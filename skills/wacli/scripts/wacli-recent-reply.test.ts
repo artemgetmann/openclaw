@@ -73,7 +73,9 @@ function seedArtemDinnerThread(db: TempDbContext["db"], params: { ts: number; ms
       jid, phone, push_name, full_name, first_name, business_name, updated_at
     ) VALUES
       ('971507664706@s.whatsapp.net', '971507664706', 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934),
-      ('74333133234289@lid', NULL, 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934);
+      -- A shared display name alone is not identity proof. Give the sibling LID
+      -- the same stored phone so reconciliation may safely join the two chats.
+      ('74333133234289@lid', '971507664706', 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934);
     INSERT INTO contact_aliases (jid, alias, notes, updated_at) VALUES
       ('971507664706@s.whatsapp.net', 'Artem Getman', NULL, 1775566934);
     INSERT INTO messages (
@@ -121,7 +123,9 @@ function seedNegotiationThread(
       jid, phone, push_name, full_name, first_name, business_name, updated_at
     ) VALUES
       ('971507664706@s.whatsapp.net', '971507664706', 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934),
-      ('74333133234289@lid', NULL, 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934);
+      -- A shared display name alone is not identity proof. Give the sibling LID
+      -- the same stored phone so reconciliation may safely join the two chats.
+      ('74333133234289@lid', '971507664706', 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934);
     INSERT INTO contact_aliases (jid, alias, notes, updated_at) VALUES
       ('971507664706@s.whatsapp.net', 'Artem Getman', NULL, 1775566934);
     INSERT INTO messages (
