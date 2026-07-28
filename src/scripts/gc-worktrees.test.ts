@@ -687,12 +687,20 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
       plistTarget,
       ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
     );
-    const excludePath = spawnSync(
-      "git",
-      ["-C", lane, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"],
-      { encoding: "utf8" },
-    ).stdout.trim();
-    fs.appendFileSync(excludePath, "\n/owned-target.plist\n");
+    // Keep the target clean and tracked so ignored-file protection does not
+    // short-circuit the narrower symlink-retirement invariant under test.
+    execFileSync("git", ["add", "owned-target.plist"], { cwd: lane });
+    execFileSync("git", ["commit", "-q", "-m", "track owned plist target"], {
+      cwd: lane,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    execFileSync("git", ["merge", "--ff-only", "-q", "merged-lane"], { cwd: main });
     fs.symlinkSync(plistTarget, ownedPlist);
 
     const result = runGc(main, {
@@ -893,7 +901,7 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
       execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: main, encoding: "utf8" }),
     ).toContain(`worktree ${registeredLane}`);
     expect(result.stderr).toContain("worktree entrypoint is missing");
-    expect(result.stderr).toContain("skipped Git metadata prune");
+    expect(result.stderr).toContain("preserved because LaunchAgent retirement failed");
 
     const firstLaunchctlLog = fs.readFileSync(tools.launchctlLog, "utf8");
     const retry = runGc(main, {
@@ -911,7 +919,7 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
       execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: main, encoding: "utf8" }),
     ).toContain(`worktree ${registeredLane}`);
     expect(retry.stderr).toContain("already quarantined");
-    expect(retry.stderr).toContain("skipped Git metadata prune");
+    expect(retry.stderr).toContain("preserving worktree metadata");
   });
 
   it("resumes prunable-agent retirement without globally pruning registrations", () => {
@@ -1042,7 +1050,7 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
       execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: main, encoding: "utf8" }),
     ).toContain(`worktree ${registeredLane}`);
     expect(retry.stderr).toContain("already quarantined");
-    expect(retry.stderr).toContain("skipped Git metadata prune");
+    expect(retry.stderr).toContain("preserving worktree metadata");
   });
 
   it("fails closed before mutation when LaunchAgent enumeration fails", () => {
@@ -1454,6 +1462,8 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
     expect(fs.existsSync(releaseLog)).toBe(false);
     expect(fs.existsSync(path.join(lane, ".env.local"))).toBe(true);
     expect(fs.existsSync(lane)).toBe(true);
-    expect(result.stdout).toContain("protected local state");
+    expect(result.stdout).toContain(
+      `ignored local state: ${path.join(fs.realpathSync(lane), ".env.local")}`,
+    );
   });
 });
