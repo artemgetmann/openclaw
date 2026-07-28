@@ -15,6 +15,12 @@ import {
   type CodexCallbackEnvelope,
 } from "./src/callback-router.js";
 import { CodexThreadService, requireThreadId } from "./src/thread-service.js";
+import {
+  CodexWorkspaceManager,
+  type CodexTaskMode,
+  type CodexWorkspaceMode,
+  type PreparedCodexWorkspace,
+} from "./src/workspace-manager.js";
 
 type PilotConfig = {
   command: string;
@@ -22,6 +28,8 @@ type PilotConfig = {
   requestTimeoutMs: number;
   turnTimeoutMs: number;
   defaultWorkspaceDir: string;
+  worktreesRoot?: string;
+  protectedWorkspaceDirs: string[];
 };
 
 type ToolParams = {
@@ -29,6 +37,10 @@ type ToolParams = {
   thread_id?: string;
   text?: string;
   workspace_dir?: string;
+  project_dir?: string;
+  task_mode?: CodexTaskMode;
+  workspace_mode?: CodexWorkspaceMode;
+  feature_name?: string;
   search?: string;
   archived?: boolean;
   include_turns?: boolean;
@@ -64,6 +76,10 @@ const ToolSchema = {
     thread_id: { type: "string" },
     text: { type: "string" },
     workspace_dir: { type: "string" },
+    project_dir: { type: "string" },
+    task_mode: { type: "string", enum: ["analysis", "implementation"] },
+    workspace_mode: { type: "string", enum: ["isolated", "direct"] },
+    feature_name: { type: "string" },
     search: { type: "string" },
     archived: { type: "boolean" },
     include_turns: { type: "boolean" },
@@ -112,11 +128,17 @@ export default function register(api: OpenClawPluginApi) {
     return await clientPromise;
   };
 
+  const workspaceManager = new CodexWorkspaceManager({
+    defaultWorkspaceDir: config.defaultWorkspaceDir,
+    worktreesRoot: config.worktreesRoot,
+    protectedWorkspaceDirs: config.protectedWorkspaceDirs,
+  });
   const service = new CodexThreadService({
     client: getClient,
     turnTimeoutMs: config.turnTimeoutMs,
     defaultWorkspaceDir: config.defaultWorkspaceDir,
     dynamicTools: [JARVIS_CALLBACK_DYNAMIC_TOOL],
+    workspaceManager,
   });
   const approvals = new CodexApprovalStore();
 
@@ -310,7 +332,7 @@ function createCodexTool(
             ctx,
             threadId,
             text,
-            workspaceDir: raw.workspace_dir,
+            execution: raw.workspace_dir,
           });
         }
       } else if (action === "delegate") {
@@ -318,25 +340,20 @@ function createCodexTool(
         // primary agent's perspective: select/create the durable native
         // thread, then run the concrete task there. The service preserves the
         // one-active-turn fence and native fail-closed errors underneath.
-        const threadId = raw.thread_id
-          ? requireThreadId(await service.resume(raw.thread_id))
-          : requireThreadId(await service.create(raw.workspace_dir));
-        const delegated = await service.message(
-          threadId,
-          required(raw.text, "text"),
-          raw.workspace_dir,
-        );
-        result = {
-          mode: "native-codex-delegate",
-          threadId: delegated.threadId,
-          turnId: delegated.turnId,
-          finalText: delegated.finalText,
-          progress: delegated.progress,
-        };
+        result = raw.thread_id
+          ? await service.message(
+              requireThreadId(await service.resume(raw.thread_id)),
+              required(raw.text, "text"),
+            )
+          : await service.delegate(delegateRequest(raw));
       } else if (action === "delegate_async") {
+        requireAsyncSession(ctx);
+        const prepared = raw.thread_id
+          ? undefined
+          : await service.createDelegateThread(delegateRequest(raw));
         const threadId = raw.thread_id
           ? requireThreadId(await service.resume(raw.thread_id))
-          : requireThreadId(await service.create(raw.workspace_dir));
+          : prepared!.threadId;
         result = await startAsyncRelay({
           service,
           callbacks,
@@ -344,7 +361,7 @@ function createCodexTool(
           ctx,
           threadId,
           text: requiredPayload(raw.text, "text"),
-          workspaceDir: raw.workspace_dir,
+          execution: prepared?.execution,
         });
       } else if (action === "resume") {
         result = await service.resume(required(raw.thread_id, "thread_id"));
@@ -365,25 +382,21 @@ async function startAsyncRelay(params: {
   ctx: OpenClawPluginToolContext;
   threadId: string;
   text: string;
-  workspaceDir?: string;
+  execution?: PreparedCodexWorkspace | string;
 }) {
-  const sessionKey = params.ctx.sessionKey?.trim();
-  if (!sessionKey) {
-    // Without a stable origin, a detached completion could only guess where
-    // to return. Fail before starting Codex instead of creating orphaned work.
-    throw new Error("async Codex relay requires a stable Jarvis session");
-  }
+  const sessionKey = requireAsyncSession(params.ctx);
 
   const delegationId = randomUUID();
   const workerPrompt = buildAsyncWorkerPrompt({
     delegationId,
     threadId: params.threadId,
     text: params.text,
+    execution: typeof params.execution === "string" ? undefined : params.execution,
   });
   const started = await params.service.startMessage(
     params.threadId,
     workerPrompt,
-    params.workspaceDir,
+    params.execution,
   );
   params.callbacks.register({
     delegationId,
@@ -579,6 +592,7 @@ function buildAsyncWorkerPrompt(params: {
   delegationId: string;
   threadId: string;
   text: string;
+  execution?: PreparedCodexWorkspace;
 }): string {
   // The task text is untrusted owner-authored content. Keep it byte-for-byte
   // inside a delegation-specific boundary instead of interpolating it into the
@@ -598,6 +612,14 @@ function buildAsyncWorkerPrompt(params: {
     "- Jarvis drives this Codex turn and remains available while you work.",
     `- Delegation ID: ${params.delegationId}`,
     `- Native Codex thread ID: ${params.threadId}`,
+    ...(params.execution?.taskMode === "implementation"
+      ? [
+          `- Assigned isolated worktree: ${params.execution.workspaceDir}`,
+          `- Source project: ${params.execution.projectDir}`,
+          `- Branch: ${params.execution.branch ?? "unknown"}`,
+          "- Read and follow repository policy before implementation; all writes stay in the assigned worktree.",
+        ]
+      : []),
     "- When the jarvis_callback tool is available, use it for meaningful progress, blocker, decision-needed, or completion messages to the originating Jarvis coordinator.",
     "- A resumed pre-existing thread may not expose jarvis_callback. If it is unavailable, continue the task and use the terminal handback below; the launcher-owned relay remains the guaranteed return path.",
     "- Start callback sequence at 1 and increment it by exactly one. Give every logical callback a stable unique callback_id; reuse both id and sequence only when retrying the exact same callback.",
@@ -795,6 +817,15 @@ function readPilotConfig(api: OpenClawPluginApi): PilotConfig {
       typeof raw.defaultWorkspaceDir === "string" && raw.defaultWorkspaceDir.trim()
         ? raw.defaultWorkspaceDir.trim()
         : process.cwd(),
+    worktreesRoot:
+      typeof raw.worktreesRoot === "string" && raw.worktreesRoot.trim()
+        ? raw.worktreesRoot.trim()
+        : undefined,
+    protectedWorkspaceDirs: Array.isArray(raw.protectedWorkspaceDirs)
+      ? raw.protectedWorkspaceDirs.filter(
+          (value): value is string => typeof value === "string" && Boolean(value.trim()),
+        )
+      : [],
   };
 }
 
@@ -855,6 +886,32 @@ function requiredPayload(value: string | undefined, label: string): string {
   return value;
 }
 
+function delegateRequest(raw: ToolParams): {
+  text: string;
+  taskMode: CodexTaskMode;
+  projectDir?: string;
+  workspaceDir?: string;
+  workspaceMode?: CodexWorkspaceMode;
+  featureName?: string;
+} {
+  return {
+    text: required(raw.text, "text"),
+    taskMode: raw.task_mode ?? "analysis",
+    projectDir: raw.project_dir,
+    workspaceDir: raw.workspace_dir,
+    workspaceMode: raw.workspace_mode,
+    featureName: raw.feature_name,
+  };
+}
+
+function requireAsyncSession(ctx: OpenClawPluginToolContext): string {
+  const sessionKey = ctx.sessionKey?.trim();
+  if (!sessionKey) {
+    throw new Error("async Codex relay requires a stable Jarvis session");
+  }
+  return sessionKey;
+}
+
 function readNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.trunc(value)
@@ -899,7 +956,9 @@ const CODEX_DELEGATION_GUIDANCE = [
   "Native Codex delegation:",
   "- When the owner explicitly asks Jarvis in ordinary language to create, start, resume, or delegate work to a native Codex thread, use the owner-only `codex_threads` tool with action `delegate_async`.",
   "- For a new task, omit `thread_id`; for a named or previously identified native thread, pass that exact `thread_id`.",
-  "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. Include the concrete workspace path in `workspace_dir` when it is known.",
+  "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. For investigation or review, set `task_mode: analysis` and pass `project_dir` when known.",
+  "- For a fix, implementation, or build request, set `task_mode: implementation` and pass `project_dir` when known. Omit `workspace_mode`: Jarvis creates an isolated worktree automatically, then Codex reads that repository's policy and setup.",
+  "- Use `workspace_mode: direct` only when the owner explicitly requests the saved project directly. It is limited to clean named branches and protected checkouts fail closed.",
   "- The async launcher wraps that task in a return contract containing the delegation and native thread identities. The scoped `jarvis_callback` tool lets that exact turn send natural progress, blocker, decision-needed, or completion messages; the terminal listener remains fallback.",
   "- Do not ask Codex to call `send_message_to_thread` or Telegram back to Jarvis. A Jarvis session is not a Codex thread address; the scoped callback and launcher-owned listener are the return transports.",
   "- Do not tell the user to run `/codex bind` and do not create a Telegram topic. Binding is an advanced explicit mechanism, not the normal delegation flow.",
