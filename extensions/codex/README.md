@@ -25,9 +25,27 @@ default runtime.
   a delegation-specific payload boundary.
 - Exact return attribution for async relays: the continuation carries the
   native Codex thread and turn ids plus trusted inter-session provenance.
+- Proactive worker callbacks through one Jarvis-owned dynamic App Server tool.
+  The natural message body is carried inside a deterministic envelope binding
+  the delegation, exact native thread and turn, originating Jarvis session,
+  callback id, monotonic sequence, and `progress`, `blocked`,
+  `decision-needed`, or `complete` status.
+- Proactive callbacks are guaranteed only for callback-capable threads created
+  through this App Server client. The pinned App Server protocol cannot install
+  dynamic tools while resuming a pre-existing thread, so those workers may not
+  have `jarvis_callback`; their terminal result still returns through the
+  launcher-owned relay fallback.
+- Callback authority is process-local and turn-scoped. Jarvis accepts the tool
+  request only from its owned App Server connection while the exact
+  delegation/thread/turn grant is active; forged, stale, wrong-turn, malformed,
+  non-monotonic, and receipt-only callbacks fail closed. Exact retries are
+  deduplicated before Jarvis wakes or delivers twice.
 - Async replies can target the same native thread through `message_async`;
-  receipt-only acknowledgements and relay-triggered recursive delegation are
-  explicitly forbidden to prevent ping-pong loops.
+  while the reported turn is still active, Jarvis uses App Server
+  `turn/steer` with the exact expected turn id. After terminal completion, the
+  existing same-thread follow-up path starts a new turn. Receipt-only
+  acknowledgements and relay-triggered recursive delegation are explicitly
+  forbidden to prevent ping-pong loops.
 - Fleet inventory paginates the metadata-only catalog, always retains every
   active thread, and reports how many inactive historical threads were omitted
   from the compact roster.
@@ -48,9 +66,16 @@ broadcast into this stdio client. Cross-process subscription requires a shared
 supervisor or broker and is outside this compatibility slice.
 
 The worker does not call `send_message_to_thread` back to Jarvis. A Jarvis
-session is not a native Codex thread address; the launcher-owned listener is
-the return transport. This supports terminal complete/blocked/decision-needed
-handback, not proactive intermediate worker callbacks.
+session is not a native Codex thread address. When available, the scoped
+`jarvis_callback` dynamic tool is the proactive return transport; Jarvis
+validates its server-owned thread/turn identity, wakes the exact originating
+session, and retains ownership of user delivery and Telegram routing. No
+Telegram credential, chat id, or topic authority is exposed to Codex.
+
+The launcher-owned terminal listener remains reconciliation fallback. A valid
+`complete` callback suppresses the duplicate terminal wake; if the worker never
+calls back—or the resumed thread does not expose `jarvis_callback`—terminal
+output still reaches the originating Jarvis session.
 
 The native thread remains durable across normal follow-up turns, but an active
 async relay is process-local: stopping the Gateway also stops the App Server

@@ -15,10 +15,18 @@ export type CodexNotification = {
   params?: JsonObject;
 };
 
+export type CodexServerRequest = {
+  method: string;
+  params?: JsonObject;
+};
+
+export type CodexServerRequestHandler = (request: CodexServerRequest) => unknown;
+
 export type CodexRpcClient = {
   initialize(): Promise<void>;
   request<T = unknown>(method: string, params?: unknown, timeoutMs?: number): Promise<T>;
   onNotification(handler: (notification: CodexNotification) => void): () => void;
+  onServerRequest(handler: CodexServerRequestHandler): () => void;
   getServerVersion(): string | undefined;
   isClosed(): boolean;
   close(): Promise<void>;
@@ -46,6 +54,7 @@ export class CodexAppServerClient implements CodexRpcClient {
   private readonly lines: ReadlineInterface;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly notificationHandlers = new Set<(notification: CodexNotification) => void>();
+  private readonly serverRequestHandlers = new Set<CodexServerRequestHandler>();
   private readonly requestTimeoutMs: number;
   private nextId = 1;
   private initialized = false;
@@ -139,6 +148,11 @@ export class CodexAppServerClient implements CodexRpcClient {
     return () => this.notificationHandlers.delete(handler);
   }
 
+  onServerRequest(handler: CodexServerRequestHandler): () => void {
+    this.serverRequestHandlers.add(handler);
+    return () => this.serverRequestHandlers.delete(handler);
+  }
+
   getServerVersion(): string | undefined {
     return this.serverVersion;
   }
@@ -185,7 +199,7 @@ export class CodexAppServerClient implements CodexRpcClient {
       return;
     }
     if ("id" in message) {
-      this.handleServerRequest(message);
+      void this.handleServerRequest(message);
       return;
     }
     const notification: CodexNotification = {
@@ -218,7 +232,7 @@ export class CodexAppServerClient implements CodexRpcClient {
     pending.resolve(message.result);
   }
 
-  private handleServerRequest(message: JsonObject): void {
+  private async handleServerRequest(message: JsonObject): Promise<void> {
     const id = message.id;
     const method = typeof message.method === "string" ? message.method : "";
     if (method.includes("requestApproval")) {
@@ -232,6 +246,28 @@ export class CodexAppServerClient implements CodexRpcClient {
         },
       });
       return;
+    }
+    const request: CodexServerRequest = {
+      method,
+      ...(isRecord(message.params) ? { params: message.params } : {}),
+    };
+    for (const handler of this.serverRequestHandlers) {
+      try {
+        const result = await handler(request);
+        if (result !== undefined) {
+          this.write({ id, result });
+          return;
+        }
+      } catch (error) {
+        this.write({
+          id,
+          error: {
+            code: -32000,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+        return;
+      }
     }
     this.write({
       id,
