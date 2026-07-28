@@ -1939,6 +1939,100 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("terminalizes a bounded unstarted direct continuation without requeueing its event", async () => {
+    const { cfg, sessionKey, sendWhatsApp } = await seedRestartContinuationHeartbeat(
+      "restart-followup:durable-stale-head",
+    );
+    const failureSpy = vi
+      .spyOn(durableStore, "markDurableFollowupRestartContinuationFailed")
+      .mockResolvedValue(true);
+    const terminalizeSpy = vi
+      .spyOn(durableStore, "terminalizeDurableFollowupRestartContinuationIfStale")
+      .mockResolvedValue(true);
+    const wakeSpy = vi.spyOn(heartbeatWake, "requestHeartbeatNow").mockImplementation(() => {});
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async () => {
+      // This is the proven incident boundary: setup consumed the event, but no
+      // real embedded run or finalization owner deferred execution.
+      drainSystemEventEntries(sessionKey);
+      return undefined;
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(failureSpy).toHaveBeenCalledWith({
+        id: "durable-stale-head",
+        sessionKey,
+        error: "restart continuation agent execution did not start",
+      });
+      expect(terminalizeSpy).toHaveBeenCalledWith({
+        id: "durable-stale-head",
+        sessionKey,
+      });
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+      expect(wakeSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "restart-continuation" }),
+      );
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+    } finally {
+      replySpy.mockRestore();
+      wakeSpy.mockRestore();
+      terminalizeSpy.mockRestore();
+      failureSpy.mockRestore();
+    }
+  });
+
+  it("keeps a direct continuation pending while a real embedded run is active", async () => {
+    const { cfg, sessionKey, sendWhatsApp } = await seedRestartContinuationHeartbeat(
+      "restart-followup:durable-live-run",
+    );
+    const failureSpy = vi
+      .spyOn(durableStore, "markDurableFollowupRestartContinuationFailed")
+      .mockResolvedValue(true);
+    const terminalizeSpy = vi
+      .spyOn(durableStore, "terminalizeDurableFollowupRestartContinuationIfStale")
+      .mockResolvedValue(true);
+    const wakeSpy = vi.spyOn(heartbeatWake, "requestHeartbeatNow").mockImplementation(() => {});
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async (_ctx, options) => {
+      drainSystemEventEntries(sessionKey);
+      options?.onAgentRunDeferred?.("embedded-run-active");
+      return undefined;
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(terminalizeSpy).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        expect.objectContaining({ contextKey: "restart-followup:durable-live-run" }),
+      ]);
+      expect(wakeSpy).toHaveBeenCalledWith({
+        reason: "restart-continuation",
+        sessionKey,
+        coalesceMs: 1_000,
+      });
+    } finally {
+      replySpy.mockRestore();
+      wakeSpy.mockRestore();
+      terminalizeSpy.mockRestore();
+      failureSpy.mockRestore();
+    }
+  });
+
   it("bypasses ordinary heartbeat policy only for a forced tagged restart continuation", async () => {
     const cases: Array<{
       name: string;

@@ -18,6 +18,9 @@ const PROCESSED_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROCESSED_MESSAGES = 10_000;
 export const DURABLE_FOLLOWUP_RETRY_BASE_MS = 1_000;
 export const DURABLE_FOLLOWUP_RETRY_MAX_MS = 5 * 60_000;
+export const RESTART_CONTINUATION_UNSTARTED_ERROR =
+  "restart continuation agent execution did not start";
+export const RESTART_CONTINUATION_UNSTARTED_LIMIT = 3;
 
 type ProcessedMessagePruneState = {
   estimatedLiveCount?: number;
@@ -96,6 +99,18 @@ export type DurableFollowupRecord = {
     continuation: "pending" | "delivering" | "delivered";
     updatedAt: number;
     lastError?: string;
+    /** Consecutive tagged wakes consumed before any agent run started. */
+    unstartedAttempts?: number;
+    /**
+     * Conservative execution boundary for the carrier's original model turn.
+     *
+     * Only an explicit `not-started` marker can ever earn dead-owner no-op
+     * recovery. Missing/unknown and started records may contain persisted tool
+     * results or ambiguous side effects and must resume from their transcript.
+     */
+    ownerExecution?: "unknown" | "not-started" | "started";
+    /** Auditable reason for a safe terminal no-op instead of model replay. */
+    terminalReason?: "unstarted-owner-dead";
   };
   /**
    * Process that still owns the accepted turn through terminal transport
@@ -473,6 +488,8 @@ export async function persistDurableFollowup(params: {
    * acceptance and restart-blocker staging.
    */
   deliveryPayloads?: ReplyPayload[];
+  /** Test/recovery callers may prove a blocker was staged before model entry. */
+  restartOwnerExecution?: "unknown" | "not-started";
   now?: number;
   ttlMs?: number;
   env?: NodeJS.ProcessEnv;
@@ -510,6 +527,7 @@ export async function persistDurableFollowup(params: {
                 restartRecovery: {
                   receipt: "pending" as const,
                   continuation: "pending" as const,
+                  ownerExecution: params.restartOwnerExecution ?? ("unknown" as const),
                   updatedAt: now,
                 },
               }
@@ -649,6 +667,7 @@ function normalizeDurableIds(run: FollowupRun): string[] {
 export async function persistDurableFollowupDelivery(params: {
   run: FollowupRun;
   payloads: ReplyPayload[];
+  restartOwnerExecution?: "unknown" | "not-started";
   env?: NodeJS.ProcessEnv;
 }): Promise<DurableFollowupRecord | undefined> {
   return await withDurableFollowupMutationLock(async () => {
@@ -659,6 +678,7 @@ export async function persistDurableFollowupDelivery(params: {
 async function persistDurableFollowupDeliveryUnlocked(params: {
   run: FollowupRun;
   payloads: ReplyPayload[];
+  restartOwnerExecution?: "unknown" | "not-started";
   env?: NodeJS.ProcessEnv;
 }): Promise<DurableFollowupRecord | undefined> {
   const sourceDurableIds = normalizeDurableIds(params.run);
@@ -707,6 +727,7 @@ async function persistDurableFollowupDeliveryUnlocked(params: {
       ? (carrier.restartRecovery ?? {
           receipt: "pending",
           continuation: "pending",
+          ownerExecution: params.restartOwnerExecution ?? "unknown",
           updatedAt: Date.now(),
         })
       : undefined,
@@ -841,18 +862,18 @@ export function isDurableFollowupOwnedByOtherLiveProcess(
   if (!ownerPid || ownerPid === currentPid) {
     return false;
   }
-  const isProcessAlive =
-    options?.isProcessAlive ??
-    ((pid: number) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (err) {
-        // EPERM still proves a process owns the PID; ESRCH proves it exited.
-        return (err as NodeJS.ErrnoException).code === "EPERM";
-      }
-    });
+  const isProcessAlive = options?.isProcessAlive ?? isProcessAliveByPid;
   return isProcessAlive(ownerPid);
+}
+
+function isProcessAliveByPid(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM still proves a process owns the PID; ESRCH proves it exited.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 async function updateDurableFollowupRestartRecovery(params: {
@@ -1037,10 +1058,133 @@ export async function markDurableFollowupRestartContinuationFailed(params: {
             continuation: "pending",
             updatedAt: Date.now(),
             lastError: params.error,
+            // Count only consecutive pre-agent failures. Delivery/routing
+            // failures have different ambiguity and must never earn this
+            // terminal no-op path.
+            unstartedAttempts:
+              params.error === RESTART_CONTINUATION_UNSTARTED_ERROR
+                ? (record.restartRecovery.unstartedAttempts ?? 0) + 1
+                : 0,
           }
         : undefined,
   });
   return updated?.restartRecovery?.continuation === "pending";
+}
+
+/**
+ * Cross the conservative model-entry boundary before invoking the provider.
+ *
+ * Writing `started` first may classify a crash just before provider entry as
+ * ambiguous, which is intentionally safer than ever replaying a turn that did
+ * persist tool calls or external side effects.
+ */
+export async function markDurableFollowupRestartOwnerExecutionStarted(params: {
+  id: string;
+  sessionKey: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const updated = await updateDurableFollowupRestartRecovery({
+    id: params.id,
+    sessionKey: params.sessionKey,
+    env: params.env,
+    mutate: (record) => ({
+      ...record.restartRecovery!,
+      ownerExecution: "started",
+      updatedAt: Date.now(),
+    }),
+  });
+  return updated?.restartRecovery?.ownerExecution === "started";
+}
+
+/**
+ * Consume only a stale restart carrier after bounded pre-agent failures.
+ *
+ * This is deliberately stricter than the ordinary retry TTL. The optional
+ * receipt must already be terminal, the process that accepted the original
+ * turn must be a different dead PID, and every counted failure must have
+ * happened before agent execution. A current/live owner may represent a
+ * partially executed turn with persisted tool results, so it must resume from
+ * transcript and can never take this no-op path.
+ */
+export async function terminalizeDurableFollowupRestartContinuationIfStale(params: {
+  id: string;
+  sessionKey: string;
+  env?: NodeJS.ProcessEnv;
+  currentPid?: number;
+  isProcessAlive?: (pid: number) => boolean;
+  unstartedLimit?: number;
+}): Promise<boolean> {
+  const updated = await withDurableFollowupMutationLock(async () => {
+    const env = params.env ?? process.env;
+    const filePath = resolveDurableFollowupPath(params.id, env);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return undefined;
+      }
+      throw err;
+    }
+    if (
+      !isDurableFollowupRecord(parsed) ||
+      !parsed.restartRecovery ||
+      parsed.run.run.sessionKey !== params.sessionKey
+    ) {
+      return undefined;
+    }
+    if (isDurableFollowupRecordCancelled(parsed, env)) {
+      await ackDurableFollowupUnlocked(parsed.id, env);
+      return undefined;
+    }
+
+    const recovery = parsed.restartRecovery;
+    const ownerPid = parsed.activeOwnerPid;
+    const currentPid = params.currentPid ?? process.pid;
+    const unstartedLimit = Math.max(
+      1,
+      Math.floor(params.unstartedLimit ?? RESTART_CONTINUATION_UNSTARTED_LIMIT),
+    );
+    const isProcessAlive = params.isProcessAlive ?? isProcessAliveByPid;
+    const hasDeadPriorOwner =
+      typeof ownerPid === "number" && ownerPid !== currentPid && !isProcessAlive(ownerPid);
+    const canTerminalize =
+      Boolean(parsed.delivery) &&
+      recovery.receipt === "delivered" &&
+      recovery.continuation === "pending" &&
+      recovery.ownerExecution === "not-started" &&
+      recovery.lastError === RESTART_CONTINUATION_UNSTARTED_ERROR &&
+      (recovery.unstartedAttempts ?? 0) >= unstartedLimit &&
+      hasDeadPriorOwner;
+    if (!canTerminalize) {
+      return undefined;
+    }
+
+    const record: DurableFollowupRecord = {
+      ...parsed,
+      // Empty is an explicit completed stage. The queue runner will not replay
+      // model/tool work and will remove only this carrier at the FIFO head.
+      delivery: { ...parsed.delivery!, payloads: [] },
+      restartRecovery: {
+        ...recovery,
+        continuation: "delivered",
+        updatedAt: Date.now(),
+        lastError: undefined,
+        terminalReason: "unstarted-owner-dead",
+      },
+    };
+    await writeJsonAtomic(filePath, record, {
+      mode: 0o600,
+      ensureDirMode: 0o700,
+      trailingNewline: true,
+    });
+    if (isDurableFollowupRecordCancelled(record, env)) {
+      await ackDurableFollowupUnlocked(record.id, env);
+      return undefined;
+    }
+    return record;
+  });
+  return updated?.restartRecovery?.terminalReason === "unstarted-owner-dead";
 }
 
 async function removeCoveredInputRecords(

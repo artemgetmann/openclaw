@@ -19,9 +19,11 @@ import { getReplyFromConfig } from "../auto-reply/reply.js";
 import {
   markDurableFollowupRestartContinuationConsumed,
   markDurableFollowupRestartContinuationFailed,
+  RESTART_CONTINUATION_UNSTARTED_ERROR,
+  terminalizeDurableFollowupRestartContinuationIfStale,
 } from "../auto-reply/reply/queue/durable-store.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
+import type { AgentRunDeferralReason, ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -1079,6 +1081,11 @@ export async function runHeartbeatOnce(opts: {
   const reconcileDrainedRestartEvents = async (params: {
     events: typeof preflight.pendingEventEntries;
     error: string;
+    /**
+     * True only when get-reply did not report a real embedded/finalization
+     * owner. This keeps bounded no-op recovery away from genuinely active work.
+     */
+    allowStaleTerminalization?: boolean;
   }) => {
     if (params.events.length === 0) {
       return;
@@ -1086,11 +1093,36 @@ export async function runHeartbeatOnce(opts: {
     // Agent setup drains system events before it knows whether an actual model
     // run can start. Restore durable replay state first, then put only the
     // matching tagged event back in RAM and request a bounded retry.
-    const retryContextKeys = await failTaggedRestartContinuations({
+    let retryContextKeys = await failTaggedRestartContinuations({
       sessionKey,
       contextKeys: params.events.map((event) => event.contextKey),
       error: params.error,
     });
+    if (params.allowStaleTerminalization) {
+      const terminalizedContexts = new Set<string>();
+      for (const retryContextKey of retryContextKeys) {
+        const parsed = parseRestartContinuationContext(retryContextKey);
+        if (parsed?.kind !== "direct-turn") {
+          continue;
+        }
+        const terminalized = await terminalizeDurableFollowupRestartContinuationIfStale({
+          id: parsed.id,
+          sessionKey,
+        });
+        if (!terminalized) {
+          continue;
+        }
+        // The original owner is proven dead and no agent execution occurred.
+        // Release only this carrier's in-memory claim; the FIFO queue retains
+        // every later message and completes the empty head stage normally.
+        releaseDirectTurnRestartContinuation(parsed.id);
+        terminalizedContexts.add(retryContextKey);
+        log.warn(`heartbeat: terminalized stale unstarted restart continuation ${parsed.id}`);
+      }
+      retryContextKeys = retryContextKeys.filter(
+        (contextKey) => !terminalizedContexts.has(contextKey),
+      );
+    }
     for (const retryContextKey of retryContextKeys) {
       const retryEvent = params.events.find(
         (event) => event.contextKey?.toLowerCase() === retryContextKey.toLowerCase(),
@@ -1122,23 +1154,37 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true && !isEventDrivenWake ? "lightweight" : undefined;
+    const restartContinuationDurableId = isForcedRestartContinuation
+      ? preflight.pendingEventEntries
+          .map((event) => parseRestartContinuationContext(event.contextKey))
+          .find((context) => context?.kind === "direct-turn")?.id
+      : undefined;
     let agentRunStarted = false;
+    let agentRunDeferralReason: AgentRunDeferralReason | undefined;
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
+          restartContinuationDurableId,
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
           onAgentRunStart: () => {
             agentRunStarted = true;
           },
+          onAgentRunDeferred: (reason: AgentRunDeferralReason) => {
+            agentRunDeferralReason = reason;
+          },
         }
       : {
           isHeartbeat: true,
+          restartContinuationDurableId,
           suppressToolErrorWarnings,
           bootstrapContextMode,
           onAgentRunStart: () => {
             agentRunStarted = true;
+          },
+          onAgentRunDeferred: (reason: AgentRunDeferralReason) => {
+            agentRunDeferralReason = reason;
           },
         };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
@@ -1159,7 +1205,11 @@ export async function runHeartbeatOnce(opts: {
       try {
         await reconcileDrainedRestartEvents({
           events: consumedRestartEvents,
-          error: "restart continuation agent execution did not start",
+          error: RESTART_CONTINUATION_UNSTARTED_ERROR,
+          // A real in-process model run or finalizer is authoritative. When no
+          // such owner was reported, bounded durable evidence may retire the
+          // stale carrier rather than head-of-line blocking later user input.
+          allowStaleTerminalization: agentRunDeferralReason === undefined,
         });
       } catch (err) {
         log.warn(`heartbeat: failed to reconcile unstarted restart continuation: ${String(err)}`);
