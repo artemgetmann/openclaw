@@ -114,7 +114,7 @@ describe("Codex natural-language delegation", () => {
         name: "Codex",
         source: "test",
         config: {},
-        pluginConfig: { command: "fake-codex", defaultWorkspaceDir: "/repo/openclaw" },
+        pluginConfig: { command: "fake-codex", defaultWorkspaceDir: process.cwd() },
         runtime: {} as never,
         registerTool(next, options) {
           toolOptions = options;
@@ -141,7 +141,8 @@ describe("Codex natural-language delegation", () => {
     const result = await tool.execute("delegate-1", {
       action: "delegate",
       text: "Inspect the OpenClaw browser issue and return the concrete root cause.",
-      workspace_dir: "/repo/openclaw",
+      task_mode: "analysis",
+      project_dir: process.cwd(),
     });
 
     expect(result).toMatchObject({
@@ -157,7 +158,8 @@ describe("Codex natural-language delegation", () => {
         method: "turn/start",
         params: expect.objectContaining({
           threadId: "thread-natural",
-          cwd: "/repo/openclaw",
+          cwd: process.cwd(),
+          sandboxPolicy: { type: "readOnly", networkAccess: false },
         }),
       }),
     ]);
@@ -204,7 +206,8 @@ describe("Codex natural-language delegation", () => {
     const accepted = await tool.execute("delegate-async-1", {
       action: "delegate_async",
       text: "\nInspect the browser issue without blocking Jarvis.\nKeep this spacing.\n",
-      workspace_dir: "/repo/openclaw",
+      task_mode: "analysis",
+      project_dir: process.cwd(),
     });
 
     expect(accepted).toMatchObject({
@@ -310,7 +313,8 @@ describe("Codex natural-language delegation", () => {
     const accepted = await tool.execute("delegate-async-callback", {
       action: "delegate_async",
       text: "Map the callback seam and report progress naturally.",
-      workspace_dir: "/repo/openclaw",
+      task_mode: "analysis",
+      project_dir: process.cwd(),
     });
     const delegationId = (accepted as { details?: { delegationId?: string } }).details
       ?.delegationId;

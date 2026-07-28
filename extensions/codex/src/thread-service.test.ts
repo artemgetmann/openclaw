@@ -351,6 +351,60 @@ describe("CodexThreadService", () => {
     ]);
   });
 
+  it("keeps callbacks while isolating an implementation delegate", async () => {
+    const client = new FakeCodexClient();
+    const service = new CodexThreadService({
+      client: async () => client,
+      turnTimeoutMs: 5_000,
+      defaultWorkspaceDir: "/repo/openclaw",
+      dynamicTools: [JARVIS_CALLBACK_DYNAMIC_TOOL],
+      workspaceManager: {
+        prepare: async () => ({
+          taskMode: "implementation",
+          workspaceMode: "isolated",
+          projectDir: "/repo/openclaw",
+          workspaceDir: "/worktrees/browser-fix",
+          worktreeCreated: true,
+          baseSha: "abc123",
+          branch: "codex/browser-fix",
+        }),
+      },
+    });
+
+    await service.delegate({
+      text: "Fix the browser bug.",
+      taskMode: "implementation",
+      projectDir: "/repo/openclaw",
+    });
+
+    expect(client.requests[0]).toEqual({
+      method: "thread/start",
+      params: expect.objectContaining({
+        cwd: "/worktrees/browser-fix",
+        sandbox: "workspace-write",
+        dynamicTools: [expect.objectContaining({ name: "jarvis_callback" })],
+      }),
+    });
+    expect(client.requests[1]).toEqual({
+      method: "turn/start",
+      params: expect.objectContaining({
+        cwd: "/worktrees/browser-fix",
+        input: [
+          expect.objectContaining({
+            text: expect.stringContaining("Read repository policy and adopt its setup"),
+          }),
+        ],
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          writableRoots: ["/worktrees/browser-fix"],
+          networkAccess: false,
+          excludeSlashTmp: true,
+          excludeTmpdirEnvVar: true,
+        },
+      }),
+    });
+  });
+
   it("allows only one active continuation per native thread", async () => {
     const client = new FakeCodexClient();
     client.holdTurn = true;

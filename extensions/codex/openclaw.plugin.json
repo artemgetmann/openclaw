@@ -31,6 +31,16 @@
       },
       "defaultWorkspaceDir": {
         "type": "string"
+      },
+      "worktreesRoot": {
+        "type": "string"
+      },
+      "protectedWorkspaceDirs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
       }
     }
   }
