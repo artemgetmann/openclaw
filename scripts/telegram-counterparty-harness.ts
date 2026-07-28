@@ -667,6 +667,11 @@ async function pollForArtem(params: {
         (!Number.isSafeInteger(message.date) || Number(message.date) <= params.notBeforeUnixSeconds)
       ) {
         params.state.stage = "reply_mismatched";
+        // Timing mismatches are just as context-sensitive as text mismatches.
+        // Persist the caller's checkpoint before stopping so recovery retains
+        // exact provenance and cannot treat a payment failure as context-free
+        // evidence for an unrelated replay.
+        params.state.failureContext = params.failureContext ?? null;
         await saveState(params.context, params.state);
         throw new CounterpartyManualRecoveryError(
           "Received the expected reply before the durable founder-approval boundary; manual recovery is required.",
@@ -797,6 +802,21 @@ async function runLockedCommand(params: {
         return state;
       }
       expectStage(state, "reply_mismatched");
+      // Fail closed before reading or recording operator evidence. A receipt
+      // proves that a specific failed operational recheck was reviewed; it
+      // must never authorize relabeling an operational or payment checkpoint.
+      //
+      // There is deliberately no migration for missing/null context. Recheck
+      // recovery and failureContext were introduced together, so an older v2
+      // reply_mismatched state can only describe an operational or payment
+      // failure. Guessing otherwise would recreate the replay hole.
+      if (state.failureContext !== "operational_recheck") {
+        throw new Error(
+          `Operational recheck recovery cannot relabel ${
+            state.failureContext ?? "missing"
+          } mismatch evidence.`,
+        );
+      }
       const receipt = required(params.context.env, "OPENCLAW_COUNTERPARTY_RECOVERY_RECEIPT");
       const prefix = `${params.context.scenarioId}:operational-recheck-mismatch:`;
       if (!receipt.startsWith(prefix) || receipt.length > 300) {
@@ -804,8 +824,9 @@ async function runLockedCommand(params: {
           `The recovery receipt must start with ${prefix} and be at most 300 characters.`,
         );
       }
-      // Older v2 states did not record which wait mismatched. Require a durable
-      // operator evidence receipt before authorizing a fresh corrected replay.
+      // Only an explicitly tagged operational-recheck failure reaches receipt
+      // validation. The scoped durable receipt then authorizes one corrected
+      // replay without changing the provenance of any other failed checkpoint.
       state.failureContext = "operational_recheck";
       state.recoveryReceipt = receipt;
       await saveState(params.context, state);

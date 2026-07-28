@@ -541,6 +541,13 @@ describe("deterministic Telegram counterparty harness", () => {
         waitMs: 0,
       }),
     ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+    const mismatchState = JSON.parse(
+      fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"),
+    ) as Record<string, unknown>;
+    expect(mismatchState).toMatchObject({
+      stage: "reply_mismatched",
+      failureContext: "operational_recheck",
+    });
     await expect(
       runCounterpartyHarness("replay-operational-detail-recheck-after-mismatch", {
         env,
@@ -569,6 +576,73 @@ describe("deterministic Telegram counterparty harness", () => {
       recoveryReceipt: `${protocol.scenarioId}:operational-recheck-mismatch:telegram-message-3`,
     });
   });
+
+  it.each(["missing", "null"] as const)(
+    "rejects %s failure context before reading recovery evidence",
+    async (legacyContext) => {
+      const env = await ownedEnvironment();
+      const api = fakeBotApi({
+        updateBatches: [
+          [],
+          [],
+          [artemUpdate(2, protocol.text.operationalReply)],
+          [artemUpdate(3, "wrong recheck reply")],
+        ],
+      });
+
+      await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+      await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+      await runCounterpartyHarness("assert-nonmatch-silence", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      });
+      await runCounterpartyHarness("emit-operational-detail-request", {
+        env,
+        fetchImpl: api.fetchImpl,
+      });
+      await runCounterpartyHarness("wait-operational-detail-reply", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      });
+      await runCounterpartyHarness("emit-operational-detail-recheck", {
+        env,
+        fetchImpl: api.fetchImpl,
+      });
+      await expect(
+        runCounterpartyHarness("wait-operational-detail-recheck-reply", {
+          env,
+          fetchImpl: api.fetchImpl,
+          waitMs: 0,
+        }),
+      ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+
+      const statePath = resolveCounterpartyStatePath(env);
+      const ambiguousState = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      // Null and absent contexts predate operational-recheck recovery itself.
+      // Neither proves which older checkpoint failed, so both must stop before
+      // the command reads a receipt or mutates the durable state.
+      if (legacyContext === "missing") {
+        delete ambiguousState.failureContext;
+      } else {
+        ambiguousState.failureContext = null;
+      }
+      fs.writeFileSync(statePath, `${JSON.stringify(ambiguousState)}\n`);
+      const beforeRecovery = fs.readFileSync(statePath, "utf8");
+
+      await expect(
+        runCounterpartyHarness("record-operational-recheck-mismatch-evidence", {
+          env,
+          fetchImpl: api.fetchImpl,
+        }),
+      ).rejects.toThrow(/cannot relabel missing mismatch evidence/);
+      expect(fs.readFileSync(statePath, "utf8")).toBe(beforeRecovery);
+    },
+  );
 
   it("requires silence for the synthetic payment until an approved continuation is allowed", async () => {
     const env = await ownedEnvironment();
@@ -677,6 +751,19 @@ describe("deterministic Telegram counterparty harness", () => {
     expect(JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"))).toMatchObject({
       stage: "reply_mismatched",
       lastUpdateId: 3,
+      failureContext: "payment",
+    });
+    env.OPENCLAW_COUNTERPARTY_RECOVERY_RECEIPT = `${protocol.scenarioId}:operational-recheck-mismatch:wrong-payment-context`;
+    await expect(
+      runCounterpartyHarness("record-operational-recheck-mismatch-evidence", {
+        env,
+        fetchImpl: api.fetchImpl,
+      }),
+    ).rejects.toThrow(/cannot relabel payment mismatch evidence/);
+    expect(JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"))).toMatchObject({
+      stage: "reply_mismatched",
+      failureContext: "payment",
+      recoveryReceipt: null,
     });
   });
 
@@ -882,6 +969,21 @@ describe("deterministic Telegram counterparty harness", () => {
     ).toMatchObject({
       stage: "reply_mismatched",
       lastUpdateId: 3,
+      failureContext: "operational",
+    });
+    textEnv.OPENCLAW_COUNTERPARTY_RECOVERY_RECEIPT = `${protocol.scenarioId}:operational-recheck-mismatch:wrong-operational-context`;
+    await expect(
+      runCounterpartyHarness("record-operational-recheck-mismatch-evidence", {
+        env: textEnv,
+        fetchImpl: textApi.fetchImpl,
+      }),
+    ).rejects.toThrow(/cannot relabel operational mismatch evidence/);
+    expect(
+      JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(textEnv), "utf8")),
+    ).toMatchObject({
+      stage: "reply_mismatched",
+      failureContext: "operational",
+      recoveryReceipt: null,
     });
     const textRetryApi = fakeBotApi();
     await expect(
