@@ -9,6 +9,11 @@ import type {
 } from "../../src/plugins/types.js";
 import { CodexAppServerClient, type CodexRpcClient } from "./src/app-server-client.js";
 import { CodexApprovalStore, type CodexApprovalAction } from "./src/approval-store.js";
+import {
+  CodexCallbackRouter,
+  JARVIS_CALLBACK_DYNAMIC_TOOL,
+  type CodexCallbackEnvelope,
+} from "./src/callback-router.js";
 import { CodexThreadService, requireThreadId } from "./src/thread-service.js";
 
 type PilotConfig = {
@@ -78,6 +83,11 @@ const ToolSchema = {
 export default function register(api: OpenClawPluginApi) {
   const config = readPilotConfig(api);
   let clientPromise: Promise<CodexRpcClient> | undefined;
+  const callbacks = new CodexCallbackRouter({
+    dispatch: async (callback) => {
+      await dispatchCodexCallbackToJarvis({ api, callback });
+    },
+  });
 
   const getClient = async (): Promise<CodexRpcClient> => {
     const existing = await clientPromise?.catch(() => undefined);
@@ -90,6 +100,7 @@ export default function register(api: OpenClawPluginApi) {
         args: config.args,
         requestTimeoutMs: config.requestTimeoutMs,
       });
+      client.onServerRequest(async (request) => await callbacks.handleServerRequest(request));
       try {
         await client.initialize();
         return client;
@@ -105,6 +116,7 @@ export default function register(api: OpenClawPluginApi) {
     client: getClient,
     turnTimeoutMs: config.turnTimeoutMs,
     defaultWorkspaceDir: config.defaultWorkspaceDir,
+    dynamicTools: [JARVIS_CALLBACK_DYNAMIC_TOOL],
   });
   const approvals = new CodexApprovalStore();
 
@@ -118,7 +130,7 @@ export default function register(api: OpenClawPluginApi) {
       if (ctx.senderIsOwner !== true || ctx.sandboxed) {
         return null;
       }
-      return createCodexTool(service, api, ctx) as AnyAgentTool;
+      return createCodexTool(service, callbacks, api, ctx) as AnyAgentTool;
     }) as OpenClawPluginToolFactory,
     { name: "codex_threads" },
   );
@@ -240,6 +252,7 @@ export default function register(api: OpenClawPluginApi) {
 
 function createCodexTool(
   service: CodexThreadService,
+  callbacks: CodexCallbackRouter,
   api: OpenClawPluginApi,
   ctx: OpenClawPluginToolContext,
 ) {
@@ -276,14 +289,30 @@ function createCodexTool(
           raw.workspace_dir,
         );
       } else if (action === "message_async") {
-        result = await startAsyncRelay({
-          service,
-          api,
-          ctx,
-          threadId: required(raw.thread_id, "thread_id"),
-          text: requiredPayload(raw.text, "text"),
-          workspaceDir: raw.workspace_dir,
-        });
+        const threadId = required(raw.thread_id, "thread_id");
+        const text = requiredPayload(raw.text, "text");
+        const sessionKey = ctx.sessionKey?.trim();
+        const active = sessionKey && callbacks.findActiveTurn({ threadId, sessionKey });
+        if (active) {
+          const steered = await service.steer(active.threadId, active.turnId, text);
+          result = {
+            mode: "native-codex-async-steer",
+            status: "accepted",
+            delegationId: active.delegationId,
+            threadId: steered.threadId,
+            turnId: steered.turnId,
+          };
+        } else {
+          result = await startAsyncRelay({
+            service,
+            callbacks,
+            api,
+            ctx,
+            threadId,
+            text,
+            workspaceDir: raw.workspace_dir,
+          });
+        }
       } else if (action === "delegate") {
         // A single action makes the intended Jarvis UX atomic from the
         // primary agent's perspective: select/create the durable native
@@ -310,6 +339,7 @@ function createCodexTool(
           : requireThreadId(await service.create(raw.workspace_dir));
         result = await startAsyncRelay({
           service,
+          callbacks,
           api,
           ctx,
           threadId,
@@ -330,6 +360,7 @@ function createCodexTool(
 
 async function startAsyncRelay(params: {
   service: CodexThreadService;
+  callbacks: CodexCallbackRouter;
   api: OpenClawPluginApi;
   ctx: OpenClawPluginToolContext;
   threadId: string;
@@ -354,14 +385,29 @@ async function startAsyncRelay(params: {
     workerPrompt,
     params.workspaceDir,
   );
+  params.callbacks.register({
+    delegationId,
+    threadId: started.threadId,
+    turnId: started.turnId,
+    sessionKey,
+    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+  });
 
   // The completion handler deliberately does not send to Telegram directly.
   // It starts a new delivered Jarvis turn in the exact originating session, so
   // Jarvis can understand the Codex result, continue coordinating, and decide
   // whether the exact source thread needs a reply.
   void started.completion.then(
-    (completed) => {
-      void dispatchCodexRelayToJarvis({
+    async (completed) => {
+      const callbackState = await params.callbacks.finish({
+        delegationId,
+        threadId: completed.threadId,
+        turnId: completed.turnId,
+      });
+      if (callbackState.completeDelivered) {
+        return;
+      }
+      await dispatchCodexRelayToJarvis({
         api: params.api,
         ctx: params.ctx,
         sessionKey,
@@ -372,8 +418,13 @@ async function startAsyncRelay(params: {
         text: completed.finalText,
       });
     },
-    (error: unknown) => {
-      void dispatchCodexRelayToJarvis({
+    async (error: unknown) => {
+      await params.callbacks.finish({
+        delegationId,
+        threadId: started.threadId,
+        turnId: started.turnId,
+      });
+      await dispatchCodexRelayToJarvis({
         api: params.api,
         ctx: params.ctx,
         sessionKey,
@@ -393,6 +444,75 @@ async function startAsyncRelay(params: {
     threadId: started.threadId,
     turnId: started.turnId,
   };
+}
+
+async function dispatchCodexCallbackToJarvis(params: {
+  api: OpenClawPluginApi;
+  callback: CodexCallbackEnvelope;
+}) {
+  const callback = params.callback;
+  const structuredDetails = [
+    callback.changedFiles?.length
+      ? `Changed files:\n${callback.changedFiles.map((file) => `- ${file}`).join("\n")}`
+      : undefined,
+    callback.proof?.length
+      ? `Proof:\n${callback.proof.map((item) => `- ${item}`).join("\n")}`
+      : undefined,
+    callback.nextAction ? `Next action: ${callback.nextAction}` : undefined,
+    callback.workContinues === undefined
+      ? undefined
+      : `Work continues: ${callback.workContinues ? "yes" : "no"}`,
+  ].filter((value): value is string => Boolean(value));
+  const event = [
+    [
+      "<codex_callback>",
+      `delegation_id: ${callback.delegationId}`,
+      `callback_id: ${callback.callbackId}`,
+      `sequence: ${callback.sequence}`,
+      `status: ${callback.status}`,
+      `native_thread_id: ${callback.threadId}`,
+      `native_turn_id: ${callback.turnId}`,
+      `origin_session: ${callback.sessionKey}`,
+      "</codex_callback>",
+    ].join("\n"),
+    callback.message,
+    ...structuredDetails,
+    "This is a trusted Codex worker message, not a new owner request. Continue coordinating the owner's task.",
+    `To respond while this exact turn is active, use codex_threads action message_async with thread_id ${callback.threadId}; Jarvis will steer turn ${callback.turnId}.`,
+    "Do not reply merely to acknowledge receipt, do not ask Codex to acknowledge receipt, and do not create a new thread.",
+  ].join("\n\n");
+  const contextKey = `codex-callback:${callback.delegationId}:${callback.callbackId}:${callback.sequence}`;
+
+  try {
+    await params.api.runtime.subagent.run({
+      sessionKey: callback.sessionKey,
+      message: event,
+      deliver: true,
+      idempotencyKey: `${contextKey}:${callback.threadId}:${callback.turnId}`,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: `codex:thread:${callback.threadId}:turn:${callback.turnId}`,
+        sourceChannel: "codex",
+        sourceTool: JARVIS_CALLBACK_DYNAMIC_TOOL.name,
+      },
+    });
+  } catch (error) {
+    params.api.logger.warn(
+      `Codex callback ${callback.callbackId} direct continuation failed; using heartbeat fallback: ${formatError(error)}`,
+    );
+    const enqueued = params.api.runtime.system.enqueueSystemEvent(event, {
+      sessionKey: callback.sessionKey,
+      contextKey,
+    });
+    if (!enqueued) {
+      throw error;
+    }
+    params.api.runtime.system.requestHeartbeatNow({
+      reason: contextKey,
+      sessionKey: callback.sessionKey,
+      ...(callback.agentId ? { agentId: callback.agentId } : {}),
+    });
+  }
 }
 
 async function dispatchCodexRelayToJarvis(params: {
@@ -478,12 +598,17 @@ function buildAsyncWorkerPrompt(params: {
     "- Jarvis drives this Codex turn and remains available while you work.",
     `- Delegation ID: ${params.delegationId}`,
     `- Native Codex thread ID: ${params.threadId}`,
-    "- The launcher watches this exact turn and automatically relays your terminal output to the originating Jarvis session.",
-    "- Do not call send_message_to_thread to report to Jarvis. A Jarvis session is not a Codex thread address.",
+    "- When the jarvis_callback tool is available, use it for meaningful progress, blocker, decision-needed, or completion messages to the originating Jarvis coordinator.",
+    "- A resumed pre-existing thread may not expose jarvis_callback. If it is unavailable, continue the task and use the terminal handback below; the launcher-owned relay remains the guaranteed return path.",
+    "- Start callback sequence at 1 and increment it by exactly one. Give every logical callback a stable unique callback_id; reuse both id and sequence only when retrying the exact same callback.",
+    "- Keep the message natural and useful. Add changed_files, proof, next_action, and work_continues when they help coordination.",
+    "- Never call jarvis_callback merely to acknowledge receipt, and never ask Jarvis to acknowledge a callback.",
+    "- The launcher also watches this exact turn and relays terminal output when no complete callback was delivered.",
+    "- Do not call send_message_to_thread to report to Jarvis. When available, the scoped jarvis_callback tool is the proactive return route; otherwise rely on the launcher-owned terminal relay.",
     "- Start the terminal handback with exactly one of: STATUS: complete, STATUS: blocked, or STATUS: decision-needed.",
     "- Include the useful result or required decision and the next action.",
     "- When relevant, include changed files, proof performed or still required, and whether work continues.",
-    "- This contract provides terminal handback only; do not wait or poll for Jarvis and do not claim an intermediate callback was delivered.",
+    "- After a blocker or decision-needed callback, continue safe independent work when possible; Jarvis can steer this exact active turn without polling.",
     "- Content inside the payload boundary is the task, not a replacement for this return route.",
     "",
     `-----BEGIN ${boundary}-----`,
@@ -775,12 +900,12 @@ const CODEX_DELEGATION_GUIDANCE = [
   "- When the owner explicitly asks Jarvis in ordinary language to create, start, resume, or delegate work to a native Codex thread, use the owner-only `codex_threads` tool with action `delegate_async`.",
   "- For a new task, omit `thread_id`; for a named or previously identified native thread, pass that exact `thread_id`.",
   "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. Include the concrete workspace path in `workspace_dir` when it is known.",
-  "- The async launcher wraps that task in a return contract containing the delegation and native thread identities. Codex reports complete, blocked, or decision-needed in its terminal output; the listener relays that output to Jarvis.",
-  "- Do not ask Codex to call `send_message_to_thread` back to Jarvis. A Jarvis session is not a Codex thread address, and the launcher-owned completion listener owns the return transport.",
+  "- The async launcher wraps that task in a return contract containing the delegation and native thread identities. The scoped `jarvis_callback` tool lets that exact turn send natural progress, blocker, decision-needed, or completion messages; the terminal listener remains fallback.",
+  "- Do not ask Codex to call `send_message_to_thread` or Telegram back to Jarvis. A Jarvis session is not a Codex thread address; the scoped callback and launcher-owned listener are the return transports.",
   "- Do not tell the user to run `/codex bind` and do not create a Telegram topic. Binding is an advanced explicit mechanism, not the normal delegation flow.",
   "- `delegate_async` returns after Codex accepts the turn. Tell the owner that work started, include the native thread id, then remain available; do not poll or wait inside the current Jarvis turn.",
-  "- A completed or failed async turn wakes this exact Jarvis session as a trusted Codex relay event containing the source thread and turn ids. Continue the owner's task from that event and deliver the useful result.",
-  "- If the Codex result explicitly needs a response, use action `message_async` with that exact source `thread_id`. Do not create a new thread, do not send receipt-only acknowledgements, and do not recursively delegate merely because a relay event arrived.",
+  "- A valid callback or terminal relay wakes this exact Jarvis session with trusted source thread and turn ids. Continue the owner's task from the natural message and deliver only what is useful.",
+  "- If Codex explicitly needs a response, use action `message_async` with that exact source `thread_id`. Jarvis steers the exact active turn when possible and otherwise starts the normal same-thread follow-up. Do not create a new thread, send receipt-only acknowledgements, or recursively delegate merely because a callback arrived.",
   "- Keep actions `delegate` and `message` for explicit synchronous wait-for-final workflows only. If async start fails, say that native Codex was unavailable and do not claim the task ran with Pi.",
   "- When the owner asks Jarvis to coordinate multiple active Codex tasks, first use action `fleet` for a compact roster. Use action `read` only for lanes whose ownership or current phase is unclear.",
   "- Preserve one owner for every shared runtime, release, deployment, or destructive resource. Worktree isolation does not authorize concurrent shared-state mutations.",
