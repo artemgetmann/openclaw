@@ -52,6 +52,7 @@ type ThreadServiceOptions = {
   client: () => Promise<CodexRpcClient>;
   turnTimeoutMs: number;
   defaultWorkspaceDir: string;
+  dynamicTools?: readonly Record<string, unknown>[];
 };
 
 /**
@@ -211,6 +212,7 @@ export class CodexThreadService {
       developerInstructions:
         "This thread is controlled by the isolated OpenClaw Codex pilot. Work read-only, do not use network access, and return one concise final answer.",
       experimentalRawEvents: true,
+      ...(this.options.dynamicTools?.length ? { dynamicTools: this.options.dynamicTools } : {}),
     });
     this.loadedThreadIds.add(requireThreadId(response));
     return response;
@@ -329,6 +331,46 @@ export class CodexThreadService {
       this.activeThreadIds.delete(normalizedThreadId);
       throw error;
     }
+  }
+
+  /**
+   * Add coordinator guidance to the exact active native turn.
+   *
+   * App Server enforces expectedTurnId as a compare-and-steer precondition, so
+   * a stale callback can never redirect text into a newer turn on the thread.
+   */
+  async steer(
+    threadId: string,
+    turnId: string,
+    text: string,
+  ): Promise<{
+    threadId: string;
+    turnId: string;
+  }> {
+    const normalizedThreadId = requireId(threadId);
+    const normalizedTurnId = requireId(turnId);
+    const prompt = text.trim();
+    if (!prompt) {
+      throw new Error("text is required");
+    }
+    if (!this.activeThreadIds.has(normalizedThreadId)) {
+      throw new Error(`Codex thread ${normalizedThreadId} has no active continuation to steer`);
+    }
+    const response = await (
+      await this.client()
+    ).request<JsonObject>("turn/steer", {
+      threadId: normalizedThreadId,
+      expectedTurnId: normalizedTurnId,
+      input: [{ type: "text", text: prompt, text_elements: [] }],
+    });
+    const returnedTurnId = readString(response.turnId);
+    if (returnedTurnId !== normalizedTurnId) {
+      throw new Error("Codex App Server steered a different turn than requested");
+    }
+    return {
+      threadId: normalizedThreadId,
+      turnId: normalizedTurnId,
+    };
   }
 
   async archive(threadId: string): Promise<void> {

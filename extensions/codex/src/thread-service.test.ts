@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { CodexNotification, CodexRpcClient } from "./app-server-client.js";
+import type {
+  CodexNotification,
+  CodexRpcClient,
+  CodexServerRequestHandler,
+} from "./app-server-client.js";
+import { JARVIS_CALLBACK_DYNAMIC_TOOL } from "./callback-router.js";
 import { CodexThreadService, requireThreadId } from "./thread-service.js";
 
 class FakeCodexClient implements CodexRpcClient {
@@ -45,12 +50,19 @@ class FakeCodexClient implements CodexRpcClient {
       }
       return { turn: { id: "turn-1" } } as T;
     }
+    if (method === "turn/steer") {
+      return { turnId: "turn-1" } as T;
+    }
     return {} as T;
   }
 
   onNotification(handler: (notification: CodexNotification) => void): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
+  }
+
+  onServerRequest(_handler: CodexServerRequestHandler): () => void {
+    return () => undefined;
   }
 
   getServerVersion() {
@@ -104,6 +116,7 @@ function createService(client: FakeCodexClient) {
     client: async () => client,
     turnTimeoutMs: 5_000,
     defaultWorkspaceDir: "/tmp/codex-pilot",
+    dynamicTools: [JARVIS_CALLBACK_DYNAMIC_TOOL],
   });
 }
 
@@ -134,6 +147,17 @@ describe("CodexThreadService", () => {
         }),
       ]),
     );
+    expect(client.requests[0]).toMatchObject({
+      method: "thread/start",
+      params: {
+        dynamicTools: [
+          expect.objectContaining({
+            name: "jarvis_callback",
+            type: "function",
+          }),
+        ],
+      },
+    });
   });
 
   it("projects selected progress while delivering one stable final", async () => {
@@ -168,6 +192,40 @@ describe("CodexThreadService", () => {
       threadId: "thread-async",
       finalText: "stable final",
     });
+  });
+
+  it("steers only the exact active native turn", async () => {
+    const client = new FakeCodexClient();
+    client.holdTurn = true;
+    const service = createService(client);
+    const started = await service.startMessage("thread-async", "Work independently.");
+
+    await expect(
+      service.steer("thread-async", "turn-1", "Use the narrow callback contract."),
+    ).resolves.toEqual({
+      threadId: "thread-async",
+      turnId: "turn-1",
+    });
+    expect(client.requests.at(-1)).toEqual({
+      method: "turn/steer",
+      params: {
+        threadId: "thread-async",
+        expectedTurnId: "turn-1",
+        input: [
+          {
+            type: "text",
+            text: "Use the narrow callback contract.",
+            text_elements: [],
+          },
+        ],
+      },
+    });
+    await expect(service.steer("thread-other", "turn-1", "Do not redirect this.")).rejects.toThrow(
+      "has no active continuation to steer",
+    );
+
+    client.finishTurn("thread-async");
+    await started.completion;
   });
 
   it("returns a compact fleet snapshot without loading every thread transcript", async () => {
