@@ -90,12 +90,12 @@ Automation Rule
   narrow `--contains` filter and inspect reply/topic metadata before deciding
   whether another send is needed. For a captionless media or voice send, read
   recent messages without `--contains` and match the outgoing message's
-  `media_kind`, timestamp, and reply/topic metadata. `read` does not accept
-  `--topic-anchor`; topic verification uses the returned `reply_to_top_id`,
-  `reply_to_msg_id`, or DM topic metadata. For other mutations such as login or
+  `media_kind`, timestamp, and reply/topic metadata. For a known forum topic,
+  use `read --topic-anchor`; it validates the anchor against the exact chat and
+  uses Telegram's topic-scoped history API. For other mutations such as login or
   topic creation, inspect the relevant current state first. Only `status`,
-  `precheck`, `read`, and `inbox` are safe to retry automatically after the
-  backend timeout.
+  `precheck`, `read`, `inbox`, and `topic-resolve` are safe to retry
+  automatically after the backend timeout.
 - Use structured CLI filters before shell parsing. If you need to find a known
   chat or message, prefer `inbox --contains ...`, `read --contains ...`, or
   `wait --contains ...`; do not pipe Telegram JSON to `grep` when one of those
@@ -257,6 +257,10 @@ Default Commands
   `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --format compact`
 - Read recent messages matching known text:
   `openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --format compact`
+- Resolve one exact forum-topic title to its authoritative anchor:
+  `openclaw telegram-user topic-resolve --chat -1003783709877 --title "Gmail Keychain Auth RCA" --json`
+- Read only one validated forum topic:
+  `openclaw telegram-user read --chat -1003783709877 --topic-anchor 12345 --limit 20 --format compact`
 - Mark one resolved chat read:
   `openclaw telegram-user mark-read --chat @jarvis_tester_1_bot --json`
 - Preserve or restore one pending chat as unread:
@@ -287,10 +291,16 @@ Behavior Notes
   manage `phone_code_hash` by hand.
 - Use `inbox` for discovery and unread triage across chats.
 - Use `read --chat` only once the target chat is known.
+- If the user names a forum topic by title, run `topic-resolve` first, then pass
+  its returned `topic_anchor` to `read`. Exact duplicate titles fail as
+  ambiguous; never choose one by nearby message text or group-wide history.
 - Prefer `read --format compact` for agent-facing context. It returns
   newest-first message rows with ids, direction, sender, reply/topic metadata,
   media kind, text, and paging hints. Use raw `read --json` only when debugging
   backend metadata.
+- A topic-scoped `read` returns the authoritative `topic_anchor` and
+  `topic_title` when Telegram resolves them. Reply metadata proves routing
+  association; it must not be used to invent a topic title.
 - `read` exposes `media_kind` for media-bearing messages; use `download` for
   the payload and keep transcription generic through `openclaw media transcribe`.
 - `wait` is thread-aware through the existing backend semantics around

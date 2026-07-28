@@ -13,6 +13,7 @@ const telegramUserDownloadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserSendCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserTopicCreateCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserTopicDeleteCommand = vi.fn().mockResolvedValue(undefined);
+const telegramUserTopicResolveCommand = vi.fn().mockResolvedValue(undefined);
 const runTelegramMonitorServiceInstall = vi.fn().mockResolvedValue(undefined);
 const runTelegramMonitorServiceRestart = vi.fn().mockResolvedValue(undefined);
 const runTelegramMonitorServiceStatus = vi.fn().mockResolvedValue(undefined);
@@ -32,6 +33,7 @@ vi.mock("../commands/telegram-user.js", () => ({
   telegramUserSendCommand,
   telegramUserTopicCreateCommand,
   telegramUserTopicDeleteCommand,
+  telegramUserTopicResolveCommand,
 }));
 
 vi.mock("./telegram-user-monitor-service.js", () => ({
@@ -77,6 +79,8 @@ describe("telegram-user cli", () => {
     expect(help).toContain("openclaw telegram-user send --chat @jarvis_tester_1_bot");
     expect(help).toContain("openclaw telegram-user send --chat -1003783709877 --topic-anchor");
     expect(help).toContain("openclaw telegram-user topic-delete --chat -1003783709877");
+    expect(help).toContain("openclaw telegram-user topic-resolve --chat -1003783709877");
+    expect(help).toContain("read --chat -1003783709877 --topic-anchor 15250");
     expect(help).toContain(
       "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof",
     );
@@ -374,6 +378,8 @@ describe("telegram-user cli", () => {
         "@jarvis_tester_1_bot",
         "--contains",
         "proof",
+        "--topic-anchor",
+        "15250",
         "--limit",
         "5",
         "--json",
@@ -387,6 +393,34 @@ describe("telegram-user cli", () => {
         contains: "proof",
         json: true,
         limit: "5",
+        topicAnchor: "15250",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("registers exact topic resolution and forwards the named chat topic", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "topic-resolve",
+        "--chat",
+        "-1003783709877",
+        "--title",
+        "Gmail Keychain Auth RCA",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserTopicResolveCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "-1003783709877",
+        json: true,
+        title: "Gmail Keychain Auth RCA",
       }),
       expect.any(Object),
     );

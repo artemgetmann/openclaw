@@ -505,6 +505,37 @@ def build_topic_delete_payload(
   }
 
 
+def build_topic_payload(topic) -> dict[str, object]:
+  # ForumTopic.id is Telegram's canonical topic anchor. It is 1 for General
+  # and the creation-service-message id for normal supergroup topics.
+  return {
+    "closed": bool(getattr(topic, "closed", False)),
+    "hidden": bool(getattr(topic, "hidden", False)),
+    "topic_anchor": int(getattr(topic, "id", 0) or 0),
+    "topic_title": str(getattr(topic, "title", "") or ""),
+  }
+
+
+def find_topic_by_anchor(result, topic_anchor: int):
+  for topic in getattr(result, "topics", []) or []:
+    if int(getattr(topic, "id", 0) or 0) == topic_anchor and getattr(topic, "title", None) is not None:
+      return topic
+  return None
+
+
+async def fetch_topic_by_anchor(client, *, chat, topic_anchor: int):
+  # This RPC binds the topic id to the selected peer. An empty/deleted result
+  # therefore fails closed instead of letting a same-numbered topic elsewhere
+  # authorize a read.
+  result = await client(
+    functions.messages.GetForumTopicsByIDRequest(
+      peer = chat,
+      topics = [topic_anchor],
+    )
+  )
+  return find_topic_by_anchor(result, topic_anchor)
+
+
 def extract_created_topic_message(updates):
   # Forum topic creation arrives as an Updates container with a service message.
   # Match the structural Telegram action class so localized text never affects
@@ -753,12 +784,17 @@ def build_parser() -> argparse.ArgumentParser:
   topic_delete.add_argument("--chat", required = True, help = "Target forum chat username or id")
   topic_delete.add_argument("--topic-anchor", type = int, required = True, help = "Forum topic anchor returned by topic-create")
 
+  topic_resolve = subparsers.add_parser("topic-resolve", help = "Resolve an exact forum topic title")
+  topic_resolve.add_argument("--chat", required = True, help = "Target forum chat username or id")
+  topic_resolve.add_argument("--title", required = True, help = "Exact forum topic title")
+
   read = subparsers.add_parser("read", help = "Read recent messages and metadata")
   read.add_argument("--chat", required = True, help = "Target chat username or id")
   read.add_argument("--limit", type = int, default = 20, help = "Maximum number of messages")
   read.add_argument("--after-id", type = int, default = 0, help = "Only return newer messages")
   read.add_argument("--before-id", type = int, default = 0, help = "Only return older messages")
   read.add_argument("--contains", default = "", help = "Only return messages containing this substring")
+  read.add_argument("--topic-anchor", type = int, help = "Read only this forum topic")
 
   mark_read = subparsers.add_parser("mark-read", help = "Acknowledge current chat history as read")
   mark_read.add_argument("--chat", required = True, help = "Target chat username or id")
@@ -1238,21 +1274,112 @@ async def run_topic_delete(args: argparse.Namespace) -> int:
       await client.disconnect()
 
 
+async def run_topic_resolve(args: argparse.Namespace) -> int:
+  if functions is None:
+    return fail("E_TELETHON_IMPORT", "Telethon forum topic functions are unavailable.")
+  session_path = resolve_session_path(args.session)
+  title = str(args.title or "").strip()
+  if not title:
+    return fail("E_USAGE", "Telegram topic-resolve requires --title.")
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
+    client, _ = await connect_client(session_path)
+    try:
+      # Telegram applies q server-side. The exact normalized comparison below
+      # prevents a fuzzy result from silently selecting the wrong topic.
+      result = await client(
+        functions.messages.GetForumTopicsRequest(
+          peer = resolve_chat(args.chat),
+          offset_date = None,
+          offset_id = 0,
+          offset_topic = 0,
+          limit = 100,
+          q = title,
+        )
+      )
+      matches = [
+        topic
+        for topic in getattr(result, "topics", []) or []
+        if getattr(topic, "title", None) is not None
+        and str(getattr(topic, "title", "")).strip().casefold() == title.casefold()
+      ]
+      if not matches:
+        return fail(
+          "E_TOPIC_NOT_FOUND",
+          "No forum topic with that exact title belongs to the target chat.",
+        )
+      if len(matches) > 1:
+        return fail(
+          "E_TOPIC_AMBIGUOUS",
+          "Multiple forum topics in the target chat have that exact title; use an explicit topic anchor.",
+          details = {"topic_anchors": [int(getattr(topic, "id", 0) or 0) for topic in matches]},
+        )
+      return emit({"chat": args.chat, "topic": build_topic_payload(matches[0])})
+    finally:
+      await client.disconnect()
+
+
 async def run_read(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   limit = max(1, min(int(args.limit or 20), 200))
   contains = str(args.contains or "")
-  read_kwargs = {
-    "limit": compute_message_scan_cap(contains = contains, limit = limit),
-  }
-  if args.after_id:
-    read_kwargs["min_id"] = int(args.after_id)
-  if args.before_id:
-    read_kwargs["max_id"] = int(args.before_id)
+  topic_anchor_raw = getattr(args, "topic_anchor", None)
+  topic_anchor = int(topic_anchor_raw or 0)
+  if topic_anchor_raw is not None and topic_anchor <= 0:
+    return fail("E_USAGE", "Telegram read --topic-anchor must be a positive integer.")
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
-      messages = await client.get_messages(resolve_chat(args.chat), **read_kwargs)
+      chat = resolve_chat(args.chat)
+      topic = None
+      if topic_anchor:
+        if functions is None:
+          return fail("E_TELETHON_IMPORT", "Telethon forum topic functions are unavailable.")
+        topic = await fetch_topic_by_anchor(client, chat = chat, topic_anchor = topic_anchor)
+        if topic is None:
+          return fail(
+            "E_TOPIC_NOT_FOUND",
+            "The topic anchor does not belong to the target chat.",
+            details = {"topic_anchor": topic_anchor},
+          )
+        # GetReplies is Telegram's topic-scoped history RPC. Unlike a chat-wide
+        # scan plus local matching, it cannot mix sibling forum topics.
+        result = await client(
+          functions.messages.GetRepliesRequest(
+            peer = chat,
+            msg_id = topic_anchor,
+            offset_id = 0,
+            offset_date = None,
+            add_offset = 0,
+            limit = compute_message_scan_cap(contains = contains, limit = limit),
+            max_id = int(args.before_id or 0),
+            min_id = int(args.after_id or 0),
+            hash = 0,
+          )
+        )
+        replies = list(getattr(result, "messages", []) or [])
+        # GetReplies owns the strict topic scope, but Telegram does not promise
+        # that every response page repeats the topic's creation/root message.
+        # Fetch that one exact id separately so root-only reads stay complete.
+        root = await client.get_messages(chat, ids = topic_anchor)
+        messages_by_id = {
+          int(getattr(message, "id", 0) or 0): message
+          for message in [*replies, root]
+          if message is not None and int(getattr(message, "id", 0) or 0) > 0
+        }
+        messages = sorted(
+          messages_by_id.values(),
+          key = lambda message: int(getattr(message, "id", 0) or 0),
+          reverse = True,
+        )
+      else:
+        read_kwargs = {
+          "limit": compute_message_scan_cap(contains = contains, limit = limit),
+        }
+        if args.after_id:
+          read_kwargs["min_id"] = int(args.after_id)
+        if args.before_id:
+          read_kwargs["max_id"] = int(args.before_id)
+        messages = await client.get_messages(chat, **read_kwargs)
       normalized = []
       for message in messages:
         message_id = int(getattr(message, "id", 0) or 0)
@@ -1265,7 +1392,10 @@ async def run_read(args: argparse.Namespace) -> int:
         normalized.append(build_message_payload(message))
         if len(normalized) >= limit:
           break
-      return emit({"messages": normalized})
+      payload: dict[str, object] = {"messages": normalized}
+      if topic is not None:
+        payload["topic"] = build_topic_payload(topic)
+      return emit(payload)
     finally:
       await client.disconnect()
 
@@ -1473,6 +1603,8 @@ async def run() -> int:
       return await run_topic_create(args)
     if args.command == "topic-delete":
       return await run_topic_delete(args)
+    if args.command == "topic-resolve":
+      return await run_topic_resolve(args)
     if args.command == "read":
       return await run_read(args)
     if args.command == "mark-read":

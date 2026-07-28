@@ -20,6 +20,7 @@ const backendMocks = vi.hoisted(() => ({
   runTelegramUserStatus: vi.fn(),
   runTelegramUserTopicCreate: vi.fn(),
   runTelegramUserTopicDelete: vi.fn(),
+  runTelegramUserTopicResolve: vi.fn(),
   sleep: vi.fn(async () => {}),
 }));
 
@@ -66,6 +67,7 @@ const {
   telegramUserStatusCommand,
   telegramUserTopicCreateCommand,
   telegramUserTopicDeleteCommand,
+  telegramUserTopicResolveCommand,
   telegramUserWaitCommand,
 } = await import("./telegram-user.js");
 
@@ -609,6 +611,36 @@ describe("telegram-user commands", () => {
     ).rejects.toThrow(/requires --chat and --topic-anchor/i);
   });
 
+  it("resolves an exact topic title to authoritative metadata", async () => {
+    backendMocks.runTelegramUserTopicResolve.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: "-1003783709877",
+      topic: {
+        closed: false,
+        hidden: false,
+        topic_anchor: 15250,
+        topic_title: "Gmail Keychain Auth RCA",
+      },
+    });
+
+    await telegramUserTopicResolveCommand(
+      {
+        chat: "-1003783709877",
+        json: true,
+        title: "Gmail Keychain Auth RCA",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserTopicResolve).toHaveBeenCalledWith({
+      chat: "-1003783709877",
+      envFile: undefined,
+      session: undefined,
+      title: "Gmail Keychain Auth RCA",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"topic_anchor": 15250'));
+  });
+
   it("renders recent messages as a table", async () => {
     backendMocks.runTelegramUserRead.mockResolvedValueOnce({
       backend_meta: backendMeta,
@@ -629,25 +661,47 @@ describe("telegram-user commands", () => {
           thread_anchor: 120,
         },
       ],
+      topic: {
+        closed: false,
+        hidden: false,
+        topic_anchor: 15250,
+        topic_title: "Gmail Keychain Auth RCA",
+      },
     });
 
     await telegramUserReadCommand(
-      { chat: "@jarvis_tester_1_bot", contains: "reply", limit: "5" },
+      {
+        chat: "-1003783709877",
+        contains: "reply",
+        limit: "5",
+        topicAnchor: "15250",
+      },
       runtime,
     );
 
     expect(backendMocks.runTelegramUserRead).toHaveBeenCalledWith({
       afterId: undefined,
       beforeId: undefined,
-      chat: "@jarvis_tester_1_bot",
+      chat: "-1003783709877",
       contains: "reply",
       envFile: undefined,
       limit: 5,
       session: undefined,
+      topicAnchor: 15250,
     });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("reply text"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("200"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("messages=1"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining('topic_title="Gmail Keychain Auth RCA"'),
+    );
+  });
+
+  it("rejects a non-positive topic anchor before reading", async () => {
+    await expect(
+      telegramUserReadCommand({ chat: "-1003783709877", topicAnchor: "0" }, runtime),
+    ).rejects.toThrow(/--topic-anchor to be a positive integer/i);
+    expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
   });
 
   it("renders recent messages in compact agent-friendly text", async () => {

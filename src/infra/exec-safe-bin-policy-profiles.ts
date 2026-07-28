@@ -347,6 +347,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["telegram-user", "send"],
       ["telegram-user", "topic-create"],
       ["telegram-user", "topic-delete"],
+      ["telegram-user", "topic-resolve"],
       ["telegram-user", "read"],
       // Telegram read-state commands remain target-scoped through --chat and
       // do not open the rest of the OpenClaw command tree.
