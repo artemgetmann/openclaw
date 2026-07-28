@@ -155,9 +155,23 @@ export type TelegramUserTopicDeleteResult = {
   topic_anchor: number;
 };
 
+export type TelegramUserTopic = {
+  closed: boolean;
+  hidden: boolean;
+  topic_anchor: number;
+  topic_title: string;
+};
+
+export type TelegramUserTopicResolveResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  chat: string;
+  topic: TelegramUserTopic;
+};
+
 export type TelegramUserReadResult = {
   backend_meta?: TelegramUserBackendMeta;
   messages: TelegramUserMessage[];
+  topic?: TelegramUserTopic | null;
 };
 
 export type TelegramUserMarkReadResult = {

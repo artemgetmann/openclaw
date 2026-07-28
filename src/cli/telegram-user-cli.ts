@@ -71,6 +71,14 @@ export function registerTelegramUserCli(program: Command) {
             "Delete a temporary forum topic after bounded live proof cleanup.",
           ],
           [
+            'openclaw telegram-user topic-resolve --chat -1003783709877 --title "Gmail Keychain Auth RCA" --json',
+            "Resolve one exact forum-topic title to its authoritative topic anchor.",
+          ],
+          [
+            "openclaw telegram-user read --chat -1003783709877 --topic-anchor 15250 --limit 20 --format compact",
+            "Read only one validated forum topic; messages from sibling topics cannot leak in.",
+          ],
+          [
             "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof --limit 5 --format compact",
             "Read matching recent DM messages in compact agent-friendly rows; add --json only when raw metadata is needed.",
           ],
@@ -118,6 +126,19 @@ export function registerTelegramUserCli(program: Command) {
     .action(() => {
       telegramUser.help({ error: true });
     });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("topic-resolve")
+      .description("Resolve one exact Telegram forum-topic title to its authoritative anchor")
+      .requiredOption("--chat <target>", "Target forum chat username or id")
+      .requiredOption("--title <title>", "Exact forum topic title"),
+  ).action(async (opts) => {
+    await runTelegramUserCommand(async () => {
+      const { telegramUserTopicResolveCommand } = await import("../commands/telegram-user.js");
+      await telegramUserTopicResolveCommand(opts, defaultRuntime);
+    });
+  });
 
   withTelegramUserBase(
     telegramUser
@@ -261,6 +282,7 @@ export function registerTelegramUserCli(program: Command) {
     .option("--after-id <id>", "Only include messages newer than this id")
     .option("--before-id <id>", "Only include messages older than this id")
     .option("--contains <text>", "Only include messages containing this substring")
+    .option("--topic-anchor <id>", "Read only this validated forum topic")
     .option("--format <format>", "Output format: table or compact", "table")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {

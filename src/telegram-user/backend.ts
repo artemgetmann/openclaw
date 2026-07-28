@@ -30,11 +30,18 @@ import type {
   TelegramUserSendResult,
   TelegramUserTopicCreateResult,
   TelegramUserTopicDeleteResult,
+  TelegramUserTopicResolveResult,
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 const telegramUserBackendTimeoutMs = 60_000;
-const telegramUserReadOnlyBackendCommands = new Set(["status", "precheck", "read", "inbox"]);
+const telegramUserReadOnlyBackendCommands = new Set([
+  "status",
+  "precheck",
+  "read",
+  "inbox",
+  "topic-resolve",
+]);
 
 const telegramUserToolingFiles = [
   "requirements.txt",
@@ -1170,6 +1177,21 @@ export async function runTelegramUserTopicDelete(
   });
 }
 
+export async function runTelegramUserTopicResolve(
+  params: {
+    chat: string;
+    title: string;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserTopicResolveResult> {
+  // Topic discovery is deliberately separate from message history. Telegram's
+  // forum-topic index is authoritative; nearby messages and reply ids are not.
+  const args = ["topic-resolve", "--chat", params.chat, "--title", params.title];
+  return runBackendCommand<TelegramUserTopicResolveResult>({
+    ...params,
+    args,
+  });
+}
+
 export async function runTelegramUserRead(
   params: {
     afterId?: number | null;
@@ -1177,6 +1199,7 @@ export async function runTelegramUserRead(
     chat: string;
     contains?: string | null;
     limit?: number | null;
+    topicAnchor?: number | null;
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserReadResult> {
   const args = ["read", "--chat", params.chat];
@@ -1184,6 +1207,7 @@ export async function runTelegramUserRead(
   pushOptionalNumberArg(args, "--after-id", params.afterId);
   pushOptionalNumberArg(args, "--before-id", params.beforeId);
   pushOptionalStringArg(args, "--contains", params.contains);
+  pushOptionalNumberArg(args, "--topic-anchor", params.topicAnchor);
   return runBackendCommand<TelegramUserReadResult>({
     ...params,
     args,

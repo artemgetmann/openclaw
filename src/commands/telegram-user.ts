@@ -19,6 +19,7 @@ import {
   runTelegramUserStatus,
   runTelegramUserTopicCreate,
   runTelegramUserTopicDelete,
+  runTelegramUserTopicResolve,
   sleep,
 } from "../telegram-user/backend.js";
 import type {
@@ -45,6 +46,7 @@ import type {
   TelegramUserSendResult,
   TelegramUserTopicCreateResult,
   TelegramUserTopicDeleteResult,
+  TelegramUserTopicResolveResult,
   TelegramUserWaitParams,
   TelegramUserWaitResult,
 } from "../telegram-user/types.js";
@@ -235,6 +237,7 @@ function buildTelegramCompactReadResult(result: TelegramUserReadResult, chat: st
     messages,
     order: "newest_first" as const,
     paging: buildTelegramCompactPaging(messages),
+    ...(result.topic ? { topic: result.topic } : {}),
   };
 }
 
@@ -243,6 +246,11 @@ function formatTelegramCompactMessages(result: TelegramUserReadResult, chat: str
   const lines = [
     `Telegram user read compact. chat=${chat} messages=${compact.messages.length} order=newest-first`,
   ];
+  if ("topic" in compact && compact.topic) {
+    lines.push(
+      `Topic: anchor=${compact.topic.topic_anchor} title=${JSON.stringify(compact.topic.topic_title)}`,
+    );
+  }
   for (const message of compact.messages) {
     lines.push(
       [
@@ -407,6 +415,25 @@ function readPositiveIntegerOpt(
     return undefined;
   }
   if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${context} requires ${flag} to be a positive integer.`);
+  }
+  return value;
+}
+
+function readPresentPositiveIntegerOpt(
+  opts: Record<string, unknown>,
+  key: string,
+  flag: string,
+  context: string,
+): number | undefined {
+  // Presence and validity are separate for security-sensitive scoping. Only
+  // an omitted property may select unscoped history; every present value must
+  // prove that it is a positive integer before any backend call.
+  if (!Object.prototype.hasOwnProperty.call(opts, key)) {
+    return undefined;
+  }
+  const value = readNumberOpt(opts, key);
+  if (value === undefined || !Number.isInteger(value) || value < 1) {
     throw new Error(`${context} requires ${flag} to be a positive integer.`);
   }
   return value;
@@ -664,10 +691,22 @@ function logTopicDeleteText(runtime: RuntimeEnv, result: TelegramUserTopicDelete
   );
 }
 
+function logTopicResolveText(runtime: RuntimeEnv, result: TelegramUserTopicResolveResult) {
+  runtime.log(
+    `Telegram user topic-resolve ok. chat=${result.chat} topic_anchor=${result.topic.topic_anchor} topic_title=${JSON.stringify(result.topic.topic_title)}`,
+  );
+  runtime.log(formatBackendMeta(result.backend_meta));
+}
+
 function logReadText(runtime: RuntimeEnv, result: TelegramUserReadResult) {
   runtime.log(
     `Telegram user read completed. messages=${result.messages.length} ${formatBackendMeta(result.backend_meta)}`,
   );
+  if (result.topic) {
+    runtime.log(
+      `topic_anchor=${result.topic.topic_anchor} topic_title=${JSON.stringify(result.topic.topic_title)}`,
+    );
+  }
   if (result.messages.length === 0) {
     runtime.log("No Telegram user messages matched the requested range.");
     return;
@@ -1066,12 +1105,39 @@ export async function telegramUserTopicDeleteCommand(
   logTopicDeleteText(runtime, result);
 }
 
+export async function telegramUserTopicResolveCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const chat = readStringOpt(opts, "chat");
+  const title = readStringOpt(opts, "title");
+  if (!chat || !title) {
+    throw new Error("Telegram user topic-resolve requires --chat and --title.");
+  }
+  const result = await runTelegramUserTopicResolve({
+    ...resolveBackendOptions(opts),
+    chat,
+    title,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logTopicResolveText(runtime, result);
+}
+
 export async function telegramUserReadCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
   const chat = readStringOpt(opts, "chat");
   if (!chat) {
     throw new Error("Telegram user read requires --chat.");
   }
   const format = readTelegramReadFormat(opts);
+  const topicAnchor = readPresentPositiveIntegerOpt(
+    opts,
+    "topicAnchor",
+    "--topic-anchor",
+    "Telegram user read",
+  );
   const result = await runTelegramUserRead({
     ...resolveBackendOptions(opts),
     chat,
@@ -1079,6 +1145,7 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
     afterId: readNumberOpt(opts, "afterId"),
     beforeId: readNumberOpt(opts, "beforeId"),
     contains: readStringOpt(opts, "contains"),
+    topicAnchor,
   });
   if (readBooleanOpt(opts, "json")) {
     logJson(runtime, format === "compact" ? buildTelegramCompactReadResult(result, chat) : result);

@@ -207,6 +207,7 @@ erasure.
   - Narrow with `--dm-only` and `--limit` when you only need a lighter scan
   - Use `openclaw telegram-user read --chat <chat> --contains <text> --limit <n> --format compact` for known message text
   - Use `openclaw telegram-user read --chat <chat> --limit <n> --format compact` only after picking the target chat
+  - When the user names a forum topic, resolve its exact title with `openclaw telegram-user topic-resolve --chat <chat> --title "<title>" --json`, then use `read --chat <chat> --topic-anchor <topic_anchor>`; never treat a group-wide text match as topic membership
   - If you need raw Telegram metadata for debugging, add `--json`; otherwise prefer compact reads to avoid clipped model/tool output
   - If a proof creates a temporary forum topic, delete that exact topic with `openclaw telegram-user topic-delete --chat <chat> --topic-anchor <topic_anchor> --json`
   - Do not pipe Telegram JSON to `grep` for chat/message discovery when these CLI filters fit

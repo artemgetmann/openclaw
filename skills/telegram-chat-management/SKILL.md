@@ -56,7 +56,11 @@ Keep internal run ids, token counts, and system metadata out of Telegram.
 ## Workflow
 
 1. Identify the target chat and topic.
-   - Existing topic: get the chat id and topic anchor.
+   - Existing topic with a known anchor: use the exact chat id and anchor.
+   - Existing topic named only by title: resolve it authoritatively with
+     `openclaw telegram-user topic-resolve --chat <chat> --title "<exact title>" --json`.
+     If the installed runtime lacks that command, stop and ask for the anchor;
+     never infer one from group-wide history or nearby reply metadata.
    - New topic: get the chat id and a short topic title.
 2. For non-trivial handoffs, save the plan in the relevant project directory
    first, then reference the path in the Telegram message.
@@ -80,7 +84,8 @@ send. If the command is killed or reports
 before retrying so the handoff cannot be duplicated.
 
 5. Report proof back in the original conversation:
-   - chat/topic title;
+   - chat/topic title only when returned by topic-create/topic-resolve or
+     explicitly confirmed by the user; otherwise say the title is unverified;
    - topic anchor;
    - Telegram-as-me message id;
    - what was included;
