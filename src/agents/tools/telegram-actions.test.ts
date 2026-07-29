@@ -328,6 +328,29 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("keeps proactive approval requests on readable legacy text transport", async () => {
+    const approvalText =
+      "Approval needed. Exact proposed reply: GA-FRESH APPROVED_CONTINUATION. Reply approve or no.";
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456789",
+        content: approvalText,
+      },
+      telegramConfig(),
+    );
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "123456789",
+      approvalText,
+      expect.objectContaining({
+        mediaUrl: undefined,
+        richMessages: false,
+        token: "tok",
+      }),
+    );
+  });
+
   it("sends a poll", async () => {
     const result = await handleTelegramAction(
       {
