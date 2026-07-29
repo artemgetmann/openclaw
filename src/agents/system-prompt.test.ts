@@ -274,7 +274,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("When a request implies a delayed, multi-step external outcome");
     expect(prompt).toContain("offer or use a `goal` in the same turn");
     expect(prompt).toContain("even if another skill handled the action");
+    expect(prompt).toContain("verify active skills/tools cover the required external actions");
+    expect(prompt).toContain("offer tracking/planning only");
     expect(prompt).toContain("Ask at most one high-value missing boundary");
+    expect(prompt).toContain("showing the complete proposed authority scope");
     expect(prompt).toContain("proceed without asking again");
     expect(prompt).toContain("include the reply or relevant content");
   });
@@ -329,7 +332,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(goalToolsSection).toContain("delayed, multi-step external outcome");
     expect(goalToolsSection).toContain("offer or use a `goal` in the same turn");
     expect(goalToolsSection).toContain("even if another skill handled the action");
+    expect(goalToolsSection).toContain(
+      "verify active skills/tools cover the required external actions",
+    );
+    expect(goalToolsSection).toContain("goal/monitor tools alone provide continuation");
+    expect(goalToolsSection).toContain("offer tracking/planning only");
     expect(goalToolsSection).toContain("Ask at most one high-value missing boundary");
+    expect(goalToolsSection).toContain("showing the complete proposed authority scope");
     expect(goalToolsSection).toContain("proceed without asking again");
     expect(goalToolsSection).toContain("Skip trivial one-shot work and casual sends");
     expect(goalToolsSection).toContain("include the reply or relevant content");

@@ -28,11 +28,18 @@ unanswered request.
 - Use the actual product term `goal` so the user learns the capability. A good
   default is: "Should I set a goal and handle this autonomously within agreed
   limits?"
+- Before offering autonomous handling, verify that active skills and tools can
+  perform the required external actions. Goal and monitor tools provide durable
+  continuation, not booking, messaging, payment, or account access. If an
+  action capability is missing, offer a goal for tracking or planning only and
+  state which step remains manual.
 - Ask at most one high-value guardrail question. Capture only the missing
   boundary that materially changes safe continuation: notify-only versus draft
   versus send-and-continue, a money or time ceiling, expiry/stop condition, or
-  when to escalate. Combine consent and that missing boundary in the same
-  question; infer the rest from context and safe defaults.
+  when to escalate. In that same question, show the complete proposed scope:
+  target, outcome, allowed actions, delivery policy, stop/expiry, and cadence
+  when relevant. Combine consent, scope confirmation, and the missing boundary
+  in one question. Infer only details that do not expand authority.
 - If the original request already clearly authorizes end-to-end handling and
   supplies sufficient limits, do not offer or ask again. Create or use the goal
   and proceed.
@@ -71,10 +78,11 @@ unanswered request.
 When a goal needs waiting on another person or system, create or reuse a
 durable monitor.
 
-- Before creation, establish the target, desired outcome, cadence, stop condition,
-  expiry, and delivery policy that matter for this request. Use existing context
-  and safe defaults; do not turn this into a questionnaire. The user's approval
-  must cover the resulting scope.
+- Before creation, establish the target, desired outcome, allowed actions,
+  cadence, stop condition, expiry, and delivery policy that matter for this
+  request. Show the proposed authority-affecting scope before approval; infer
+  only non-authority details and do not turn this into a questionnaire. The
+  user's approval must cover the resulting scope.
 - Default to `notify_draft` with the drafted next response included.
 - Use `actionPolicy: "auto_send"` only when the user explicitly authorized
   autonomous sending within scope and the monitor has a real watched-surface

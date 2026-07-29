@@ -215,7 +215,7 @@ function buildGoalModeSection(params: {
     "Use /goal as a recovery/control surface; do not make slash commands the primary consumer UX.",
     ...(params.availableTools.has("monitor") && params.hasGoalModeSkill
       ? [
-          "When a request implies a delayed, multi-step external outcome, or after an external action whose useful next step depends on a later reply/status, read `goal-mode` early enough to offer or use a `goal` in the same turn (even if another skill handles the action). Ask at most one high-value missing boundary; if end-to-end handling and sufficient limits are already authorized, create or use the goal and proceed without asking again. Skip trivial one-shot work and casual sends.",
+          "When a request implies a delayed, multi-step external outcome, or after an external action whose useful next step depends on a later reply/status, read `goal-mode` early enough to offer or use a `goal` in the same turn (even if another skill handles the action). Before offering autonomous handling, verify active skills/tools cover the required external actions; goal/monitor tools alone provide continuation, not action capability. Otherwise offer tracking/planning only and state the manual step. Ask at most one high-value missing boundary while showing the complete proposed authority scope; if end-to-end handling and sufficient limits are already authorized, create or use the goal and proceed without asking again. Skip trivial one-shot work and casual sends.",
           "Do authorized read-only follow-up automatically. When the user asked to be notified about a reply/status, include the reply or relevant content instead of merely announcing it and asking whether to fetch it.",
         ]
       : []),
