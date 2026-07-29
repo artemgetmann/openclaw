@@ -105,25 +105,47 @@ enum ConsumerBootstrap {
         let agents = root["agents"] as? [String: Any]
         let defaults = agents?["defaults"] as? [String: Any]
         let heartbeat = defaults?["heartbeat"] as? [String: Any]
-        guard self.valueIsMissing(heartbeat?["target"]),
-              let route = self.singleTelegramOwnerRoute(from: root)
-        else {
+        guard let route = self.singleTelegramOwnerRoute(from: root) else {
+            return false
+        }
+
+        let managedRoute = heartbeat?["managedRoute"] as? [String: Any]
+        let currentRouteIsAppOwned =
+            managedRoute != nil
+            && self.trimmedString(managedRoute?["target"]) == self.trimmedString(heartbeat?["target"])
+            && self.trimmedString(managedRoute?["to"]) == self.trimmedString(heartbeat?["to"])
+            && self.trimmedString(managedRoute?["accountId"]) == self.trimmedString(heartbeat?["accountId"])
+        let routeIsCompletelyMissing =
+            self.valueIsMissing(heartbeat?["target"])
+            && self.valueIsMissing(heartbeat?["to"])
+            && self.valueIsMissing(heartbeat?["accountId"])
+        // Seed a missing route, or refresh a route whose entire live tuple still
+        // matches the app-owned provenance record. Any user-edited tuple wins.
+        guard routeIsCompletelyMissing || currentRouteIsAppOwned else {
             return false
         }
 
         var changed = false
-        changed = self.setDefaultValue(
+        changed = self.setConfigValue(
             in: &root,
             path: ["agents", "defaults", "heartbeat", "target"],
             value: "telegram") || changed
-        changed = self.setDefaultValue(
+        changed = self.setConfigValue(
             in: &root,
             path: ["agents", "defaults", "heartbeat", "to"],
             value: route.ownerId) || changed
-        changed = self.setDefaultValue(
+        changed = self.setConfigValue(
             in: &root,
             path: ["agents", "defaults", "heartbeat", "accountId"],
             value: route.accountId) || changed
+        changed = self.setConfigValue(
+            in: &root,
+            path: ["agents", "defaults", "heartbeat", "managedRoute"],
+            value: [
+                "target": "telegram",
+                "to": route.ownerId,
+                "accountId": route.accountId,
+            ]) || changed
         return changed
     }
 
@@ -311,6 +333,35 @@ enum ConsumerBootstrap {
         guard let string = value as? String else { return nil }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Writes a managed value even when it already exists, while reporting
+    /// whether the serialized config actually changed.
+    private static func setConfigValue(
+        in root: inout [String: Any],
+        path: [String],
+        value: Any
+    ) -> Bool {
+        guard !path.isEmpty else { return false }
+        if path.count == 1 {
+            let key = path[0]
+            if let previous = root[key] as? NSObject, previous.isEqual(value) {
+                return false
+            }
+            root[key] = value
+            return true
+        }
+
+        let key = path[0]
+        var child = root[key] as? [String: Any] ?? [:]
+        let changed = self.setConfigValue(
+            in: &child,
+            path: Array(path.dropFirst()),
+            value: value)
+        if changed {
+            root[key] = child
+        }
+        return changed
     }
 
     @discardableResult

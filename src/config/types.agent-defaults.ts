@@ -277,6 +277,16 @@ export type AgentDefaultsConfig = {
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
+    /**
+     * App-owned delivery tuple used to distinguish managed consumer routing
+     * from an explicit user override. The app may refresh the live route only
+     * while it still exactly matches this provenance record.
+     */
+    managedRoute?: {
+      target: ChannelId;
+      to: string;
+      accountId: string;
+    };
     /** Override the product heartbeat prompt from auto-reply/heartbeat.ts. */
     prompt?: string;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */

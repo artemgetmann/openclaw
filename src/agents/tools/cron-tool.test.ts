@@ -511,6 +511,40 @@ describe("cron tool", () => {
     expect(delivery).toEqual({ mode: "none" });
   });
 
+  it("uses the runtime-trusted origin for reminders from isolated heartbeat sessions", async () => {
+    const tool = createCronTool({
+      agentSessionKey: "agent:main:main:heartbeat",
+      defaultDelivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "42",
+        accountId: "default",
+      },
+    });
+
+    await tool.execute("call-heartbeat-origin", {
+      action: "add",
+      job: buildReminderAgentTurnJob(),
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | {
+          delivery?: {
+            mode?: string;
+            channel?: string;
+            to?: string;
+            accountId?: string;
+          };
+        }
+      | undefined;
+    expect(params?.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "42",
+      accountId: "default",
+    });
+  });
+
   it("does not infer announce delivery when mode is webhook", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
     const delivery = await executeAddAndReadDelivery({

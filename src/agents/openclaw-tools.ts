@@ -232,6 +232,19 @@ export function createOpenClawTools(
     }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
+      // A normal chat can usually recover delivery from its session key. An
+      // isolated heartbeat cannot: its last-route state is cleared on purpose.
+      // Preserve the runtime-resolved origin so reminders created there still
+      // have one explicit, privacy-safe destination.
+      defaultDelivery:
+        options?.agentChannel && options.agentChannel !== "webchat" && options.agentTo
+          ? {
+              mode: "announce",
+              channel: options.agentChannel,
+              to: options.agentTo,
+              accountId: options.agentAccountId,
+            }
+          : undefined,
     }),
     createMonitorTool({
       agentSessionKey: options?.agentSessionKey,

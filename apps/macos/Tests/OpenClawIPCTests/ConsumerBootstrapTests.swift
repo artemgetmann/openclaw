@@ -61,6 +61,56 @@ struct ConsumerBootstrapTests {
         #expect(ownerHeartbeat?["target"] as? String == "telegram")
         #expect(ownerHeartbeat?["to"] as? String == "42")
         #expect(ownerHeartbeat?["accountId"] as? String == "default")
+        let managedRoute = ownerHeartbeat?["managedRoute"] as? [String: Any]
+        #expect(managedRoute?["target"] as? String == "telegram")
+        #expect(managedRoute?["to"] as? String == "42")
+        #expect(managedRoute?["accountId"] as? String == "default")
+
+        // Managed onboarding may replace a verified Telegram owner. Refresh
+        // the app-owned route atomically so reminders cannot leak to the old ID.
+        var replacedOwnerRoot: [String: Any] = [
+            "agents": ownerAgents ?? [:],
+            "channels": [
+                "telegram": [
+                    "defaultAccount": "default",
+                    "allowFrom": ["84"],
+                ],
+            ],
+        ]
+
+        _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &replacedOwnerRoot)
+
+        let replacedAgents = replacedOwnerRoot["agents"] as? [String: Any]
+        let replacedDefaults = replacedAgents?["defaults"] as? [String: Any]
+        let replacedHeartbeat = replacedDefaults?["heartbeat"] as? [String: Any]
+        #expect(replacedHeartbeat?["to"] as? String == "84")
+        let replacedManagedRoute = replacedHeartbeat?["managedRoute"] as? [String: Any]
+        #expect(replacedManagedRoute?["to"] as? String == "84")
+
+        // A user-edited tuple no longer matches the provenance marker and wins
+        // over later managed-owner refreshes.
+        var userOverrideHeartbeat = ownerHeartbeat ?? [:]
+        userOverrideHeartbeat["to"] = "99"
+        var userOverrideRoot: [String: Any] = [
+            "agents": [
+                "defaults": [
+                    "heartbeat": userOverrideHeartbeat,
+                ],
+            ],
+            "channels": [
+                "telegram": [
+                    "defaultAccount": "default",
+                    "allowFrom": ["84"],
+                ],
+            ],
+        ]
+
+        _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &userOverrideRoot)
+
+        let overrideAgents = userOverrideRoot["agents"] as? [String: Any]
+        let overrideDefaults = overrideAgents?["defaults"] as? [String: Any]
+        let overrideHeartbeat = overrideDefaults?["heartbeat"] as? [String: Any]
+        #expect(overrideHeartbeat?["to"] as? String == "99")
 
         var customRoot: [String: Any] = [
             "agents": [
