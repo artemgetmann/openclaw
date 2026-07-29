@@ -248,6 +248,10 @@ export async function handleTelegramAction(
       cfg,
       token,
       accountId: accountId ?? undefined,
+      // Message actions power proactive tool, monitor, and cron sends. Keep
+      // their text on Bot API sendMessage so Telegram-user/MTProto readers see
+      // ordinary text instead of an unsupported rich-message media shell.
+      richMessages: false,
       mediaUrl: mediaUrl || undefined,
       mediaLocalRoots: options?.mediaLocalRoots,
       buttons,
