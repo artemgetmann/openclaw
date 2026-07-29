@@ -64,6 +64,16 @@ default runtime.
   surface does not claim cross-process steering or interruption.
 - One-time Telegram approval buttons for archive and unarchive, with
   sender-bound tokens and a fresh native state check before mutation.
+- Durable monitor authority for one exact preapproved continuation:
+  `codex.thread.unarchive_resume` binds a goal, stable purpose, native thread,
+  continuation prompt, expiry, stop condition, and idempotency key. The monitor
+  store consumes the grant before unarchiving or starting the turn, so restart
+  and duplicate wakes cannot execute the action twice.
+
+Monitor sessions may still use read-only Codex inventory. Generic mutating
+Codex actions are rejected from monitor sessions; only the exact durable action
+above can cross that boundary. Interactive owner commands keep their existing
+one-time approval flow, and no global permission is widened.
 
 The extension never creates Telegram topics automatically. Binding an existing
 conversation or topic is always explicit.

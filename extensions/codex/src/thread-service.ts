@@ -618,6 +618,25 @@ export class CodexThreadService {
     });
   }
 
+  async unarchiveIfNeeded(threadId: string): Promise<{ changed: boolean }> {
+    const normalizedThreadId = requireId(threadId);
+    const response = asRecord(await this.read(normalizedThreadId, false));
+    const returnedId = readNestedString(response, ["thread", "id"]);
+    if (returnedId !== normalizedThreadId) {
+      throw new Error("Codex App Server returned a different thread while checking unarchive");
+    }
+    const thread = asRecord(response.thread);
+    if (thread.archived !== true) {
+      return { changed: false };
+    }
+    await (
+      await this.client()
+    ).request("thread/unarchive", {
+      threadId: normalizedThreadId,
+    });
+    return { changed: true };
+  }
+
   private async assertIdle(threadId: string, action: string): Promise<void> {
     const response = asRecord(await this.read(threadId, false));
     const returnedId = readNestedString(response, ["thread", "id"]);

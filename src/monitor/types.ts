@@ -11,6 +11,58 @@ export function isTerminalMonitorStatus(status: MonitorStatus): boolean {
 
 export type MonitorActionPolicy = "notify_draft" | "notify_only" | "auto_send";
 
+export const CODEX_THREAD_UNARCHIVE_RESUME_ACTION = "codex.thread.unarchive_resume" as const;
+
+export type MonitorAuthorityAction = {
+  kind: typeof CODEX_THREAD_UNARCHIVE_RESUME_ACTION;
+  /** Exact native thread covered by the grant. Wildcards are never accepted. */
+  threadId: string;
+  /** Exact bounded continuation prompt approved as part of the one-shot action. */
+  prompt: string;
+};
+
+export type MonitorAuthorityAuditEvent = {
+  event: "granted" | "revoked" | "consumed" | "completed" | "failed" | "denied";
+  atMs: number;
+  reason?: string;
+};
+
+export type MonitorAuthorityExecution = {
+  status: "available" | "consumed" | "completed" | "failed";
+  executions: number;
+  consumedAtMs?: number;
+  completedAtMs?: number;
+  failedAtMs?: number;
+  externalRef?: string;
+  error?: string;
+};
+
+/**
+ * A persisted grant is intentionally narrower than generic tool permission.
+ * It authorizes one exact action against one exact target and is consumed
+ * before the external mutation begins.
+ */
+export type MonitorAuthorityGrant = {
+  schemaVersion: 1;
+  grantId: string;
+  goalId: string;
+  purposeKey: string;
+  action: MonitorAuthorityAction;
+  idempotencyKey: string;
+  expiresAt: string;
+  stopCondition: string;
+  maxExecutions: 1;
+  grantedAtMs: number;
+  revokedAtMs?: number;
+  execution: MonitorAuthorityExecution;
+  audit: MonitorAuthorityAuditEvent[];
+};
+
+export type MonitorAuthorityGrantInput = Pick<
+  MonitorAuthorityGrant,
+  "purposeKey" | "action" | "idempotencyKey" | "expiresAt" | "stopCondition"
+>;
+
 /**
  * Monitor instructions are replayed in every wake, so retain enough context
  * for a real task while keeping durable state and wake prompts bounded.
@@ -136,6 +188,8 @@ export type MonitorRecord = {
   stopCondition?: string;
   actionPolicy: MonitorActionPolicy;
   goal?: MonitorGoalSnapshot;
+  /** Exact one-shot authority copied from the user-approved goal/monitor contract. */
+  authority?: MonitorAuthorityGrant;
   /** Optional for legacy records; new records persist the normalized default. */
   notificationPolicy?: MonitorNotificationPolicy;
   /** Small bounded counter/timestamp state; never stores raw source evidence. */
@@ -176,6 +230,7 @@ export type MonitorCreateInput = {
   stopCondition?: string;
   actionPolicy?: MonitorActionPolicy;
   goal?: MonitorGoalSnapshot;
+  authority?: MonitorAuthorityGrant;
   purpose?: string;
   notificationPolicy?: MonitorNotificationPolicy;
   lastCheckpoint?: MonitorCheckpoint;
@@ -195,6 +250,7 @@ export type MonitorUpdatePatch = Partial<
     | "stopCondition"
     | "actionPolicy"
     | "goal"
+    | "authority"
     | "notificationPolicy"
     | "notificationState"
     | "disclosure"

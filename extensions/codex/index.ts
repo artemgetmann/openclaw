@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { loadConfig } from "../../src/config/config.js";
+import { resolveStorePath as resolveSessionStorePath } from "../../src/config/sessions/paths.js";
+import { resolveCronStorePath } from "../../src/cron/store.js";
+import {
+  claimMonitorAuthorityAction,
+  finalizeMonitorAuthorityAction,
+} from "../../src/monitor/authority.js";
+import { resolveMonitorStorePath } from "../../src/monitor/store.js";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -8,6 +16,7 @@ import type {
   PluginCommandContext,
   PluginCommandResult,
 } from "../../src/plugins/types.js";
+import { parseAgentSessionKey } from "../../src/sessions/session-key-utils.js";
 import { CodexAppServerClient, type CodexRpcClient } from "./src/app-server-client.js";
 import { CodexApprovalStore, type CodexApprovalAction } from "./src/approval-store.js";
 import {
@@ -59,6 +68,7 @@ type ToolParams = {
   archived?: boolean;
   include_turns?: boolean;
   limit?: number;
+  idempotency_key?: string;
 };
 
 const APPROVAL_NAMESPACE = "codexpilot";
@@ -86,6 +96,7 @@ const ToolSchema = {
         "delegate_async",
         "resume",
         "fork",
+        "unarchive_resume_authorized_once",
       ],
     },
     thread_id: { type: "string" },
@@ -99,6 +110,7 @@ const ToolSchema = {
     archived: { type: "boolean" },
     include_turns: { type: "boolean" },
     limit: { type: "integer", minimum: 1, maximum: 100 },
+    idempotency_key: { type: "string" },
   },
   required: ["action"],
   additionalProperties: false,
@@ -391,6 +403,19 @@ function createCodexTool(
     parameters: ToolSchema,
     execute: async (_toolCallId: string, raw: ToolParams) => {
       const action = raw.action ?? "";
+      const monitorSessionKey = ctx.sessionKey?.trim();
+      const isMonitorSession =
+        parseAgentSessionKey(monitorSessionKey)?.rest.startsWith("monitor:") === true;
+      if (
+        isMonitorSession &&
+        !["status", "fleet", "list", "search", "read", "unarchive_resume_authorized_once"].includes(
+          action,
+        )
+      ) {
+        throw new Error(
+          `monitor sessions must use a durable authority grant for mutating Codex action ${action}`,
+        );
+      }
       let result: unknown;
       if (action === "status") {
         result = await service.status();
@@ -474,6 +499,76 @@ function createCodexTool(
         result = await service.resume(required(raw.thread_id, "thread_id"));
       } else if (action === "fork") {
         result = await service.fork(required(raw.thread_id, "thread_id"));
+      } else if (action === "unarchive_resume_authorized_once") {
+        const sessionKey = required(monitorSessionKey, "monitor session");
+        const threadId = required(raw.thread_id, "thread_id");
+        const text = requiredPayload(raw.text, "text");
+        const idempotencyKey = required(raw.idempotency_key, "idempotency_key");
+        const cfg = ctx.config ?? loadConfig();
+        const storePath = resolveMonitorStorePath({
+          cronStorePath: resolveCronStorePath(cfg.cron?.store),
+        });
+        const claim = await claimMonitorAuthorityAction({
+          storePath,
+          sessionStorePath: resolveSessionStorePath(cfg.session?.store, {
+            agentId: ctx.agentId,
+          }),
+          monitorSessionKey: sessionKey,
+          threadId,
+          prompt: text,
+          idempotencyKey,
+        });
+        if (!claim.execute) {
+          result = {
+            mode: "durable-monitor-authority",
+            status: claim.status,
+            monitorId: claim.monitorId,
+            grantId: claim.grantId,
+            executed: false,
+          };
+        } else {
+          try {
+            const unarchive = await service.unarchiveIfNeeded(threadId);
+            const resumedThreadId = requireThreadId(await service.resume(threadId));
+            if (resumedThreadId !== threadId) {
+              throw new Error("Codex App Server resumed a different thread than authorized");
+            }
+            const started = await startAsyncRelay({
+              service,
+              callbacks,
+              getRegistry,
+              api,
+              // Terminal results belong in the owner session that created the
+              // goal, not in the now-stopped monitor continuation session.
+              ctx: { ...ctx, sessionKey: claim.originSessionKey },
+              threadId,
+              text: claim.prompt,
+            });
+            await finalizeMonitorAuthorityAction({
+              storePath,
+              monitorSessionKey: sessionKey,
+              grantId: claim.grantId,
+              outcome: "completed",
+              externalRef: started.turnId,
+            });
+            result = {
+              ...started,
+              mode: "durable-monitor-authority",
+              monitorId: claim.monitorId,
+              grantId: claim.grantId,
+              unarchived: unarchive.changed,
+            };
+          } catch (error) {
+            await finalizeMonitorAuthorityAction({
+              storePath,
+              monitorSessionKey: sessionKey,
+              grantId: claim.grantId,
+              outcome: "failed",
+              error: formatError(error),
+            });
+            throw error;
+          }
+        }
       } else {
         throw new Error(`unsupported codex_threads action: ${action || "missing"}`);
       }

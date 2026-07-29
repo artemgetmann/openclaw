@@ -1,7 +1,16 @@
-import { mkdtemp } from "node:fs/promises";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { updateSessionStore } from "../../src/config/sessions/store.js";
+import { createMonitorAuthorityGrant } from "../../src/monitor/authority.js";
+import {
+  createMonitorRecord,
+  loadMonitorStore,
+  resolveMonitorStorePath,
+  saveMonitorStore,
+} from "../../src/monitor/store.js";
+import { CODEX_THREAD_UNARCHIVE_RESUME_ACTION } from "../../src/monitor/types.js";
 import type { AnyAgentTool, OpenClawPluginToolFactory } from "../../src/plugins/types.js";
 import { createTestPluginApi } from "../test-utils/plugin-api.js";
 import { CodexDelegationRegistry } from "./src/delegation-registry.js";
@@ -30,6 +39,21 @@ vi.mock("./src/app-server-client.js", () => ({
       if (method === "thread/resume") {
         return { thread: { id: "thread-natural", status: { type: "idle" } } };
       }
+      if (method === "thread/read") {
+        return (
+          appServer.threadReadResponse ?? {
+            thread: {
+              id: "thread-natural",
+              status: { type: "idle" },
+              archived: true,
+              turns: [],
+            },
+          }
+        );
+      }
+      if (method === "thread/unarchive") {
+        return {};
+      }
       if (method === "thread/list") {
         return {
           data: [
@@ -41,13 +65,6 @@ vi.mock("./src/app-server-client.js", () => ({
             },
           ],
         };
-      }
-      if (method === "thread/read") {
-        return (
-          appServer.threadReadResponse ?? {
-            thread: { id: "thread-natural", status: { type: "idle" }, turns: [] },
-          }
-        );
       }
       if (method === "turn/start") {
         // The service registers its collector before starting the turn. Delay
@@ -109,7 +126,7 @@ function finishNaturalTurn() {
 }
 
 async function createRelayState() {
-  const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-relay-index-"));
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-relay-index-"));
   return { resolveStateDir: () => stateDir };
 }
 
@@ -852,6 +869,215 @@ describe("Codex natural-language delegation", () => {
       }),
     ).rejects.toThrow("requires a stable Jarvis session");
     expect(appServer.requests.filter((request) => request.method === "turn/start")).toEqual([]);
+  });
+
+  it("blocks generic mutating Codex actions from durable monitor sessions", async () => {
+    let factory: OpenClawPluginToolFactory | undefined;
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerTool(next) {
+          if (typeof next === "function") {
+            factory = next;
+          }
+        },
+      }),
+    );
+    const tool = factory?.({
+      senderIsOwner: true,
+      sandboxed: false,
+      sessionKey: "agent:main:monitor:release-proof",
+    }) as AnyAgentTool;
+
+    await expect(
+      tool.execute("monitor-generic-resume", {
+        action: "resume",
+        thread_id: "thread-natural",
+      }),
+    ).rejects.toThrow("must use a durable authority grant");
+    await expect(
+      tool.execute("monitor-read", {
+        action: "list",
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("consumes exact durable authority before unarchiving and starting one continuation", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.serverRequestHandlers = new Set();
+    appServer.autoComplete = false;
+    appServer.threadReadResponse = undefined;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-authority-"));
+    const cronStorePath = path.join(dir, "cron.json");
+    const sessionStorePath = path.join(dir, "sessions.json");
+    const monitorStorePath = resolveMonitorStorePath({ cronStorePath });
+    const sessionKey = "agent:main:monitor:release-proof";
+    const text = "The Mac release is available. Run the deferred verification now.";
+    const idempotencyKey = "release-2026-08:thread-natural";
+    const grant = createMonitorAuthorityGrant({
+      input: {
+        purposeKey: "mac-release:verify-login-item-fix",
+        action: {
+          kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+          threadId: "thread-natural",
+          prompt: text,
+        },
+        idempotencyKey,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        stopCondition: "Accept the exact Codex continuation once.",
+      },
+      goal: {
+        id: "goal-release",
+        objective: "Verify the next release.",
+        autonomy: {
+          level: "act_within_scope",
+          allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+        },
+      },
+      nowMs: Date.now(),
+    });
+    await updateSessionStore(sessionStorePath, (store) => {
+      store["agent:main:telegram:direct:owner"] = {
+        sessionId: "origin-session",
+        updatedAt: Date.now(),
+        goal: {
+          schemaVersion: 1,
+          id: grant.goalId,
+          objective: "Verify the next release.",
+          status: "active",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          tokenStart: 0,
+          tokensUsed: 0,
+          continuationTurns: 0,
+          autonomy: {
+            level: "act_within_scope",
+            allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+          },
+        },
+      };
+    });
+    const monitor = createMonitorRecord(
+      {
+        monitorId: "monitor-release",
+        agentId: "main",
+        instructions: "Watch for the release and resume the exact verification thread.",
+        originSessionKey: "agent:main:telegram:direct:owner",
+        monitorSessionKey: sessionKey,
+        sourceType: "github-release",
+        sourceTarget: { repo: "artemgetmann/openclaw" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "notify_only",
+        goal: {
+          id: grant.goalId,
+          objective: "Verify the next release.",
+          autonomy: {
+            level: "act_within_scope",
+            allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+          },
+        },
+        authority: grant,
+        cronJobId: "cron-release",
+      },
+      Date.now(),
+    );
+    await saveMonitorStore(monitorStorePath, { version: 1, monitors: [monitor] });
+
+    let factory: OpenClawPluginToolFactory | undefined;
+    const run = vi.fn(async () => ({ runId: "relay" }));
+    const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {
+          state: { resolveStateDir: () => dir },
+          subagent: { run, waitForRun },
+          system: {
+            enqueueSystemEvent: vi.fn(() => true),
+            requestHeartbeatNow: vi.fn(),
+          },
+        } as never,
+        registerTool(next) {
+          if (typeof next === "function") {
+            factory = next;
+          }
+        },
+      }),
+    );
+    const tool = factory?.({
+      senderIsOwner: true,
+      sandboxed: false,
+      sessionKey,
+      agentId: "main",
+      config: {
+        cron: { store: cronStorePath },
+        session: { store: sessionStorePath },
+      },
+    }) as AnyAgentTool;
+
+    const accepted = await tool.execute("authorized-resume", {
+      action: "unarchive_resume_authorized_once",
+      thread_id: "thread-natural",
+      text,
+      idempotency_key: idempotencyKey,
+    });
+    expect(accepted).toMatchObject({
+      details: {
+        mode: "durable-monitor-authority",
+        monitorId: "monitor-release",
+        threadId: "thread-natural",
+        turnId: "turn-natural",
+        unarchived: true,
+      },
+    });
+    expect(appServer.requests.map((request) => request.method)).toEqual([
+      "thread/read",
+      "thread/unarchive",
+      "thread/resume",
+      "turn/start",
+    ]);
+    expect((await loadMonitorStore(monitorStorePath)).monitors[0]).toMatchObject({
+      status: "completed",
+      authority: {
+        execution: { status: "completed", executions: 1, externalRef: "turn-natural" },
+      },
+    });
+
+    appServer.requests.splice(0);
+    await expect(
+      tool.execute("authorized-resume-retry", {
+        action: "unarchive_resume_authorized_once",
+        thread_id: "thread-natural",
+        text,
+        idempotency_key: idempotencyKey,
+      }),
+    ).resolves.toMatchObject({
+      details: {
+        status: "completed",
+        executed: false,
+      },
+    });
+    expect(appServer.requests).toEqual([]);
+    finishNaturalTurn();
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:telegram:direct:owner",
+          deliver: true,
+        }),
+      );
+    });
+    await fs.rm(dir, { recursive: true });
   });
 
   it("does not expose the native delegate tool to non-owners", () => {

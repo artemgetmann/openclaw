@@ -7,11 +7,13 @@ import type { CronDelivery } from "../cron/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   buildMonitorAutonomyLines,
+  buildMonitorAuthorityLines,
   buildMonitorDraftCompletionLines,
   buildMonitorNotificationLines,
 } from "./prompt-contract.js";
 import type {
   MonitorGoalSnapshot,
+  MonitorAuthorityGrant,
   MonitorNotificationPolicy,
   MonitorNotificationState,
 } from "./types.js";
@@ -62,6 +64,7 @@ export function buildMonitorBootstrapPrompt(params: {
   expiryAt?: string;
   actionPolicy: string;
   goal?: MonitorGoalSnapshot;
+  authority?: MonitorAuthorityGrant;
   notificationPolicy?: MonitorNotificationPolicy;
   notificationState?: MonitorNotificationState;
   watchDeliveryConfigured: boolean;
@@ -104,6 +107,7 @@ export function buildMonitorBootstrapPrompt(params: {
     "",
     "Use normal OpenClaw tools and skills to fetch fresh source state on each wake.",
     ...buildMonitorAutonomyLines(params.goal),
+    ...buildMonitorAuthorityLines(params.authority),
     ...buildMonitorNotificationLines({
       policy: params.notificationPolicy,
       state: params.notificationState,
@@ -185,6 +189,7 @@ export async function seedMonitorSession(params: {
   expiryAt?: string;
   actionPolicy: string;
   goal?: MonitorGoalSnapshot;
+  authority?: MonitorAuthorityGrant;
   notificationPolicy?: MonitorNotificationPolicy;
   notificationState?: MonitorNotificationState;
   watchDeliveryConfigured: boolean;
@@ -240,6 +245,7 @@ export async function seedMonitorSession(params: {
       expiryAt: params.expiryAt,
       actionPolicy: params.actionPolicy,
       goal: params.goal,
+      authority: params.authority,
       notificationPolicy: params.notificationPolicy,
       notificationState: params.notificationState,
       watchDeliveryConfigured: params.watchDeliveryConfigured,
