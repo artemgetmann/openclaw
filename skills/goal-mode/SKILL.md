@@ -19,9 +19,23 @@ waiting, negotiation, or multiple external turns.
 
 ## Offer Flow
 
-Offer goal mode in natural language when the task clearly needs follow-up,
-waiting, negotiation, completion tracking, or multiple external turns.
+Offer a goal in natural language when the request implies a delayed, multi-step
+external outcome: follow-up, waiting, negotiation, completion tracking, or
+multiple external turns. Examples include arranging an appointment or pickup,
+making a booking, messaging someone when a reply matters, and chasing an
+unanswered request.
 
+- Use the actual product term `goal` so the user learns the capability. A good
+  default is: "Should I set a goal and handle this autonomously within agreed
+  limits?"
+- Ask at most one high-value guardrail question. Capture only the missing
+  boundary that materially changes safe continuation: notify-only versus draft
+  versus send-and-continue, a money or time ceiling, expiry/stop condition, or
+  when to escalate. Combine consent and that missing boundary in the same
+  question; infer the rest from context and safe defaults.
+- If the original request already clearly authorizes end-to-end handling and
+  supplies sufficient limits, do not offer or ask again. Create or use the goal
+  and proceed.
 - After sending a message or taking an external action, offer to keep watching
   only when a later reply/status is the next useful step.
 - If the user's stated next step depends on that reply/status, make the offer in
@@ -32,19 +46,35 @@ waiting, negotiation, completion tracking, or multiple external turns.
 - Offer once. If the user declines, stop asking.
 - Do not create a goal or monitor before approval unless the original request
   already authorizes continued pursuit.
-- Offer naturally and concretely: target, desired outcome, stop condition,
-  expiry, cadence, and the default `notify_draft` delivery policy.
+- Do not interrogate the user for every possible field. Infer safe defaults and
+  ask only for the one missing boundary that matters.
 - Do not make slash commands the primary experience. `/goal` is a recovery and
   control surface.
 - Natural-language UX only: no buttons, settings, or commands in the offer.
+
+## Friction Rules
+
+- Perform read-only steps needed to fulfill the request automatically when the
+  source is already authorized. Do not ask whether to inspect or fetch
+  information the user already asked to receive.
+- If the user asked to be notified about a reply or status change, include the
+  reply text or relevant content in the notification when available. Do not say
+  only that a reply exists and ask whether to pull it.
+- Do not offer a goal for trivial one-shot requests with no meaningful delayed
+  outcome.
+- Once an agreed goal is active, do not repeatedly ask permission for actions
+  inside its limits. Escalate only for out-of-scope, irreversible, costly,
+  sensitive, or otherwise ungranted actions.
 
 ## Monitors
 
 When a goal needs waiting on another person or system, create or reuse a
 durable monitor.
 
-- Before creation, confirm the target, desired outcome, cadence, stop condition,
-  expiry, and delivery policy. The user's approval must cover that scope.
+- Before creation, establish the target, desired outcome, cadence, stop condition,
+  expiry, and delivery policy that matter for this request. Use existing context
+  and safe defaults; do not turn this into a questionnaire. The user's approval
+  must cover the resulting scope.
 - Default to `notify_draft` with the drafted next response included.
 - Use `actionPolicy: "auto_send"` only when the user explicitly authorized
   autonomous sending within scope and the monitor has a real watched-surface
