@@ -31,8 +31,14 @@ RELEASE_STAGING_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RELEASE_STAGING_OLDER_THAN_D
 RUNTIME_CACHE_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_CACHE_OLDER_THAN_DAYS:-14}"
 RUNTIME_INSTANCE_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_INSTANCE_OLDER_THAN_DAYS:-7}"
 RUNTIME_LOGS_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_LOGS_OLDER_THAN_DAYS:-3}"
+PS_BIN="${OPENCLAW_CLEANUP_PS_BIN:-/bin/ps}"
+LSOF_BIN="${OPENCLAW_CLEANUP_LSOF_BIN:-/usr/sbin/lsof}"
 
 WORKTREES_ROOT="${OPENCLAW_WORKTREES_ROOT:-}"
+WORKTREES_ROOT_EXPLICIT=0
+if [[ -n "$WORKTREES_ROOT" ]]; then
+  WORKTREES_ROOT_EXPLICIT=1
+fi
 BUILD_ARTIFACT_ROOT="$(openclaw_build_artifact_root)"
 RUNTIME_INSTANCES_ROOT="${OPENCLAW_RUNTIME_INSTANCES_ROOT:-$HOME/Library/Application Support/OpenClaw/instances}"
 CURRENT_ROOT="$(cd "$ROOT_DIR" && pwd -P)"
@@ -40,6 +46,12 @@ NOW_EPOCH="$(date +%s)"
 TOTAL_KIB=0
 CANDIDATE_COUNT=0
 DELETED_COUNT=0
+PROCESS_SNAPSHOT_READY=0
+PROCESS_SNAPSHOT_FAILED=0
+PROCESS_SNAPSHOT=""
+OPEN_FILE_SNAPSHOT_READY=0
+OPEN_FILE_SNAPSHOT_FAILED=0
+OPEN_FILE_SNAPSHOT=""
 DISK_BEFORE_KIB=""
 DISK_AFTER_KIB=""
 
@@ -50,7 +62,7 @@ Usage: scripts/cleanup-build-artifacts.sh [options]
 Reports rebuildable OpenClaw worktree artifacts by default.
 
 Modes:
-  --worktrees             Scan sibling worktree artifacts. Default when no mode is set.
+  --worktrees             Scan registered worktree artifacts. Default when no mode is set.
   --build-cache           Scan ~/Library/Caches/OpenClaw/build-artifacts.
   --runtime-instances     Scan ~/Library/Application Support/OpenClaw/instances.
 
@@ -62,7 +74,7 @@ Options:
   --older-than-days <n>   Worktree artifact age threshold. Default: 7.
   --deps-older-than-days <n>
                           node_modules age threshold. Default: 21.
-  --worktrees-root <dir>  Override the worktree root. Default: canonical .worktrees.
+  --worktrees-root <dir>  Scan immediate child directories instead of registered worktrees.
   --json                  Emit machine-readable JSON lines.
   --help                  Show this help.
 
@@ -99,11 +111,17 @@ human_kib() {
 
 path_mtime_epoch() {
   local target_path="$1"
-  if stat -f %m "$target_path" >/dev/null 2>&1; then
-    stat -f %m "$target_path"
-  else
-    stat -c %Y "$target_path"
+  local mtime=""
+
+  # GNU stat accepts -f but reports filesystem metadata, so command success is
+  # not enough to identify BSD stat. Accept only an epoch-shaped BSD result,
+  # then fall back to GNU's explicit mtime format.
+  mtime="$(stat -f %m "$target_path" 2>/dev/null || true)"
+  if [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$mtime"
+    return 0
   fi
+  stat -c %Y "$target_path"
 }
 
 path_age_days() {
@@ -129,6 +147,22 @@ path_size_kib_or_zero() {
   local size_kib
   size_kib="$(path_size_kib "$1" || true)"
   printf '%s\n' "${size_kib:-0}"
+}
+
+path_identity() {
+  local target_path="$1"
+  local identity=""
+
+  # Device, inode, mtime, and ctime together detect replacement plus ordinary
+  # directory-entry changes. Candidate-specific policy is still rechecked
+  # after this because nested state can change without touching the root mtime.
+  # As above, validate BSD output because GNU stat -f can exit successfully.
+  identity="$(stat -f '%d:%i:%m:%c' "$target_path" 2>/dev/null || true)"
+  if [[ "$identity" =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]+$ ]]; then
+    printf '%s\n' "$identity"
+    return 0
+  fi
+  stat -c '%d:%i:%Y:%Z' "$target_path"
 }
 
 tree_removal_protection_reason() {
@@ -200,22 +234,267 @@ record_candidate_total() {
 
 path_has_process_ref() {
   local target_path="$1"
-  ps axww -o args= | grep -F "$target_path" | grep -v 'grep -F' >/dev/null 2>&1
+
+  # One host snapshot is sufficient for report/classification and avoids
+  # spawning ps once per artifact across hundreds of registered worktrees.
+  # Apply mode performs an additional fresh check immediately before removal.
+  if [[ "$PROCESS_SNAPSHOT_READY" != "1" ]]; then
+    PROCESS_SNAPSHOT_READY=1
+    if ! command -v "$PS_BIN" >/dev/null 2>&1 || ! PROCESS_SNAPSHOT="$("$PS_BIN" axww -o args= 2>/dev/null)"; then
+      PROCESS_SNAPSHOT_FAILED=1
+    fi
+  fi
+  [[ "$PROCESS_SNAPSHOT_FAILED" == "1" ]] && return 0
+  printf '%s\n' "$PROCESS_SNAPSHOT" | grep -F "$target_path" | grep -v 'grep -F' >/dev/null 2>&1
 }
 
 path_has_open_files() {
   local target_path="$1"
-  local lsof_output
-  if ! command -v lsof >/dev/null 2>&1; then
-    return 1
+
+  # A single machine-readable lsof snapshot replaces recursive +D traversal
+  # for every candidate. Exact path/prefix matching preserves directory
+  # semantics without making scan time proportional to dependency tree size.
+  if [[ "$OPEN_FILE_SNAPSHOT_READY" != "1" ]]; then
+    OPEN_FILE_SNAPSHOT_READY=1
+    if ! command -v "$LSOF_BIN" >/dev/null 2>&1 || ! OPEN_FILE_SNAPSHOT="$("$LSOF_BIN" -Fn 2>/dev/null)"; then
+      OPEN_FILE_SNAPSHOT_FAILED=1
+    fi
   fi
-  lsof_output="$(lsof +D "$target_path" 2>/dev/null || true)"
-  [[ -n "$lsof_output" ]]
+  [[ "$OPEN_FILE_SNAPSHOT_FAILED" == "1" ]] && return 0
+  printf '%s\n' "$OPEN_FILE_SNAPSHOT" | awk -v target="$target_path" '
+    substr($0, 1, 1) == "n" {
+      open_path = substr($0, 2)
+      if (open_path == target || index(open_path, target "/") == 1) {
+        found = 1
+        exit
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  '
+}
+
+path_is_active_fresh() {
+  local target_path="$1"
+  local process_output=""
+  local lsof_output=""
+  local lsof_status=0
+
+  command -v "$PS_BIN" >/dev/null 2>&1 || return 0
+  if ! process_output="$("$PS_BIN" axww -o args= 2>/dev/null)"; then
+    return 0
+  fi
+  if printf '%s\n' "$process_output" | grep -F "$target_path" | grep -v 'grep -F' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  command -v "$LSOF_BIN" >/dev/null 2>&1 || return 0
+  lsof_output="$("$LSOF_BIN" +D "$target_path" 2>&1)" || lsof_status=$?
+  [[ "$lsof_status" == "0" ]] && return 0
+  [[ "$lsof_status" == "1" && -z "$lsof_output" ]] && return 1
+  return 0
 }
 
 path_is_active() {
   local target_path="$1"
   path_has_process_ref "$target_path" || path_has_open_files "$target_path"
+}
+
+generated_age_policy_block_reason() {
+  local target_path="$1"
+  local min_age="$2"
+  local age_unit="$3"
+  local current_age=0
+
+  if [[ "$age_unit" == "hours" ]]; then
+    current_age="$(path_age_hours "$target_path" 2>/dev/null)" || {
+      printf 'age-inspection-failed'
+      return 0
+    }
+  else
+    current_age="$(path_age_days "$target_path" 2>/dev/null)" || {
+      printf 'age-inspection-failed'
+      return 0
+    }
+  fi
+  if ((current_age < min_age)); then
+    printf 'candidate-became-too-new'
+    return 0
+  fi
+  return 1
+}
+
+worktree_artifact_policy_block_reason() {
+  local target_path="$1"
+  local worktree="$2"
+  local kind="$3"
+  local min_age_days="$4"
+
+  if [[ ! -d "$worktree" || "$target_path" != "$worktree/$kind" ]]; then
+    printf 'worktree-or-candidate-identity-changed'
+    return 0
+  fi
+  if [[ "$INCLUDE_CURRENT" != "1" && "$(cd "$worktree" 2>/dev/null && pwd -P)" == "$CURRENT_ROOT" ]]; then
+    printf 'current-checkout'
+    return 0
+  fi
+  if worktree_is_protected_control_lane "$worktree"; then
+    printf 'control-or-release-worktree'
+    return 0
+  fi
+  if worktree_is_dirty "$worktree"; then
+    printf 'dirty-or-status-indeterminate'
+    return 0
+  fi
+  if [[ "$kind" == "dist" ]] && dist_has_release_recovery_state "$target_path"; then
+    printf 'release-artifact-or-receipt'
+    return 0
+  fi
+  generated_age_policy_block_reason "$target_path" "$min_age_days" days
+}
+
+newest_release_run_path() {
+  local run_dir
+  local candidate_name
+  local candidate_mtime
+  local newest_path=""
+  local newest_mtime=0
+  local inventory_path=""
+
+  if ! inventory_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-release-runs.XXXXXX")"; then
+    return 2
+  fi
+  if ! find "$BUILD_ARTIFACT_ROOT/runs" -mindepth 1 -maxdepth 1 -type d -print0 > "$inventory_path" 2>/dev/null; then
+    rm -f "$inventory_path" || true
+    return 2
+  fi
+
+  while IFS= read -r -d '' run_dir; do
+    candidate_name="$(basename "$run_dir")"
+    case "$candidate_name" in
+      *-jarvis-release-*|jarvis-release-*|*-sparkle-*|sparkle-*|*-appcast-*|appcast-*)
+        candidate_mtime="$(path_mtime_epoch "$run_dir" 2>/dev/null)" || continue
+        if ((candidate_mtime > newest_mtime)); then
+          newest_mtime="$candidate_mtime"
+          newest_path="$run_dir"
+        fi
+        ;;
+    esac
+  done < "$inventory_path"
+  if ! rm -f "$inventory_path"; then
+    return 2
+  fi
+  printf '%s\n' "$newest_path"
+}
+
+build_run_policy_block_reason() {
+  local target_path="$1"
+  local kind="$2"
+
+  if [[ "$(dirname "$target_path")" != "$BUILD_ARTIFACT_ROOT/runs" ]]; then
+    printf 'build-run-parent-changed'
+    return 0
+  fi
+  if [[ "$kind" == "release-staging" ]]; then
+    local newest_path=""
+    if ! newest_path="$(newest_release_run_path)"; then
+      printf 'release-run-inventory-failed'
+      return 0
+    fi
+    if [[ "$newest_path" == "$target_path" ]]; then
+      printf 'newest-release-staging'
+      return 0
+    fi
+    generated_age_policy_block_reason "$target_path" "$RELEASE_STAGING_OLDER_THAN_DAYS" days
+    return $?
+  fi
+  generated_age_policy_block_reason "$target_path" "$BUILD_RUNS_OLDER_THAN_HOURS" hours
+}
+
+runtime_cache_policy_block_reason() {
+  local target_path="$1"
+
+  if runtime_cache_is_newest_in_group "$target_path"; then
+    printf 'newest-in-group'
+    return 0
+  fi
+  generated_age_policy_block_reason "$target_path" "$RUNTIME_CACHE_OLDER_THAN_DAYS" days
+}
+
+runtime_instance_policy_block_reason() {
+  local target_path="$1"
+  local instance_name="$2"
+
+  if [[ "$(basename "$target_path")" != "$instance_name" ]] ||
+    ! runtime_instance_is_generated "$instance_name" ||
+    runtime_instance_is_protected_name "$instance_name" ||
+    runtime_instance_has_protected_state "$target_path"; then
+    printf 'runtime-instance-became-stateful-or-unowned'
+    return 0
+  fi
+  generated_age_policy_block_reason "$target_path" "$RUNTIME_INSTANCE_OLDER_THAN_DAYS" days
+}
+
+pre_delete_block_reason() {
+  local target_path="$1"
+  local expected_identity="$2"
+  local policy_fn="$3"
+  shift 3
+  local reason=""
+  local current_identity=""
+
+  [[ -e "$target_path" || -L "$target_path" ]] || {
+    printf 'candidate-disappeared'
+    return 0
+  }
+  current_identity="$(path_identity "$target_path" 2>/dev/null)" || {
+    printf 'identity-inspection-failed'
+    return 0
+  }
+  if [[ "$current_identity" != "$expected_identity" ]]; then
+    printf 'candidate-identity-changed'
+    return 0
+  fi
+  if reason="$("$policy_fn" "$target_path" "$@")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  if path_has_retention_marker "$target_path"; then
+    printf 'protected-marker'
+    return 0
+  fi
+  if reason="$(tree_removal_protection_reason "$target_path")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  if path_is_active_fresh "$target_path"; then
+    printf 'became-active-or-inspection-indeterminate'
+    return 0
+  fi
+
+  # Live/process inspection can take long enough for state, receipts, markers,
+  # permissions, or the path itself to change. Re-run every policy immediately
+  # after it and before the exact-path rm.
+  if reason="$("$policy_fn" "$target_path" "$@")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  if path_has_retention_marker "$target_path"; then
+    printf 'protected-marker'
+    return 0
+  fi
+  if reason="$(tree_removal_protection_reason "$target_path")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  current_identity="$(path_identity "$target_path" 2>/dev/null)" || {
+    printf 'identity-inspection-failed'
+    return 0
+  }
+  if [[ "$current_identity" != "$expected_identity" ]]; then
+    printf 'candidate-identity-changed'
+    return 0
+  fi
+  return 1
 }
 
 delete_or_report_candidate() {
@@ -224,9 +503,12 @@ delete_or_report_candidate() {
   local target_path="$3"
   local age_days="$4"
   local size_kib="$5"
+  local policy_fn="$6"
+  shift 6
 
   local protection_reason=""
   local validated_size_kib=""
+  local expected_identity=""
 
   if path_has_retention_marker "$target_path"; then
     print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "protected-marker" "explicit-retention"
@@ -250,10 +532,29 @@ delete_or_report_candidate() {
     return 0
   fi
   size_kib="$validated_size_kib"
+  if ! expected_identity="$(path_identity "$target_path" 2>/dev/null)"; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" "identity-inspection-failed" "operator-remediation-required"
+    return 0
+  fi
 
   record_candidate_total "$size_kib"
 
   if [[ "$APPLY" == "1" ]]; then
+    if protection_reason="$(pre_delete_block_reason "$target_path" "$expected_identity" "$policy_fn" "$@")"; then
+      print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "$protection_reason" "rebuildable-generated"
+      return 0
+    fi
+    # du can itself take long enough for state to change. Require one final
+    # complete traversal, then repeat the entire exact-candidate safety proof.
+    if ! validated_size_kib="$(path_size_kib "$target_path")"; then
+      print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" "final-size-validation-failed" "operator-remediation-required"
+      return 0
+    fi
+    size_kib="$validated_size_kib"
+    if protection_reason="$(pre_delete_block_reason "$target_path" "$expected_identity" "$policy_fn" "$@")"; then
+      print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "$protection_reason" "rebuildable-generated"
+      return 0
+    fi
     # rm can still lose a race with a permission or filesystem change after the
     # precheck. Keep the overall cleanup pass alive and report the exact path;
     # never compensate with chmod, sudo, or a broader deletion.
@@ -293,34 +594,38 @@ consider_generated_path() {
     return 0
   fi
 
-  delete_or_report_candidate "$kind" "$scope" "$target_path" "$age_days" "$size_kib"
-}
-
-canonical_checkout_root() {
-  local common_dir
-  common_dir="$(git -C "$ROOT_DIR" rev-parse --git-common-dir 2>/dev/null || true)"
-  if [[ -n "$common_dir" ]]; then
-    if [[ "$common_dir" != /* ]]; then
-      common_dir="$ROOT_DIR/$common_dir"
-    fi
-    common_dir="$(cd "$common_dir" && pwd -P)"
-    if [[ "$(basename "$common_dir")" == ".git" ]]; then
-      dirname "$common_dir"
-      return 0
-    fi
-  fi
-  printf '%s\n' "$ROOT_DIR"
-}
-
-default_worktrees_root() {
-  local checkout_root
-  checkout_root="$(canonical_checkout_root)"
-  printf '%s/.worktrees\n' "$checkout_root"
+  delete_or_report_candidate "$kind" "$scope" "$target_path" "$age_days" "$size_kib" \
+    generated_age_policy_block_reason "$min_age_days" days
 }
 
 worktree_is_dirty() {
   local worktree="$1"
-  [[ -n "$(git -C "$worktree" status --short --untracked-files=no 2>/dev/null || true)" ]]
+  local status_output
+
+  # Untracked files are user state too. A generated directory may itself be
+  # ignored, but any unrelated untracked file protects the whole worktree.
+  # A failed status probe is indeterminate, so fail closed and protect it too.
+  if ! status_output="$(git -C "$worktree" status --short 2>/dev/null)"; then
+    return 0
+  fi
+  [[ -n "$status_output" ]]
+}
+
+worktree_is_protected_control_lane() {
+  local worktree="$1"
+  local branch=""
+
+  # The sacred main checkout owns source-control and shared-runtime recovery;
+  # the blessed Jarvis release lane intentionally keeps expensive prewarm
+  # output. Registered-worktree discovery must not turn either durable control
+  # surface into an automatic cache target.
+  branch="$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  case "$branch" in
+    main|codex/jarvis-release-current)
+      return 0
+      ;;
+  esac
+  [[ "$worktree" == */.worktrees/jarvis-release-current ]]
 }
 
 dist_has_release_recovery_state() {
@@ -370,6 +675,10 @@ consider_worktree_candidate() {
     print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "current-checkout"
     return 0
   fi
+  if worktree_is_protected_control_lane "$worktree"; then
+    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "control-or-release-worktree"
+    return 0
+  fi
   if [[ "$kind" == "dist" ]] && dist_has_release_recovery_state "$target_path"; then
     print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "release-artifact-or-receipt"
     return 0
@@ -387,7 +696,8 @@ consider_worktree_candidate() {
     return 0
   fi
 
-  delete_or_report_candidate "$kind" "$worktree" "$target_path" "$age_days" "$size_kib"
+  delete_or_report_candidate "$kind" "$worktree" "$target_path" "$age_days" "$size_kib" \
+    worktree_artifact_policy_block_reason "$worktree" "$kind" "$min_age_days"
 }
 
 scan_worktree() {
@@ -416,11 +726,37 @@ scan_worktree() {
   fi
 }
 
-scan_worktrees() {
+scan_worktrees_root() {
   [[ -d "$WORKTREES_ROOT" ]] || return 0
   while IFS= read -r -d '' worktree; do
     scan_worktree "$worktree"
   done < <(find "$WORKTREES_ROOT" -mindepth 1 -maxdepth 1 -type d -print0)
+}
+
+scan_registered_worktrees() {
+  local field
+  local worktree
+
+  # Git's registry is the authority for linked worktrees. NUL-delimited
+  # porcelain output preserves spaces and other shell-sensitive path bytes,
+  # while avoiding assumptions about whether a checkout lives under
+  # .worktrees/name or a nested Codex UUID/openclaw directory.
+  while IFS= read -r -d '' field; do
+    case "$field" in
+      "worktree "*)
+        worktree="${field#worktree }"
+        scan_worktree "$worktree"
+        ;;
+    esac
+  done < <(git -C "$ROOT_DIR" worktree list --porcelain -z)
+}
+
+scan_worktrees() {
+  if [[ "$WORKTREES_ROOT_EXPLICIT" == "1" ]]; then
+    scan_worktrees_root
+  else
+    scan_registered_worktrees
+  fi
 }
 
 scan_build_cache_standard_bucket() {
@@ -505,7 +841,8 @@ scan_build_cache_runs() {
       print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "open-files" "rebuildable-generated"
       continue
     fi
-    delete_or_report_candidate "$kind" "build-cache" "$run_dir" "$age_days" "$size_kib"
+    delete_or_report_candidate "$kind" "build-cache" "$run_dir" "$age_days" "$size_kib" \
+      build_run_policy_block_reason "$kind"
   done < <(find "$BUILD_ARTIFACT_ROOT/runs" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
 }
 
@@ -521,15 +858,29 @@ runtime_cache_is_newest_in_group() {
   local candidate_mtime
   local newest_path=""
   local newest_mtime=0
+  local inventory_path=""
 
   group_dir="$(runtime_cache_group_key "$target_path")"
+  if ! inventory_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-runtime-cache.XXXXXX")"; then
+    return 0
+  fi
+  if ! find "$group_dir" -mindepth 1 -maxdepth 1 -type d -print0 > "$inventory_path" 2>/dev/null; then
+    rm -f "$inventory_path" || true
+    return 0
+  fi
   while IFS= read -r -d '' candidate; do
-    candidate_mtime="$(path_mtime_epoch "$candidate")"
+    if ! candidate_mtime="$(path_mtime_epoch "$candidate")"; then
+      rm -f "$inventory_path" || true
+      return 0
+    fi
     if (( candidate_mtime > newest_mtime )); then
       newest_mtime="$candidate_mtime"
       newest_path="$candidate"
     fi
-  done < <(find "$group_dir" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+  done < "$inventory_path"
+  if ! rm -f "$inventory_path"; then
+    return 0
+  fi
   [[ "$newest_path" == "$target_path" ]]
 }
 
@@ -563,7 +914,8 @@ scan_runtime_cache() {
       print_record "skip" "runtime-cache-entry" "$size_kib" "$age_days" "build-cache" "$cache_dir" "open-files" "rebuildable-generated"
       continue
     fi
-    delete_or_report_candidate "runtime-cache-entry" "build-cache" "$cache_dir" "$age_days" "$size_kib"
+    delete_or_report_candidate "runtime-cache-entry" "build-cache" "$cache_dir" "$age_days" "$size_kib" \
+      runtime_cache_policy_block_reason
   done < <(find "$runtime_cache_root" -mindepth 1 -maxdepth 3 -type d -print0 2>/dev/null)
 }
 
@@ -597,7 +949,31 @@ runtime_instance_is_protected_name() {
 
 runtime_instance_has_protected_state() {
   local instance_dir="$1"
-  [[ -e "$instance_dir/browser" || -e "$instance_dir/memory" || -e "$instance_dir/credentials" || -e "$instance_dir/openclaw.json" ]]
+  local protected_path
+
+  # Legacy/runtime-instance layouts may place operator identity and control
+  # state under instance/.openclaw rather than at the instance root. Check the
+  # known layouts explicitly and fail closed before generated-name heuristics
+  # can classify the entire instance as rebuildable.
+  for protected_path in \
+    "$instance_dir"/browser \
+    "$instance_dir"/memory \
+    "$instance_dir"/credentials \
+    "$instance_dir"/identity \
+    "$instance_dir"/openclaw.json \
+    "$instance_dir"/config/openclaw.json \
+    "$instance_dir"/.openclaw/browser \
+    "$instance_dir"/.openclaw/memory \
+    "$instance_dir"/.openclaw/credentials \
+    "$instance_dir"/.openclaw/identity \
+    "$instance_dir"/.openclaw/openclaw.json \
+    "$instance_dir"/.openclaw/config/openclaw.json; do
+    if [[ -e "$protected_path" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 scan_runtime_instance_logs() {
@@ -660,7 +1036,8 @@ scan_runtime_instance() {
     return 0
   fi
 
-  delete_or_report_candidate "runtime-instance" "$instance_name" "$instance_dir" "$age_days" "$size_kib"
+  delete_or_report_candidate "runtime-instance" "$instance_name" "$instance_dir" "$age_days" "$size_kib" \
+    runtime_instance_policy_block_reason "$instance_name"
 }
 
 scan_runtime_instances() {
@@ -706,6 +1083,7 @@ while [[ $# -gt 0 ]]; do
     --worktrees-root)
       [[ $# -ge 2 ]] || die "--worktrees-root requires a value"
       WORKTREES_ROOT="$2"
+      WORKTREES_ROOT_EXPLICIT=1
       shift 2
       ;;
     --json)
@@ -749,17 +1127,18 @@ done
 if [[ "$EXPLICIT_MODE" == "0" ]]; then
   WORKTREES=1
 fi
-if [[ -z "$WORKTREES_ROOT" ]]; then
-  WORKTREES_ROOT="$(default_worktrees_root)"
-fi
-
 if [[ "$JSON" != "1" ]]; then
   echo "OpenClaw build artifact cleanup"
   echo "  mode=$([[ "$APPLY" == "1" ]] && echo apply || echo report)"
   echo "  worktrees=$WORKTREES"
   echo "  build_cache=$BUILD_CACHE"
   echo "  runtime_instances=$RUNTIME_INSTANCES"
-  echo "  worktrees_root=$WORKTREES_ROOT"
+  if [[ "$WORKTREES_ROOT_EXPLICIT" == "1" ]]; then
+    echo "  worktrees_source=root"
+    echo "  worktrees_root=$WORKTREES_ROOT"
+  else
+    echo "  worktrees_source=git-registry"
+  fi
   echo "  build_artifact_root=$BUILD_ARTIFACT_ROOT"
   echo "  runtime_instances_root=$RUNTIME_INSTANCES_ROOT"
   echo "  current_checkout=$CURRENT_ROOT"
