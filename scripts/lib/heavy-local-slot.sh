@@ -12,6 +12,15 @@ OPENCLAW_HEAVY_LOCAL_SLOT_HELD=0
 OPENCLAW_HEAVY_LOCAL_SLOT_CLAIMED_DIR=0
 OPENCLAW_HEAVY_LOCAL_SLOT_PATH=""
 OPENCLAW_HEAVY_LOCAL_SLOT_TOKEN=""
+OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CLASS=""
+OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CODE=""
+OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_MESSAGE=""
+
+openclaw_heavy_local_slot_set_refusal() {
+  OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CLASS="$1"
+  OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CODE="$2"
+  OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_MESSAGE="$3"
+}
 
 openclaw_heavy_local_slot_value() {
   local metadata_path="$1"
@@ -360,14 +369,30 @@ openclaw_heavy_local_slot_acquire() {
   local token="" owner_pid="" owner_token="" owner_start="" owner_label=""
   local metadata_wait=0 live_status=0 child_status=0
 
-  lock_path="$(openclaw_heavy_local_slot_resolve_path)" || return 1
+  openclaw_heavy_local_slot_set_refusal "" "" ""
+  lock_path="$(openclaw_heavy_local_slot_resolve_path)" || {
+    openclaw_heavy_local_slot_set_refusal \
+      "guard_internal" \
+      "lease_path_unavailable" \
+      "could not resolve the machine-wide lease path"
+    return 75
+  }
   token="$(openclaw_heavy_local_slot_generate_token)" || {
-    echo "Refusing heavy work: could not create a secure lease token." >&2
+    openclaw_heavy_local_slot_set_refusal \
+      "guard_internal" \
+      "lease_token_unavailable" \
+      "could not create a secure lease token"
     return 75
   }
   lock_parent="$(dirname "$lock_path")"
   owner_path="$lock_path/owner"
-  (umask 077 && /bin/mkdir -p "$lock_parent" && /bin/chmod 700 "$lock_parent") || return 1
+  if ! (umask 077 && /bin/mkdir -p "$lock_parent" && /bin/chmod 700 "$lock_parent"); then
+    openclaw_heavy_local_slot_set_refusal \
+      "guard_internal" \
+      "lease_parent_unavailable" \
+      "could not create or protect the lease parent directory"
+    return 75
+  fi
 
   # Publish intended ownership before mkdir so the wrapper's already-installed
   # EXIT trap can clean only its own ownerless directory after an interruption.
@@ -380,7 +405,10 @@ openclaw_heavy_local_slot_acquire() {
       if ! openclaw_heavy_local_slot_after_mkdir ||
         ! openclaw_heavy_local_slot_write_owner "$owner_path" "$token" "$label" "$policy"; then
         openclaw_heavy_local_slot_release
-        echo "Refusing heavy work: could not publish lease owner metadata." >&2
+        openclaw_heavy_local_slot_set_refusal \
+          "guard_internal" \
+          "owner_publish_failed" \
+          "could not publish lease owner metadata"
         return 75
       fi
       OPENCLAW_HEAVY_LOCAL_SLOT_HELD=1
@@ -397,7 +425,10 @@ openclaw_heavy_local_slot_acquire() {
       metadata_wait=$((metadata_wait + 1))
     done
     if [[ ! -f "$owner_path" ]]; then
-      echo "Refusing heavy work: slot has no readable owner metadata at $lock_path." >&2
+      openclaw_heavy_local_slot_set_refusal \
+        "guard_internal" \
+        "owner_metadata_unreadable" \
+        "slot has no readable owner metadata at $lock_path"
       return 75
     fi
 
@@ -411,13 +442,17 @@ openclaw_heavy_local_slot_acquire() {
       live_status=$?
     fi
     if [[ "$live_status" -eq 0 ]]; then
-      printf 'Refusing heavy work: slot held by "%s" (PID %s).\n' \
-        "${owner_label:-unknown}" \
-        "${owner_pid:-unknown}" >&2
+      openclaw_heavy_local_slot_set_refusal \
+        "occupied" \
+        "live_owner" \
+        "slot held by \"${owner_label:-unknown}\" (PID ${owner_pid:-unknown})"
       return 75
     fi
     if [[ "$live_status" -eq 2 || -z "$owner_token" ]]; then
-      echo "Refusing heavy work: slot owner identity is incomplete; refusing unsafe recovery." >&2
+      openclaw_heavy_local_slot_set_refusal \
+        "guard_internal" \
+        "owner_identity_ambiguous" \
+        "slot owner identity is incomplete; refusing unsafe recovery"
       return 75
     fi
 
@@ -427,11 +462,17 @@ openclaw_heavy_local_slot_acquire() {
       child_status=$?
     fi
     if [[ "$child_status" -eq 0 ]]; then
-      echo "Refusing heavy work: dead slot owner still has a live guarded process group." >&2
+      openclaw_heavy_local_slot_set_refusal \
+        "occupied" \
+        "orphan_group_live" \
+        "dead slot owner still has a live guarded process group"
       return 75
     fi
     if [[ "$child_status" -eq 2 ]]; then
-      echo "Refusing heavy work: guarded child identity is incomplete; refusing unsafe recovery." >&2
+      openclaw_heavy_local_slot_set_refusal \
+        "guard_internal" \
+        "child_identity_ambiguous" \
+        "guarded child identity is incomplete; refusing unsafe recovery"
       return 75
     fi
 
@@ -440,7 +481,10 @@ openclaw_heavy_local_slot_acquire() {
       "$owner_token" \
       "$owner_pid" \
       "$owner_start"; then
-      echo "Refusing heavy work: stale-slot recovery is already active or ownership changed." >&2
+      openclaw_heavy_local_slot_set_refusal \
+        "occupied" \
+        "recovery_in_progress" \
+        "stale-slot recovery is already active or ownership changed"
       return 75
     fi
   done
@@ -484,6 +528,7 @@ openclaw_heavy_local_slot_require_or_reexec_with_policy() {
     standard | jarvis-remediation)
       ;;
     *)
+      printf 'HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=unknown_policy\n' >&2
       echo "Refusing heavy work: unknown admission policy '$policy'." >&2
       return 75
       ;;

@@ -78,6 +78,30 @@ wait_for_absence() {
   [[ ! -e "$path" ]] || fail "timed out waiting for removal of $path"
 }
 
+wait_for_text() {
+  local path="$1"
+  local expected="$2"
+  local attempt=0
+
+  while [[ "$attempt" -lt 200 ]]; do
+    if [[ -f "$path" ]] && grep -Fq "$expected" "$path"; then
+      return 0
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  fail "timed out waiting for '$expected' in $path"
+}
+
+assert_one_line() {
+  local path="$1"
+  local expected="$2"
+  local count=0
+
+  count="$(grep -Fc "$expected" "$path" || true)"
+  [[ "$count" -eq 1 ]] || fail "expected one '$expected' line in $path, found $count"
+}
+
 wait_for_dead_pid() {
   local pid="$1"
   local attempt=0
@@ -218,10 +242,15 @@ host_health_reason() {
   # and Tailscale failures remain fatal regardless of policy.
   if [[ "$test_health_sample" == "jarvis-unhealthy" ]]; then
     if [[ "$require_jarvis_health" == "1" ]]; then
-      printf 'managed Jarvis health check failed'
+      printf '%s' \
+        'host_unhealthy|jarvis_unhealthy|managed Jarvis health check failed|metric=jarvis_health observed=unhealthy expected=healthy'
     fi
+  elif [[ "$test_health_sample" == "guard-internal" ]]; then
+    printf '%s' \
+      'guard_internal|fixture_measurement_failed|synthetic measurement backend failed|metric=fixture status=unavailable'
   elif [[ -n "$test_health_sample" && "$test_health_sample" != "healthy" ]]; then
-    printf '%s' "$test_health_sample"
+    printf 'host_unhealthy|fixture_host_pressure|%s|metric=fixture observed=unhealthy' \
+      "$test_health_sample"
   fi
 }
 EOF
@@ -233,7 +262,11 @@ EOF
       print "readonly MONITOR_INTERVAL_SECONDS=0.05"
       next
     }
-    $0 == "preflight_reason=$(host_health_reason \"$PREFLIGHT_MIN_CPU_IDLE_PERCENT\" \"$require_jarvis_health\")" {
+    $0 == "readonly WAIT_POLL_SECONDS=5" {
+      print "readonly WAIT_POLL_SECONDS=1"
+      next
+    }
+    $0 == "  preflight_result=$(host_health_reason \"$PREFLIGHT_MIN_CPU_IDLE_PERCENT\" \"$require_jarvis_health\")" {
       print "source \"${ROOT_DIR}/scripts/lib/heavy-local-slot-health-fixture.sh\""
     }
     $0 == "  kill -TERM -- \"-$child_pgid\" 2>/dev/null || true" {
@@ -1065,6 +1098,360 @@ test_child_status_propagation() {
   pass "guarded child status propagates unchanged"
 }
 
+test_refusal_classes_and_internal_failure_distinction() {
+  local occupied_lock="$TMP_DIR/classes-occupied.lock"
+  local holder_health="$TMP_DIR/classes-holder.health"
+  local contender_health="$TMP_DIR/classes-contender.health"
+  local holder_ready="$TMP_DIR/classes-holder.ready"
+  local holder_release="$TMP_DIR/classes-holder.release"
+  local health_lock="$TMP_DIR/classes-health.lock"
+  local health_file="$TMP_DIR/classes-health.health"
+  local internal_lock="$TMP_DIR/classes-internal.lock"
+  local internal_file="$TMP_DIR/classes-internal.health"
+  local output="$TMP_DIR/classes.out"
+  local marker="$TMP_DIR/classes.marker"
+  local holder_pid=0 status=0
+
+  write_healthy_samples "$holder_health"
+  write_healthy_samples "$contender_health"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$occupied_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$holder_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "classes-holder" \
+      -- \
+      bash -c ': >"$1"; while [[ ! -f "$2" ]]; do sleep 0.05; done' \
+        _ "$holder_ready" "$holder_release" &
+  holder_pid=$!
+  wait_for_file "$holder_ready"
+
+  set +e
+  run_test_wrapper \
+    "$occupied_lock" \
+    "$contender_health" \
+    "classes-occupied" \
+    touch "$marker" \
+    >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "occupied refusal returned $status instead of 75"
+  grep -Fq 'HEAVY_LOCAL_SLOT_REFUSAL class=occupied code=live_owner' "$output" ||
+    fail "occupied refusal omitted its structured class"
+  [[ ! -e "$marker" ]] || fail "occupied refusal ran guarded work"
+
+  printf 'synthetic host pressure\n' >"$health_file"
+  set +e
+  run_test_wrapper \
+    "$health_lock" \
+    "$health_file" \
+    "classes-host-health" \
+    touch "$marker" \
+    >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "host-health refusal returned $status instead of 75"
+  grep -Fq 'HEAVY_LOCAL_SLOT_REFUSAL class=host_unhealthy code=fixture_host_pressure' "$output" ||
+    fail "host-health refusal omitted its structured class"
+  [[ ! -e "$health_lock" ]] || fail "host-health refusal retained the lease"
+
+  printf 'guard-internal\n' >"$internal_file"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$internal_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$internal_file" \
+    "$FIXTURE_WRAPPER" \
+      --label "classes-internal" \
+      --wait-seconds 3 \
+      -- \
+      touch "$marker" \
+      >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "guard-internal refusal returned $status instead of 75"
+  grep -Fq \
+    'HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=fixture_measurement_failed' \
+    "$output" ||
+    fail "guard-internal refusal omitted its structured class"
+  ! grep -Fq 'Heavy-local slot queued' "$output" ||
+    fail "guard-internal refusal was incorrectly retried"
+  [[ ! -e "$internal_lock" ]] || fail "guard-internal refusal retained the lease"
+
+  : >"$holder_release"
+  wait "$holder_pid"
+  pass "occupied, host-health, and guard-internal refusals are distinct"
+}
+
+test_wait_argument_bounds_fail_before_admission() {
+  local lock_path="$TMP_DIR/wait-arguments.lock"
+  local output="$TMP_DIR/wait-arguments.out"
+  local invalid="" status=0
+
+  for invalid in 08 00010 86401 999999999999999999999999; do
+    set +e
+    OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+      "$FIXTURE_WRAPPER" \
+        --label "wait-arguments" \
+        --wait-seconds "$invalid" \
+        -- \
+        true \
+        >"$output" 2>&1
+    status=$?
+    set -e
+    [[ "$status" -eq 2 ]] ||
+      fail "invalid wait value $invalid returned $status instead of usage status 2"
+    [[ ! -e "$lock_path" ]] || fail "invalid wait value $invalid reached admission"
+  done
+  pass "wait bounds reject leading-zero and overflowing values before admission"
+}
+
+test_queue_notice_sanitizes_untrusted_label() {
+  local lock_path="$TMP_DIR/queue-label.lock"
+  local holder_health="$TMP_DIR/queue-label-holder.health"
+  local waiter_health="$TMP_DIR/queue-label-waiter.health"
+  local holder_ready="$TMP_DIR/queue-label-holder.ready"
+  local holder_release="$TMP_DIR/queue-label-holder.release"
+  local output="$TMP_DIR/queue-label.out"
+  local holder_pid=0 waiter_pid=0 status=0
+
+  write_healthy_samples "$holder_health"
+  write_healthy_samples "$waiter_health"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$holder_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "queue-label-holder" \
+      -- \
+      bash -c ': >"$1"; while [[ ! -f "$2" ]]; do sleep 0.05; done' \
+        _ "$holder_ready" "$holder_release" &
+  holder_pid=$!
+  wait_for_file "$holder_ready"
+
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$waiter_health" \
+    "$FIXTURE_WRAPPER" \
+      --label $'unsafe\nlabel\033[31m' \
+      --wait-seconds 30 \
+      -- \
+      true \
+      >"$output" 2>&1 &
+  waiter_pid=$!
+  wait_for_text "$output" 'Heavy-local slot queued for "unsafelabel31m"'
+  kill -TERM "$waiter_pid"
+  set +e
+  wait "$waiter_pid"
+  status=$?
+  set -e
+  [[ "$status" -eq 143 ]] || fail "unsafe-label waiter returned $status instead of 143"
+  assert_one_line "$output" 'Heavy-local slot queued for "unsafelabel31m"'
+  [[ "$(LC_ALL=C tr -cd '\033' <"$output" | wc -c | tr -d ' ')" -eq 0 ]] ||
+    fail "queue output retained terminal escape characters"
+
+  : >"$holder_release"
+  wait "$holder_pid"
+  pass "queue notice sanitizes untrusted labels into one safe line"
+}
+
+test_occupied_wait_runs_once_with_one_queue_notice() {
+  local lock_path="$TMP_DIR/occupied-wait.lock"
+  local holder_health="$TMP_DIR/occupied-wait-holder.health"
+  local waiter_health="$TMP_DIR/occupied-wait-waiter.health"
+  local holder_ready="$TMP_DIR/occupied-wait-holder.ready"
+  local holder_release="$TMP_DIR/occupied-wait-holder.release"
+  local command_receipt="$TMP_DIR/occupied-wait-command.receipt"
+  local output="$TMP_DIR/occupied-wait.out"
+  local holder_pid=0 waiter_pid=0 status=0
+
+  write_healthy_samples "$holder_health"
+  write_healthy_samples "$waiter_health"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$holder_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "occupied-wait-holder" \
+      -- \
+      bash -c ': >"$1"; while [[ ! -f "$2" ]]; do sleep 0.05; done' \
+        _ "$holder_ready" "$holder_release" &
+  holder_pid=$!
+  wait_for_file "$holder_ready"
+
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$waiter_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "occupied-waiter" \
+      --wait-seconds 5 \
+      -- \
+      bash -c 'printf "run\n" >>"$1"' _ "$command_receipt" \
+      >"$output" 2>&1 &
+  waiter_pid=$!
+  wait_for_text "$output" 'Heavy-local slot queued for "occupied-waiter"'
+  : >"$holder_release"
+  wait "$holder_pid"
+  set +e
+  wait "$waiter_pid"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 0 ]] || fail "occupied waiter returned $status instead of 0"
+  [[ "$(wc -l <"$command_receipt" | tr -d ' ')" -eq 1 ]] ||
+    fail "occupied waiter did not execute its guarded command exactly once"
+  assert_one_line "$output" 'Heavy-local slot queued for "occupied-waiter"'
+  assert_one_line "$output" 'Heavy-local slot granted to "occupied-waiter"'
+  [[ ! -e "$lock_path" ]] || fail "occupied waiter leaked its lease"
+  pass "occupied wait acquires atomically and runs exactly once with one queue notice"
+}
+
+test_host_health_wait_releases_lease_then_runs_once() {
+  local lock_path="$TMP_DIR/health-wait.lock"
+  local health_path="$TMP_DIR/health-wait.health"
+  local command_receipt="$TMP_DIR/health-wait-command.receipt"
+  local output="$TMP_DIR/health-wait.out"
+  local waiter_pid=0 status=0 sample=0
+
+  : >"$health_path"
+  while [[ "$sample" -lt 20 ]]; do
+    printf 'synthetic host pressure\n' >>"$health_path"
+    sample=$((sample + 1))
+  done
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --label "health-waiter" \
+      --wait-seconds 5 \
+      -- \
+      bash -c 'printf "run\n" >>"$1"' _ "$command_receipt" \
+      >"$output" 2>&1 &
+  waiter_pid=$!
+
+  wait_for_text "$output" 'Heavy-local slot queued for "health-waiter"'
+  wait_for_absence "$lock_path"
+  write_healthy_samples "$health_path"
+  set +e
+  wait "$waiter_pid"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 0 ]] || fail "host-health waiter returned $status instead of 0"
+  [[ "$(wc -l <"$command_receipt" | tr -d ' ')" -eq 1 ]] ||
+    fail "host-health waiter did not execute its guarded command exactly once"
+  assert_one_line "$output" 'Heavy-local slot queued for "health-waiter"'
+  [[ ! -e "$lock_path" ]] || fail "host-health waiter leaked its lease"
+  pass "host-health wait sleeps without the lease and runs exactly once after recovery"
+}
+
+test_deadline_blocks_late_admission() {
+  local lock_path="$TMP_DIR/deadline.lock"
+  local holder_health="$TMP_DIR/deadline-holder.health"
+  local waiter_health="$TMP_DIR/deadline-waiter.health"
+  local holder_ready="$TMP_DIR/deadline-holder.ready"
+  local holder_release="$TMP_DIR/deadline-holder.release"
+  local marker="$TMP_DIR/deadline.marker"
+  local output="$TMP_DIR/deadline.out"
+  local holder_pid=0 releaser_pid=0 status=0
+
+  write_healthy_samples "$holder_health"
+  write_healthy_samples "$waiter_health"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$holder_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "deadline-holder" \
+      -- \
+      bash -c ': >"$1"; while [[ ! -f "$2" ]]; do sleep 0.05; done' \
+        _ "$holder_ready" "$holder_release" &
+  holder_pid=$!
+  wait_for_file "$holder_ready"
+
+  (
+    trap - EXIT INT TERM HUP
+    wait_for_text "$output" 'Heavy-local slot queued for "deadline-waiter"'
+    : >"$holder_release"
+  ) &
+  releaser_pid=$!
+
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$waiter_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "deadline-waiter" \
+      --wait-seconds 1 \
+      -- \
+      touch "$marker" \
+      >"$output" 2>&1
+  status=$?
+  set -e
+  wait "$releaser_pid"
+  wait "$holder_pid"
+
+  [[ "$status" -eq 75 ]] || fail "deadline waiter returned $status instead of 75"
+  grep -Fq 'HEAVY_LOCAL_SLOT_REFUSAL class=occupied code=wait_timeout' "$output" ||
+    fail "deadline waiter omitted its timeout classification"
+  [[ ! -e "$marker" ]] || fail "deadline waiter launched after its deadline"
+  [[ ! -e "$lock_path" ]] || fail "deadline waiter leaked its lease"
+  pass "a slot freed during the final sleep cannot admit work after the deadline"
+}
+
+test_wait_timeout_and_cancel_never_run_command() {
+  local lock_path="$TMP_DIR/wait-stop.lock"
+  local holder_health="$TMP_DIR/wait-stop-holder.health"
+  local waiter_health="$TMP_DIR/wait-stop-waiter.health"
+  local holder_ready="$TMP_DIR/wait-stop-holder.ready"
+  local holder_release="$TMP_DIR/wait-stop-holder.release"
+  local marker="$TMP_DIR/wait-stop.marker"
+  local timeout_output="$TMP_DIR/wait-timeout.out"
+  local cancel_output="$TMP_DIR/wait-cancel.out"
+  local holder_pid=0 waiter_pid=0 status=0
+
+  write_healthy_samples "$holder_health"
+  write_healthy_samples "$waiter_health"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$holder_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "wait-stop-holder" \
+      -- \
+      bash -c ': >"$1"; while [[ ! -f "$2" ]]; do sleep 0.05; done' \
+        _ "$holder_ready" "$holder_release" &
+  holder_pid=$!
+  wait_for_file "$holder_ready"
+
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$waiter_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "timeout-waiter" \
+      --wait-seconds 1 \
+      -- \
+      touch "$marker" \
+      >"$timeout_output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "wait timeout returned $status instead of 75"
+  grep -Fq 'HEAVY_LOCAL_SLOT_REFUSAL class=occupied code=wait_timeout' "$timeout_output" ||
+    fail "wait timeout omitted its structured terminal reason"
+  assert_one_line "$timeout_output" 'Heavy-local slot queued for "timeout-waiter"'
+  [[ ! -e "$marker" ]] || fail "timed-out waiter ran guarded work"
+
+  write_healthy_samples "$waiter_health"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$waiter_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "cancel-waiter" \
+      --wait-seconds 30 \
+      -- \
+      touch "$marker" \
+      >"$cancel_output" 2>&1 &
+  waiter_pid=$!
+  wait_for_text "$cancel_output" 'Heavy-local slot queued for "cancel-waiter"'
+  kill -TERM "$waiter_pid"
+  set +e
+  wait "$waiter_pid"
+  status=$?
+  set -e
+  [[ "$status" -eq 143 ]] || fail "cancelled waiter returned $status instead of 143"
+  assert_one_line "$cancel_output" 'Heavy-local slot queued for "cancel-waiter"'
+  [[ ! -e "$marker" ]] || fail "cancelled waiter ran guarded work"
+  kill -0 "$holder_pid" 2>/dev/null || fail "cancelled waiter harmed the live holder"
+
+  : >"$holder_release"
+  wait "$holder_pid"
+  [[ ! -e "$lock_path" ]] || fail "wait timeout/cancel leaked the holder lease"
+  pass "bounded timeout and cancellation never execute or disturb the holder"
+}
+
 create_stubborn_orphan_fixture() {
   local fixture="$TMP_DIR/stubborn-orphan-fixture.sh"
 
@@ -1752,6 +2139,34 @@ if [[ "${1:-}" == "--wiring-only" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "--coordination-only" ]]; then
+  SUITE_PHASE="create_instrumented_runtime"
+  create_instrumented_runtime
+  run_suite_test test_refusal_classes_and_internal_failure_distinction
+  run_suite_test test_wait_argument_bounds_fail_before_admission
+  run_suite_test test_queue_notice_sanitizes_untrusted_label
+  run_suite_test test_occupied_wait_runs_once_with_one_queue_notice
+  run_suite_test test_host_health_wait_releases_lease_then_runs_once
+  run_suite_test test_deadline_blocks_late_admission
+  run_suite_test test_wait_timeout_and_cancel_never_run_command
+  SUITE_PHASE="complete"
+  echo "Heavy-local slot coordination tests passed."
+  exit 0
+fi
+
+if [[ "${1:-}" == "--cleanup-only" ]]; then
+  SUITE_PHASE="create_instrumented_runtime"
+  create_instrumented_runtime
+  SUITE_PHASE="create_sigint_reset_launcher"
+  create_sigint_reset_launcher
+  run_suite_test test_root_exit_kills_term_ignoring_orphan_group
+  run_suite_test test_two_sample_health_stop_kills_tree
+  run_suite_test test_signal_cleanup_kills_tree_and_releases
+  SUITE_PHASE="complete"
+  echo "Heavy-local slot cleanup tests passed."
+  exit 0
+fi
+
 SUITE_PHASE="create_instrumented_runtime"
 create_instrumented_runtime
 SUITE_PHASE="create_sigint_reset_launcher"
@@ -1771,6 +2186,13 @@ run_suite_test test_copied_live_token_from_sibling_is_rejected
 run_suite_test test_stale_recovery_and_token_safe_cleanup
 run_suite_test test_ambiguous_owner_identity_fails_closed
 run_suite_test test_child_status_propagation
+run_suite_test test_refusal_classes_and_internal_failure_distinction
+run_suite_test test_wait_argument_bounds_fail_before_admission
+run_suite_test test_queue_notice_sanitizes_untrusted_label
+run_suite_test test_occupied_wait_runs_once_with_one_queue_notice
+run_suite_test test_host_health_wait_releases_lease_then_runs_once
+run_suite_test test_deadline_blocks_late_admission
+run_suite_test test_wait_timeout_and_cancel_never_run_command
 run_suite_test test_root_exit_kills_term_ignoring_orphan_group
 run_suite_test test_wrapper_sigkill_retains_lease_until_orphan_group_dies
 run_suite_test test_two_sample_health_stop_kills_tree
