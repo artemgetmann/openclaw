@@ -51,8 +51,11 @@ Example config:
 - Active hours: `09:00-20:00` in `timezone: "user"` by default. Override `agents.defaults.heartbeat.activeHours` (or per-agent `agents.list[].heartbeat.activeHours`) to change it, or explicitly set a 24/7 window if you want overnight heartbeats.
 - Weekends: `urgent-only` by default. The hourly ambient sweep still checks during active hours, but routine attention waits for a weekday. Use `normal` or `off` for different behavior.
 - Context cost: ambient sweeps default to lightweight isolated context. Explicit event-driven wakes retain the main session and full bootstrap context.
-- Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
-  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. Surface at most three items that genuinely need the user's attention now, and do not repeat an unchanged blocker even as a shorter nudge. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.`
+- Prompt body (configurable via `agents.defaults.heartbeat.prompt`): read
+  `HEARTBEAT.md`, perform broad ambient sweeps, surface at most three genuinely
+  useful items, create bounded non-duplicate one-shot reminders for confirmed
+  commitments, keep new recurring monitoring approval-based, and reply
+  `HEARTBEAT_OK` when nothing needs attention.
 - The heartbeat prompt is sent **verbatim** as the user message. The system
   prompt includes a “Heartbeat” section and the run is flagged internally.
 - For normal heartbeat sweeps (not cron/exec event runs), OpenClaw also injects a
@@ -82,6 +85,17 @@ The default prompt is intentionally conservative:
   inbox/thread/person until something happens” should normally become cron jobs instead.
 - **Approval-oriented follow-up**: if heartbeat suggests deeper work or a new
   recurring monitor, the model should ask before expanding scope.
+- **Bounded proactive reminders**: a confirmed time-bound commitment can create
+  up to three non-duplicate one-shot reminders without a separate approval
+  prompt. Tentative or time-ambiguous events must not schedule anything.
+- **Operational travel facts**: flight reminders should include source-confirmed
+  boarding gate, check-in counter, document-check counter, deadlines, baggage
+  status, and boarding time when available. These are distinct logistics, not
+  interchangeable labels. No checked baggage can reduce counter time, but
+  mandatory document verification still wins. Volatile facts need a named
+  source and checked-at time. Use an agent-turn reminder [a scheduled agent run]
+  to refresh them at wake time instead of freezing a gate or counter into static
+  text; unavailable facts stay explicitly unknown rather than guessed.
 - **Attention budget**: heartbeat should surface at most three items that
   genuinely need the user now.
 - **Repeat suppression**: if a blocker was already surfaced and nothing
@@ -197,7 +211,6 @@ Routing boundaries:
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
-        prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. Surface at most three items that genuinely need the user's attention now, and do not repeat an unchanged blocker even as a shorter nudge. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.",
         ackMaxChars: 300, // max chars allowed after HEARTBEAT_OK
       },
     },
@@ -238,7 +251,6 @@ Example: two agents, only the second agent runs heartbeats.
           every: "1h",
           target: "whatsapp",
           to: "+15551234567",
-          prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. Surface at most three items that genuinely need the user's attention now, and do not repeat an unchanged blocker even as a shorter nudge. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.",
         },
       },
     ],

@@ -1,6 +1,8 @@
 import Foundation
+import OSLog
 
 enum ConsumerBootstrap {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "consumer.bootstrap")
     // Jarvis users often send a thought as several rapid Telegram messages.
     // A short Telegram-only debounce turns that burst into one agent turn while
     // leaving other channels unchanged and preserving an explicit user opt-out.
@@ -16,6 +18,7 @@ enum ConsumerBootstrap {
         self.ensureRuntimeDefaults()
         self.ensureDirectories()
         self.ensureConfig()
+        self.ensureProactiveHeartbeatPolicy()
     }
 
     private static func ensureRuntimeDefaults() {
@@ -90,7 +93,51 @@ enum ConsumerBootstrap {
             in: &root,
             path: ["agents", "defaults", "typingMode"],
             value: self.defaultTypingMode) || changed
+        changed = self.applyProactiveHeartbeatDefaults(to: &root) || changed
         return changed
+    }
+
+    /// Routes proactive alerts only after consumer onboarding has identified
+    /// exactly one Telegram owner. Using generic `target: last` could leak a
+    /// private reminder into a group that happened to be the latest route.
+    @discardableResult
+    static func applyProactiveHeartbeatDefaults(to root: inout [String: Any]) -> Bool {
+        let agents = root["agents"] as? [String: Any]
+        let defaults = agents?["defaults"] as? [String: Any]
+        let heartbeat = defaults?["heartbeat"] as? [String: Any]
+        guard self.valueIsMissing(heartbeat?["target"]),
+              let route = self.singleTelegramOwnerRoute(from: root)
+        else {
+            return false
+        }
+
+        var changed = false
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["agents", "defaults", "heartbeat", "target"],
+            value: "telegram") || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["agents", "defaults", "heartbeat", "to"],
+            value: route.ownerId) || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["agents", "defaults", "heartbeat", "accountId"],
+            value: route.accountId) || changed
+        return changed
+    }
+
+    private static func ensureProactiveHeartbeatPolicy() {
+        let configured = AgentWorkspaceConfig.workspace(from: OpenClawConfigFile.loadDict())
+        let workspaceURL = AgentWorkspace.resolveWorkspaceURL(from: configured)
+        do {
+            _ = try AgentWorkspace.bootstrapConsumerHeartbeatPolicyIfSafe(workspaceURL: workspaceURL)
+        } catch {
+            // A failed migration must never block app startup. Log only the
+            // filesystem error; workspace content is private and stays out of
+            // diagnostics.
+            self.logger.error("consumer heartbeat policy bootstrap failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private static func migrateRetiredBrowserProfiles(in root: inout [String: Any]) -> Bool {
@@ -227,6 +274,37 @@ enum ConsumerBootstrap {
 
     private static func jarvisBackend(from root: [String: Any]) -> [String: Any]? {
         (root["jarvis"] as? [String: Any])?["backend"] as? [String: Any]
+    }
+
+    private static func singleTelegramOwnerRoute(
+        from root: [String: Any])
+        -> (ownerId: String, accountId: String)?
+    {
+        guard let telegram = (root["channels"] as? [String: Any])?["telegram"] as? [String: Any]
+        else {
+            return nil
+        }
+
+        let accountId = self.trimmedString(telegram["defaultAccount"]) ?? "default"
+        let account = (telegram["accounts"] as? [String: Any])?[accountId] as? [String: Any]
+        // Upgrade-era configs can hold authorization at either level. Merge
+        // both and require one unique owner; conflicting stale values stay
+        // ambiguous instead of silently preferring one layer.
+        let accountOwners = account?["allowFrom"] as? [String] ?? []
+        let channelOwners = telegram["allowFrom"] as? [String] ?? []
+        let rawOwners = accountOwners + channelOwners
+        let owners = Array(Set(rawOwners.compactMap(self.trimmedString))).sorted()
+
+        // Consumer Telegram onboarding stores numeric sender IDs. Reject
+        // usernames, wildcards, and multiple owners instead of guessing where
+        // private life reminders belong.
+        guard owners.count == 1,
+              let ownerId = owners.first,
+              ownerId.allSatisfy(\.isNumber)
+        else {
+            return nil
+        }
+        return (ownerId, accountId)
     }
 
     private static func trimmedString(_ value: Any?) -> String? {

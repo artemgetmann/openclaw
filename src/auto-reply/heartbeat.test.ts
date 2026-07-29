@@ -173,6 +173,18 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(HEARTBEAT_PROMPT).toContain("not for inventing or storing ad hoc scoped monitors");
     expect(HEARTBEAT_PROMPT).toContain("prefer cron with a cadence, stop condition, and expiry");
     expect(HEARTBEAT_PROMPT).toContain("Ask before creating new monitoring scope");
+    expect(HEARTBEAT_PROMPT).toContain("confirmed time-bound commitments");
+    expect(HEARTBEAT_PROMPT).toContain("at most three useful one-shot reminders");
+    expect(HEARTBEAT_PROMPT).toContain("check existing reminders first");
+    expect(HEARTBEAT_PROMPT).toContain("airport arrival at least two hours before departure");
+    expect(HEARTBEAT_PROMPT).toContain("no checked baggage");
+    expect(HEARTBEAT_PROMPT).toContain("mandatory document verification");
+    expect(HEARTBEAT_PROMPT).toContain("boarding gate, check-in counter or counter range");
+    expect(HEARTBEAT_PROMPT).toContain("document-check counter");
+    expect(HEARTBEAT_PROMPT).toContain("schedule an agentTurn whose wake instructions refresh");
+    expect(HEARTBEAT_PROMPT).toContain("instead of baking current values into a static reminder");
+    expect(HEARTBEAT_PROMPT).toContain("source and checked-at time");
+    expect(HEARTBEAT_PROMPT).toContain("never guess or silently reuse stale travel facts");
   });
 
   it("returns false for undefined/null (missing file should not skip)", () => {

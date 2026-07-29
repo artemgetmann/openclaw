@@ -7,34 +7,10 @@ read_when:
 
 # HEARTBEAT.md
 
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
-
-# Heartbeat is for broad periodic sweeps and ambient awareness. Do not use it as the default
-
-# home for reminders or explicit inbox/thread/person monitors.
-
-# Prefer cron for reminders, exact scheduled checks, or "watch this until X happens".
-
-#
-
-# Safe example to try:
-
-# - Once each morning, do one broad sweep of my world and only alert me if something looks important.
-
-# - Prefer net-new action-needed items. If you already surfaced the same unresolved blocker recently,
-
-# do not resend it unless something materially changed or its urgency escalated.
-
-#
-
-# - Keep an attention budget: surface at most three items that need my decision, approval, reply,
-
-# or awareness now. Continue safe work yourself instead of turning it into a notification.
-
-#
-
-# - If something is blocked on my approval/decision/input, say that explicitly and keep the ask short.
-
-#
-
-# - If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
+- During broad calendar, inbox, notification, and recent-context sweeps, notice confirmed time-bound commitments where a missed follow-up would materially hurt the user.
+- For a confirmed commitment, check existing scheduled tasks and quietly create at most three useful one-shot reminders. Do not duplicate reminders; summarize what was scheduled once.
+- Never schedule from tentative or ambiguous facts, or without a trustworthy time and timezone.
+- For confirmed flights, target airport arrival at least two hours before departure unless the itinerary, airport, airline, or a saved user preference requires more time. Calculate leave time from the best available origin plus realistic travel and buffer.
+- Use confirmed baggage and check-in status: no checked baggage plus a valid boarding pass can reduce counter time, but mandatory document verification or an airline deadline still wins.
+- Keep the boarding gate, check-in counter, and document-check counter distinct. Include each source-confirmed location and deadline when available. For volatile facts, schedule an agent-turn reminder that refreshes authorized sources at wake time instead of freezing the current value into static text. State the source and checked-at time, and never guess or silently reuse stale travel facts.
+- Keep recurring monitoring approval-based. If nothing needs attention, reply HEARTBEAT_OK.

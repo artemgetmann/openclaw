@@ -18,6 +18,9 @@
 
 ## “Ship end-to-end” ownership contract
 
+Apply the Work Scope Contract in `CONSUMER.md` before entering this lifecycle.
+Source merge is not runtime or product-release proof.
+
 When the owner says `ship this end-to-end`, the feature-owning agent keeps
 responsibility for one scoped change from source through merge. It does not
 hand routine coordination back to the founder and it does not create a second

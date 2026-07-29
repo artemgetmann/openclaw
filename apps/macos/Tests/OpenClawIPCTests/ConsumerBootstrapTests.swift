@@ -28,6 +28,74 @@ struct ConsumerBootstrapTests {
         #expect(customDefaults?["typingMode"] as? String == "message")
     }
 
+    @Test func `consumer routes proactive alerts to one verified Telegram owner only`() {
+        var missingRoot: [String: Any] = [:]
+
+        let filled = ConsumerBootstrap.applyMissingConfigDefaults(to: &missingRoot)
+
+        #expect(filled)
+        let agents = missingRoot["agents"] as? [String: Any]
+        let defaults = agents?["defaults"] as? [String: Any]
+        let heartbeat = defaults?["heartbeat"] as? [String: Any]
+        #expect(heartbeat == nil)
+
+        var ownerRoot: [String: Any] = [
+            "channels": [
+                "telegram": [
+                    "defaultAccount": "default",
+                    "allowFrom": ["42"],
+                    "accounts": [
+                        "default": [
+                            "allowFrom": [],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+
+        _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &ownerRoot)
+
+        let ownerAgents = ownerRoot["agents"] as? [String: Any]
+        let ownerDefaults = ownerAgents?["defaults"] as? [String: Any]
+        let ownerHeartbeat = ownerDefaults?["heartbeat"] as? [String: Any]
+        #expect(ownerHeartbeat?["target"] as? String == "telegram")
+        #expect(ownerHeartbeat?["to"] as? String == "42")
+        #expect(ownerHeartbeat?["accountId"] as? String == "default")
+
+        var customRoot: [String: Any] = [
+            "agents": [
+                "defaults": [
+                    "heartbeat": [
+                        "target": "none",
+                    ],
+                ],
+            ],
+        ]
+
+        _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &customRoot)
+
+        let customAgents = customRoot["agents"] as? [String: Any]
+        let customDefaults = customAgents?["defaults"] as? [String: Any]
+        let customHeartbeat = customDefaults?["heartbeat"] as? [String: Any]
+        #expect(customHeartbeat?["target"] as? String == "none")
+    }
+
+    @Test func `consumer does not guess a proactive recipient from ambiguous Telegram owners`() {
+        var root: [String: Any] = [
+            "channels": [
+                "telegram": [
+                    "allowFrom": ["42", "84"],
+                ],
+            ],
+        ]
+
+        _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+        let agents = root["agents"] as? [String: Any]
+        let defaults = agents?["defaults"] as? [String: Any]
+        #expect(defaults?["heartbeat"] == nil)
+    }
+
     @Test func `consumer defaults to signed in browser without overwriting explicit profile`() {
         var missingRoot: [String: Any] = [:]
 

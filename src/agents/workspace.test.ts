@@ -8,6 +8,7 @@ import { writeSkill } from "./skills.e2e-test-helpers.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
@@ -143,6 +144,10 @@ describe("ensureAgentWorkspace", () => {
     expect(bootstrap).not.toContain("Who am I?");
     expect(bootstrap).not.toContain("What am I?");
     expect(bootstrap).not.toContain("creature/vibe");
+    const heartbeat = await fs.readFile(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8");
+    expect(heartbeat).toContain("confirmed time-bound commitments");
+    expect(heartbeat).toContain("at most three useful one-shot reminders");
+    expect(heartbeat).toContain("boarding gate, check-in counter, and document-check counter");
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
   });
 
