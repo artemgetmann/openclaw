@@ -10,7 +10,10 @@ trap on_error ERR
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/heavy-local-slot.sh
 source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
-ORIGINAL_ARGS=("$@")
+# Seed the re-exec argv with the script itself. macOS ships Bash 3.2, where
+# expanding an empty array under `set -u` raises "unbound variable"; the
+# release build invokes this entrypoint with zero arguments.
+REEXEC_COMMAND=("$ROOT_DIR/scripts/bundle-a2ui.sh" "$@")
 HASH_FILE="$ROOT_DIR/src/canvas-host/a2ui/.bundle.hash"
 OUTPUT_FILE="$ROOT_DIR/src/canvas-host/a2ui/a2ui.bundle.js"
 A2UI_RENDERER_DIR="$ROOT_DIR/vendor/a2ui/renderers/lit"
@@ -33,8 +36,7 @@ fi
 openclaw_heavy_local_slot_require_or_reexec \
   "bundle-a2ui" \
   "$ROOT_DIR" \
-  "$ROOT_DIR/scripts/bundle-a2ui.sh" \
-  "${ORIGINAL_ARGS[@]}"
+  "${REEXEC_COMMAND[@]}"
 
 INPUT_PATHS=(
   "$ROOT_DIR/package.json"

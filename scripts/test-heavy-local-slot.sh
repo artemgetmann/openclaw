@@ -1628,6 +1628,13 @@ test_fleet_and_release_lock_coexistence_and_wiring() {
   assert_guard_precedes_mutation \
     scripts/bundle-a2ui.sh \
     '^pnpm -s exec tsc '
+  # The public release calls bundle-a2ui with no arguments. Keep the re-exec
+  # array non-empty so macOS Bash 3.2 nounset mode cannot abort before build.
+  grep -Fq 'REEXEC_COMMAND=("$ROOT_DIR/scripts/bundle-a2ui.sh" "$@")' \
+    "$ROOT_DIR/scripts/bundle-a2ui.sh" ||
+    fail "bundle-a2ui does not seed its zero-argument re-exec command"
+  grep -Fq '"${REEXEC_COMMAND[@]}"' "$ROOT_DIR/scripts/bundle-a2ui.sh" ||
+    fail "bundle-a2ui does not pass the nounset-safe re-exec command"
   assert_guard_precedes_mutation \
     scripts/relaunch-consumer-mac-ui-smoke.sh \
     '^[[:space:]]*cleanup_ui_smoke_artifacts$'
