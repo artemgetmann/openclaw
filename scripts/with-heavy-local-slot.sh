@@ -16,16 +16,23 @@ readonly RUNTIME_MIN_CPU_IDLE_PERCENT=20
 readonly MONITOR_INTERVAL_SECONDS=15
 readonly UNHEALTHY_STRIKES_BEFORE_STOP=2
 readonly HOST_HEALTH_HTTP_TIMEOUT_SECONDS=3
+readonly WAIT_POLL_SECONDS=5
+readonly MAX_WAIT_SECONDS=86400
 
 usage() {
   cat >&2 <<'EOF'
 Usage:
   scripts/with-heavy-local-slot.sh --label <owner> --check
+  scripts/with-heavy-local-slot.sh --label <owner> --wait-seconds <seconds> -- <command> [args...]
   scripts/with-heavy-local-slot.sh --label <owner> -- <command> [args...]
 
 Serializes CPU- or memory-intensive local work across all worktrees and clones
 owned by this user. On macOS it also refuses to start when memory, CPU
 headroom, Tailscale, or the managed Jarvis gateway are unhealthy.
+
+--wait-seconds performs one bounded acquire-and-run transaction. It waits
+without holding the lease, prints at most one queue notice, and executes the
+guarded command exactly once after admission.
 EOF
   exit 2
 }
@@ -33,6 +40,8 @@ EOF
 label=''
 check_only=false
 policy='standard'
+wait_seconds=0
+display_label=''
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -50,6 +59,11 @@ while [ "$#" -gt 0 ]; do
       policy=$2
       shift 2
       ;;
+    --wait-seconds)
+      [ "$#" -ge 2 ] || usage
+      wait_seconds=$2
+      shift 2
+      ;;
     --)
       shift
       break
@@ -61,10 +75,18 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$label" ] || usage
+display_label="$(openclaw_heavy_local_slot_safe_text "$label")"
+[ -n "$display_label" ] || usage
+[[ "$wait_seconds" =~ ^(0|[1-9][0-9]*)$ ]] || usage
+[ "${#wait_seconds}" -le "${#MAX_WAIT_SECONDS}" ] || usage
+[ "$wait_seconds" -le "$MAX_WAIT_SECONDS" ] || usage
 if [ "$check_only" = false ] && [ "$#" -eq 0 ]; then
   usage
 fi
 if [ "$check_only" = true ] && [ "$#" -ne 0 ]; then
+  usage
+fi
+if [ "$check_only" = true ] && [ "$wait_seconds" -ne 0 ]; then
   usage
 fi
 
@@ -75,6 +97,96 @@ health_stop_file=''
 child_cleanup_safe=1
 committed_identity_status=1
 PERL_BIN="$(command -v perl 2>/dev/null || true)"
+queue_notice_emitted=0
+wait_started=$SECONDS
+last_refusal_class=''
+last_refusal_code=''
+last_refusal_message=''
+last_refusal_data=''
+
+emit_refusal() {
+  local refusal_class="$1"
+  local refusal_code="$2"
+  local refusal_message="$3"
+  local refusal_data="${4:-}"
+
+  printf 'HEAVY_LOCAL_SLOT_REFUSAL class=%s code=%s' \
+    "$refusal_class" \
+    "$refusal_code" >&2
+  if [ -n "$refusal_data" ]; then
+    printf ' %s' "$refusal_data" >&2
+  fi
+  printf '\n' >&2
+  printf 'Refusing heavy work: %s\n' "$refusal_message" >&2
+}
+
+wait_deadline_has_expired() {
+  [ "$wait_seconds" -gt 0 ] &&
+    [ "$queue_notice_emitted" -eq 1 ] &&
+    [ "$((SECONDS - wait_started))" -ge "$wait_seconds" ]
+}
+
+emit_wait_timeout() {
+  emit_refusal \
+    "$last_refusal_class" \
+    "wait_timeout" \
+    "timed out after ${wait_seconds}s; last reason: $last_refusal_message" \
+    "last_code=$last_refusal_code${last_refusal_data:+ $last_refusal_data}"
+}
+
+queue_or_refuse() {
+  local refusal_class="$1"
+  local refusal_code="$2"
+  local refusal_message="$3"
+  local refusal_data="${4:-}"
+  local elapsed=0
+  local remaining=0
+  local sleep_seconds=0
+
+  last_refusal_class="$refusal_class"
+  last_refusal_code="$refusal_code"
+  last_refusal_message="$refusal_message"
+  last_refusal_data="$refusal_data"
+
+  if [ "$wait_seconds" -eq 0 ]; then
+    emit_refusal "$refusal_class" "$refusal_code" "$refusal_message" "$refusal_data"
+    return 1
+  fi
+  if [ "$refusal_class" != "occupied" ] && [ "$refusal_class" != "host_unhealthy" ]; then
+    emit_refusal "$refusal_class" "$refusal_code" "$refusal_message" "$refusal_data"
+    return 1
+  fi
+
+  if [ "$queue_notice_emitted" -eq 0 ]; then
+    printf 'Heavy-local slot queued for "%s" (class=%s, code=%s); waiting up to %ss.\n' \
+      "$display_label" \
+      "$refusal_class" \
+      "$refusal_code" \
+      "$wait_seconds" >&2
+    queue_notice_emitted=1
+  fi
+
+  elapsed=$((SECONDS - wait_started))
+  remaining=$((wait_seconds - elapsed))
+  if [ "$remaining" -le 0 ]; then
+    emit_wait_timeout
+    return 1
+  fi
+
+  sleep_seconds=$WAIT_POLL_SECONDS
+  if [ "$remaining" -lt "$sleep_seconds" ]; then
+    sleep_seconds=$remaining
+  fi
+  sleep "$sleep_seconds"
+
+  # A final sleep may end at or after the deadline. Refuse here instead of
+  # returning to acquisition, where a newly free slot could launch late work.
+  if wait_deadline_has_expired; then
+    emit_wait_timeout
+    return 1
+  fi
+  return 0
+}
 
 resolve_command_path() {
   local candidate="$1"
@@ -96,19 +208,28 @@ validate_policy_for_command() {
       ;;
     jarvis-remediation)
       [ "$check_only" = false ] || {
-        echo "Refusing heavy work: Jarvis remediation requires the canonical hotfix command." >&2
+        emit_refusal \
+          "guard_internal" \
+          "invalid_remediation_request" \
+          "Jarvis remediation requires the canonical hotfix command"
         return 75
       }
       guarded_command="$(resolve_command_path "${1:-}" || true)"
       allowed_command="$(resolve_command_path "$ROOT_DIR/scripts/ship-jarvis-hotfix.sh" || true)"
       if [ -z "$guarded_command" ] || [ "$guarded_command" != "$allowed_command" ]; then
-        echo "Refusing heavy work: Jarvis remediation is restricted to the canonical ship-jarvis-hotfix entrypoint." >&2
+        emit_refusal \
+          "guard_internal" \
+          "invalid_remediation_command" \
+          "Jarvis remediation is restricted to the canonical ship-jarvis-hotfix entrypoint"
         return 75
       fi
       return 0
       ;;
     *)
-      echo "Refusing heavy work: unknown admission policy '$policy'." >&2
+      emit_refusal \
+        "guard_internal" \
+        "unknown_policy" \
+        "unknown admission policy '$policy'"
       return 75
       ;;
   esac
@@ -269,7 +390,7 @@ handle_interrupt() {
   # metadata. This distinguishes a signal delivered to this wrapper from a
   # signal-derived status returned by the guarded command.
   printf 'Heavy-local wrapper "%s" received %s (owner PID %s, child PID %s, child PGID %s).\n' \
-    "$label" \
+    "$display_label" \
     "$signal_name" \
     "$$" \
     "${child_pid:-unknown}" \
@@ -293,26 +414,19 @@ else
   exit "$policy_status"
 fi
 [ -n "$PERL_BIN" ] && [ -r "$RUNNER" ] || {
-  echo "Refusing heavy work: Perl session runner is unavailable." >&2
+  emit_refusal \
+    "guard_internal" \
+    "session_runner_unavailable" \
+    "Perl session runner is unavailable"
   exit 75
 }
 if ! "$PERL_BIN" "$RUNNER" --inspect-process "$$" >/dev/null 2>&1; then
-  echo "Refusing heavy work: POSIX process identity backend is unavailable." >&2
+  emit_refusal \
+    "guard_internal" \
+    "process_identity_unavailable" \
+    "POSIX process identity backend is unavailable"
   exit 75
 fi
-
-if openclaw_heavy_local_slot_acquire "$label" "$policy"; then
-  :
-else
-  acquire_status=$?
-  exit "$acquire_status"
-fi
-health_stop_file="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/health_stop_reason"
-
-deny() {
-  printf 'Refusing heavy work: %s\n' "$1" >&2
-  exit 75
-}
 
 host_health_reason() {
   local required_cpu_idle=$1
@@ -327,11 +441,16 @@ host_health_reason() {
       awk -F': ' '/System-wide memory free percentage/{gsub(/%/, "", $2); print int($2); exit}'
   )
   if [ -z "$memory_free" ]; then
-    printf 'could not measure memory pressure'
+    printf '%s' \
+      'guard_internal|memory_measurement_failed|could not measure memory pressure|metric=memory_pressure status=unavailable'
     return 0
   fi
   if [ "$memory_free" -lt "$MIN_MEMORY_FREE_PERCENT" ]; then
-    printf 'memory headroom is %s%% (minimum %s%%)' "$memory_free" "$MIN_MEMORY_FREE_PERCENT"
+    printf 'host_unhealthy|memory_pressure|memory headroom is %s%% (minimum %s%%)|metric=memory_free_percent observed=%s threshold=%s unit=percent' \
+      "$memory_free" \
+      "$MIN_MEMORY_FREE_PERCENT" \
+      "$memory_free" \
+      "$MIN_MEMORY_FREE_PERCENT"
     return 0
   fi
 
@@ -342,11 +461,16 @@ host_health_reason() {
       awk '/CPU usage:/{gsub(/%/, "", $7); print int($7); exit}'
   )
   if [ -z "$cpu_idle" ]; then
-    printf 'could not measure CPU headroom'
+    printf '%s' \
+      'guard_internal|cpu_measurement_failed|could not measure CPU headroom|metric=cpu_idle_percent status=unavailable'
     return 0
   fi
   if [ "$cpu_idle" -lt "$required_cpu_idle" ]; then
-    printf 'CPU idle is %s%% (minimum %s%%)' "$cpu_idle" "$required_cpu_idle"
+    printf 'host_unhealthy|cpu_pressure|CPU idle is %s%% (minimum %s%%)|metric=cpu_idle_percent observed=%s threshold=%s unit=percent' \
+      "$cpu_idle" \
+      "$required_cpu_idle" \
+      "$cpu_idle" \
+      "$required_cpu_idle"
     return 0
   fi
 
@@ -354,7 +478,8 @@ host_health_reason() {
   # operator may already be losing access. Local work must wait.
   tailscale_line=$(scutil --nc list 2>/dev/null | grep -i '"Tailscale"' | head -n 1 || true)
   if [ -n "$tailscale_line" ] && ! printf '%s\n' "$tailscale_line" | grep -q '(Connected)'; then
-    printf 'Tailscale is configured but not connected'
+    printf '%s' \
+      'host_unhealthy|tailscale_disconnected|Tailscale is configured but not connected|metric=tailscale_connection observed=disconnected expected=connected'
     return 0
   fi
 
@@ -364,7 +489,8 @@ host_health_reason() {
     launchctl print "gui/$(id -u)/ai.jarvis.gateway" >/dev/null 2>&1; then
     if ! curl -fsS --max-time "$HOST_HEALTH_HTTP_TIMEOUT_SECONDS" \
       http://127.0.0.1:18789/healthz >/dev/null; then
-      printf 'managed Jarvis health check failed'
+      printf '%s' \
+        'host_unhealthy|jarvis_unhealthy|managed Jarvis health check failed|metric=jarvis_health observed=unhealthy expected=healthy'
       return 0
     fi
   fi
@@ -378,12 +504,55 @@ if [ "$policy" = "jarvis-remediation" ]; then
   require_jarvis_health=0
 fi
 
-preflight_reason=$(host_health_reason "$PREFLIGHT_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health")
-if [ -n "$preflight_reason" ]; then
-  deny "$preflight_reason"
-fi
+while true; do
+  if openclaw_heavy_local_slot_acquire "$label" "$policy"; then
+    # Acquisition can spend time validating owner metadata or stale recovery.
+    # A lease won after the caller's deadline must be released without launch.
+    if wait_deadline_has_expired; then
+      openclaw_heavy_local_slot_release
+      emit_wait_timeout
+      exit 75
+    fi
+  else
+    acquire_status=$?
+    if queue_or_refuse \
+      "${OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CLASS:-guard_internal}" \
+      "${OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CODE:-acquire_failed}" \
+      "${OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_MESSAGE:-heavy-local slot acquisition failed}" \
+      ""; then
+      continue
+    fi
+    exit "$acquire_status"
+  fi
 
-printf 'Heavy-local slot granted to "%s".\n' "$label"
+  preflight_result=$(host_health_reason "$PREFLIGHT_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health")
+  if [ -z "$preflight_result" ]; then
+    # The final health probe may itself consume the remaining wait budget.
+    # Preserve the same no-late-launch boundary after that probe completes.
+    if wait_deadline_has_expired; then
+      openclaw_heavy_local_slot_release
+      emit_wait_timeout
+      exit 75
+    fi
+    break
+  fi
+  IFS='|' read -r preflight_class preflight_code preflight_reason preflight_data \
+    <<<"$preflight_result"
+  # Host-health waiters never monopolize the serialization lease. Release
+  # before sleeping, then compete atomically again on the next bounded attempt.
+  openclaw_heavy_local_slot_release
+  if queue_or_refuse \
+    "$preflight_class" \
+    "$preflight_code" \
+    "$preflight_reason" \
+    "$preflight_data"; then
+    continue
+  fi
+  exit 75
+done
+health_stop_file="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/health_stop_reason"
+
+printf 'Heavy-local slot granted to "%s".\n' "$display_label"
 if [ "$check_only" = true ]; then
   exit 0
 fi
@@ -428,28 +597,35 @@ if [ "$committed_identity_status" -ne 0 ]; then
   child_cleanup_safe=0
   kill -KILL "$child_pid" 2>/dev/null || true
   wait "$child_pid" 2>/dev/null || true
-  echo "Refusing heavy work: guarded child session metadata was not published safely." >&2
+  emit_refusal \
+    "guard_internal" \
+    "child_session_publish_failed" \
+    "guarded child session metadata was not published safely"
   exit 75
 fi
 if ! authorize_committed_guarded_child; then
   child_cleanup_safe=0
   kill -KILL "$child_pid" 2>/dev/null || true
   wait "$child_pid" 2>/dev/null || true
-  echo "Refusing heavy work: guarded child authorization was not published safely." >&2
+  emit_refusal \
+    "guard_internal" \
+    "child_authorization_failed" \
+    "guarded child authorization was not published safely"
   exit 75
 fi
 
 monitor_guarded_child() {
   local unhealthy_strikes=0
-  local runtime_reason
+  local runtime_result runtime_class runtime_code runtime_reason runtime_data
 
   # The monitor is a background subshell. It must never inherit the parent's
   # lease-cleanup traps or release a lock still owned by the waiting wrapper.
   trap - EXIT INT TERM HUP
 
   while kill -0 "$child_pid" 2>/dev/null; do
-    runtime_reason=$(host_health_reason "$RUNTIME_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health")
-    if [ -n "$runtime_reason" ]; then
+    runtime_result=$(host_health_reason "$RUNTIME_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health")
+    if [ -n "$runtime_result" ]; then
+      IFS='|' read -r runtime_class runtime_code runtime_reason runtime_data <<<"$runtime_result"
       unhealthy_strikes=$((unhealthy_strikes + 1))
     else
       unhealthy_strikes=0
@@ -459,7 +635,11 @@ monitor_guarded_child() {
     # stopping a runaway job before a multi-minute VNC/Jarvis starvation event.
     if [ "$unhealthy_strikes" -ge "$UNHEALTHY_STRIKES_BEFORE_STOP" ] &&
       guarded_group_is_live; then
-      printf '%s\n' "$runtime_reason" >"$health_stop_file"
+      printf '%s|%s|%s|%s\n' \
+        "$runtime_class" \
+        "$runtime_code" \
+        "$runtime_reason" \
+        "$runtime_data" >"$health_stop_file"
       printf 'Stopping guarded work after repeated host-health failures: %s\n' "$runtime_reason" >&2
       stop_guarded_child
       return 0
@@ -485,6 +665,13 @@ stop_health_monitor
 stop_guarded_child || true
 
 if [ -s "$health_stop_file" ]; then
+  IFS='|' read -r health_stop_class health_stop_code health_stop_reason health_stop_data \
+    <"$health_stop_file"
+  emit_refusal \
+    "$health_stop_class" \
+    "$health_stop_code" \
+    "$health_stop_reason" \
+    "$health_stop_data"
   exit 75
 fi
 exit "$child_status"

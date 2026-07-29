@@ -1,8 +1,8 @@
 # Local fleet resource control
 
-The founder's Mac is an interactive workstation and the production Jarvis host.
-Remote desktop, Tailscale, and Jarvis responsiveness outrank local agent
-throughput.
+This Mac is a dedicated agent host and the production Jarvis host. Local agent
+throughput may consume spare capacity aggressively, but it must not trade away
+machine survival, remote access, or Jarvis availability.
 
 ## Hard limits
 
@@ -62,11 +62,29 @@ scripts/with-heavy-local-slot.sh --label "<thread-id>:<purpose>" -- \
   pnpm vitest run path/to/focused.test.ts --maxWorkers 1
 ```
 
-Use the read-only preflight before assigning the slot:
+For a diagnostic snapshot only, use the read-only preflight:
 
 ```bash
 scripts/with-heavy-local-slot.sh --label "<thread-id>:preflight" --check
 ```
+
+`--check` does not reserve the slot. Never use a successful check followed by a
+separate unguarded command as admission; another lane can win that race. Use one
+bounded acquire-and-run transaction when the caller can wait:
+
+```bash
+scripts/with-heavy-local-slot.sh \
+  --label "<thread-id>:focused-proof" \
+  --wait-seconds 900 \
+  -- pnpm vitest run path/to/focused.test.ts --maxWorkers 1
+```
+
+The bounded path waits without holding the lease, acquires and health-checks
+atomically before launch, and executes the command once. It prints at most one
+`Heavy-local slot queued` notice even if the refusal reason changes while
+waiting. `occupied` and `host_unhealthy` are retryable; `guard_internal` fails
+immediately because retrying ambiguous guard state could hide a sandbox,
+measurement, metadata, or identity failure.
 
 The wrapper stores an atomic lease at a stable per-user machine path, so
 independent clones and worktrees contend for the same slot. Canonical
@@ -91,13 +109,27 @@ metadata, an incomplete spawn handshake, unreadable process identity, PID or
 group reuse, or mismatched start/session identity fails closed instead of
 guessing that the lease is stale or signaling an unverified group.
 
-On macOS the wrapper refuses admission when:
+On macOS the wrapper currently refuses admission when:
 
 - another heavy command owns the slot;
 - system memory headroom is below 25%;
 - CPU idle capacity is below 35%;
 - configured Tailscale is disconnected; or
 - the managed Jarvis gateway is installed but unhealthy.
+
+Refusals retain exit code `75` for compatibility and also emit a stable line:
+
+```text
+HEAVY_LOCAL_SLOT_REFUSAL class=<occupied|host_unhealthy|guard_internal> code=<reason> [measurement fields]
+```
+
+The class separates normal serialization, measured host pressure, and failures
+inside the guard or its measurement backends. The following human line retains
+the useful owner, PID, measurement, or recovery detail. A bounded wait that
+expires emits the last retryable class with `code=wait_timeout`.
+Measured CPU, memory, Tailscale, and Jarvis refusals also expose stable
+`metric`, `observed`, `threshold`, `expected`, and `unit` fields when relevant.
+These are refusal telemetry, not a complete capacity profile.
 
 Admitted commands run with background scheduling and reduced process priority.
 While the command runs, the wrapper rechecks the host every 15 seconds. Two
@@ -122,8 +154,49 @@ slower denial of service.
 
 The 25% memory threshold, 35% admission CPU-idle threshold, 20% runtime
 CPU-idle threshold, 15-second interval, two-strike stop rule, and three-second
-health timeout are fixed product policy. Environment variables cannot lower,
-disable, corrupt, or stretch them.
+health timeout remain fixed product policy in this revision. Environment
+variables cannot lower, disable, corrupt, or stretch them.
+
+## Dedicated-host capacity policy
+
+The one-heavy lease is a failure-containment boundary, not interactive-headroom
+policy. It remains machine-wide for every profile.
+
+Current protection is narrower than the failure list:
+
+- CPU: admission and runtime CPU-idle checks plus background scheduling and
+  reduced priority. There is no direct thermal-pressure or shutdown-risk probe.
+- Memory: `memory_pressure` accounts for compression, but the guard does not
+  separately bound swap size or swap-growth rate.
+- Disk: retention tooling can report pressure, but admission has no free-space
+  or exhaustion check.
+- Availability: configured Tailscale connectivity and managed Jarvis HTTP
+  health are checked. VNC or another remote-desktop path is not probed directly.
+- Overlap: the machine-wide lease and process-group supervision prevent two
+  guarded heavy trees from running concurrently.
+
+That evidence does not justify lowering CPU or memory thresholds yet. Doing so
+would replace an interactive-headroom guess with a thermal, swap, and disk
+guess. The dedicated-host profile stays deferred until this bounded experiment
+is completed in a separate PR:
+
+1. Add a read-only sampler that records monotonic time, CPU idle,
+   `memory_pressure`, `vm.swapusage`, Data-volume free space, macOS thermal
+   state, Tailscale state, Jarvis health, and the structured guard reason. It
+   must redact command arguments and environment values.
+2. Run representative Node, Swift/Xcode, browser, and package workloads one at
+   a time under the existing lease. Record admission, every 15-second runtime
+   sample, workload exit, and any Jarvis or remote-access interruption.
+3. Establish stop limits from the first observed thermal, swap-growth, disk, or
+   availability degradation, then apply an explicit safety margin. A threshold
+   change is invalid if no failure boundary was observed.
+4. Add a named, non-ambient dedicated-host policy that can raise utilization
+   only while thermal, swap, disk, Tailscale, Jarvis, serialization, and
+   process-tree checks remain enforced. Repeat deterministic guard tests and a
+   bounded host soak before making it default.
+
+Until that experiment exists, queue/wait removes coordination waste without
+claiming more safe machine capacity than the guard can prove.
 
 Live `scripts/ship-jarvis-hotfix.sh` is the one remediation exception. The
 helper requests an internal `jarvis-remediation` policy, and the wrapper accepts
