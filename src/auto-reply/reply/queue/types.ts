@@ -2,6 +2,7 @@ import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { CronDelivery } from "../../../cron/types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ReplyPayload, SourceReplyDeliveryMode } from "../../types.js";
@@ -107,6 +108,8 @@ export type FollowupRun = {
     extraSystemPrompt?: string;
     enforceFinalTag?: boolean;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    /** Runtime-trusted reminder destination, independent of source-topic routing. */
+    cronDefaultDelivery?: CronDelivery;
   };
 };
 

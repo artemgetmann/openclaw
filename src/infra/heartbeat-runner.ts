@@ -1154,6 +1154,22 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true && !isEventDrivenWake ? "lightweight" : undefined;
+    // The source topic remains available for receipts and attention routing.
+    // Reminder delivery is a separate privacy boundary and follows the configured
+    // heartbeat destination instead of inheriting whatever source was inspected.
+    const cronDefaultDelivery =
+      delivery.channel !== "none" && delivery.to
+        ? {
+            mode: "announce" as const,
+            channel: delivery.channel,
+            to: delivery.to,
+            accountId: delivery.accountId,
+          }
+        : {
+            // An explicit none is security-significant: undefined would let the
+            // cron tool fall back to the inspected source topic.
+            mode: "none" as const,
+          };
     const restartContinuationDurableId = isForcedRestartContinuation
       ? preflight.pendingEventEntries
           .map((event) => parseRestartContinuationContext(event.contextKey))
@@ -1166,6 +1182,7 @@ export async function runHeartbeatOnce(opts: {
           isHeartbeat: true,
           restartContinuationDurableId,
           heartbeatModelOverride,
+          cronDefaultDelivery,
           suppressToolErrorWarnings,
           bootstrapContextMode,
           onAgentRunStart: () => {
@@ -1178,6 +1195,7 @@ export async function runHeartbeatOnce(opts: {
       : {
           isHeartbeat: true,
           restartContinuationDurableId,
+          cronDefaultDelivery,
           suppressToolErrorWarnings,
           bootstrapContextMode,
           onAgentRunStart: () => {

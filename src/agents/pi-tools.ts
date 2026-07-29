@@ -1,6 +1,7 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { CronDelivery } from "../cron/types.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import type { HeartbeatSourceReceiptContext } from "../infra/outbound/source-receipt.js";
 import { resolvePermissionDefaults } from "../infra/permissions-mode.js";
@@ -211,6 +212,8 @@ export function createOpenClawCodingTools(options?: {
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
+  /** Runtime-trusted reminder destination; never infer this from a source topic. */
+  cronDefaultDelivery?: CronDelivery;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
@@ -518,6 +521,7 @@ export function createOpenClawCodingTools(options?: {
       agentAccountId: options?.agentAccountId,
       agentTo: options?.messageTo,
       agentThreadId: options?.messageThreadId,
+      cronDefaultDelivery: options?.cronDefaultDelivery,
       agentGroupId: options?.groupId ?? null,
       agentGroupChannel: options?.groupChannel ?? null,
       agentGroupSpace: options?.groupSpace ?? null,

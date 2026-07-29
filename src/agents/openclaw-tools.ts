@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import type { CronDelivery } from "../cron/types.js";
 import type { HeartbeatSourceReceiptContext } from "../infra/outbound/source-receipt.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
@@ -62,6 +63,8 @@ export function createOpenClawTools(
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
     agentThreadId?: string | number;
+    /** Runtime-trusted reminder destination, separate from reply/source routing. */
+    cronDefaultDelivery?: CronDelivery;
     agentDir?: string;
     sandboxRoot?: string;
     sandboxFsBridge?: SandboxFsBridge;
@@ -232,6 +235,19 @@ export function createOpenClawTools(
     }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
+      // Heartbeats carry a separately trusted private destination because the
+      // visible source context may be a group/topic. Ordinary chats may still
+      // fall back to their runtime-resolved origin.
+      defaultDelivery:
+        options?.cronDefaultDelivery ??
+        (options?.agentChannel && options.agentChannel !== "webchat" && options.agentTo
+          ? {
+              mode: "announce",
+              channel: options.agentChannel,
+              to: options.agentTo,
+              accountId: options.agentAccountId,
+            }
+          : undefined),
     }),
     createMonitorTool({
       agentSessionKey: options?.agentSessionKey,

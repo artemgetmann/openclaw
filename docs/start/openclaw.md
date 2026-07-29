@@ -155,8 +155,11 @@ Example:
 
 ## Heartbeats (proactive mode)
 
-By default, OpenClaw runs a heartbeat every day with the prompt:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.`
+By default, OpenClaw runs a periodic heartbeat using the product prompt. It
+reads `HEARTBEAT.md`, performs broad ambient sweeps, creates bounded one-shot
+reminders for confirmed commitments, keeps recurring monitoring
+approval-based, and replies `HEARTBEAT_OK` when nothing needs attention. See
+[Heartbeat](/gateway/heartbeat#defaults) for the current contract.
 Set `agents.defaults.heartbeat.every: "0m"` to disable.
 
 - If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.

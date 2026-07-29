@@ -848,7 +848,7 @@ struct TelegramSetupBootstrapTests {
             _ = try await store.applyTelegramSetupBootstrap(
                 token: "777000:test-child-token",
                 dmPolicy: "allowlist",
-                allowFrom: ["1336356696"],
+                allowFrom: ["424242"],
                 enabled: true)
 
             let telegram = try #require(
@@ -857,9 +857,15 @@ struct TelegramSetupBootstrapTests {
             let defaultAccount = try #require(accounts["default"] as? [String: Any])
             #expect(telegram["enabled"] as? Bool == true)
             #expect(telegram["dmPolicy"] as? String == "allowlist")
-            #expect(telegram["allowFrom"] as? [String] == ["1336356696"])
+            #expect(telegram["allowFrom"] as? [String] == ["424242"])
             #expect(telegram["botToken"] as? String == "777000:test-child-token")
             #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+            let agents = try #require(savedRoot.value()["agents"] as? [String: Any])
+            let defaults = try #require(agents["defaults"] as? [String: Any])
+            let heartbeat = try #require(defaults["heartbeat"] as? [String: Any])
+            #expect(heartbeat["target"] as? String == "telegram")
+            #expect(heartbeat["to"] as? String == "424242")
+            #expect(heartbeat["accountId"] as? String == "default")
 
             await ConfigStore._testClearOverrides()
         }

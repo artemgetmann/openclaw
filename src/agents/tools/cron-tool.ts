@@ -51,6 +51,12 @@ const CronToolSchema = Type.Object(
 
 type CronToolOptions = {
   agentSessionKey?: string;
+  /**
+   * Runtime-trusted origin used when an agentTurn reminder omits delivery.
+   * Isolated heartbeat sessions intentionally clear last-route state, so the
+   * originating heartbeat destination must be carried explicitly.
+   */
+  defaultDelivery?: CronDelivery;
 };
 
 type GatewayToolCaller = typeof callGatewayTool;
@@ -432,7 +438,8 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (mode === "" || mode === "announce") &&
               !hasTarget;
             if (shouldInfer) {
-              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              const inferred =
+                opts?.defaultDelivery ?? inferDeliveryFromSessionKey(opts?.agentSessionKey);
               if (inferred) {
                 (job as { delivery?: unknown }).delivery = {
                   ...delivery,

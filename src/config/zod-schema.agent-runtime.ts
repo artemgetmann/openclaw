@@ -33,6 +33,14 @@ export const HeartbeatSchema = z
     directPolicy: z.union([z.literal("allow"), z.literal("block")]).optional(),
     to: z.string().optional(),
     accountId: z.string().optional(),
+    managedRoute: z
+      .object({
+        target: z.string(),
+        to: z.string(),
+        accountId: z.string(),
+      })
+      .strict()
+      .optional(),
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),

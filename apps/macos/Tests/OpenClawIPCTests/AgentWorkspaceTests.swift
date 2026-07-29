@@ -115,6 +115,12 @@ struct AgentWorkspaceTests {
         #expect(agents.contains("check the relevant `SKILL.md`"))
         #expect(agents.contains("## Heartbeats"))
         #expect(agents.contains("Use heartbeats for broad sweeps"))
+        #expect(agents.contains("confirmed time-bound commitments"))
+        #expect(agents.contains("at most three useful one-shot reminders"))
+        #expect(agents.contains("target airport arrival at least two hours before departure"))
+        #expect(agents.contains("no checked baggage"))
+        #expect(agents.contains("mandatory document verification"))
+        #expect(agents.contains("Never guess a terminal, gate, or check-in counter"))
         #expect(agents.contains("reply `HEARTBEAT_OK`"))
         #expect(agents.contains("never ask the human about Git/repo/commit/sync details"))
         #expect(agents.contains("## Platform Formatting"))
@@ -151,6 +157,43 @@ struct AgentWorkspaceTests {
         #expect(soul.contains("Not a corporate drone"))
         #expect(!soul.contains("## Workspace Defaults"))
         #expect(soul.contains("should not drift silently"))
+    }
+
+    @Test
+    func `consumer heartbeat policy activates only missing or untouched stock checklist`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        _ = try AgentWorkspace.bootstrap(workspaceURL: tmp)
+
+        let heartbeatURL = tmp.appendingPathComponent(AgentWorkspace.heartbeatFilename)
+        let changedMissing = try AgentWorkspace.bootstrapConsumerHeartbeatPolicyIfSafe(workspaceURL: tmp)
+        #expect(changedMissing)
+        let active = try String(contentsOf: heartbeatURL, encoding: .utf8)
+        #expect(active.contains("confirmed time-bound commitments"))
+        #expect(active.contains("at most three useful one-shot reminders"))
+
+        try AgentWorkspace.legacyHeartbeatTemplate().write(
+            to: heartbeatURL,
+            atomically: true,
+            encoding: .utf8)
+        let changedStock = try AgentWorkspace.bootstrapConsumerHeartbeatPolicyIfSafe(workspaceURL: tmp)
+        #expect(changedStock)
+        #expect(try String(contentsOf: heartbeatURL, encoding: .utf8) == active)
+
+        try "- Keep my custom medication reminder.\n".write(
+            to: heartbeatURL,
+            atomically: true,
+            encoding: .utf8)
+        let changedCustom = try AgentWorkspace.bootstrapConsumerHeartbeatPolicyIfSafe(workspaceURL: tmp)
+        #expect(!changedCustom)
+        #expect(try String(contentsOf: heartbeatURL, encoding: .utf8)
+            == "- Keep my custom medication reminder.\n")
+
+        try "".write(to: heartbeatURL, atomically: true, encoding: .utf8)
+        let changedOptOut = try AgentWorkspace.bootstrapConsumerHeartbeatPolicyIfSafe(workspaceURL: tmp)
+        #expect(!changedOptOut)
+        #expect(try String(contentsOf: heartbeatURL, encoding: .utf8).isEmpty)
     }
 
     @Test

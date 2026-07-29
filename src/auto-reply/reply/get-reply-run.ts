@@ -668,6 +668,7 @@ export async function runPreparedReply(
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
       sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
+      cronDefaultDelivery: opts?.cronDefaultDelivery,
     },
   };
 

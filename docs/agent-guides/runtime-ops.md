@@ -109,6 +109,10 @@ OPENCLAW_CONFIG_PATH="$HOME/Library/Application Support/Jarvis/.jarvis/openclaw.
 
 ## Jarvis Runtime Shipping Lanes
 
+Runtime lane selection follows the Work Scope Contract in `CONSUMER.md`. The
+main-Jarvis lane is Artem-specific unless a separate product release is
+explicitly authorized and proven.
+
 Keep these lanes separate. They answer different questions, mutate different
 state, and produce different proof:
 

@@ -169,6 +169,44 @@ enum AgentWorkspace {
             workspaceURL: workspaceURL,
             filename: self.bootstrapFilename,
             content: self.defaultBootstrapTemplate())
+        _ = try self.bootstrapConsumerHeartbeatPolicyIfSafe(workspaceURL: workspaceURL)
+    }
+
+    /// Activates the consumer's ambient assistant policy without touching a
+    /// user-owned checklist. Missing files are created only in an empty or
+    /// template-only workspace; existing files migrate only when they exactly
+    /// match the comments-only stock template shipped by older Jarvis builds.
+    @discardableResult
+    static func bootstrapConsumerHeartbeatPolicyIfSafe(workspaceURL: URL) throws -> Bool {
+        let heartbeatURL = workspaceURL.appendingPathComponent(self.heartbeatFilename)
+        let fileManager = FileManager()
+
+        if fileManager.fileExists(atPath: heartbeatURL.path) {
+            let current = try String(contentsOf: heartbeatURL, encoding: .utf8)
+            // Current product defaults and user-owned edits need no migration.
+            // Only the exact comments-only template from older builds is safe
+            // to replace automatically.
+            guard current == self.legacyHeartbeatTemplate() else { return false }
+        } else {
+            // Do not make an empty pre-onboarding workspace look initialized:
+            // `bootstrap()` uses emptiness to decide whether BOOTSTRAP.md must
+            // be seeded. A missing heartbeat can be filled only after AGENTS.md
+            // proves workspace bootstrap already started.
+            let agentsURL = self.agentsURL(workspaceURL: workspaceURL)
+            guard fileManager.fileExists(atPath: agentsURL.path),
+                  self.isTemplateOnlyWorkspace(workspaceURL: workspaceURL)
+            else {
+                return false
+            }
+            try fileManager.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        }
+
+        try self.consumerHeartbeatPolicyTemplate().write(
+            to: heartbeatURL,
+            atomically: true,
+            encoding: .utf8)
+        self.logger.info("Activated consumer heartbeat policy at \(heartbeatURL.path, privacy: .public)")
+        return true
     }
 
     private static func writeConsumerTemplateIfMissingOrTemplate(
@@ -295,6 +333,20 @@ enum AgentWorkspace {
         Use heartbeats for broad sweeps: memory cleanup, recent context, inbox/calendar/project awareness, and other
         ambient checks. Use cron for exact reminders, precise schedules, or scoped monitors. If nothing needs attention,
         reply `HEARTBEAT_OK`.
+
+        Act like a capable personal assistant around confirmed time-bound commitments. Check existing scheduled tasks
+        first, then create at most three useful one-shot reminders without a separate approval prompt; tell the human
+        once what you scheduled and make cancellation easy. Do not schedule from tentative or ambiguous facts, or
+        without a trustworthy time and timezone.
+
+        For confirmed flights, target airport arrival at least two hours before departure unless a source or saved
+        preference requires more time. Work backward using the best available origin, realistic travel, and buffer.
+        Use confirmed baggage and check-in status: no checked baggage plus a valid boarding pass can reduce counter
+        time, but mandatory document verification or an airline deadline still wins. Keep the boarding gate, check-in
+        counter, and document-check counter distinct. Include each source-confirmed location and deadline when available.
+        For volatile facts, schedule an agent-turn reminder that refreshes authorized sources at wake time instead of
+        freezing the current value into static text. Name the source and checked-at time, and say when a fact is unavailable.
+        Never guess a terminal, gate, or check-in counter.
 
         Do not bother the human with internal maintenance. Do not mention Git, commits, repos, sync, or backups in
         normal consumer mode unless the human explicitly opted into developer-style workspace management. Backups are
@@ -457,6 +509,74 @@ enum AgentWorkspace {
         Write this like a warm working memory, not a questionnaire. The goal is to be helpful on the second turn, not just the twentieth.
         """
         return self.loadTemplate(named: self.userFilename, fallback: fallback)
+    }
+
+    static func defaultHeartbeatTemplate() -> String {
+        let fallback = """
+        # HEARTBEAT.md - Jarvis Ambient Awareness
+
+        - During broad calendar, inbox, notification, and recent-context sweeps, notice confirmed time-bound \
+        commitments where a missed follow-up would materially hurt the user.
+        - For a confirmed commitment, check existing scheduled tasks and quietly create at most three useful \
+        one-shot reminders. Do not duplicate reminders; summarize what was scheduled once.
+        - Never schedule from tentative or ambiguous facts, or without a trustworthy time and timezone.
+        - For confirmed flights, target airport arrival at least two hours before departure unless the itinerary, \
+        airport, airline, or a saved user preference requires more time. Calculate leave time from the best \
+        available origin plus realistic travel and buffer.
+        - Use confirmed baggage and check-in status: no checked baggage plus a valid boarding pass can reduce \
+        counter time, but mandatory document verification or an airline deadline still wins.
+        - Keep the boarding gate, check-in counter, and document-check counter distinct. Include each \
+        source-confirmed location and deadline when available. For volatile facts, schedule an agent-turn \
+        reminder that refreshes authorized sources at wake time instead of freezing the current value into \
+        static text. State the source and checked-at time, and never guess or silently reuse stale travel facts.
+        - Keep recurring monitoring approval-based. If nothing needs attention, reply HEARTBEAT_OK.
+        """
+        return self.loadTemplate(named: self.heartbeatFilename, fallback: fallback)
+    }
+
+    /// Exact stock content from builds where heartbeat was disabled by default.
+    /// Keep this isolated from the current template so migration remains narrow
+    /// and a user's intentionally empty file continues to be an opt-out.
+    static func legacyHeartbeatTemplate() -> String {
+        return """
+        # HEARTBEAT.md
+
+        # Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+        # Heartbeat is for broad periodic sweeps and ambient awareness. Do not use it as the default
+
+        # home for reminders or explicit inbox/thread/person monitors.
+
+        # Prefer cron for reminders, exact scheduled checks, or "watch this until X happens".
+
+        #
+
+        # Safe example to try:
+
+        # - Once each morning, do one broad sweep of my world and only alert me if something looks important.
+
+        # - Prefer net-new action-needed items. If you already surfaced the same unresolved blocker recently,
+
+        # do not resend it unless something materially changed or its urgency escalated.
+
+        #
+
+        # - Keep an attention budget: surface at most three items that need my decision, approval, reply,
+
+        # or awareness now. Continue safe work yourself instead of turning it into a notification.
+
+        #
+
+        # - If something is blocked on my approval/decision/input, say that explicitly and keep the ask short.
+
+        #
+
+        # - If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
+        """ + "\n"
+    }
+
+    private static func consumerHeartbeatPolicyTemplate() -> String {
+        self.defaultHeartbeatTemplate()
     }
 
     static func defaultGroupsTemplate() -> String {

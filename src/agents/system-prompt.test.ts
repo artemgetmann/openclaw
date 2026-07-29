@@ -483,6 +483,48 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("use heartbeat only for optional broad low-frequency awareness");
   });
 
+  it("proactively creates bounded one-shot reminders for confirmed commitments", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["cron"],
+    });
+
+    expect(prompt).toContain("## Proactive Assistance");
+    expect(prompt).toContain("confirmed time-bound commitment");
+    expect(prompt).toContain("at most three useful one-shot reminders");
+    expect(prompt).toContain("check existing scheduled tasks first");
+    expect(prompt).toContain("Do not ask for separate approval");
+    expect(prompt).toContain("tentative, ambiguous, or missing a trustworthy time or timezone");
+    expect(prompt).toContain("target airport arrival at least two hours before departure");
+    expect(prompt).toContain("confirmed baggage and check-in status");
+    expect(prompt).toContain("no checked baggage");
+    expect(prompt).toContain("mandatory document verification");
+    expect(prompt).toContain("boarding gate, check-in counter or counter range");
+    expect(prompt).toContain("document-check counter");
+    expect(prompt).toContain("Keep these distinct");
+    expect(prompt).toContain("schedule an agentTurn whose wake instructions refresh");
+    expect(prompt).toContain("instead of baking current values into a static reminder");
+    expect(prompt).toContain("source and checked-at time");
+    expect(prompt).toContain("Never guess or silently reuse stale travel facts");
+  });
+
+  it("checks already-authorized sources before asking the user to relay an OTP", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec"],
+    });
+
+    expect(prompt).toContain("## Verification Codes");
+    expect(prompt).toContain("checking what is already authorized");
+    expect(prompt).toContain("available capability inventory");
+    expect(prompt).toContain("non-content read-only health or auth probe");
+    expect(prompt).toContain("Do not open, read, or search OTP messages with ordinary");
+    expect(prompt).toContain("first-class secret-safe path");
+    expect(prompt).toContain("keep the value out of the model context, transcript, logs");
+    expect(prompt).toContain("ask the user to enter the code locally without pasting it into chat");
+    expect(prompt).toContain("Never echo, persist, enter, or submit a code");
+  });
+
   it("describes heartbeat as ambient awareness rather than the default monitor engine", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -503,6 +545,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain(
       "Keep heartbeat conservative and approval-oriented. If a heartbeat suggests deeper follow-up work or a new recurring monitor, ask before creating that scope.",
+    );
+    expect(prompt).toContain(
+      "A bounded one-shot reminder for a confirmed commitment is not a new recurring monitor",
     );
   });
 

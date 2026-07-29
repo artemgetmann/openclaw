@@ -111,6 +111,27 @@ explicit approval immediately before each of these sensitive actions:
 - account, privacy, security, permission, or profile-setting changes
 - software install, update, relaunch-to-update, or package-manager mutation
 
+For a user-requested routine sign-in, do not immediately claim the user must
+relay an OTP without checking what is already authorized. Identify the
+displayed delivery channel and destination, inspect the available capability
+inventory, and, when supported, run only a non-content read-only health or auth
+probe for the matching connected source.
+
+Do not open, read, or search OTP messages with ordinary inbox, messaging,
+browser, shell, or computer-use tools. Their inputs and results can persist in
+transcripts or logs. Only retrieve a code through a first-class secret-safe path
+explicitly documented to keep the value out of model context, transcripts,
+logs, memory, and ordinary tool parameters such as `set-value`. Do not connect
+or reauthorize an account, broaden the search, or change read state merely to
+obtain a code.
+
+If no such secret-safe path exists, explain that the relevant source is
+connected when known, then ask the user to enter the code locally without
+pasting it into chat. Retrieving a code does not authorize entering or
+submitting it. Never echo, persist, enter, or submit a code through an ordinary
+tool. Account recovery, MFA changes, payments, identity checks, device
+approvals, and other high-risk challenges remain hard stops.
+
 Execute the exact visible action in one foreground invocation. For a sensitive
 surface, the verifier pauses this command, sends an approval request to a
 configured authenticated approver (the originating conversation for the native

@@ -1,6 +1,8 @@
 import Foundation
+import OSLog
 
 enum ConsumerBootstrap {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "consumer.bootstrap")
     // Jarvis users often send a thought as several rapid Telegram messages.
     // A short Telegram-only debounce turns that burst into one agent turn while
     // leaving other channels unchanged and preserving an explicit user opt-out.
@@ -16,6 +18,7 @@ enum ConsumerBootstrap {
         self.ensureRuntimeDefaults()
         self.ensureDirectories()
         self.ensureConfig()
+        self.ensureProactiveHeartbeatPolicy()
     }
 
     private static func ensureRuntimeDefaults() {
@@ -90,7 +93,73 @@ enum ConsumerBootstrap {
             in: &root,
             path: ["agents", "defaults", "typingMode"],
             value: self.defaultTypingMode) || changed
+        changed = self.applyProactiveHeartbeatDefaults(to: &root) || changed
         return changed
+    }
+
+    /// Routes proactive alerts only after consumer onboarding has identified
+    /// exactly one Telegram owner. Using generic `target: last` could leak a
+    /// private reminder into a group that happened to be the latest route.
+    @discardableResult
+    static func applyProactiveHeartbeatDefaults(to root: inout [String: Any]) -> Bool {
+        let agents = root["agents"] as? [String: Any]
+        let defaults = agents?["defaults"] as? [String: Any]
+        let heartbeat = defaults?["heartbeat"] as? [String: Any]
+        guard let route = self.singleTelegramOwnerRoute(from: root) else {
+            return false
+        }
+
+        let managedRoute = heartbeat?["managedRoute"] as? [String: Any]
+        let currentRouteIsAppOwned =
+            managedRoute != nil
+            && self.trimmedString(managedRoute?["target"]) == self.trimmedString(heartbeat?["target"])
+            && self.trimmedString(managedRoute?["to"]) == self.trimmedString(heartbeat?["to"])
+            && self.trimmedString(managedRoute?["accountId"]) == self.trimmedString(heartbeat?["accountId"])
+        let routeIsCompletelyMissing =
+            self.valueIsMissing(heartbeat?["target"])
+            && self.valueIsMissing(heartbeat?["to"])
+            && self.valueIsMissing(heartbeat?["accountId"])
+        // Seed a missing route, or refresh a route whose entire live tuple still
+        // matches the app-owned provenance record. Any user-edited tuple wins.
+        guard routeIsCompletelyMissing || currentRouteIsAppOwned else {
+            return false
+        }
+
+        var changed = false
+        changed = self.setConfigValue(
+            in: &root,
+            path: ["agents", "defaults", "heartbeat", "target"],
+            value: "telegram") || changed
+        changed = self.setConfigValue(
+            in: &root,
+            path: ["agents", "defaults", "heartbeat", "to"],
+            value: route.ownerId) || changed
+        changed = self.setConfigValue(
+            in: &root,
+            path: ["agents", "defaults", "heartbeat", "accountId"],
+            value: route.accountId) || changed
+        changed = self.setConfigValue(
+            in: &root,
+            path: ["agents", "defaults", "heartbeat", "managedRoute"],
+            value: [
+                "target": "telegram",
+                "to": route.ownerId,
+                "accountId": route.accountId,
+            ]) || changed
+        return changed
+    }
+
+    private static func ensureProactiveHeartbeatPolicy() {
+        let configured = AgentWorkspaceConfig.workspace(from: OpenClawConfigFile.loadDict())
+        let workspaceURL = AgentWorkspace.resolveWorkspaceURL(from: configured)
+        do {
+            _ = try AgentWorkspace.bootstrapConsumerHeartbeatPolicyIfSafe(workspaceURL: workspaceURL)
+        } catch {
+            // A failed migration must never block app startup. Log only the
+            // filesystem error; workspace content is private and stays out of
+            // diagnostics.
+            self.logger.error("consumer heartbeat policy bootstrap failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private static func migrateRetiredBrowserProfiles(in root: inout [String: Any]) -> Bool {
@@ -229,10 +298,70 @@ enum ConsumerBootstrap {
         (root["jarvis"] as? [String: Any])?["backend"] as? [String: Any]
     }
 
+    private static func singleTelegramOwnerRoute(
+        from root: [String: Any])
+        -> (ownerId: String, accountId: String)?
+    {
+        guard let telegram = (root["channels"] as? [String: Any])?["telegram"] as? [String: Any]
+        else {
+            return nil
+        }
+
+        let accountId = self.trimmedString(telegram["defaultAccount"]) ?? "default"
+        let account = (telegram["accounts"] as? [String: Any])?[accountId] as? [String: Any]
+        // Upgrade-era configs can hold authorization at either level. Merge
+        // both and require one unique owner; conflicting stale values stay
+        // ambiguous instead of silently preferring one layer.
+        let accountOwners = account?["allowFrom"] as? [String] ?? []
+        let channelOwners = telegram["allowFrom"] as? [String] ?? []
+        let rawOwners = accountOwners + channelOwners
+        let owners = Array(Set(rawOwners.compactMap(self.trimmedString))).sorted()
+
+        // Consumer Telegram onboarding stores numeric sender IDs. Reject
+        // usernames, wildcards, and multiple owners instead of guessing where
+        // private life reminders belong.
+        guard owners.count == 1,
+              let ownerId = owners.first,
+              ownerId.allSatisfy(\.isNumber)
+        else {
+            return nil
+        }
+        return (ownerId, accountId)
+    }
+
     private static func trimmedString(_ value: Any?) -> String? {
         guard let string = value as? String else { return nil }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Writes a managed value even when it already exists, while reporting
+    /// whether the serialized config actually changed.
+    private static func setConfigValue(
+        in root: inout [String: Any],
+        path: [String],
+        value: Any
+    ) -> Bool {
+        guard !path.isEmpty else { return false }
+        if path.count == 1 {
+            let key = path[0]
+            if let previous = root[key] as? NSObject, previous.isEqual(value) {
+                return false
+            }
+            root[key] = value
+            return true
+        }
+
+        let key = path[0]
+        var child = root[key] as? [String: Any] ?? [:]
+        let changed = self.setConfigValue(
+            in: &child,
+            path: Array(path.dropFirst()),
+            value: value)
+        if changed {
+            root[key] = child
+        }
+        return changed
     }
 
     @discardableResult

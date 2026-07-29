@@ -411,6 +411,10 @@ extension ChannelsStore {
         self.updateConfigValue(
             path: [.key("channels"), .key("telegram"), .key("accounts"), .key(Self.consumerDefaultTelegramAccountId), .key("groupAllowFrom")],
             value: synchronizedGroupAllowFrom)
+        // The first verified DM gives Jarvis one privacy-safe proactive
+        // destination. Fill only missing heartbeat routing; an explicit user
+        // target or `none` opt-out always wins.
+        _ = ConsumerBootstrap.applyProactiveHeartbeatDefaults(to: &self.configDraft)
         JarvisAccountActivationConfig.configureManagedRuntime(into: &self.configDraft)
         let persisted: [String: Any]
         if AppFlavor.current.isConsumer,
