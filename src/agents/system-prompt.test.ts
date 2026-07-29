@@ -271,11 +271,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Use /goal as a recovery/control surface");
     expect(prompt).not.toContain("Scoped autonomy");
     expect(prompt).not.toContain('Call update_goal(status="complete") only with evidence');
-    expect(prompt).toContain(
-      "if the user's stated next step depends on a later reply/status, treat this as a post-action handoff",
-    );
-    expect(prompt).toContain("before the same final, read `goal-mode`");
+    expect(prompt).toContain("When a request implies a delayed, multi-step external outcome");
+    expect(prompt).toContain("offer or use a `goal` in the same turn");
     expect(prompt).toContain("even if another skill handled the action");
+    expect(prompt).toContain("verify active skills/tools cover the required external actions");
+    expect(prompt).toContain("offer tracking/planning only");
+    expect(prompt).toContain("Ask at most one high-value missing boundary");
+    expect(prompt).toContain("showing the complete proposed authority scope");
+    expect(prompt).toContain("proceed without asking again");
+    expect(prompt).toContain("include the reply or relevant content");
   });
 
   it("omits monitor-specific goal guidance when monitor is unavailable", () => {
@@ -286,7 +290,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Goal Tools");
-    expect(prompt).not.toContain("treat this as a post-action handoff");
+    expect(prompt).not.toContain("delayed, multi-step external outcome");
   });
 
   it("requires message-drafting before recipient-facing text in full and minimal runs", () => {
@@ -325,12 +329,19 @@ describe("buildAgentSystemPrompt", () => {
     });
     const goalToolsSection = promptWithMonitor.split("## Goal Tools")[1]?.split("\n## ")[0] ?? "";
 
-    expect(goalToolsSection).toContain("After an external send/action");
-    expect(goalToolsSection).toContain("user's stated next step depends");
-    expect(goalToolsSection).toContain("before the same final");
+    expect(goalToolsSection).toContain("delayed, multi-step external outcome");
+    expect(goalToolsSection).toContain("offer or use a `goal` in the same turn");
     expect(goalToolsSection).toContain("even if another skill handled the action");
-    expect(goalToolsSection).toContain("skip casual sends");
-    expect(goalToolsSection).toContain("never create one without approval");
+    expect(goalToolsSection).toContain(
+      "verify active skills/tools cover the required external actions",
+    );
+    expect(goalToolsSection).toContain("goal/monitor tools alone provide continuation");
+    expect(goalToolsSection).toContain("offer tracking/planning only");
+    expect(goalToolsSection).toContain("Ask at most one high-value missing boundary");
+    expect(goalToolsSection).toContain("showing the complete proposed authority scope");
+    expect(goalToolsSection).toContain("proceed without asking again");
+    expect(goalToolsSection).toContain("Skip trivial one-shot work and casual sends");
+    expect(goalToolsSection).toContain("include the reply or relevant content");
     expect(goalToolsSection).not.toContain("default notify with a drafted next response");
     expect(goalToolsSection).not.toContain("buttons, settings, or commands");
   });

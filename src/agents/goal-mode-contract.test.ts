@@ -22,10 +22,36 @@ describe("goal-mode autonomy contract", () => {
     });
     expect(systemPrompt).toContain("<name>goal-mode</name>");
     expect(systemPrompt).toContain("use the `goal-mode` skill from <available_skills>");
-    expect(systemPrompt).toContain("skip casual sends");
-    expect(systemPrompt).toContain("never create one without approval unless already authorized");
+    expect(systemPrompt).toContain("delayed, multi-step external outcome");
+    expect(systemPrompt).toContain("offer or use a `goal` in the same turn");
+    expect(systemPrompt).toContain(
+      "verify active skills/tools cover the required external actions",
+    );
+    expect(systemPrompt).toContain("goal/monitor tools alone provide continuation");
+    expect(systemPrompt).toContain("offer tracking/planning only");
+    expect(systemPrompt).toContain("Ask at most one high-value missing boundary");
+    expect(systemPrompt).toContain("showing the complete proposed authority scope");
+    expect(systemPrompt).toContain("proceed without asking again");
+    expect(systemPrompt).toContain("include the reply or relevant content");
+    expect(systemPrompt).toContain("Skip trivial one-shot work and casual sends");
     const normalizedContract = goalModeContract.replace(/\s+/g, " ");
     const requiredContract = [
+      "Use the actual product term `goal` so the user learns the capability",
+      "Should I set a goal and handle this autonomously within agreed limits?",
+      "Before offering autonomous handling, verify that active skills and tools can perform the required external actions",
+      "Goal and monitor tools provide durable continuation, not booking, messaging, payment, or account access",
+      "offer a goal for tracking or planning only and state which step remains manual",
+      "Ask at most one high-value guardrail question",
+      "notify-only versus draft versus send-and-continue",
+      "show the complete proposed scope",
+      "Combine consent, scope confirmation, and the missing boundary in one question",
+      "Infer only details that do not expand authority",
+      "If the original request already clearly authorizes end-to-end handling and supplies sufficient limits, do not offer or ask again",
+      "Do not ask whether to inspect or fetch information the user already asked to receive",
+      "include the reply text or relevant content in the notification when available",
+      "Do not offer a goal for trivial one-shot requests",
+      "do not repeatedly ask permission for actions inside its limits",
+      "Escalate only for out-of-scope, irreversible, costly, sensitive, or otherwise ungranted actions",
       "only 8 or 9, ask before anything paid",
       "push back on 7:30/7:45 automatically",
       "follow up with support autonomously on normal status questions",
