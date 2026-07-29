@@ -489,6 +489,33 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
       return;
     }
+    case "app.update.available": {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
+        return;
+      }
+      const version = normalizeNonEmptyString(obj.version);
+      const build = normalizeNonEmptyString(obj.build);
+      if (!version || !build) {
+        return;
+      }
+      const cfg = loadConfig();
+      const sessionKey = normalizeMainKey(cfg.session?.mainKey);
+      const ready = obj.readyToInstall === true;
+      const text =
+        `A signed Jarvis app update is available: version ${version} (build ${build}). ` +
+        `It is ${ready ? "ready to install" : "downloading or preparing"}. ` +
+        "Tell the user about it. If they want Jarvis to install it, inspect app.update.status, " +
+        "arm restart confirmation, and wait for their next-turn approval before installing.";
+      const queued = enqueueSystemEvent(text, {
+        sessionKey,
+        contextKey: `app-update:${version}:${build}`,
+      });
+      if (queued) {
+        requestHeartbeatNow({ reason: "app-update-available", sessionKey });
+      }
+      return;
+    }
     case "chat.subscribe": {
       if (!evt.payloadJSON) {
         return;

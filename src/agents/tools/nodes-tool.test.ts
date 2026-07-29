@@ -106,6 +106,24 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("blocks generic invocation from bypassing app-update confirmation", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-app-update", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "system.appUpdate.install",
+        invokeParamsJson: JSON.stringify({
+          expectedVersion: "2026.7.29",
+          expectedBuild: "2026072901",
+        }),
+      }),
+    ).rejects.toThrow("confirmation-gated");
+
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("falls back to a local plan when the node only supports system.run", async () => {
     nodeUtilsMocks.listNodes.mockResolvedValue([
       {

@@ -23,7 +23,7 @@ export function buildPendingRestartConfirmationPromptHint(): string {
   return [
     "A pending restart confirmation exists for this session.",
     "Do not call `restart.request_confirmation` again while this pending confirmation exists.",
-    "You may only proceed with restart-capable gateway actions (`restart`, `config.apply`, `config.patch`, `update.run`) if the current user turn clearly confirms the restart-capable action you asked about.",
+    "You may only proceed with restart-capable gateway actions (`restart`, `config.apply`, `config.patch`, `update.run`, `app.update.install`) if the current user turn clearly confirms the restart-capable action you asked about.",
     "If the user is ambiguous, asks a different question, or does not clearly confirm, do not restart; ask again.",
     "Do not treat your own prior message, older user messages, or generic restart chatter as confirmation.",
     'When you need to ask first, use: "This will interrupt other tasks that you have running in other chats. Restart now?"',
@@ -597,7 +597,7 @@ export function buildAgentSystemPrompt(params: {
     "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) and do not ask for a different or rotated code.",
     "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
     "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
-    "For restart-capable gateway actions in live chat (`restart`, `config.apply`, `config.patch`, `update.run`), when this session does not already have a pending restart confirmation, you MUST first call the gateway tool with action `restart.request_confirmation`.",
+    "For restart-capable gateway actions in live chat (`restart`, `config.apply`, `config.patch`, `update.run`, `app.update.install`), when this session does not already have a pending restart confirmation, you MUST first call the gateway tool with action `restart.request_confirmation`.",
     'Only after that tool call succeeds, ask exactly: "This will interrupt other tasks that you have running in other chats. Restart now?" Then end the turn and wait for the user\'s reply.',
     "Never ask the restart confirmation question before the gateway tool successfully records the pending confirmation.",
     "If a pending restart confirmation already exists, do not call `restart.request_confirmation` again; evaluate the current user turn against that pending request.",
@@ -623,8 +623,9 @@ export function buildAgentSystemPrompt(params: {
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
+          "When a signed app update event arrives, use `app.update.status` to report the exact version and build. If the user wants it installed, arm restart confirmation, ask the returned question, end the turn, and only call `app.update.install` after a clear confirmation on the next user turn. Never substitute `update.run`; that updates gateway source, not the signed Mac app.",
           "Use config.schema.lookup with a specific dot path to inspect only the relevant config subtree before making config changes or answering config-field questions; avoid guessing field names/types.",
-          "Actions: config.schema.lookup, config.get, config.apply (validate + write full config, then restart), config.patch (partial update, merges with existing), update.run (update deps or git, then restart).",
+          "Actions: config.schema.lookup, config.get, config.apply (validate + write full config, then restart), config.patch (partial update, merges with existing), update.run (update deps or git, then restart), app.update.status (inspect the signed Mac app update), app.update.install (install the exact ready Sparkle update, then relaunch).",
           "After restart, OpenClaw pings the last active session automatically.",
         ].join("\n")
       : "",

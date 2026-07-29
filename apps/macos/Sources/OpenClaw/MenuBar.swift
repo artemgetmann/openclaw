@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import MenuBarExtraAccess
 import Observation
+import OpenClawKit
 import OSLog
 import Security
 import SwiftUI
@@ -274,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        AppUpdateControllerRegistry.shared.register(self.updaterController)
         self.state = AppStateStore.shared
         // Register before a recovery incident can fire so the notification and
         // both in-app cards expose the same one-action restart path.
@@ -553,6 +555,9 @@ protocol UpdaterProviding: AnyObject {
     var isAvailable: Bool { get }
     var updateStatus: UpdateStatus { get }
     func checkForUpdates(_ sender: Any?)
+    func appUpdateStatus() -> OpenClawAppUpdateStatus
+    func installAppUpdate(expectedVersion: String, expectedBuild: String) throws
+    func setAppUpdateEventSink(_ sink: (@Sendable (String, String?) async -> Void)?)
 }
 
 /// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
@@ -562,6 +567,21 @@ final class DisabledUpdaterController: UpdaterProviding {
     let isAvailable: Bool = false
     let updateStatus = UpdateStatus()
     func checkForUpdates(_: Any?) {}
+    func appUpdateStatus() -> OpenClawAppUpdateStatus {
+        OpenClawAppUpdateStatus(
+            available: false,
+            readyToInstall: false,
+            error: "Sparkle updates are unavailable in this build.")
+    }
+
+    func installAppUpdate(expectedVersion _: String, expectedBuild _: String) throws {
+        throw NSError(
+            domain: "OpenClawAppUpdate",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Sparkle updates are unavailable in this build."])
+    }
+
+    func setAppUpdateEventSink(_: (@Sendable (String, String?) async -> Void)?) {}
 }
 
 @MainActor
@@ -569,9 +589,50 @@ final class DisabledUpdaterController: UpdaterProviding {
 final class UpdateStatus {
     static let disabled = UpdateStatus()
     var isUpdateReady: Bool
+    var availableVersion: String?
+    var availableBuild: String?
+    var lastError: String?
 
     init(isUpdateReady: Bool = false) {
         self.isUpdateReady = isUpdateReady
+    }
+}
+
+/// Bridges the app-owned updater into the authenticated Mac node RPC surface.
+///
+/// The registry is intentionally process-local. The gateway never receives a
+/// download URL or signing override; it can only inspect and install the exact
+/// Sparkle item already accepted by the signed app.
+@MainActor
+final class AppUpdateControllerRegistry {
+    static let shared = AppUpdateControllerRegistry()
+    private weak var controller: UpdaterProviding?
+
+    func register(_ controller: UpdaterProviding) {
+        self.controller = controller
+    }
+
+    func status() -> OpenClawAppUpdateStatus {
+        self.controller?.appUpdateStatus() ?? OpenClawAppUpdateStatus(
+            available: false,
+            readyToInstall: false,
+            error: "The app updater has not finished starting.")
+    }
+
+    func install(expectedVersion: String, expectedBuild: String) throws {
+        guard let controller else {
+            throw NSError(
+                domain: "OpenClawAppUpdate",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "The app updater has not finished starting."])
+        }
+        try controller.installAppUpdate(
+            expectedVersion: expectedVersion,
+            expectedBuild: expectedBuild)
+    }
+
+    func setEventSink(_ sink: (@Sendable (String, String?) async -> Void)?) {
+        self.controller?.setAppUpdateEventSink(sink)
     }
 }
 
@@ -585,6 +646,9 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         updaterDelegate: self,
         userDriverDelegate: nil)
     let updateStatus = UpdateStatus()
+    private var immediateInstallHandler: (() -> Void)?
+    private var eventSink: (@Sendable (String, String?) async -> Void)?
+    private var lastAnnouncedUpdate: String?
 
     init(savedAutoUpdate: Bool) {
         super.init()
@@ -612,16 +676,77 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         self.controller.checkForUpdates(sender)
     }
 
+    func appUpdateStatus() -> OpenClawAppUpdateStatus {
+        OpenClawAppUpdateStatus(
+            available: self.updateStatus.availableVersion != nil,
+            readyToInstall: self.immediateInstallHandler != nil,
+            version: self.updateStatus.availableVersion,
+            build: self.updateStatus.availableBuild,
+            error: self.updateStatus.lastError)
+    }
+
+    func installAppUpdate(expectedVersion: String, expectedBuild: String) throws {
+        guard self.updateStatus.availableVersion == expectedVersion,
+              self.updateStatus.availableBuild == expectedBuild
+        else {
+            throw NSError(
+                domain: "OpenClawAppUpdate",
+                code: 3,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "The available update changed. Check status and ask the user again.",
+                ])
+        }
+        guard let immediateInstallHandler else {
+            throw NSError(
+                domain: "OpenClawAppUpdate",
+                code: 4,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "The update is still downloading or preparing. Try again after it is ready.",
+                ])
+        }
+
+        // Sparkle owns termination, replacement, signature validation, and
+        // relaunch. Calling its captured handler avoids brittle GUI driving.
+        // Let the node invocation response reach the gateway before Sparkle
+        // terminates this process. This makes the restart sentinel and the
+        // user's chat receipt deterministic instead of racing app shutdown.
+        Task { @MainActor in
+            await Task.yield()
+            immediateInstallHandler()
+        }
+    }
+
+    func setAppUpdateEventSink(_ sink: (@Sendable (String, String?) async -> Void)?) {
+        self.eventSink = sink
+        if sink != nil {
+            self.emitAvailableUpdateIfNeeded()
+        }
+    }
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        self.updateStatus.availableVersion = item.displayVersionString
+        self.updateStatus.availableBuild = item.versionString
+        self.updateStatus.lastError = nil
+        self.emitAvailableUpdateIfNeeded()
+    }
+
     func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
-        self.updateStatus.isUpdateReady = true
+        self.updateStatus.availableVersion = item.displayVersionString
+        self.updateStatus.availableBuild = item.versionString
+        self.updateStatus.lastError = nil
     }
 
     func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
         self.updateStatus.isUpdateReady = false
+        self.immediateInstallHandler = nil
+        self.updateStatus.lastError = error.localizedDescription
     }
 
     func userDidCancelDownload(_ updater: SPUUpdater) {
         self.updateStatus.isUpdateReady = false
+        self.immediateInstallHandler = nil
     }
 
     func updater(
@@ -633,10 +758,73 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         switch choice {
         case .install, .skip:
             self.updateStatus.isUpdateReady = false
+            self.immediateInstallHandler = nil
         case .dismiss:
             self.updateStatus.isUpdateReady = (state.stage == .downloaded)
         @unknown default:
             self.updateStatus.isUpdateReady = false
+        }
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        willInstallUpdateOnQuit item: SUAppcastItem,
+        immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool
+    {
+        self.updateStatus.availableVersion = item.displayVersionString
+        self.updateStatus.availableBuild = item.versionString
+        self.updateStatus.isUpdateReady = true
+        self.immediateInstallHandler = immediateInstallHandler
+        self.emitAvailableUpdateIfNeeded()
+
+        // Returning true gives this controller ownership of the handler.
+        // Sparkle still installs on ordinary app quit, while Jarvis may invoke
+        // the handler only after the gateway's later-turn confirmation gate.
+        return true
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        self.clearAvailableUpdate()
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        self.clearAvailableUpdate()
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        self.updateStatus.lastError = error.localizedDescription
+    }
+
+    private func clearAvailableUpdate() {
+        self.updateStatus.isUpdateReady = false
+        self.updateStatus.availableVersion = nil
+        self.updateStatus.availableBuild = nil
+        self.immediateInstallHandler = nil
+        self.lastAnnouncedUpdate = nil
+    }
+
+    private func emitAvailableUpdateIfNeeded() {
+        guard let eventSink,
+              let version = self.updateStatus.availableVersion,
+              let build = self.updateStatus.availableBuild
+        else {
+            return
+        }
+        let updateKey = "\(version)|\(build)|\(self.immediateInstallHandler != nil)"
+        guard self.lastAnnouncedUpdate != updateKey else { return }
+        self.lastAnnouncedUpdate = updateKey
+        let payload = [
+            "version": version,
+            "build": build,
+            "readyToInstall": self.immediateInstallHandler != nil,
+        ] as [String: Any]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let payloadJSON = String(data: data, encoding: .utf8)
+        else {
+            return
+        }
+        Task {
+            await eventSink("app.update.available", payloadJSON)
         }
     }
 }

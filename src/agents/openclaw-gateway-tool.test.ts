@@ -13,33 +13,63 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 
 vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: vi.fn(async (method: string) => {
-    if (method === "config.get") {
-      return { hash: "hash-1" };
-    }
-    if (method === "config.schema.lookup") {
-      return {
-        path: "gateway.auth",
-        schema: {
-          type: "object",
-        },
-        hint: { label: "Gateway Auth" },
-        hintPath: "gateway.auth",
-        children: [
-          {
-            key: "token",
-            path: "gateway.auth.token",
-            type: "string",
-            required: true,
-            hasChildren: false,
-            hint: { label: "Token", sensitive: true },
-            hintPath: "gateway.auth.token",
+  callGatewayTool: vi.fn(
+    async (method: string, _opts: unknown, params: Record<string, unknown>) => {
+      if (method === "config.get") {
+        return { hash: "hash-1" };
+      }
+      if (method === "config.schema.lookup") {
+        return {
+          path: "gateway.auth",
+          schema: {
+            type: "object",
           },
-        ],
-      };
-    }
-    return { ok: true };
-  }),
+          hint: { label: "Gateway Auth" },
+          hintPath: "gateway.auth",
+          children: [
+            {
+              key: "token",
+              path: "gateway.auth.token",
+              type: "string",
+              required: true,
+              hasChildren: false,
+              hint: { label: "Token", sensitive: true },
+              hintPath: "gateway.auth.token",
+            },
+          ],
+        };
+      }
+      if (method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "mac-test",
+              displayName: "Test Mac",
+              platform: "macos",
+              connected: true,
+              commands: ["system.appUpdate.status", "system.appUpdate.install"],
+            },
+          ],
+        };
+      }
+      if (method === "node.invoke") {
+        if (params.command === "system.appUpdate.status") {
+          return {
+            payload: {
+              available: true,
+              readyToInstall: true,
+              version: "2026.7.29",
+              build: "2026072901",
+            },
+          };
+        }
+        if (params.command === "system.appUpdate.install") {
+          return { payload: { accepted: true } };
+        }
+      }
+      return { ok: true };
+    },
+  ),
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
@@ -242,6 +272,95 @@ describe("gateway tool", () => {
       expect(opts).toMatchObject({ timeoutMs: 20 * 60_000 });
       expect(params).toMatchObject({ timeoutMs: 20 * 60_000 });
     }
+  });
+
+  it("reads signed app update status without restart confirmation", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("app-update-status", {
+      action: "app.update.status",
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      nodeId: "mac-test",
+      result: {
+        available: true,
+        readyToInstall: true,
+        version: "2026.7.29",
+        build: "2026072901",
+      },
+    });
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.any(Object),
+      expect.objectContaining({ command: "system.appUpdate.status" }),
+    );
+  });
+
+  it("blocks signed app installation without a later-turn confirmation", async () => {
+    const { storePath, sessionKey } = await createSessionStoreFixture();
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    await expect(
+      tool.execute("app-update-unconfirmed", {
+        action: "app.update.install",
+        expectedVersion: "2026.7.29",
+        expectedBuild: "2026072901",
+      }),
+    ).rejects.toThrow("Restart confirmation required");
+  });
+
+  it("installs only the exact ready app update after later-turn confirmation", async () => {
+    const pending = createPendingRestartConfirmation({ now: Date.now() - 1_000 });
+    const { storePath, sessionKey } = await createSessionStoreFixture({
+      entry: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt + 500,
+        pendingRestartConfirmation: pending,
+      },
+    });
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    const result = await withEnvAsync(
+      { OPENCLAW_STATE_DIR: path.dirname(storePath), OPENCLAW_PROFILE: "isolated" },
+      () =>
+        tool.execute("app-update-confirmed", {
+          action: "app.update.install",
+          expectedVersion: "2026.7.29",
+          expectedBuild: "2026072901",
+          note: "Jarvis updated and resumed.",
+        }),
+    );
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      accepted: true,
+      nodeId: "mac-test",
+      version: "2026.7.29",
+      build: "2026072901",
+    });
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.any(Object),
+      expect.objectContaining({
+        command: "system.appUpdate.install",
+        params: {
+          expectedVersion: "2026.7.29",
+          expectedBuild: "2026072901",
+        },
+      }),
+    );
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[sessionKey]?.pendingRestartConfirmation).toBeUndefined();
   });
 
   it("returns a path-scoped schema lookup result", async () => {

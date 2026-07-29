@@ -4,6 +4,9 @@ import OpenClawKit
 
 @MainActor
 protocol MacNodeRuntimeMainActorServices: Sendable {
+    func appUpdateStatus() -> OpenClawAppUpdateStatus
+    func installAppUpdate(expectedVersion: String, expectedBuild: String) throws
+
     func recordScreen(
         screenIndex: Int?,
         appName: String?,
@@ -26,6 +29,16 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
 final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
     private let screenRecorder = ScreenRecordService()
     private let locationService = MacNodeLocationService()
+
+    func appUpdateStatus() -> OpenClawAppUpdateStatus {
+        AppUpdateControllerRegistry.shared.status()
+    }
+
+    func installAppUpdate(expectedVersion: String, expectedBuild: String) throws {
+        try AppUpdateControllerRegistry.shared.install(
+            expectedVersion: expectedVersion,
+            expectedBuild: expectedBuild)
+    }
 
     func recordScreen(
         screenIndex: Int?,

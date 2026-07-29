@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -20,6 +21,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { listNodes } from "./nodes-utils.js";
 
 const log = createSubsystemLogger("gateway-tool");
 
@@ -46,6 +48,8 @@ const GATEWAY_ACTIONS = [
   "config.apply",
   "config.patch",
   "update.run",
+  "app.update.status",
+  "app.update.install",
 ] as const;
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
@@ -69,6 +73,10 @@ const GatewayToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
+  // app.update.status, app.update.install
+  node: Type.Optional(Type.String()),
+  expectedVersion: Type.Optional(Type.String()),
+  expectedBuild: Type.Optional(Type.String()),
 });
 // NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
 // - OpenAI rejects tool schemas that include these keywords at the *top-level*.
@@ -84,7 +92,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, arm restart confirmation for the current chat, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation. Only after that action succeeds, ask the confirmation question returned by the tool, end the turn, and wait for the user's reply. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, arm restart confirmation for the current chat, inspect or change gateway config, update gateway source, or inspect/install a signed Sparkle app update. Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation. Only after that action succeeds, ask the confirmation question returned by the tool, end the turn, and wait for the user's reply. app.update.status is read-only. app.update.install requires the exact version/build returned by status and a later-turn confirmation. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Always pass a human-readable completion message via the note parameter so the system can deliver it after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -198,6 +206,55 @@ export function createGatewayTool(opts?: {
 
       const gatewayOpts = readGatewayCallOptions(params);
 
+      const resolveAppUpdateNode = async () => {
+        const requestedNode =
+          typeof params.node === "string" && params.node.trim() ? params.node.trim() : undefined;
+        const nodes = await listNodes(gatewayOpts);
+        const requiredCommands = ["system.appUpdate.status", "system.appUpdate.install"];
+        const capable = nodes.filter(
+          (node) =>
+            node.connected === true &&
+            requiredCommands.every((command) => node.commands?.includes(command) === true),
+        );
+        if (requestedNode) {
+          const normalized = requestedNode.toLowerCase();
+          const match = capable.find(
+            (node) =>
+              node.nodeId.toLowerCase() === normalized ||
+              node.displayName?.toLowerCase() === normalized,
+          );
+          if (!match) {
+            throw new Error(
+              `The requested node is not connected with app-update support: ${requestedNode}`,
+            );
+          }
+          return match;
+        }
+        if (capable.length === 0) {
+          throw new Error("No connected Jarvis Mac app supports signed app updates.");
+        }
+        if (capable.length > 1) {
+          throw new Error(
+            "Multiple Jarvis Mac apps support updates. Pass the exact node id or display name.",
+          );
+        }
+        return capable[0];
+      };
+
+      const invokeAppUpdateNode = async (
+        nodeId: string,
+        command: "system.appUpdate.status" | "system.appUpdate.install",
+        commandParams: Record<string, unknown> = {},
+      ) => {
+        const result = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
+          nodeId,
+          command,
+          params: commandParams,
+          idempotencyKey: randomUUID(),
+        });
+        return result?.payload ?? {};
+      };
+
       const resolveGatewayWriteMeta = (): {
         sessionKey: string | undefined;
         note: string | undefined;
@@ -285,6 +342,85 @@ export function createGatewayTool(opts?: {
           timeoutMs: updateTimeoutMs,
         });
         return jsonResult({ ok: true, result });
+      }
+      if (action === "app.update.status") {
+        const node = await resolveAppUpdateNode();
+        const result = await invokeAppUpdateNode(node.nodeId, "system.appUpdate.status");
+        return jsonResult({ ok: true, nodeId: node.nodeId, result });
+      }
+      if (action === "app.update.install") {
+        const expectedVersion = readStringParam(params, "expectedVersion", { required: true });
+        const expectedBuild = readStringParam(params, "expectedBuild", { required: true });
+        const node = await resolveAppUpdateNode();
+
+        // Re-read the app-owned Sparkle state before consuming consent. This
+        // prevents a stale prompt from authorizing a newly published build.
+        const status = (await invokeAppUpdateNode(
+          node.nodeId,
+          "system.appUpdate.status",
+        )) as Record<string, unknown>;
+        if (
+          status.readyToInstall !== true ||
+          status.version !== expectedVersion ||
+          status.build !== expectedBuild
+        ) {
+          throw new Error(
+            "The approved app update is no longer ready or has changed. Check status and ask again.",
+          );
+        }
+        await requirePendingRestartConfirmation();
+
+        const { sessionKey, note } = resolveGatewayWriteMeta();
+        const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+        const payload: RestartSentinelPayload = {
+          kind: "update",
+          // "ok" means the restart-capable update operation was accepted.
+          // The sentinel watcher still verifies the replacement process after
+          // Sparkle relaunches the app and its managed gateway.
+          status: "ok",
+          ts: Date.now(),
+          sessionKey,
+          deliveryContext,
+          threadId,
+          message:
+            note ??
+            `Jarvis updated to ${expectedVersion} (${expectedBuild}) and resumed this chat.`,
+          doctorHint: formatDoctorNonInteractiveHint(),
+          stats: {
+            mode: "app.update.install",
+            phase: "requested",
+            verified: false,
+            after: {
+              version: expectedVersion,
+              build: expectedBuild,
+            },
+          },
+        };
+        await writeRestartSentinel(payload);
+        let result: unknown;
+        try {
+          result = await invokeAppUpdateNode(node.nodeId, "system.appUpdate.install", {
+            expectedVersion,
+            expectedBuild,
+          });
+        } catch (error) {
+          // Replace the active operation so the detached watcher cannot report
+          // a false recovery when the app rejected the install request.
+          await writeRestartSentinel({
+            ...payload,
+            status: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+        return jsonResult({
+          ok: true,
+          accepted: true,
+          nodeId: node.nodeId,
+          version: expectedVersion,
+          build: expectedBuild,
+          result,
+        });
       }
 
       throw new Error(`Unknown action: ${action}`);

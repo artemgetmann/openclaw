@@ -71,6 +71,10 @@ actor MacNodeRuntime {
                 return try await self.handleSystemWhich(req)
             case OpenClawSystemCommand.notify.rawValue:
                 return try await self.handleSystemNotify(req)
+            case OpenClawSystemCommand.appUpdateStatus.rawValue:
+                return try await self.handleAppUpdateStatus(req)
+            case OpenClawSystemCommand.appUpdateInstall.rawValue:
+                return try await self.handleAppUpdateInstall(req)
             case OpenClawSystemCommand.execApprovalsGet.rawValue:
                 return try await self.handleSystemExecApprovalsGet(req)
             case OpenClawSystemCommand.execApprovalsSet.rawValue:
@@ -81,6 +85,21 @@ actor MacNodeRuntime {
         } catch {
             return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
         }
+    }
+
+    private func handleAppUpdateStatus(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let services = await self.mainActorServices()
+        let status = await services.appUpdateStatus()
+        return try BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: Self.encodePayload(status))
+    }
+
+    private func handleAppUpdateInstall(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(OpenClawAppUpdateInstallParams.self, from: req.paramsJSON)
+        let services = await self.mainActorServices()
+        try await services.installAppUpdate(
+            expectedVersion: params.expectedVersion,
+            expectedBuild: params.expectedBuild)
+        return BridgeInvokeResponse(id: req.id, ok: true)
     }
 
     private func isCanvasCommand(_ command: String) -> Bool {
