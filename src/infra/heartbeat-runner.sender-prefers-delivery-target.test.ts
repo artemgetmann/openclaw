@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { GetReplyOptions } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
@@ -95,7 +97,7 @@ describe("runHeartbeatOnce", () => {
           },
         });
 
-        replySpy.mockImplementation(async (ctx, opts) => {
+        replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
           expect(ctx.To).toBe("-1003841603622");
           expect(ctx.From).toBe("-1003841603622");
           expect(ctx.OriginatingChannel).toBe("telegram");
@@ -178,7 +180,7 @@ describe("runHeartbeatOnce", () => {
           },
         });
 
-        replySpy.mockImplementation(async (_ctx, opts) => {
+        replySpy.mockImplementation(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
           expect(opts?.cronDefaultDelivery).toEqual({ mode: "none" });
           return { text: "HEARTBEAT_OK" };
         });
