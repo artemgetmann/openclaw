@@ -50,7 +50,11 @@ releases use `jarvis-managed-bundle`; protected break-glass deployments use
 `telegram-live-runtime.sh ensure`. The canary never auto-falls back between
 sources.
 
-Run `--execute` only with fresh approval after the expected commit is deployed.
+Run `--execute` only under approval that is fresh to the bounded shipping run.
+That approval may be granted before deployment when it explicitly covers the
+deployment, restart, live canary, and exact cleanup as one sequence; do not stop
+between those stages merely to ask again. Follow the authorization envelope and
+scope-change rules in `docs/agent-guides/runtime-ops.md`.
 The harness targets `ai.jarvis.gateway`, acquires the machine-wide canary lock,
 creates one uniquely named topic in the configured Jarvis Lab chat, records
 runtime/transport/message evidence, and cleans only its exact topic and local

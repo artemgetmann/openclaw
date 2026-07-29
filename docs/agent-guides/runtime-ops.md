@@ -125,6 +125,39 @@ This serializes operational state without a coordinator service. It does not
 grant permission for the live action: task authority and the runtime lane below
 still decide whether it may run.
 
+### Approval and autonomous completion
+
+Treat authorization and temporary availability as different states:
+
+- Before a protected end-to-end run, translate broad completion language into
+  one explicit approval that names every planned mutation: app-support/runtime
+  deployment, shared-gateway restart, live Telegram reads or sends, temporary
+  topic creation, and exact cleanup. Ask once for the whole bounded sequence,
+  not once per routine stage.
+- The approval may bind to the current CI-green `main` at execution time rather
+  than one soon-stale commit when the user explicitly authorizes that moving
+  target. Ordinary advancement by merged, green PRs then does not require
+  another prompt. Stop for a security/release-class change, failed or missing
+  required checks, a new external destination, broader destructive cleanup, or
+  any mutation class that the original approval did not name.
+- After that explicit approval succeeds, retain ownership through deployment,
+  restart, proof, exact cleanup, and bounded health/CI waiting. Do not return
+  for routine confirmations unless the scope changes or a new protected action
+  appears.
+- A later explicit user hold immediately narrows any earlier approval. Preserve
+  the verified runtime, stop before the held mutation boundary, and continue
+  unrelated source/review work. If the hold says it remains in force until the
+  user releases it, resource availability or task completion elsewhere does
+  not imply resumption.
+- A platform authorization rejection is not a capacity wait. Sleeping or
+  polling cannot make it pass, and bypassing it is forbidden. Preserve the last
+  verified checkpoint, report the exact rejected mutations, and request one
+  concise approval that names them.
+- A resource-guard refusal or pending external check is temporary availability.
+  Keep the lane queued and use the low-frequency waiting policy in
+  `docs/agent-guides/fleet-resource-control.md`; do not turn it into a new
+  approval request.
+
 ### Canonical main-Jarvis hotfix wrapper
 
 When Artem asks to “Ship this PR to my main Jarvis” or equivalent, use the
