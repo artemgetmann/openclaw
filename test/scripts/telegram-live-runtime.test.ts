@@ -9,11 +9,25 @@ import { acquireTelegramTesterScenarioReservation } from "../../scripts/lib/tele
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const SCRIPT_PATH = path.join(process.cwd(), "scripts", "telegram-live-runtime.sh");
 
+function readSourceableRuntimeScript(): string {
+  // These unit fixtures copy the operator entrypoint into a temporary directory
+  // and source individual functions without executing `main`. Main now imports
+  // the machine-wide heavy-slot helper relative to the repository root, which
+  // intentionally does not exist beside a copied fixture. Strip only that
+  // bootstrap import here; production execution keeps the real self-guard.
+  return readFileSync(SCRIPT_PATH, "utf8")
+    .replace(
+      '# shellcheck source=scripts/lib/heavy-local-slot.sh\nsource "${REPO_ROOT}/scripts/lib/heavy-local-slot.sh"\n',
+      "",
+    )
+    .replace(/\nmain "\$@"\s*$/, "\n");
+}
+
 describe("telegram-live-runtime.sh", () => {
   it("keeps truthy env parsing compatible with macOS bash 3", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
     const stdout = execFileSync(
       BASH_BIN,
@@ -42,7 +56,7 @@ describe("telegram-live-runtime.sh", () => {
       "lib",
       "telegram-live-runtime-helpers.mjs",
     );
-    writeFileSync(sourcePath, readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n"));
+    writeFileSync(sourcePath, readSourceableRuntimeScript());
     writeFileSync(baseConfigPath, "{}\n");
 
     const prepare = (stateDir: string, enabled: boolean) =>
@@ -134,7 +148,7 @@ describe("telegram-live-runtime.sh", () => {
       "--json",
     ];
     const expectedCommand = `${executable} ${argv.join(" ")}`;
-    writeFileSync(sourcePath, readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n"));
+    writeFileSync(sourcePath, readSourceableRuntimeScript());
     writeFileSync(
       ownerPath,
       `${JSON.stringify({
@@ -219,7 +233,7 @@ describe("telegram-live-runtime.sh", () => {
     const sourcePath = path.join(tempDir, "runtime-source.sh");
     const helperPath = path.join(tempDir, "helper.mjs");
     mkdirSync(repoRoot, { recursive: true });
-    writeFileSync(sourcePath, readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n"));
+    writeFileSync(sourcePath, readSourceableRuntimeScript());
     writeFileSync(
       path.join(repoRoot, "openclaw.mjs"),
       'import fs from "node:fs"; fs.writeFileSync(process.env.LISTENER_TEST_PID_PATH, String(process.pid)); setInterval(() => {}, 1000);\n',
@@ -275,7 +289,7 @@ describe("telegram-live-runtime.sh", () => {
   it("cleans up a newly spawned listener when readiness times out", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-listener-timeout-"));
     const sourcePath = path.join(tempDir, "runtime-source.sh");
-    writeFileSync(sourcePath, readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n"));
+    writeFileSync(sourcePath, readSourceableRuntimeScript());
     const stdout = execFileSync(
       BASH_BIN,
       [
@@ -293,7 +307,7 @@ describe("telegram-live-runtime.sh", () => {
   it("emits ensure proof lines with an empty token claim array on macOS bash 3", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-empty-array-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
     const stdout = execFileSync(
       BASH_BIN,
@@ -342,7 +356,7 @@ describe("telegram-live-runtime.sh", () => {
       "command-locks",
       `${profileId}.command.lock`,
     );
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
 
     const stdout = execFileSync(
@@ -376,7 +390,7 @@ describe("telegram-live-runtime.sh", () => {
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
     const runtimeStateDir = path.join(tempDir, "missing", "nested", "state");
     const commandLockDir = path.join(tempDir, "missing", "nested", "profile.command.lock");
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
 
     const stdout = execFileSync(
@@ -401,7 +415,7 @@ describe("telegram-live-runtime.sh", () => {
   it("routes every profile lifecycle mutator through the command lock", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-wrappers-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
 
     const stdout = execFileSync(
@@ -426,7 +440,7 @@ describe("telegram-live-runtime.sh", () => {
   it("resolves the machine session owner before tester token claim", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-owner-order-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
 
     const stdout = execFileSync(
@@ -453,7 +467,7 @@ describe("telegram-live-runtime.sh", () => {
     const reservationRoot = path.join(tempDir, "reservations");
     const token = "12345:release-test";
     const scenarioId = "release-scenario";
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
     const reservation = await acquireTelegramTesterScenarioReservation({
       token,
@@ -499,7 +513,7 @@ describe("telegram-live-runtime.sh", () => {
     const envLocalPath = path.join(tempDir, ".env.local");
     const reservationRoot = path.join(tempDir, "reservations");
     const token = "12345:legacy-release-test";
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
     writeFileSync(envLocalPath, `TELEGRAM_BOT_TOKEN=${token}\nKEEP_ME=yes\n`);
 
@@ -561,7 +575,7 @@ describe("telegram-live-runtime.sh", () => {
       session,
     ];
     const expectedCommand = `${executable} ${argv.join(" ")}`;
-    writeFileSync(sourcePath, readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n"));
+    writeFileSync(sourcePath, readSourceableRuntimeScript());
     const writeOwner = (profileId: string) =>
       writeFileSync(
         ownerPath,
@@ -643,7 +657,7 @@ describe("telegram-live-runtime.sh", () => {
   it("accepts the exact tester profile marker after gateway cwd changes", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-owner-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
     expect(scriptSource).toMatch(/"scripts\/run-node\.mjs",\s+"--profile",\s+profileId,/u);
 
@@ -668,7 +682,7 @@ describe("telegram-live-runtime.sh", () => {
   it("rejects a longer profile with the expected profile as a prefix", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-other-owner-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, scriptSource, "utf8");
 
     const stdout = execFileSync(
@@ -694,7 +708,7 @@ describe("telegram-live-runtime.sh", () => {
     const sourcePath = path.join(tempDir, "proof.png");
     const uploadDir = path.join(tempDir, "uploads");
     const sourceScriptPath = path.join(tempDir, "telegram-live-runtime-source.sh");
-    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    const scriptSource = readSourceableRuntimeScript();
     writeFileSync(sourcePath, "fake image", "utf8");
     writeFileSync(sourceScriptPath, scriptSource, "utf8");
 
