@@ -559,13 +559,18 @@ function createCodexTool(
               unarchived: unarchive.changed,
             };
           } catch (error) {
-            await finalizeMonitorAuthorityAction({
-              storePath,
-              monitorSessionKey: sessionKey,
-              grantId: claim.grantId,
-              outcome: "failed",
-              error: formatError(error),
-            });
+            if (!(error instanceof CodexRelayAcceptanceAmbiguousError)) {
+              await finalizeMonitorAuthorityAction({
+                storePath,
+                monitorSessionKey: sessionKey,
+                grantId: claim.grantId,
+                outcome: "failed",
+                error: formatError(error),
+              });
+            }
+            // Acceptance ambiguity must remain consumed: the App Server may
+            // already be running the turn, so neither "failed" nor replay is
+            // truthful or safe.
             throw error;
           }
         }
@@ -575,6 +580,13 @@ function createCodexTool(
       return jsonToolResult(result);
     },
   };
+}
+
+class CodexRelayAcceptanceAmbiguousError extends Error {
+  constructor(cause: unknown) {
+    super("Codex relay acceptance became ambiguous after the native turn started", { cause });
+    this.name = "CodexRelayAcceptanceAmbiguousError";
+  }
 }
 
 async function startAsyncRelay(params: {
@@ -623,7 +635,7 @@ async function startAsyncRelay(params: {
         `Untracked Codex relay ${delegationId} terminated after acceptance persistence failed: ${formatError(completionError)}`,
       );
     });
-    throw error;
+    throw new CodexRelayAcceptanceAmbiguousError(error);
   }
   params.callbacks.register({
     delegationId,

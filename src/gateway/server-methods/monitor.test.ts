@@ -776,6 +776,17 @@ describe("monitor gateway handlers", () => {
       expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       stopCondition: "Stop after the exact Codex continuation is accepted once.",
     };
+    const authorityRequest = {
+      purposeKey: ` ${authority.purposeKey} `,
+      action: {
+        ...authority.action,
+        threadId: ` ${authority.action.threadId} `,
+        prompt: ` ${authority.action.prompt} `,
+      },
+      idempotencyKey: ` ${authority.idempotencyKey} `,
+      expiresAt: ` ${authority.expiresAt} `,
+      stopCondition: ` ${authority.stopCondition} `,
+    };
     const goal = await createSessionGoal({
       sessionKey: originSessionKey,
       storePath: configState.sessionStorePath,
@@ -798,7 +809,7 @@ describe("monitor gateway handlers", () => {
         sourceType: "github-release",
         sourceTarget: { repo: "artemgetmann/openclaw", channel: "mac" },
         cadence: { kind: "every", everyMs: 300_000 },
-        authority,
+        authority: authorityRequest,
       },
       "req-release-authority",
     );
@@ -825,7 +836,7 @@ describe("monitor gateway handlers", () => {
         sourceType: "rss",
         sourceTarget: { feed: "mac-releases" },
         cadence: { kind: "every", everyMs: 900_000 },
-        authority,
+        authority: authorityRequest,
       },
       "req-release-authority-retry",
     );
@@ -868,7 +879,7 @@ describe("monitor gateway handlers", () => {
         sourceType: "github-release",
         sourceTarget: { repo: "artemgetmann/openclaw", channel: "mac" },
         cadence: { kind: "every", everyMs: 300_000 },
-        authority,
+        authority: authorityRequest,
       },
       "req-release-authority-terminal-retry",
     );

@@ -132,6 +132,120 @@ async function createRelayState() {
 
 const { default: registerCodex } = await import("./index.js");
 
+async function createDurableAuthorityFixture(label: string) {
+  appServer.requests.splice(0);
+  appServer.handlers = new Set();
+  appServer.serverRequestHandlers = new Set();
+  appServer.autoComplete = false;
+  appServer.threadReadResponse = undefined;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-codex-authority-${label}-`));
+  const cronStorePath = path.join(dir, "cron.json");
+  const sessionStorePath = path.join(dir, "sessions.json");
+  const monitorStorePath = resolveMonitorStorePath({ cronStorePath });
+  const sessionKey = `agent:main:monitor:${label}`;
+  const originSessionKey = `agent:main:telegram:direct:${label}`;
+  const text = `Run the deferred ${label} proof exactly once.`;
+  const idempotencyKey = `${label}:thread-natural`;
+  const grantInput = {
+    purposeKey: `release:${label}`,
+    action: {
+      kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+      threadId: "thread-natural",
+      prompt: text,
+    },
+    idempotencyKey,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    stopCondition: "Accept the exact Codex continuation once.",
+  };
+  const approvedGrant = { ...grantInput, maxExecutions: 1 as const };
+  const goal = {
+    id: `goal-${label}`,
+    objective: `Verify ${label}.`,
+    autonomy: {
+      level: "act_within_scope" as const,
+      allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+      authorityGrants: [approvedGrant],
+    },
+  };
+  const grant = createMonitorAuthorityGrant({
+    input: grantInput,
+    goal,
+    nowMs: Date.now(),
+  });
+  await updateSessionStore(sessionStorePath, (store) => {
+    store[originSessionKey] = {
+      sessionId: `origin-${label}`,
+      updatedAt: Date.now(),
+      goal: {
+        schemaVersion: 1,
+        ...goal,
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        tokenStart: 0,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      },
+    };
+  });
+  const monitor = createMonitorRecord(
+    {
+      monitorId: `monitor-${label}`,
+      agentId: "main",
+      instructions: `Watch for ${label}, then resume the exact verification thread.`,
+      originSessionKey,
+      monitorSessionKey: sessionKey,
+      sourceType: "github-release",
+      sourceTarget: { repo: "artemgetmann/openclaw" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_only",
+      goal,
+      authority: grant,
+      cronJobId: `cron-${label}`,
+    },
+    Date.now(),
+  );
+  await saveMonitorStore(monitorStorePath, { version: 1, monitors: [monitor] });
+
+  let factory: OpenClawPluginToolFactory | undefined;
+  registerCodex(
+    createTestPluginApi({
+      id: "codex",
+      name: "Codex",
+      source: "test",
+      config: {},
+      pluginConfig: {},
+      runtime: {
+        state: { resolveStateDir: () => dir },
+        subagent: {
+          run: vi.fn(async () => ({ runId: "relay" })),
+          waitForRun: vi.fn(async () => ({ status: "ok" as const })),
+        },
+        system: {
+          enqueueSystemEvent: vi.fn(() => true),
+          requestHeartbeatNow: vi.fn(),
+        },
+      } as never,
+      registerTool(next) {
+        if (typeof next === "function") {
+          factory = next;
+        }
+      },
+    }),
+  );
+  const tool = factory?.({
+    senderIsOwner: true,
+    sandboxed: false,
+    sessionKey,
+    agentId: "main",
+    config: {
+      cron: { store: cronStorePath },
+      session: { store: sessionStorePath },
+    },
+  }) as AnyAgentTool;
+  return { dir, idempotencyKey, monitorStorePath, text, tool };
+}
+
 describe("Codex natural-language delegation", () => {
   it("guides Jarvis to delegate without a conversation binding and runs one native task", async () => {
     appServer.requests.splice(0);
@@ -1083,6 +1197,55 @@ describe("Codex natural-language delegation", () => {
       );
     });
     await fs.rm(dir, { recursive: true });
+  });
+
+  it("keeps authority consumed when relay acceptance persistence is ambiguous", async () => {
+    const fixture = await createDurableAuthorityFixture("ambiguous-acceptance");
+    const markAccepted = vi
+      .spyOn(CodexDelegationRegistry.prototype, "markAccepted")
+      .mockRejectedValueOnce(new Error("simulated acceptance persistence failure"));
+    try {
+      await expect(
+        fixture.tool.execute("authorized-resume-ambiguous", {
+          action: "unarchive_resume_authorized_once",
+          thread_id: "thread-natural",
+          text: fixture.text,
+          idempotency_key: fixture.idempotencyKey,
+        }),
+      ).rejects.toThrow("acceptance became ambiguous");
+      expect(appServer.requests.map((request) => request.method)).toEqual([
+        "thread/read",
+        "thread/unarchive",
+        "thread/resume",
+        "turn/start",
+      ]);
+      expect((await loadMonitorStore(fixture.monitorStorePath)).monitors[0]).toMatchObject({
+        status: "stopped",
+        authority: {
+          execution: { status: "consumed", executions: 1 },
+        },
+      });
+
+      appServer.requests.splice(0);
+      await expect(
+        fixture.tool.execute("authorized-resume-ambiguous-retry", {
+          action: "unarchive_resume_authorized_once",
+          thread_id: "thread-natural",
+          text: fixture.text,
+          idempotency_key: fixture.idempotencyKey,
+        }),
+      ).resolves.toMatchObject({
+        details: {
+          status: "consumed",
+          executed: false,
+        },
+      });
+      expect(appServer.requests).toEqual([]);
+      finishNaturalTurn();
+    } finally {
+      markAccepted.mockRestore();
+      await fs.rm(fixture.dir, { recursive: true });
+    }
   });
 
   it("does not expose the native delegate tool to non-owners", () => {

@@ -6,6 +6,7 @@ import type { CronService } from "../../cron/service.js";
 import type { CronJobCreate } from "../../cron/types.js";
 import {
   createMonitorAuthorityGrant,
+  normalizeMonitorAuthorityGrantInput,
   revokeMonitorAuthorityGrant,
 } from "../../monitor/authority.js";
 import {
@@ -698,14 +699,17 @@ export const monitorHandlers: GatewayRequestHandlers = {
     await withMonitorStoreWriteLock(storePath, async () => {
       const store = await loadMonitorStore(storePath);
       const cfg = loadConfig();
-      const requestedAuthorityIdentity = p.authority
+      const normalizedAuthorityInput = p.authority
+        ? normalizeMonitorAuthorityGrantInput(p.authority)
+        : undefined;
+      const requestedAuthorityIdentity = normalizedAuthorityInput
         ? {
             agentId: p.agentId,
             sourceType: p.sourceType,
             sourceTarget: p.sourceTarget,
             actionPolicy: p.actionPolicy,
             purposeLabel: p.name,
-            authority: p.authority,
+            authority: normalizedAuthorityInput,
           }
         : undefined;
       const terminalAuthorityRetry = requestedAuthorityIdentity
@@ -751,9 +755,9 @@ export const monitorHandlers: GatewayRequestHandlers = {
           cfg,
         });
       }
-      const authority = p.authority
+      const authority = normalizedAuthorityInput
         ? createMonitorAuthorityGrant({
-            input: p.authority,
+            input: normalizedAuthorityInput,
             goal,
             nowMs: Date.now(),
           })

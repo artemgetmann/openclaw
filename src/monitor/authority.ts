@@ -65,6 +65,43 @@ function actionIsAllowedByGoal(
   );
 }
 
+export function normalizeMonitorAuthorityGrantInput(
+  input: MonitorAuthorityGrantInput,
+): MonitorAuthorityGrantInput {
+  if (input.action.kind !== CODEX_THREAD_UNARCHIVE_RESUME_ACTION) {
+    // The static input type admits only the supported literal, but persisted
+    // or wire data can still be malformed at runtime.
+    throw new Error("unsupported durable authority action");
+  }
+  return {
+    purposeKey: requireBoundedText(
+      input.purposeKey,
+      "authority.purposeKey",
+      MAX_PURPOSE_KEY_LENGTH,
+    ),
+    action: {
+      kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+      threadId: requireBoundedText(
+        input.action.threadId,
+        "authority.action.threadId",
+        MAX_THREAD_ID_LENGTH,
+      ),
+      prompt: requireBoundedText(input.action.prompt, "authority.action.prompt", MAX_PROMPT_LENGTH),
+    },
+    idempotencyKey: requireBoundedText(
+      input.idempotencyKey,
+      "authority.idempotencyKey",
+      MAX_IDEMPOTENCY_KEY_LENGTH,
+    ),
+    expiresAt: requireBoundedText(input.expiresAt, "authority.expiresAt", 80),
+    stopCondition: requireBoundedText(
+      input.stopCondition,
+      "authority.stopCondition",
+      MAX_STOP_CONDITION_LENGTH,
+    ),
+  };
+}
+
 export function createMonitorAuthorityGrant(params: {
   input: MonitorAuthorityGrantInput;
   goal: MonitorGoalSnapshot | undefined;
@@ -73,48 +110,14 @@ export function createMonitorAuthorityGrant(params: {
   if (!params.goal) {
     throw new Error("durable authority requires an active bound goal");
   }
-  if (params.input.action.kind !== CODEX_THREAD_UNARCHIVE_RESUME_ACTION) {
-    // The static input type admits only the supported literal, but persisted
-    // or wire data can still be malformed at runtime.
-    throw new Error("unsupported durable authority action");
-  }
-
-  const expiresAt = requireBoundedText(params.input.expiresAt, "authority.expiresAt", 80);
-  const expiresAtMs = Date.parse(expiresAt);
+  const normalizedInput = normalizeMonitorAuthorityGrantInput(params.input);
+  const expiresAtMs = Date.parse(normalizedInput.expiresAt);
   if (!Number.isFinite(expiresAtMs) || expiresAtMs <= params.nowMs) {
     throw new Error("authority.expiresAt must be a future ISO timestamp");
   }
 
   const approvedContract = {
-    purposeKey: requireBoundedText(
-      params.input.purposeKey,
-      "authority.purposeKey",
-      MAX_PURPOSE_KEY_LENGTH,
-    ),
-    action: {
-      kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
-      threadId: requireBoundedText(
-        params.input.action.threadId,
-        "authority.action.threadId",
-        MAX_THREAD_ID_LENGTH,
-      ),
-      prompt: requireBoundedText(
-        params.input.action.prompt,
-        "authority.action.prompt",
-        MAX_PROMPT_LENGTH,
-      ),
-    },
-    idempotencyKey: requireBoundedText(
-      params.input.idempotencyKey,
-      "authority.idempotencyKey",
-      MAX_IDEMPOTENCY_KEY_LENGTH,
-    ),
-    expiresAt,
-    stopCondition: requireBoundedText(
-      params.input.stopCondition,
-      "authority.stopCondition",
-      MAX_STOP_CONDITION_LENGTH,
-    ),
+    ...normalizedInput,
     maxExecutions: 1 as const,
   };
   if (!actionIsAllowedByGoal(params.goal, approvedContract)) {
