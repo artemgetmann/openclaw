@@ -42,7 +42,10 @@ describe("legacy migrate Jarvis consumer model defaults", () => {
     expect(res.changes).toContain(
       "Updated Jarvis consumer primary model openai-codex/gpt-5.4 → openai-codex/gpt-5.6-sol.",
     );
-    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "openai-codex/gpt-5.6-sol" });
+    expect(res.config?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.6-sol",
+      fallbacks: ["openai-codex/gpt-5.5"],
+    });
     expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.6-sol"]).toEqual({});
     expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.4"]).toEqual({});
     expect(res.config?.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]).toBeDefined();
@@ -60,7 +63,60 @@ describe("legacy migrate Jarvis consumer model defaults", () => {
       }),
     );
 
-    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "openai-codex/gpt-5.6-sol" });
+    expect(res.config?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.6-sol",
+      fallbacks: ["openai-codex/gpt-5.5"],
+    });
+  });
+
+  it("replaces the managed GPT-5.4 fallback with GPT-5.5", () => {
+    const res = migrateLegacyConfig(
+      makeStaleJarvisConsumerConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.6-sol",
+              fallbacks: ["openai-codex/gpt-5.4"],
+            },
+            models: {
+              "openai-codex/gpt-5.4": {},
+              "openai-codex/gpt-5.6-sol": {},
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.6-sol",
+      fallbacks: ["openai-codex/gpt-5.5"],
+    });
+    expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.5"]).toEqual({});
+    expect(res.changes).toContain(
+      "Updated Jarvis consumer fallback model openai-codex/gpt-5.4 → openai-codex/gpt-5.5.",
+    );
+  });
+
+  it("preserves an explicitly disabled managed fallback", () => {
+    const res = migrateLegacyConfig(
+      makeStaleJarvisConsumerConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.6-sol",
+              fallbacks: [],
+            },
+            models: {
+              "openai-codex/gpt-5.5": {},
+              "openai-codex/gpt-5.6-sol": {},
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
   });
 
   it("promotes direct OpenAI Jarvis defaults without changing provider families", () => {

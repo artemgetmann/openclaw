@@ -836,6 +836,13 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("529 API is busy")).toBe("overloaded");
     expect(classifyFailoverReason("529 Please try again")).toBe("overloaded");
   });
+  it("classifies Codex server_error payloads as retryable", () => {
+    const codexServerError =
+      'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request.","param":null},"sequence_number":2}';
+
+    expect(classifyFailoverReason(codexServerError)).toBe("timeout");
+    expect(isFailoverErrorMessage(codexServerError)).toBe(true);
+  });
   it("classifies zhipuai Weekly/Monthly Limit Exhausted as rate_limit (#33785)", () => {
     expect(
       classifyFailoverReason(

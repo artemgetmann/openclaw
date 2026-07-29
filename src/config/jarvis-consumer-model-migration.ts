@@ -1,6 +1,7 @@
 export const JARVIS_CONSUMER_LEGACY_CODEX_MODEL = "openai-codex/gpt-5.4";
 export const JARVIS_CONSUMER_PREVIOUS_CODEX_MODEL = "openai-codex/gpt-5.5";
 export const JARVIS_CONSUMER_CURRENT_CODEX_MODEL = "openai-codex/gpt-5.6-sol";
+export const JARVIS_CONSUMER_CODEX_FALLBACK_MODEL = JARVIS_CONSUMER_PREVIOUS_CODEX_MODEL;
 export const JARVIS_CONSUMER_LEGACY_CODEX_MODELS = [
   JARVIS_CONSUMER_LEGACY_CODEX_MODEL,
   JARVIS_CONSUMER_PREVIOUS_CODEX_MODEL,
@@ -59,6 +60,31 @@ export function getJarvisConsumerPrimaryModel(root: UnknownRecord): string | und
 
 export function hasJarvisConsumerModel(root: UnknownRecord, key: string): boolean {
   return hasOwn(getRecord(getJarvisConsumerAgentsDefaults(root)?.models), key);
+}
+
+export function shouldMigrateJarvisConsumerCodexFallback(root: UnknownRecord): boolean {
+  if (!isJarvisConsumerConfig(root)) {
+    return false;
+  }
+  const primary = getJarvisConsumerPrimaryModel(root);
+  const willUseCurrentCodex =
+    primary === JARVIS_CONSUMER_CURRENT_CODEX_MODEL ||
+    JARVIS_CONSUMER_LEGACY_CODEX_MODELS.some((model) => primary === model);
+  if (!willUseCurrentCodex) {
+    return false;
+  }
+
+  const model = getRecord(getJarvisConsumerAgentsDefaults(root)?.model);
+  if (!model || !hasOwn(model, "fallbacks")) {
+    // Managed defaults created before fallback policy existed should gain the
+    // safe previous-generation model automatically.
+    return true;
+  }
+  if (!Array.isArray(model.fallbacks) || model.fallbacks.length === 0) {
+    // An explicit empty list is an operator opt-out, not stale product state.
+    return false;
+  }
+  return model.fallbacks.some((fallback) => fallback === JARVIS_CONSUMER_LEGACY_CODEX_MODEL);
 }
 
 export function isJarvisConsumerConfig(root: UnknownRecord): boolean {
@@ -159,6 +185,7 @@ export function shouldMigrateJarvisConsumerModelDefaults(root: UnknownRecord): b
   const needsAnthropic =
     hasJarvisConsumerAnthropicAuth(root) &&
     !hasJarvisConsumerModel(root, JARVIS_CONSUMER_ANTHROPIC_SONNET_MODEL);
+  const needsCodexFallback = shouldMigrateJarvisConsumerCodexFallback(root);
 
   return (
     needsCodexDefault ||
@@ -166,6 +193,7 @@ export function shouldMigrateJarvisConsumerModelDefaults(root: UnknownRecord): b
     needsPrimaryPromotion ||
     needsAliasTransfer ||
     needsClaudeCli ||
-    needsAnthropic
+    needsAnthropic ||
+    needsCodexFallback
   );
 }
