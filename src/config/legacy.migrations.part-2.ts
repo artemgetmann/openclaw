@@ -5,10 +5,13 @@ import {
   hasJarvisConsumerModel,
   JARVIS_CONSUMER_ANTHROPIC_SONNET_MODEL,
   JARVIS_CONSUMER_CLAUDE_CLI_MODEL,
+  JARVIS_CONSUMER_CODEX_FALLBACK_MODEL,
   JARVIS_CONSUMER_CURRENT_CODEX_MODEL,
   JARVIS_CONSUMER_CURRENT_OPENAI_MODEL,
+  JARVIS_CONSUMER_LEGACY_CODEX_MODEL,
   JARVIS_CONSUMER_LEGACY_CODEX_MODELS,
   JARVIS_CONSUMER_LEGACY_OPENAI_MODELS,
+  shouldMigrateJarvisConsumerCodexFallback,
   shouldMigrateJarvisConsumerModelDefaults,
 } from "./jarvis-consumer-model-migration.js";
 import {
@@ -122,6 +125,7 @@ function migrateJarvisConsumerModelDefaults(raw: Record<string, unknown>, change
     return;
   }
 
+  const needsCodexFallback = shouldMigrateJarvisConsumerCodexFallback(raw);
   const agents = ensureRecord(raw, "agents");
   const defaults = ensureRecord(agents, "defaults");
   const models = ensureRecord(defaults, "models");
@@ -165,6 +169,39 @@ function migrateJarvisConsumerModelDefaults(raw: Record<string, unknown>, change
     const model = getRecord(defaults.model);
     defaults.model = model ? { ...model, primary: targetPrimary } : { primary: targetPrimary };
     changes.push(`Updated Jarvis consumer primary model ${primary} → ${targetPrimary}.`);
+  }
+
+  if (needsCodexFallback) {
+    // Keep this migration narrow: add the managed fallback when absent, or
+    // replace only the obsolete product fallback. Explicit empty and custom
+    // fallback lists remain operator-owned.
+    const model = getRecord(defaults.model);
+    const existingFallbacks = Array.isArray(model?.fallbacks) ? model.fallbacks : undefined;
+    const nextFallbacks = existingFallbacks
+      ? existingFallbacks.map((fallback) =>
+          fallback === JARVIS_CONSUMER_LEGACY_CODEX_MODEL
+            ? JARVIS_CONSUMER_CODEX_FALLBACK_MODEL
+            : fallback,
+        )
+      : [JARVIS_CONSUMER_CODEX_FALLBACK_MODEL];
+    const dedupedFallbacks = [
+      ...new Set(nextFallbacks.filter((value) => typeof value === "string")),
+    ];
+    defaults.model = {
+      ...model,
+      primary: targetPrimary ?? primary,
+      fallbacks: dedupedFallbacks,
+    };
+    addJarvisConsumerModel(models, JARVIS_CONSUMER_CODEX_FALLBACK_MODEL, changes);
+    if (existingFallbacks?.includes(JARVIS_CONSUMER_LEGACY_CODEX_MODEL)) {
+      changes.push(
+        `Updated Jarvis consumer fallback model ${JARVIS_CONSUMER_LEGACY_CODEX_MODEL} → ${JARVIS_CONSUMER_CODEX_FALLBACK_MODEL}.`,
+      );
+    } else {
+      changes.push(
+        `Configured ${JARVIS_CONSUMER_CODEX_FALLBACK_MODEL} as the Jarvis consumer fallback model.`,
+      );
+    }
   }
 
   if (hasJarvisConsumerClaudeCliAuth(raw)) {

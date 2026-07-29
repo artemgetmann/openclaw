@@ -217,10 +217,14 @@ describe("runGatewayStartupConfigPreflight", () => {
       ...legacyParsed,
       agents: {
         defaults: {
-          model: { primary: "openai-codex/gpt-5.6-sol" },
+          model: {
+            primary: "openai-codex/gpt-5.6-sol",
+            fallbacks: ["openai-codex/gpt-5.5"],
+          },
           models: {
             "openai-codex/gpt-5.3-codex": {},
             "openai-codex/gpt-5.4": {},
+            "openai-codex/gpt-5.5": {},
             "openai-codex/gpt-5.6-sol": {},
           },
         },
@@ -253,6 +257,7 @@ describe("runGatewayStartupConfigPreflight", () => {
     const writtenConfig = writeConfig.mock.calls[0]?.[0];
     expect(writtenConfig?.agents?.defaults?.model).toEqual({
       primary: "openai-codex/gpt-5.6-sol",
+      fallbacks: ["openai-codex/gpt-5.5"],
     });
     expect(writtenConfig?.agents?.defaults?.models?.["openai-codex/gpt-5.6-sol"]).toEqual({});
     expect(result.config).toEqual(migratedConfig);

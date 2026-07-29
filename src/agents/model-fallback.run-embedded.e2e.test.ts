@@ -62,6 +62,8 @@ const baseUsage = {
 
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+const CODEX_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request.","param":null},"sequence_number":2}';
 
 const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
   role: "assistant",
@@ -296,6 +298,26 @@ function mockAllProvidersOverloaded() {
 }
 
 describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
+  it("falls back after a Codex-prefixed generic server error", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(CODEX_SERVER_ERROR_PAYLOAD);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:codex-server-error",
+        runId: "run:codex-server-error",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("timeout");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder();
+    });
+  });
+
   it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

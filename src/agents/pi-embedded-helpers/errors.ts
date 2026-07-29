@@ -306,10 +306,10 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
 }
 
 const ERROR_PAYLOAD_PREFIX_RE =
-  /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
+  /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|codex\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const ERROR_PREFIX_RE =
-  /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
+  /^(?:error|api\s*error|openai\s*error|anthropic\s*error|codex\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
@@ -958,9 +958,15 @@ function isJsonApiInternalServerError(raw: string): boolean {
     return false;
   }
   const value = raw.toLowerCase();
+  // Provider CLIs may prefix JSON (for example, "Codex error: {...}"), so
+  // classify from the structured markers without requiring the whole string to
+  // parse as JSON. This path only receives an assistant errorMessage.
+  const hasGenericServerErrorCode = /"(?:type|code)"\s*:\s*"server_error"/i.test(raw);
   // Anthropic often wraps transient 500s in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
-  return value.includes('"type":"api_error"') && value.includes("internal server error");
+  const hasApiInternalServerError =
+    value.includes('"type":"api_error"') && value.includes("internal server error");
+  return hasGenericServerErrorCode || hasApiInternalServerError;
 }
 
 export function parseImageDimensionError(raw: string): {
