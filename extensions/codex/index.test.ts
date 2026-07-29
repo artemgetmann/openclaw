@@ -1,6 +1,10 @@
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool, OpenClawPluginToolFactory } from "../../src/plugins/types.js";
 import { createTestPluginApi } from "../test-utils/plugin-api.js";
+import { CodexDelegationRegistry } from "./src/delegation-registry.js";
 
 const appServer = vi.hoisted(() => {
   const requests: Array<{ method: string; params: unknown }> = [];
@@ -11,7 +15,8 @@ const appServer = vi.hoisted(() => {
     (request: { method: string; params?: Record<string, unknown> }) => Promise<unknown>
   >();
   let autoComplete = true;
-  return { requests, handlers, serverRequestHandlers, autoComplete };
+  let threadReadResponse: unknown = undefined;
+  return { requests, handlers, serverRequestHandlers, autoComplete, threadReadResponse };
 });
 
 vi.mock("./src/app-server-client.js", () => ({
@@ -36,6 +41,13 @@ vi.mock("./src/app-server-client.js", () => ({
             },
           ],
         };
+      }
+      if (method === "thread/read") {
+        return (
+          appServer.threadReadResponse ?? {
+            thread: { id: "thread-natural", status: { type: "idle" }, turns: [] },
+          }
+        );
       }
       if (method === "turn/start") {
         // The service registers its collector before starting the turn. Delay
@@ -94,6 +106,11 @@ function finishNaturalTurn() {
       },
     });
   }
+}
+
+async function createRelayState() {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-relay-index-"));
+  return { resolveStateDir: () => stateDir };
 }
 
 const { default: registerCodex } = await import("./index.js");
@@ -173,6 +190,8 @@ describe("Codex natural-language delegation", () => {
     const enqueueSystemEvent = vi.fn(() => true);
     const requestHeartbeatNow = vi.fn();
     const run = vi.fn(async () => ({ runId: "jarvis-relay-run" }));
+    const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+    const state = await createRelayState();
     let factory: OpenClawPluginToolFactory | undefined;
 
     registerCodex(
@@ -183,7 +202,8 @@ describe("Codex natural-language delegation", () => {
         config: {},
         pluginConfig: { command: "fake-codex", defaultWorkspaceDir: "/repo/openclaw" },
         runtime: {
-          subagent: { run },
+          state,
+          subagent: { run, waitForRun },
           system: {
             enqueueSystemEvent,
             requestHeartbeatNow,
@@ -272,6 +292,142 @@ describe("Codex natural-language delegation", () => {
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(waitForRun).toHaveBeenCalledWith({
+      runId: "jarvis-relay-run",
+      timeoutMs: 5 * 60 * 1000,
+    });
+  });
+
+  it("keeps spawn-accepted handback non-final until the exact Jarvis run completes", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.serverRequestHandlers = new Set();
+    appServer.autoComplete = false;
+    const state = await createRelayState();
+    const run = vi.fn(async () => ({ runId: "jarvis-pending-run" }));
+    let completeJarvisRun!: (value: { status: "ok" }) => void;
+    const waitForRun = vi.fn(
+      async () =>
+        await new Promise<{ status: "ok" }>((resolve) => {
+          completeJarvisRun = resolve;
+        }),
+    );
+    let factory: OpenClawPluginToolFactory | undefined;
+
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { command: "fake-codex" },
+        runtime: {
+          state,
+          subagent: { run, waitForRun },
+          system: {
+            enqueueSystemEvent: vi.fn(() => true),
+            requestHeartbeatNow: vi.fn(),
+          },
+        } as never,
+        registerTool(next) {
+          if (typeof next === "function") {
+            factory = next;
+          }
+        },
+      }),
+    );
+
+    const tool = factory?.({
+      senderIsOwner: true,
+      sandboxed: false,
+      sessionKey: "agent:main:telegram:direct:owner",
+    }) as AnyAgentTool;
+    const accepted = await tool.execute("delegate-async-pending-delivery", {
+      action: "delegate_async",
+      text: "Finish, then hand back through the exact Jarvis run.",
+    });
+    const delegationId = (accepted as { details?: { delegationId?: string } }).details
+      ?.delegationId;
+    expect(delegationId).toBeTruthy();
+
+    finishNaturalTurn();
+    await vi.waitFor(() => expect(waitForRun).toHaveBeenCalledTimes(1));
+    const registry = new CodexDelegationRegistry(
+      path.join(state.resolveStateDir(), "codex", "async-relays.json"),
+    );
+    await expect(registry.get(delegationId!)).resolves.toMatchObject({
+      lifecycle: "delivery-started",
+      lastJarvisRunId: "jarvis-pending-run",
+      lastJarvisRunPurpose: "terminal",
+    });
+
+    completeJarvisRun({ status: "ok" });
+    await vi.waitFor(async () => {
+      await expect(registry.get(delegationId!)).resolves.toMatchObject({
+        lifecycle: "delivered",
+      });
+    });
+  });
+
+  it("keeps queued heartbeat handback non-final across the restart crash window", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.serverRequestHandlers = new Set();
+    appServer.autoComplete = false;
+    const state = await createRelayState();
+    const run = vi.fn(async () => {
+      throw new Error("Jarvis run spawn unavailable");
+    });
+    const waitForRun = vi.fn();
+    const enqueueSystemEvent = vi.fn(() => true);
+    const requestHeartbeatNow = vi.fn();
+    let factory: OpenClawPluginToolFactory | undefined;
+
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { command: "fake-codex" },
+        runtime: {
+          state,
+          subagent: { run, waitForRun },
+          system: { enqueueSystemEvent, requestHeartbeatNow },
+        } as never,
+        registerTool(next) {
+          if (typeof next === "function") {
+            factory = next;
+          }
+        },
+      }),
+    );
+
+    const tool = factory?.({
+      senderIsOwner: true,
+      sandboxed: false,
+      sessionKey: "agent:main:telegram:direct:owner",
+    }) as AnyAgentTool;
+    const accepted = await tool.execute("delegate-async-heartbeat-window", {
+      action: "delegate_async",
+      text: "Finish, then exercise the volatile heartbeat fallback.",
+    });
+    const delegationId = (accepted as { details?: { delegationId?: string } }).details
+      ?.delegationId;
+    expect(delegationId).toBeTruthy();
+
+    finishNaturalTurn();
+    await vi.waitFor(() => expect(enqueueSystemEvent).toHaveBeenCalledTimes(1));
+    const registry = new CodexDelegationRegistry(
+      path.join(state.resolveStateDir(), "codex", "async-relays.json"),
+    );
+    await expect(registry.get(delegationId!)).resolves.toMatchObject({
+      lifecycle: "delivery-started",
+      deliveryKind: "terminal",
+      heartbeatQueuedAtMs: expect.any(Number),
+    });
+    expect(waitForRun).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).toHaveBeenCalledTimes(1);
   });
 
   it("accepts a natural proactive callback once and steers the exact active turn", async () => {
@@ -280,6 +436,8 @@ describe("Codex natural-language delegation", () => {
     appServer.serverRequestHandlers = new Set();
     appServer.autoComplete = false;
     const run = vi.fn(async () => ({ runId: "jarvis-callback-run" }));
+    const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+    const state = await createRelayState();
     let factory: OpenClawPluginToolFactory | undefined;
 
     registerCodex(
@@ -290,7 +448,8 @@ describe("Codex natural-language delegation", () => {
         config: {},
         pluginConfig: { command: "fake-codex", defaultWorkspaceDir: "/repo/openclaw" },
         runtime: {
-          subagent: { run },
+          state,
+          subagent: { run, waitForRun },
           system: {
             enqueueSystemEvent: vi.fn(() => true),
             requestHeartbeatNow: vi.fn(),
@@ -407,6 +566,8 @@ describe("Codex natural-language delegation", () => {
     const run = vi.fn(async (_payload: { message: string }) => ({
       runId: "jarvis-complete-callback-run",
     }));
+    const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+    const state = await createRelayState();
     let factory: OpenClawPluginToolFactory | undefined;
     registerCodex(
       createTestPluginApi({
@@ -416,7 +577,8 @@ describe("Codex natural-language delegation", () => {
         config: {},
         pluginConfig: { command: "fake-codex" },
         runtime: {
-          subagent: { run },
+          state,
+          subagent: { run, waitForRun },
           system: {
             enqueueSystemEvent: vi.fn(() => true),
             requestHeartbeatNow: vi.fn(),
@@ -465,12 +627,97 @@ describe("Codex natural-language delegation", () => {
     });
   });
 
+  it("reconciles a proven persisted terminal turn once at service startup", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.serverRequestHandlers = new Set();
+    appServer.autoComplete = false;
+    const state = await createRelayState();
+    const registry = new CodexDelegationRegistry(
+      path.join(state.resolveStateDir(), "codex", "async-relays.json"),
+      Date.now,
+    );
+    await registry.createStarting({
+      delegationId: "delegation-restart",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      threadId: "thread-natural",
+      deliveryKey: "codex-relay:delegation-restart",
+    });
+    await registry.markAccepted("delegation-restart", "turn-natural");
+    appServer.threadReadResponse = {
+      thread: {
+        id: "thread-natural",
+        turns: [
+          {
+            id: "turn-natural",
+            status: "completed",
+            items: [
+              {
+                type: "agentMessage",
+                phase: "final_answer",
+                text: "Persisted exact result.",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const run = vi.fn(async () => ({ runId: "jarvis-reconciled-run" }));
+    const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+    let startService: (() => Promise<void>) | undefined;
+
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { command: "fake-codex" },
+        runtime: {
+          state,
+          subagent: { run, waitForRun },
+          system: {
+            enqueueSystemEvent: vi.fn(() => true),
+            requestHeartbeatNow: vi.fn(),
+          },
+        } as never,
+        registerService(service) {
+          startService = async () => await service.start({} as never);
+        },
+      }),
+    );
+
+    await startService?.();
+    await startService?.();
+
+    expect(appServer.requests.filter((request) => request.method === "thread/read")).toEqual([
+      {
+        method: "thread/read",
+        params: { threadId: "thread-natural", includeTurns: true },
+      },
+    ]);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:owner",
+        idempotencyKey: "codex-relay:delegation-restart:completed:thread-natural:turn-natural",
+        message: expect.stringContaining("Persisted exact result."),
+      }),
+    );
+    await expect(registry.get("delegation-restart")).resolves.toMatchObject({
+      lifecycle: "delivered",
+    });
+  });
+
   it("keeps terminal fallback for resumed threads without sending unsupported dynamic tools", async () => {
     appServer.requests.splice(0);
     appServer.handlers = new Set();
     appServer.serverRequestHandlers = new Set();
     appServer.autoComplete = false;
     const run = vi.fn(async () => ({ runId: "jarvis-reply-run" }));
+    const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+    const state = await createRelayState();
     let factory: OpenClawPluginToolFactory | undefined;
 
     registerCodex(
@@ -481,7 +728,8 @@ describe("Codex natural-language delegation", () => {
         config: {},
         pluginConfig: { command: "fake-codex" },
         runtime: {
-          subagent: { run },
+          state,
+          subagent: { run, waitForRun },
           system: {
             enqueueSystemEvent: vi.fn(() => true),
             requestHeartbeatNow: vi.fn(),

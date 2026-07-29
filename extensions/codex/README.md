@@ -87,10 +87,42 @@ The launcher-owned terminal listener remains reconciliation fallback. A valid
 calls back—or the resumed thread does not expose `jarvis_callback`—terminal
 output still reaches the originating Jarvis session.
 
-The native thread remains durable across normal follow-up turns, but an active
-async relay is process-local: stopping the Gateway also stops the App Server
-child and its completion listener. The extension never retries that interrupted
-turn automatically because doing so could duplicate work or side effects.
+Accepted async relays are recorded in an atomic owner-only registry under the
+OpenClaw state directory before acceptance returns to Jarvis. The record binds
+the delegation, originating Jarvis session, native thread and turn, lifecycle,
+stable delivery key, and reconciliation timestamps. It contains no task prompt,
+Telegram credential, chat id, or topic authority.
+
+Stopping the Gateway still stops its App Server child and process-local
+completion listener. On startup, the extension uses only
+`thread/read(includeTurns: true)` to inspect the exact persisted native turn. A
+proven completed turn with a final agent message is relayed once. A nonterminal,
+missing, mismatched, failed, interrupted, malformed, or stale record wakes the
+originating Jarvis session with a decision-needed report when exact routing
+identity exists. A crash after delivery starts is also reported as ambiguous;
+the result is not sent again. Startup never resumes observation, subscribes to
+an unrelated Codex process, infers completion, or retries the task because any
+of those actions could duplicate work or side effects.
+
+A returned Jarvis `runId` proves only that the continuation was accepted for
+execution. The registry finalizes delivery only after `agent.wait` reports that
+exact Jarvis run completed. Likewise, successfully queueing a system event and
+requesting a heartbeat is volatile wake evidence, not a durable delivery
+receipt. Both crash windows remain non-final and reconcile to an explicit
+decision-needed report; neither can silently suppress the terminal handback.
+
+Decision-needed classification is irreversible. Reconciliation atomically
+claims its one permitted report before invoking Jarvis; after a crash, startup
+does not inspect Codex again or resend that report. This at-most-once boundary
+may leave delivery ambiguous, but it cannot turn a stale or uncertain relay
+back into a terminal-result candidate. Run and heartbeat timestamps are
+diagnostic only and never refresh the lifecycle staleness clock. These receipts
+prove Jarvis-run completion and a finished delivery path/attempt—not durable
+Telegram or provider delivery.
+
+Reconciliation isolates each durable record. A failed inspection or Jarvis
+dispatch is logged after its fail-closed claim and cannot prevent later,
+unrelated relays from reconciling during the same startup pass.
 
 ## Configuration
 

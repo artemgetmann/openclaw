@@ -12,6 +12,7 @@ class FakeCodexClient implements CodexRpcClient {
   readonly handlers = new Set<(notification: CodexNotification) => void>();
   closed = false;
   holdTurn = false;
+  persistedThreadResponse: Record<string, unknown> | undefined;
   listedThreads: Array<Record<string, unknown>> = [];
   listedThreadPages = new Map<
     string,
@@ -38,7 +39,12 @@ class FakeCodexClient implements CodexRpcClient {
     if (method === "thread/start") {
       return { thread: { id: "thread-new", status: { type: "idle" } } } as T;
     }
-    if (method === "thread/read" || method === "thread/resume") {
+    if (method === "thread/read") {
+      return (this.persistedThreadResponse ?? {
+        thread: { id: threadId, status: { type: "idle" }, turns: [] },
+      }) as T;
+    }
+    if (method === "thread/resume") {
       return { thread: { id: threadId, status: { type: "idle" } } } as T;
     }
     if (method === "thread/fork") {
@@ -77,7 +83,7 @@ class FakeCodexClient implements CodexRpcClient {
     this.closed = true;
   }
 
-  finishTurn(threadId: string) {
+  finishTurn(threadId: string, status: "completed" | "failed" | "interrupted" = "completed") {
     this.emit({
       method: "item/started",
       params: {
@@ -99,7 +105,12 @@ class FakeCodexClient implements CodexRpcClient {
       method: "turn/completed",
       params: {
         threadId,
-        turn: { id: "turn-1", status: "completed", items: [] },
+        turn: {
+          id: "turn-1",
+          status,
+          items: [],
+          ...(status === "failed" ? { error: { message: "native failure" } } : {}),
+        },
       },
     });
   }
@@ -191,6 +202,95 @@ describe("CodexThreadService", () => {
     await expect(started.completion).resolves.toMatchObject({
       threadId: "thread-async",
       finalText: "stable final",
+    });
+  });
+
+  it("does not infer successful completion from an interrupted terminal event", async () => {
+    const client = new FakeCodexClient();
+    client.holdTurn = true;
+    const service = createService(client);
+    const started = await service.startMessage("thread-interrupted", "Work independently.");
+
+    client.finishTurn("thread-interrupted", "interrupted");
+
+    await expect(started.completion).rejects.toMatchObject({
+      name: "CodexTurnTerminalError",
+      terminalStatus: "interrupted",
+    });
+  });
+
+  it("reads one exact persisted terminal turn without resuming or subscribing", async () => {
+    const client = new FakeCodexClient();
+    client.persistedThreadResponse = {
+      thread: {
+        id: "thread-durable",
+        turns: [
+          {
+            id: "turn-other",
+            status: "completed",
+            items: [{ type: "agentMessage", text: "Unrelated result." }],
+          },
+          {
+            id: "turn-durable",
+            status: "completed",
+            items: [
+              { type: "agentMessage", text: "Progress text." },
+              {
+                type: "agentMessage",
+                phase: "final_answer",
+                text: "Exact terminal result.",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const service = createService(client);
+
+    await expect(service.inspectPersistedTurn("thread-durable", "turn-durable")).resolves.toEqual({
+      kind: "completed",
+      threadId: "thread-durable",
+      turnId: "turn-durable",
+      finalText: "Exact terminal result.",
+    });
+    expect(client.requests).toEqual([
+      {
+        method: "thread/read",
+        params: { threadId: "thread-durable", includeTurns: true },
+      },
+    ]);
+    expect(client.handlers).toHaveLength(0);
+  });
+
+  it("fails closed for missing, mismatched, and nonterminal persisted turns", async () => {
+    const client = new FakeCodexClient();
+    const service = createService(client);
+
+    client.persistedThreadResponse = {
+      thread: {
+        id: "thread-other",
+        turns: [{ id: "turn-1", status: "completed", items: [] }],
+      },
+    };
+    await expect(service.inspectPersistedTurn("thread-1", "turn-1")).resolves.toMatchObject({
+      kind: "mismatch",
+      expectedThreadId: "thread-1",
+      actualThreadId: "thread-other",
+    });
+
+    client.persistedThreadResponse = { thread: { id: "thread-1", turns: [] } };
+    await expect(service.inspectPersistedTurn("thread-1", "turn-1")).resolves.toMatchObject({
+      kind: "missing",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    client.persistedThreadResponse = {
+      thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress" }] },
+    };
+    await expect(service.inspectPersistedTurn("thread-1", "turn-1")).resolves.toMatchObject({
+      kind: "nonterminal",
+      status: "inProgress",
     });
   });
 
