@@ -32,6 +32,7 @@ function makeRetentionFixtures(root: string) {
 set -euo pipefail
 printf '%s\\n' "$*" >> "${cleanupLog}"
 printf '{"fixture":"cleanup"}\\n'
+exit "\${OPENCLAW_TEST_CLEANUP_STATUS:-0}"
 `,
   );
   writeExecutable(
@@ -50,6 +51,7 @@ function runRetention(
   freeGiB: number,
   fixture: ReturnType<typeof makeRetentionFixtures>,
   args: string[] = [],
+  env: NodeJS.ProcessEnv = {},
 ) {
   return spawnSync("/bin/bash", [retentionScript, ...args], {
     cwd: repoRoot,
@@ -58,6 +60,7 @@ function runRetention(
       OPENCLAW_DISK_RETENTION_AVAILABLE_KIB_OVERRIDE: String(freeGiB * 1024 * 1024),
       OPENCLAW_DISK_RETENTION_CLEANUP_SCRIPT: fixture.cleanup,
       OPENCLAW_DISK_RETENTION_GC_SCRIPT: fixture.gc,
+      ...env,
     },
     encoding: "utf8",
   });
@@ -182,6 +185,19 @@ describePosix("disk retention coordinator", () => {
     expect(result.stdout).toContain("artifact_action=report");
     expect(result.stdout).toContain("worktree_gc_action=report");
     expect(fs.readFileSync(fixture.cleanupLog, "utf8")).not.toContain("--apply");
+    expect(fs.readFileSync(fixture.gcLog, "utf8")).not.toContain("--auto");
+  });
+
+  it("propagates an explicit partial artifact report after still running report-only GC", () => {
+    const root = makeTempRoot();
+    const fixture = makeRetentionFixtures(root);
+    const result = runRetention(60, fixture, [], {
+      OPENCLAW_TEST_CLEANUP_STATUS: "4",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(4);
+    expect(result.stdout).toContain("status=partial");
+    expect(result.stdout).toContain("operator_action=review the lower-bound candidates");
     expect(fs.readFileSync(fixture.gcLog, "utf8")).not.toContain("--auto");
   });
 

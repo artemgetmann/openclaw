@@ -100,6 +100,16 @@ assert_record() {
   pass "$label"
 }
 
+assert_record_size_unknown() {
+  local path="$1"
+  local label="$2"
+  if ! awk -v path="$path" 'index($0, path) && index($0, "unknown") { found=1 } END { exit(found ? 0 : 1) }' "$OUT"; then
+    sed -n '1,240p' "$OUT" >&2
+    fail "$label: expected unknown-sized record for $path"
+  fi
+  pass "$label"
+}
+
 RUNS="$BUILD_ROOT/runs"
 GENERIC_OLD="$RUNS/20200101T000000Z-package-mac-app-100.old"
 RELEASE_OLD="$RUNS/20200101T000000Z-jarvis-release-200.old"
@@ -228,9 +238,21 @@ fi
 exit 1
 EOF
 chmod +x "$INSPECTION_BIN_DIR/ps" "$INSPECTION_BIN_DIR/lsof"
+REAL_DU="$(command -v du)"
+cat >"$INSPECTION_BIN_DIR/du" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${OPENCLAW_TEST_INSPECTION_LOG:-}" ]]; then
+  printf 'du %s\n' "$*" >>"$OPENCLAW_TEST_INSPECTION_LOG"
+fi
+exec "$OPENCLAW_TEST_REAL_DU" "$@"
+EOF
+chmod +x "$INSPECTION_BIN_DIR/du"
 export OPENCLAW_TEST_PROCESS_ACTIVE="$PROCESS_ACTIVE"
+export OPENCLAW_TEST_REAL_DU="$REAL_DU"
 export OPENCLAW_CLEANUP_PS_BIN="$INSPECTION_BIN_DIR/ps"
 export OPENCLAW_CLEANUP_LSOF_BIN="$INSPECTION_BIN_DIR/lsof"
+export OPENCLAW_CLEANUP_DU_BIN="$INSPECTION_BIN_DIR/du"
 
 OPENCLAW_BUILD_ARTIFACT_ROOT="$BUILD_ROOT" \
 OPENCLAW_CLEANUP_BUILD_RUNS_OLDER_THAN_HOURS=0 \
@@ -431,6 +453,7 @@ done
 REAL_GIT="$(command -v git)"
 REGISTERED_ROOT="$TMP_DIR/codex-worktrees"
 REGISTERED_CLEAN="$REGISTERED_ROOT/clean-uuid/openclaw"
+REGISTERED_CLEAN_SECOND="$REGISTERED_ROOT/clean-second-uuid/openclaw"
 REGISTERED_UNTRACKED="$REGISTERED_ROOT/untracked-uuid/openclaw"
 REGISTERED_MODIFIED="$REGISTERED_ROOT/modified-uuid/openclaw"
 REGISTERED_STATUS_ERROR="$REGISTERED_ROOT/status-error-uuid/openclaw"
@@ -440,7 +463,7 @@ GIT_WRAPPER="$GIT_WRAPPER_DIR/git"
 INSPECTION_LOG="$TMP_DIR/registered-inspection.log"
 mkdir -p "$GIT_WRAPPER_DIR"
 
-for fixture_repo in "$REGISTERED_CLEAN" "$REGISTERED_UNTRACKED" "$REGISTERED_MODIFIED" "$REGISTERED_STATUS_ERROR"; do
+for fixture_repo in "$REGISTERED_CLEAN" "$REGISTERED_CLEAN_SECOND" "$REGISTERED_UNTRACKED" "$REGISTERED_MODIFIED" "$REGISTERED_STATUS_ERROR"; do
   mkdir -p "$fixture_repo/dist"
   git -C "$fixture_repo" init -q -b fixture
   printf 'fixture\n' >"$fixture_repo/tracked.txt"
@@ -465,11 +488,15 @@ touch -t 202001010000 "$REGISTERED_MAIN/dist"
   printf '%s\n' '#!/usr/bin/env bash'
   printf '%s\n' 'if [[ "$3" == "worktree" && "$4" == "list" && "$5" == "--porcelain" && "$6" == "-z" ]]; then'
   printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_CLEAN"'
+  printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_CLEAN_SECOND"'
   printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_UNTRACKED"'
   printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_MODIFIED"'
   printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_STATUS_ERROR"'
   printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/main\0\0" "$REGISTERED_MAIN"'
   printf '%s\n' '  exit 0'
+  printf '%s\n' 'fi'
+  printf '%s\n' 'if [[ "$1" == "-C" && "${3:-}" == "status" && -n "${OPENCLAW_TEST_INSPECTION_LOG:-}" ]]; then'
+  printf '%s\n' '  printf "git-status %s\n" "$2" >>"$OPENCLAW_TEST_INSPECTION_LOG"'
   printf '%s\n' 'fi'
   printf '%s\n' 'if [[ "$1" == "-C" && "$2" == "$REGISTERED_STATUS_ERROR" && "$3" == "status" ]]; then'
   printf '%s\n' '  exit 1'
@@ -479,9 +506,11 @@ touch -t 202001010000 "$REGISTERED_MAIN/dist"
 chmod +x "$GIT_WRAPPER"
 export OPENCLAW_TEST_INSPECTION_LOG="$INSPECTION_LOG"
 
+set +e
 PATH="$GIT_WRAPPER_DIR:$PATH" \
 REAL_GIT="$REAL_GIT" \
 REGISTERED_CLEAN="$REGISTERED_CLEAN" \
+REGISTERED_CLEAN_SECOND="$REGISTERED_CLEAN_SECOND" \
 REGISTERED_UNTRACKED="$REGISTERED_UNTRACKED" \
 REGISTERED_MODIFIED="$REGISTERED_MODIFIED" \
 REGISTERED_STATUS_ERROR="$REGISTERED_STATUS_ERROR" \
@@ -489,19 +518,91 @@ REGISTERED_MAIN="$REGISTERED_MAIN" \
 OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
   /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
     --worktrees >"$OUT" 2>&1
+REGISTERED_REPORT_STATUS=$?
+set -e
+if [[ "$REGISTERED_REPORT_STATUS" -ne 0 ]]; then
+  sed -n '1,240p' "$OUT" >&2
+  fail "registered report expected status 0, got $REGISTERED_REPORT_STATUS"
+fi
 
 assert_record "would_rm" "$REGISTERED_CLEAN/dist" "default discovery finds nested registered worktree"
+assert_record "would_rm" "$REGISTERED_CLEAN_SECOND/dist" "default discovery keeps scanning clean registered worktrees"
 assert_record "skip" "$REGISTERED_UNTRACKED/dist" "untracked-only worktree is protected"
+assert_record_size_unknown "$REGISTERED_UNTRACKED/dist" "dirty worktree skips recursive size traversal"
 assert_output_has "reason: dirty" "untracked-only protection explains dirty state"
 assert_record "skip" "$REGISTERED_MODIFIED/dist" "tracked-dirty worktree remains protected"
 assert_record "skip" "$REGISTERED_STATUS_ERROR/dist" "status failure protects indeterminate worktree"
 assert_record "skip" "$REGISTERED_MAIN/dist" "sacred main worktree remains protected"
+assert_record_size_unknown "$REGISTERED_MAIN/dist" "control worktree skips recursive size traversal"
 assert_output_has "control-or-release-worktree" "control-lane protection explains sacred main skip"
 assert_file_exists "$REGISTERED_CLEAN/dist" "default registered-worktree fixture remains dry-run only"
 if [[ "$(grep -c '^ps ' "$INSPECTION_LOG")" != "1" || "$(grep -c '^lsof -Fn$' "$INSPECTION_LOG")" != "1" ]]; then
   fail "registered scan must take one process and one open-file snapshot"
 fi
 pass "registered scan cost is bounded to one host inspection snapshot"
+for protected_path in \
+  "$REGISTERED_UNTRACKED/dist" \
+  "$REGISTERED_MODIFIED/dist" \
+  "$REGISTERED_STATUS_ERROR/dist" \
+  "$REGISTERED_MAIN/dist"; do
+  if grep -F -- "du -sk $protected_path" "$INSPECTION_LOG" >/dev/null; then
+    fail "protected registered artifact must not trigger recursive du: $protected_path"
+  fi
+done
+pass "protected registered artifacts are filtered before recursive size traversal"
+if [[ "$(grep -F -c -- "du -sk $REGISTERED_CLEAN/dist" "$INSPECTION_LOG")" != "1" ]]; then
+  fail "clean registered candidate must be sized exactly once in report mode"
+fi
+pass "clean report candidate performs one recursive size traversal"
+for fixture_repo in \
+  "$REGISTERED_CLEAN" \
+  "$REGISTERED_CLEAN_SECOND" \
+  "$REGISTERED_UNTRACKED" \
+  "$REGISTERED_MODIFIED" \
+  "$REGISTERED_STATUS_ERROR"; do
+  if [[ "$(grep -F -c -- "git-status $fixture_repo" "$INSPECTION_LOG")" != "1" ]]; then
+    fail "registered worktree dirtiness must be inspected once: $fixture_repo"
+  fi
+done
+pass "registered worktree dirtiness is inspected once per lane"
+
+set +e
+PATH="$GIT_WRAPPER_DIR:$PATH" \
+REAL_GIT="$REAL_GIT" \
+REGISTERED_CLEAN="$REGISTERED_CLEAN" \
+REGISTERED_CLEAN_SECOND="$REGISTERED_CLEAN_SECOND" \
+REGISTERED_UNTRACKED="$REGISTERED_UNTRACKED" \
+REGISTERED_MODIFIED="$REGISTERED_MODIFIED" \
+REGISTERED_STATUS_ERROR="$REGISTERED_STATUS_ERROR" \
+REGISTERED_MAIN="$REGISTERED_MAIN" \
+OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
+  /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
+    --worktrees --json --report-max-tree-validations 1 >"$OUT" 2>&1
+REPORT_BUDGET_STATUS=$?
+set -e
+[[ "$REPORT_BUDGET_STATUS" -eq 4 ]] || fail "partial report expected status 4, got $REPORT_BUDGET_STATUS"
+assert_record "would_rm" "$REGISTERED_CLEAN/dist" "report budget validates the first eligible candidate"
+if grep -F -- "$REGISTERED_CLEAN_SECOND/dist" "$OUT" >/dev/null; then
+  fail "report budget must stop before a second recursive candidate validation"
+fi
+pass "report budget stops before the next expensive candidate"
+assert_output_has '"complete":false' "partial JSON summary is explicit"
+assert_output_has '"tree_validations":1' "partial JSON summary reports consumed tree validations"
+assert_output_has '"partial_reason":"tree-validation-budget-exhausted"' "partial JSON summary explains the bound"
+
+PATH="$GIT_WRAPPER_DIR:$PATH" \
+REAL_GIT="$REAL_GIT" \
+REGISTERED_CLEAN="$REGISTERED_CLEAN" \
+REGISTERED_CLEAN_SECOND="$REGISTERED_CLEAN_SECOND" \
+REGISTERED_UNTRACKED="$REGISTERED_UNTRACKED" \
+REGISTERED_MODIFIED="$REGISTERED_MODIFIED" \
+REGISTERED_STATUS_ERROR="$REGISTERED_STATUS_ERROR" \
+REGISTERED_MAIN="$REGISTERED_MAIN" \
+OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
+  /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
+    --worktrees --apply --report-max-tree-validations 0 >"$OUT" 2>&1
+assert_file_missing "$REGISTERED_CLEAN/dist" "apply ignores the report-only scan budget"
+assert_file_missing "$REGISTERED_CLEAN_SECOND/dist" "apply still evaluates every clean fixture"
 unset OPENCLAW_TEST_INSPECTION_LOG
 
 set +e

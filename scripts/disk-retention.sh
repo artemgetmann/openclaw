@@ -37,6 +37,10 @@ Pressure policy:
   automatic rebuildable cleanup below 50 GiB free
   urgent nonzero result below 30 GiB free after cleanup
 
+Report completeness:
+  artifact validation is capped at 24 recursive candidates by default.
+  An incomplete lower-bound report exits 4 with status=partial.
+
 Runtime instances, Codex sessions/history/browser state, and ambiguous
 authenticated state are never automatic targets.
 EOF
@@ -168,7 +172,11 @@ printf 'pressure_before=%s\n' "$level_before"
 printf 'artifact_action=%s\n' "$([[ "$artifact_apply" == "1" ]] && printf apply || printf report)"
 printf 'worktree_gc_action=%s\n' "$([[ "$gc_apply" == "1" ]] && printf apply || printf report)"
 
-run_artifact_retention "$artifact_apply"
+artifact_status=0
+run_artifact_retention "$artifact_apply" || artifact_status=$?
+if [[ "$artifact_status" -ne 0 && "$artifact_status" -ne 4 ]]; then
+  exit "$artifact_status"
+fi
 run_worktree_gc "$gc_apply"
 
 free_after_kib="$(available_kib)" || die "could not recheck free space for $DISK_TARGET"
@@ -180,6 +188,12 @@ if [[ "$AUTO" == "1" && "$level_after" == "urgent" ]]; then
   printf 'status=urgent\n'
   printf 'operator_action=stop heavy builds and review protected candidates\n'
   exit 3
+fi
+
+if [[ "$artifact_status" -eq 4 ]]; then
+  printf 'status=partial\n'
+  printf 'operator_action=review the lower-bound candidates or raise OPENCLAW_CLEANUP_REPORT_MAX_TREE_VALIDATIONS\n'
+  exit 4
 fi
 
 printf 'status=ok\n'

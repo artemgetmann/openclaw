@@ -33,6 +33,8 @@ RUNTIME_INSTANCE_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_INSTANCE_OLDER_THAN
 RUNTIME_LOGS_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_LOGS_OLDER_THAN_DAYS:-3}"
 PS_BIN="${OPENCLAW_CLEANUP_PS_BIN:-/bin/ps}"
 LSOF_BIN="${OPENCLAW_CLEANUP_LSOF_BIN:-/usr/sbin/lsof}"
+DU_BIN="${OPENCLAW_CLEANUP_DU_BIN:-du}"
+REPORT_MAX_TREE_VALIDATIONS="${OPENCLAW_CLEANUP_REPORT_MAX_TREE_VALIDATIONS:-24}"
 
 WORKTREES_ROOT="${OPENCLAW_WORKTREES_ROOT:-}"
 WORKTREES_ROOT_EXPLICIT=0
@@ -54,6 +56,10 @@ OPEN_FILE_SNAPSHOT_FAILED=0
 OPEN_FILE_SNAPSHOT=""
 DISK_BEFORE_KIB=""
 DISK_AFTER_KIB=""
+REPORT_TREE_VALIDATIONS=0
+REPORT_COMPLETE=1
+REPORT_PARTIAL_REASON=""
+STOP_SCAN=0
 
 usage() {
   cat <<'EOF'
@@ -75,6 +81,9 @@ Options:
   --deps-older-than-days <n>
                           node_modules age threshold. Default: 21.
   --worktrees-root <dir>  Scan immediate child directories instead of registered worktrees.
+  --report-max-tree-validations <n>
+                          Stop report mode after n recursive candidate validations.
+                          Default: 24. Apply mode ignores this report-only budget.
   --json                  Emit machine-readable JSON lines.
   --help                  Show this help.
 
@@ -140,7 +149,7 @@ path_age_hours() {
 
 path_size_kib() {
   local target_path="$1"
-  du -sk "$target_path" 2>/dev/null | awk '{print $1}'
+  "$DU_BIN" -sk "$target_path" 2>/dev/null | awk '{print $1}'
 }
 
 path_size_kib_or_zero() {
@@ -230,6 +239,20 @@ record_candidate_total() {
   local size_kib="$1"
   TOTAL_KIB=$((TOTAL_KIB + size_kib))
   CANDIDATE_COUNT=$((CANDIDATE_COUNT + 1))
+}
+
+reserve_report_tree_validation() {
+  if [[ "$APPLY" == "1" ]]; then
+    return 0
+  fi
+  if ((REPORT_TREE_VALIDATIONS >= REPORT_MAX_TREE_VALIDATIONS)); then
+    REPORT_COMPLETE=0
+    REPORT_PARTIAL_REASON="tree-validation-budget-exhausted"
+    STOP_SCAN=1
+    return 1
+  fi
+  REPORT_TREE_VALIDATIONS=$((REPORT_TREE_VALIDATIONS + 1))
+  return 0
 }
 
 path_has_process_ref() {
@@ -514,6 +537,11 @@ delete_or_report_candidate() {
     print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "protected-marker" "explicit-retention"
     return 0
   fi
+  # Report mode is evidence gathering, not deletion authority. Cap its
+  # recursive validations so a fleet with hundreds of dependency trees cannot
+  # monopolize the host indefinitely. Apply mode deliberately ignores this
+  # budget and retains every complete pre-delete traversal below.
+  reserve_report_tree_validation || return 0
   # Validate the full directory tree before rm can touch an accessible sibling.
   # This also validates a regular file's parent removal access without requiring
   # the file itself to be executable.
@@ -575,26 +603,24 @@ consider_generated_path() {
   local target_path="$3"
   local min_age_days="$4"
   local age_days
-  local size_kib
 
   [[ -e "$target_path" ]] || return 0
   age_days="$(path_age_days "$target_path")"
-  size_kib="$(path_size_kib_or_zero "$target_path")"
 
   if (( age_days < min_age_days )); then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "too-new" "rebuildable-generated"
+    print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" "too-new" "rebuildable-generated"
     return 0
   fi
   if path_has_process_ref "$target_path"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "active-process" "rebuildable-generated"
+    print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" "active-process" "rebuildable-generated"
     return 0
   fi
   if path_has_open_files "$target_path"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "open-files" "rebuildable-generated"
+    print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" "open-files" "rebuildable-generated"
     return 0
   fi
 
-  delete_or_report_candidate "$kind" "$scope" "$target_path" "$age_days" "$size_kib" \
+  delete_or_report_candidate "$kind" "$scope" "$target_path" "$age_days" "unknown" \
     generated_age_policy_block_reason "$min_age_days" days
 }
 
@@ -660,43 +686,38 @@ consider_worktree_candidate() {
   local target_path="$2"
   local kind="$3"
   local min_age_days="$4"
+  local worktree_reason="${5:-}"
+  local worktree_risk="${6:-}"
   local age_days=0
-  local size_kib=0
 
   [[ -d "$target_path" ]] || return 0
 
   age_days="$(path_age_days "$target_path")"
-  size_kib="$(path_size_kib_or_zero "$target_path")"
-
   if (( age_days < min_age_days )); then
     return 0
   fi
-  if [[ "$INCLUDE_CURRENT" != "1" && "$(cd "$worktree" && pwd -P)" == "$CURRENT_ROOT" ]]; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "current-checkout"
-    return 0
-  fi
-  if worktree_is_protected_control_lane "$worktree"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "control-or-release-worktree"
+  if [[ "$worktree_reason" == "protected" ]]; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$worktree" "$target_path" "$worktree_reason" "$worktree_risk"
     return 0
   fi
   if [[ "$kind" == "dist" ]] && dist_has_release_recovery_state "$target_path"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "release-artifact-or-receipt"
+    print_record "skip" "$kind" "unknown" "$age_days" "$worktree" "$target_path" "protected" "release-artifact-or-receipt"
     return 0
   fi
-  if worktree_is_dirty "$worktree"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "dirty" "worktree-generated"
+  if [[ -n "$worktree_reason" ]]; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$worktree" "$target_path" "$worktree_reason" "$worktree_risk"
     return 0
   fi
   if path_has_process_ref "$target_path"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "active-process" "worktree-generated"
+    print_record "skip" "$kind" "unknown" "$age_days" "$worktree" "$target_path" "active-process" "worktree-generated"
     return 0
   fi
   if path_has_open_files "$target_path"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "open-files" "worktree-generated"
+    print_record "skip" "$kind" "unknown" "$age_days" "$worktree" "$target_path" "open-files" "worktree-generated"
     return 0
   fi
 
-  delete_or_report_candidate "$kind" "$worktree" "$target_path" "$age_days" "$size_kib" \
+  delete_or_report_candidate "$kind" "$worktree" "$target_path" "$age_days" "unknown" \
     worktree_artifact_policy_block_reason "$worktree" "$kind" "$min_age_days"
 }
 
@@ -713,16 +734,38 @@ scan_worktree() {
     "coverage"
   )
   local name=""
+  local worktree_reason=""
+  local worktree_risk=""
+  local physical_worktree=""
 
   [[ -d "$worktree" ]] || return 0
   git -C "$worktree" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
 
+  physical_worktree="$(cd "$worktree" && pwd -P)"
+  if [[ "$INCLUDE_CURRENT" != "1" && "$physical_worktree" == "$CURRENT_ROOT" ]]; then
+    worktree_reason="protected"
+    worktree_risk="current-checkout"
+  elif worktree_is_protected_control_lane "$worktree"; then
+    worktree_reason="protected"
+    worktree_risk="control-or-release-worktree"
+  elif worktree_is_dirty "$worktree"; then
+    worktree_reason="dirty"
+    worktree_risk="worktree-generated"
+  fi
+
   for name in "${generated_names[@]}"; do
-    consider_worktree_candidate "$worktree" "$worktree/$name" "$name" "$OLDER_THAN_DAYS"
+    consider_worktree_candidate \
+      "$worktree" "$worktree/$name" "$name" "$OLDER_THAN_DAYS" \
+      "$worktree_reason" "$worktree_risk"
+    if [[ "$STOP_SCAN" == "1" ]]; then
+      return 0
+    fi
   done
 
   if [[ "$INCLUDE_DEPS" == "1" ]]; then
-    consider_worktree_candidate "$worktree" "$worktree/node_modules" "node_modules" "$DEPS_OLDER_THAN_DAYS"
+    consider_worktree_candidate \
+      "$worktree" "$worktree/node_modules" "node_modules" "$DEPS_OLDER_THAN_DAYS" \
+      "$worktree_reason" "$worktree_risk"
   fi
 }
 
@@ -730,6 +773,9 @@ scan_worktrees_root() {
   [[ -d "$WORKTREES_ROOT" ]] || return 0
   while IFS= read -r -d '' worktree; do
     scan_worktree "$worktree"
+    if [[ "$STOP_SCAN" == "1" ]]; then
+      break
+    fi
   done < <(find "$WORKTREES_ROOT" -mindepth 1 -maxdepth 1 -type d -print0)
 }
 
@@ -746,6 +792,9 @@ scan_registered_worktrees() {
       "worktree "*)
         worktree="${field#worktree }"
         scan_worktree "$worktree"
+        if [[ "$STOP_SCAN" == "1" ]]; then
+          break
+        fi
         ;;
     esac
   done < <(git -C "$ROOT_DIR" worktree list --porcelain -z)
@@ -1086,6 +1135,11 @@ while [[ $# -gt 0 ]]; do
       WORKTREES_ROOT_EXPLICIT=1
       shift 2
       ;;
+    --report-max-tree-validations)
+      [[ $# -ge 2 ]] || die "--report-max-tree-validations requires a value"
+      REPORT_MAX_TREE_VALIDATIONS="$2"
+      shift 2
+      ;;
     --json)
       JSON=1
       shift
@@ -1117,6 +1171,7 @@ done
 
 [[ "$OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "--older-than-days must be a non-negative integer"
 [[ "$DEPS_OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "--deps-older-than-days must be a non-negative integer"
+[[ "$REPORT_MAX_TREE_VALIDATIONS" =~ ^[0-9]+$ ]] || die "--report-max-tree-validations must be a non-negative integer"
 [[ "$BUILD_RUNS_OLDER_THAN_HOURS" =~ ^[0-9]+$ ]] || die "OPENCLAW_CLEANUP_BUILD_RUNS_OLDER_THAN_HOURS must be a non-negative integer"
 [[ "$BUILD_TEMP_OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "OPENCLAW_CLEANUP_BUILD_TEMP_OLDER_THAN_DAYS must be a non-negative integer"
 [[ "$RELEASE_STAGING_OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "OPENCLAW_CLEANUP_RELEASE_STAGING_OLDER_THAN_DAYS must be a non-negative integer"
@@ -1157,10 +1212,10 @@ fi
 if [[ "$WORKTREES" == "1" ]]; then
   scan_worktrees
 fi
-if [[ "$BUILD_CACHE" == "1" ]]; then
+if [[ "$BUILD_CACHE" == "1" && "$STOP_SCAN" != "1" ]]; then
   scan_build_cache
 fi
-if [[ "$RUNTIME_INSTANCES" == "1" ]]; then
+if [[ "$RUNTIME_INSTANCES" == "1" && "$STOP_SCAN" != "1" ]]; then
   scan_runtime_instances
 fi
 
@@ -1168,23 +1223,37 @@ if [[ "$JSON" == "1" ]]; then
   if [[ "$APPLY" == "1" ]]; then
     DISK_AFTER_KIB="$(disk_available_kib "$ROOT_DIR")"
   fi
-  printf '{"summary":{"mode":"%s","worktrees":%s,"build_cache":%s,"runtime_instances":%s,"candidates":%s,"deleted":%s,"total_kib":%s}}\n' \
+  printf '{"summary":{"mode":"%s","worktrees":%s,"build_cache":%s,"runtime_instances":%s,"candidates":%s,"deleted":%s,"total_kib":%s,"complete":%s,"tree_validations":%s,"max_tree_validations":%s,"partial_reason":"%s"}}\n' \
     "$([[ "$APPLY" == "1" ]] && echo apply || echo report)" \
     "$WORKTREES" \
     "$BUILD_CACHE" \
     "$RUNTIME_INSTANCES" \
     "$CANDIDATE_COUNT" \
     "$DELETED_COUNT" \
-    "$TOTAL_KIB"
+    "$TOTAL_KIB" \
+    "$([[ "$REPORT_COMPLETE" == "1" ]] && echo true || echo false)" \
+    "$REPORT_TREE_VALIDATIONS" \
+    "$REPORT_MAX_TREE_VALIDATIONS" \
+    "$REPORT_PARTIAL_REASON"
 else
   echo "Summary:"
   echo "  candidates=$CANDIDATE_COUNT"
   echo "  deleted=$DELETED_COUNT"
   echo "  reclaimable=$(human_kib "$TOTAL_KIB")"
+  echo "  scan_status=$([[ "$REPORT_COMPLETE" == "1" ]] && echo complete || echo partial)"
+  echo "  tree_validations=$REPORT_TREE_VALIDATIONS"
+  if [[ "$REPORT_COMPLETE" != "1" ]]; then
+    echo "  partial_reason=$REPORT_PARTIAL_REASON"
+    echo "  reclaimable_is_lower_bound=yes"
+  fi
   if [[ "$APPLY" == "1" ]]; then
     DISK_AFTER_KIB="$(disk_available_kib "$ROOT_DIR")"
     echo "  disk_before=$(human_kib "${DISK_BEFORE_KIB:-0}")"
     echo "  disk_after=$(human_kib "${DISK_AFTER_KIB:-0}")"
     echo "  disk_delta=$(human_kib "$((DISK_AFTER_KIB - DISK_BEFORE_KIB))")"
   fi
+fi
+
+if [[ "$APPLY" != "1" && "$REPORT_COMPLETE" != "1" ]]; then
+  exit 4
 fi
