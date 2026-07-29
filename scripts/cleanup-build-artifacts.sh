@@ -152,12 +152,6 @@ path_size_kib() {
   "$DU_BIN" -sk "$target_path" 2>/dev/null | awk '{print $1}'
 }
 
-path_size_kib_or_zero() {
-  local size_kib
-  size_kib="$(path_size_kib "$1" || true)"
-  printf '%s\n' "${size_kib:-0}"
-}
-
 path_identity() {
   local target_path="$1"
   local identity=""
@@ -816,6 +810,9 @@ scan_build_cache_standard_bucket() {
   [[ -d "$BUILD_ARTIFACT_ROOT/$bucket" ]] || return 0
   while IFS= read -r -d '' artifact_dir; do
     consider_generated_path "build-cache-$bucket" "build-cache" "$artifact_dir" "$min_age_days"
+    if [[ "$STOP_SCAN" == "1" ]]; then
+      break
+    fi
   done < <(find "$BUILD_ARTIFACT_ROOT/$bucket" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
 }
 
@@ -823,7 +820,6 @@ scan_build_cache_runs() {
   local run_dir
   local age_hours
   local age_days
-  local size_kib
   local kind
   local newest_release_run=""
   local newest_release_mtime=0
@@ -859,39 +855,36 @@ scan_build_cache_runs() {
         ;;
     esac
 
-    # du returning no trustworthy size is a protection signal, not 0K. This is
-    # the root-owned mode-700 failure that previously made dry-runs misleading.
-    if ! size_kib="$(path_size_kib "$run_dir")"; then
-      print_record "skip" "$kind" "unknown" "$age_days" "build-cache" "$run_dir" "size-unreadable; $(openclaw_build_path_metadata "$run_dir"); operator action: ask the owner to inspect this exact stale cache path" "operator-remediation-required"
-      continue
-    fi
     if path_has_retention_marker "$run_dir"; then
-      print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "protected-marker" "explicit-retention"
+      print_record "skip" "$kind" "unknown" "$age_days" "build-cache" "$run_dir" "protected-marker" "explicit-retention"
       continue
     fi
     if [[ "$kind" == "release-staging" ]]; then
       if ((age_days < RELEASE_STAGING_OLDER_THAN_DAYS)); then
-        print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "too-new" "resumable-release-staging"
+        print_record "skip" "$kind" "unknown" "$age_days" "build-cache" "$run_dir" "too-new" "resumable-release-staging"
         continue
       fi
       if [[ "$run_dir" == "$newest_release_run" ]]; then
-        print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "protected" "newest-release-staging"
+        print_record "skip" "$kind" "unknown" "$age_days" "build-cache" "$run_dir" "protected" "newest-release-staging"
         continue
       fi
     elif ((age_hours < BUILD_RUNS_OLDER_THAN_HOURS)); then
-      print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "too-new" "rebuildable-generated"
+      print_record "skip" "$kind" "unknown" "$age_days" "build-cache" "$run_dir" "too-new" "rebuildable-generated"
       continue
     fi
     if path_has_process_ref "$run_dir"; then
-      print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "active-process" "rebuildable-generated"
+      print_record "skip" "$kind" "unknown" "$age_days" "build-cache" "$run_dir" "active-process" "rebuildable-generated"
       continue
     fi
     if path_has_open_files "$run_dir"; then
-      print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "open-files" "rebuildable-generated"
+      print_record "skip" "$kind" "unknown" "$age_days" "build-cache" "$run_dir" "open-files" "rebuildable-generated"
       continue
     fi
-    delete_or_report_candidate "$kind" "build-cache" "$run_dir" "$age_days" "$size_kib" \
+    delete_or_report_candidate "$kind" "build-cache" "$run_dir" "$age_days" "unknown" \
       build_run_policy_block_reason "$kind"
+    if [[ "$STOP_SCAN" == "1" ]]; then
+      break
+    fi
   done < <(find "$BUILD_ARTIFACT_ROOT/runs" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
 }
 
@@ -937,43 +930,43 @@ scan_runtime_cache() {
   local runtime_cache_root="$BUILD_ARTIFACT_ROOT/runtime-cache"
   local cache_dir
   local age_days
-  local size_kib
 
   [[ -d "$runtime_cache_root" ]] || return 0
-  size_kib="$(path_size_kib_or_zero "$runtime_cache_root")"
-  print_record "report" "runtime-cache" "$size_kib" "$(path_age_days "$runtime_cache_root")" "build-cache" "$runtime_cache_root" "protected" "kept-by-default"
+  print_record "report" "runtime-cache" "unknown" "$(path_age_days "$runtime_cache_root")" "build-cache" "$runtime_cache_root" "protected" "kept-by-default"
 
   [[ "$INCLUDE_RUNTIME_CACHE" == "1" ]] || return 0
   while IFS= read -r -d '' cache_dir; do
     age_days="$(path_age_days "$cache_dir")"
-    size_kib="$(path_size_kib_or_zero "$cache_dir")"
     if (( age_days < RUNTIME_CACHE_OLDER_THAN_DAYS )); then
-      print_record "skip" "runtime-cache-entry" "$size_kib" "$age_days" "build-cache" "$cache_dir" "too-new" "rebuildable-generated"
+      print_record "skip" "runtime-cache-entry" "unknown" "$age_days" "build-cache" "$cache_dir" "too-new" "rebuildable-generated"
       continue
     fi
     if runtime_cache_is_newest_in_group "$cache_dir"; then
-      print_record "skip" "runtime-cache-entry" "$size_kib" "$age_days" "build-cache" "$cache_dir" "protected" "newest-in-group"
+      print_record "skip" "runtime-cache-entry" "unknown" "$age_days" "build-cache" "$cache_dir" "protected" "newest-in-group"
       continue
     fi
     if path_has_process_ref "$cache_dir"; then
-      print_record "skip" "runtime-cache-entry" "$size_kib" "$age_days" "build-cache" "$cache_dir" "active-process" "rebuildable-generated"
+      print_record "skip" "runtime-cache-entry" "unknown" "$age_days" "build-cache" "$cache_dir" "active-process" "rebuildable-generated"
       continue
     fi
     if path_has_open_files "$cache_dir"; then
-      print_record "skip" "runtime-cache-entry" "$size_kib" "$age_days" "build-cache" "$cache_dir" "open-files" "rebuildable-generated"
+      print_record "skip" "runtime-cache-entry" "unknown" "$age_days" "build-cache" "$cache_dir" "open-files" "rebuildable-generated"
       continue
     fi
-    delete_or_report_candidate "runtime-cache-entry" "build-cache" "$cache_dir" "$age_days" "$size_kib" \
+    delete_or_report_candidate "runtime-cache-entry" "build-cache" "$cache_dir" "$age_days" "unknown" \
       runtime_cache_policy_block_reason
+    if [[ "$STOP_SCAN" == "1" ]]; then
+      break
+    fi
   done < <(find "$runtime_cache_root" -mindepth 1 -maxdepth 3 -type d -print0 2>/dev/null)
 }
 
 scan_build_cache() {
   scan_build_cache_runs
-  scan_build_cache_standard_bucket "tmp" "$BUILD_TEMP_OLDER_THAN_DAYS"
-  scan_build_cache_standard_bucket "temp" "$BUILD_TEMP_OLDER_THAN_DAYS"
-  scan_build_cache_standard_bucket "smoke" "$BUILD_TEMP_OLDER_THAN_DAYS"
-  scan_runtime_cache
+  [[ "$STOP_SCAN" == "1" ]] || scan_build_cache_standard_bucket "tmp" "$BUILD_TEMP_OLDER_THAN_DAYS"
+  [[ "$STOP_SCAN" == "1" ]] || scan_build_cache_standard_bucket "temp" "$BUILD_TEMP_OLDER_THAN_DAYS"
+  [[ "$STOP_SCAN" == "1" ]] || scan_build_cache_standard_bucket "smoke" "$BUILD_TEMP_OLDER_THAN_DAYS"
+  [[ "$STOP_SCAN" == "1" ]] || scan_runtime_cache
 }
 
 runtime_instance_is_generated() {
@@ -1033,11 +1026,14 @@ scan_runtime_instance_logs() {
 
   [[ -d "$logs_dir" ]] || return 0
   if path_is_active "$instance_dir"; then
-    print_record "skip" "runtime-logs" "$(path_size_kib_or_zero "$logs_dir")" "$(path_age_days "$logs_dir")" "$instance_name" "$logs_dir" "active-process" "generated-logs"
+    print_record "skip" "runtime-logs" "unknown" "$(path_age_days "$logs_dir")" "$instance_name" "$logs_dir" "active-process" "generated-logs"
     return 0
   fi
   while IFS= read -r -d '' log_entry; do
     consider_generated_path "runtime-logs" "$instance_name" "$log_entry" "$RUNTIME_LOGS_OLDER_THAN_DAYS"
+    if [[ "$STOP_SCAN" == "1" ]]; then
+      break
+    fi
   done < <(find "$logs_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 }
 
@@ -1045,16 +1041,14 @@ scan_runtime_instance() {
   local instance_dir="$1"
   local instance_name
   local age_days
-  local size_kib
   local generated=0
   local risk="manual-review"
 
   instance_name="$(basename "$instance_dir")"
   age_days="$(path_age_days "$instance_dir")"
-  size_kib="$(path_size_kib_or_zero "$instance_dir")"
 
   if runtime_instance_is_protected_name "$instance_name" || runtime_instance_has_protected_state "$instance_dir"; then
-    print_record "skip" "runtime-instance" "$size_kib" "$age_days" "$instance_name" "$instance_dir" "protected" "stateful-or-default"
+    print_record "skip" "runtime-instance" "unknown" "$age_days" "$instance_name" "$instance_dir" "protected" "stateful-or-default"
     return 0
   fi
 
@@ -1064,28 +1058,28 @@ scan_runtime_instance() {
   fi
 
   if (( generated == 0 )); then
-    print_record "report" "runtime-instance" "$size_kib" "$age_days" "$instance_name" "$instance_dir" "protected" "$risk"
+    print_record "report" "runtime-instance" "unknown" "$age_days" "$instance_name" "$instance_dir" "protected" "$risk"
     scan_runtime_instance_logs "$instance_dir" "$instance_name"
     return 0
   fi
 
   if (( age_days < RUNTIME_INSTANCE_OLDER_THAN_DAYS )); then
-    print_record "skip" "runtime-instance" "$size_kib" "$age_days" "$instance_name" "$instance_dir" "too-new" "$risk"
+    print_record "skip" "runtime-instance" "unknown" "$age_days" "$instance_name" "$instance_dir" "too-new" "$risk"
     scan_runtime_instance_logs "$instance_dir" "$instance_name"
     return 0
   fi
   if path_has_process_ref "$instance_dir"; then
-    print_record "skip" "runtime-instance" "$size_kib" "$age_days" "$instance_name" "$instance_dir" "active-process" "$risk"
+    print_record "skip" "runtime-instance" "unknown" "$age_days" "$instance_name" "$instance_dir" "active-process" "$risk"
     scan_runtime_instance_logs "$instance_dir" "$instance_name"
     return 0
   fi
   if path_has_open_files "$instance_dir"; then
-    print_record "skip" "runtime-instance" "$size_kib" "$age_days" "$instance_name" "$instance_dir" "open-files" "$risk"
+    print_record "skip" "runtime-instance" "unknown" "$age_days" "$instance_name" "$instance_dir" "open-files" "$risk"
     scan_runtime_instance_logs "$instance_dir" "$instance_name"
     return 0
   fi
 
-  delete_or_report_candidate "runtime-instance" "$instance_name" "$instance_dir" "$age_days" "$size_kib" \
+  delete_or_report_candidate "runtime-instance" "$instance_name" "$instance_dir" "$age_days" "unknown" \
     runtime_instance_policy_block_reason "$instance_name"
 }
 
@@ -1095,6 +1089,9 @@ scan_runtime_instances() {
   [[ -d "$RUNTIME_INSTANCES_ROOT" ]] || return 0
   while IFS= read -r -d '' instance_dir; do
     scan_runtime_instance "$instance_dir"
+    if [[ "$STOP_SCAN" == "1" ]]; then
+      break
+    fi
   done < <(find "$RUNTIME_INSTANCES_ROOT" -mindepth 1 -maxdepth 1 -type d -print0)
 }
 

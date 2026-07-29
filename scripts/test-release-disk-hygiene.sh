@@ -254,6 +254,49 @@ export OPENCLAW_CLEANUP_PS_BIN="$INSPECTION_BIN_DIR/ps"
 export OPENCLAW_CLEANUP_LSOF_BIN="$INSPECTION_BIN_DIR/lsof"
 export OPENCLAW_CLEANUP_DU_BIN="$INSPECTION_BIN_DIR/du"
 
+# A zero report budget must stop before the first recursive size traversal,
+# regardless of which cleanup surface provides the first eligible candidate.
+# These fixtures use isolated temp roots and never exercise apply mode.
+BUDGET_INSPECTION_LOG="$TMP_DIR/report-budget-inspection.log"
+BUDGET_BUILD_ROOT="$TMP_DIR/report-budget-build-artifacts"
+BUDGET_BUILD_CANDIDATE="$BUDGET_BUILD_ROOT/tmp/old-candidate"
+mkdir -p "$BUDGET_BUILD_CANDIDATE"
+printf 'old build payload\n' >"$BUDGET_BUILD_CANDIDATE/payload.txt"
+touch -t 202001010000 "$BUDGET_BUILD_CANDIDATE"
+set +e
+OPENCLAW_TEST_INSPECTION_LOG="$BUDGET_INSPECTION_LOG" \
+OPENCLAW_BUILD_ARTIFACT_ROOT="$BUDGET_BUILD_ROOT" \
+OPENCLAW_CLEANUP_BUILD_TEMP_OLDER_THAN_DAYS=0 \
+  /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
+    --build-cache --json --report-max-tree-validations 0 >"$OUT" 2>&1
+BUDGET_BUILD_STATUS=$?
+set -e
+[[ "$BUDGET_BUILD_STATUS" -eq 4 ]] || fail "zero-budget build-cache report expected status 4, got $BUDGET_BUILD_STATUS"
+if grep -q '^du ' "$BUDGET_INSPECTION_LOG"; then
+  fail "zero-budget build-cache report must stop before recursive size traversal"
+fi
+pass "build-cache report budget is reserved before recursive size traversal"
+
+: >"$BUDGET_INSPECTION_LOG"
+BUDGET_RUNTIME_ROOT="$TMP_DIR/report-budget-runtime-instances"
+BUDGET_RUNTIME_CANDIDATE="$BUDGET_RUNTIME_ROOT/test-budget-instance"
+mkdir -p "$BUDGET_RUNTIME_CANDIDATE"
+printf 'old runtime payload\n' >"$BUDGET_RUNTIME_CANDIDATE/payload.txt"
+touch -t 202001010000 "$BUDGET_RUNTIME_CANDIDATE"
+set +e
+OPENCLAW_TEST_INSPECTION_LOG="$BUDGET_INSPECTION_LOG" \
+OPENCLAW_RUNTIME_INSTANCES_ROOT="$BUDGET_RUNTIME_ROOT" \
+OPENCLAW_CLEANUP_RUNTIME_INSTANCE_OLDER_THAN_DAYS=0 \
+  /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
+    --runtime-instances --json --report-max-tree-validations 0 >"$OUT" 2>&1
+BUDGET_RUNTIME_STATUS=$?
+set -e
+[[ "$BUDGET_RUNTIME_STATUS" -eq 4 ]] || fail "zero-budget runtime report expected status 4, got $BUDGET_RUNTIME_STATUS"
+if grep -q '^du ' "$BUDGET_INSPECTION_LOG"; then
+  fail "zero-budget runtime report must stop before recursive size traversal"
+fi
+pass "runtime report budget is reserved before recursive size traversal"
+
 OPENCLAW_BUILD_ARTIFACT_ROOT="$BUILD_ROOT" \
 OPENCLAW_CLEANUP_BUILD_RUNS_OLDER_THAN_HOURS=0 \
 OPENCLAW_CLEANUP_RELEASE_STAGING_OLDER_THAN_DAYS=0 \
