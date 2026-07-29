@@ -107,6 +107,19 @@ released when the command exits. Exit code `75` means "temporarily unavailable"
 or "stopped to protect host health"; wait for recovery instead of bypassing the
 guard.
 
+For a temporary availability wait, retain the exact source/checkpoint state and
+poll infrequently. Prefer a product-native monitor or scheduled wake at a
+five-to-ten-minute cadence when one is available. If the active environment has
+no reliable wake mechanism, do not start a tight sleep loop or hammer the
+guard; report the queued checkpoint once and resume when the coordinator or
+user wakes the lane. Never use polling for an authorization rejection:
+authorization requires explicit approval and cannot become valid with time.
+If one fresh retry after verified host recovery fails at the same stage for the
+same health reason, stop treating it as a queue wait. Preserve the artifact,
+release the lane, and diagnose the command's own resource behavior. Repeatedly
+restarting a deterministic offender is not autonomous completion; it is just a
+slower denial of service.
+
 The 25% memory threshold, 35% admission CPU-idle threshold, 20% runtime
 CPU-idle threshold, 15-second interval, two-strike stop rule, and three-second
 health timeout are fixed product policy. Environment variables cannot lower,
