@@ -90,7 +90,7 @@ final class MacNodeModeCoordinator {
                             guard let self else { return }
                             await self.session.sendEvent(event: event, payloadJSON: payload)
                         }
-                        AppUpdateControllerRegistry.shared.setEventSink { [weak self] event, payload in
+                        await AppUpdateControllerRegistry.shared.setEventSink { [weak self] event, payload in
                             guard let self else { return }
                             await self.session.sendEvent(event: event, payloadJSON: payload)
                         }
@@ -98,7 +98,7 @@ final class MacNodeModeCoordinator {
                     onDisconnected: { [weak self] reason in
                         guard let self else { return }
                         await self.runtime.setEventSender(nil)
-                        AppUpdateControllerRegistry.shared.setEventSink(nil)
+                        await AppUpdateControllerRegistry.shared.setEventSink(nil)
                         self.logger.error("mac node disconnected: \(reason, privacy: .public)")
                     },
                     onInvoke: { [weak self] req in
