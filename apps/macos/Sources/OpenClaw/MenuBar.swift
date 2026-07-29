@@ -283,7 +283,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         self.installVisibleSurfaceObserverIfNeeded()
         if let state {
-            Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
+            Task {
+                await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused)
+                await self.restartGatewayAfterAppUpdateIfNeeded(state: state)
+            }
         }
         TerminationSignalWatcher.shared.start()
         NodePairingApprovalPrompter.shared.start()
@@ -309,6 +312,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
+    }
+
+    private func restartGatewayAfterAppUpdateIfNeeded(state: AppState) async {
+        guard PendingAppUpdateRestart.consumeIfCurrentBuild() else { return }
+        // Remote and paused installations have no active local gateway to
+        // replace. Consuming the one-shot marker is still correct because the
+        // app itself has already reached the approved build.
+        guard state.connectionMode == .local, !state.isPaused else { return }
+        await GatewayProcessManager.shared.restartManagedGateway()
     }
 
     @MainActor
@@ -636,6 +648,32 @@ final class AppUpdateControllerRegistry {
     }
 }
 
+/// Carries app-update intent across Sparkle's process replacement.
+///
+/// The marker is build-pinned and one-shot. An old app relaunched after a
+/// failed installation cannot restart the gateway or claim the update worked.
+enum PendingAppUpdateRestart {
+    private static let expectedBuildKey = "pendingSparkleAppUpdateBuild"
+
+    static func record(expectedBuild: String, defaults: UserDefaults = .standard) {
+        defaults.set(expectedBuild, forKey: self.expectedBuildKey)
+    }
+
+    static func consumeIfCurrentBuild(
+        defaults: UserDefaults = .standard,
+        currentBuild: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) -> Bool
+    {
+        guard let expectedBuild = defaults.string(forKey: self.expectedBuildKey),
+              let currentBuild,
+              expectedBuild == currentBuild
+        else {
+            return false
+        }
+        defaults.removeObject(forKey: self.expectedBuildKey)
+        return true
+    }
+}
+
 #if canImport(Sparkle)
 import Sparkle
 
@@ -712,6 +750,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         // Let the node invocation response reach the gateway before Sparkle
         // terminates this process. This makes the restart sentinel and the
         // user's chat receipt deterministic instead of racing app shutdown.
+        PendingAppUpdateRestart.record(expectedBuild: expectedBuild)
         Task { @MainActor in
             await Task.yield()
             immediateInstallHandler()
