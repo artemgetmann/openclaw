@@ -53,6 +53,17 @@ type ResolvedAssistantErrorState = {
   normalizedErrorText: string | null;
 };
 
+function isTerminalSilentAssistantReply(lastAssistant: AssistantMessage | undefined): boolean {
+  if (!lastAssistant || lastAssistant.stopReason !== "stop") {
+    return false;
+  }
+  // A terminal NO_REPLY is authoritative for the whole turn. Models can emit
+  // tool-adjacent commentary before the final silent token; retaining that
+  // earlier text would turn an intentionally quiet monitor wake into a user
+  // notification.
+  return isSilentReplyText(extractAssistantText(lastAssistant), SILENT_REPLY_TOKEN);
+}
+
 function resolveRawAnswerTexts(params: {
   assistantTexts: string[];
   lastAssistant: AssistantMessage | undefined;
@@ -162,7 +173,9 @@ export function buildEmbeddedRunPayloads(params: {
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
-  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
+  const suppressAssistantArtifacts =
+    params.didSendDeterministicApprovalPrompt === true ||
+    isTerminalSilentAssistantReply(params.lastAssistant);
   const rawAnswerTexts = resolveRawAnswerTexts({
     assistantTexts: params.assistantTexts,
     lastAssistant: params.lastAssistant,
@@ -352,7 +365,9 @@ export function resolveEmbeddedRunPayloadErrorAssistant(params: {
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
 }): AssistantMessage | undefined {
-  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
+  const suppressAssistantArtifacts =
+    params.didSendDeterministicApprovalPrompt === true ||
+    isTerminalSilentAssistantReply(params.lastAssistant);
   if (suppressAssistantArtifacts) {
     return undefined;
   }

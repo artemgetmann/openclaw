@@ -1,4 +1,6 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
@@ -90,5 +92,33 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expect(payloads).toHaveLength(0);
+  });
+
+  it("lets terminal NO_REPLY suppress earlier tool-adjacent commentary", () => {
+    const lastAssistant: AssistantMessage = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+
+    const payloads = buildPayloads({
+      assistantTexts: ["Checking the watched Telegram chat for fresh evidence.", "NO_REPLY"],
+      lastAssistant,
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("does not let an errored NO_REPLY-shaped assistant hide the failure", () => {
+    const lastAssistant: AssistantMessage = makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage: "provider failed",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+
+    const payloads = buildPayloads({ lastAssistant });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
   });
 });
