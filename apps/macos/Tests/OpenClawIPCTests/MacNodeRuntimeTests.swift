@@ -52,6 +52,12 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen record uses injected services`() async throws {
         @MainActor
         final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            func appUpdateStatus() -> OpenClawAppUpdateStatus {
+                OpenClawAppUpdateStatus(available: false, readyToInstall: false)
+            }
+
+            func installAppUpdate(expectedVersion _: String, expectedBuild _: String) throws {}
+
             func recordScreen(
                 screenIndex: Int?,
                 appName: String?,
@@ -109,6 +115,88 @@ struct MacNodeRuntimeTests {
         let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
         #expect(payload.format == "mp4")
         #expect(!payload.base64.isEmpty)
+    }
+
+    @Test func `app update commands pin installation to the approved release`() async throws {
+        @MainActor
+        final class FakeUpdateServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            var installedVersion: String?
+            var installedBuild: String?
+
+            func appUpdateStatus() -> OpenClawAppUpdateStatus {
+                OpenClawAppUpdateStatus(
+                    available: true,
+                    readyToInstall: true,
+                    gatewayRestartRequired: true,
+                    version: "2026.7.29",
+                    build: "2026072901")
+            }
+
+            func installAppUpdate(expectedVersion: String, expectedBuild: String) throws {
+                self.installedVersion = expectedVersion
+                self.installedBuild = expectedBuild
+            }
+
+            func recordScreen(
+                screenIndex _: Int?,
+                appName _: String?,
+                bundleId _: String?,
+                windowId _: UInt32?,
+                durationMs _: Int?,
+                fps _: Double?,
+                includeAudio _: Bool?,
+                outPath _: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                throw CocoaError(.featureUnsupported)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus {
+                .denied
+            }
+
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
+                .reducedAccuracy
+            }
+
+            func currentLocation(
+                desiredAccuracy _: OpenClawLocationAccuracy,
+                maxAgeMs _: Int?,
+                timeoutMs _: Int?) async throws -> CLLocation
+            {
+                throw CocoaError(.featureUnsupported)
+            }
+        }
+
+        let services = await MainActor.run { FakeUpdateServices() }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let statusResponse = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "app-update-status",
+                command: OpenClawSystemCommand.appUpdateStatus.rawValue))
+        #expect(statusResponse.ok)
+        let statusJSON = try #require(statusResponse.payloadJSON)
+        let status = try JSONDecoder().decode(
+            OpenClawAppUpdateStatus.self,
+            from: Data(statusJSON.utf8))
+        #expect(status.version == "2026.7.29")
+        #expect(status.build == "2026072901")
+        #expect(status.readyToInstall)
+        #expect(status.gatewayRestartRequired)
+
+        let params = OpenClawAppUpdateInstallParams(
+            expectedVersion: "2026.7.29",
+            expectedBuild: "2026072901")
+        let paramsJSON = try String(decoding: JSONEncoder().encode(params), as: UTF8.self)
+        let installResponse = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "app-update-install",
+                command: OpenClawSystemCommand.appUpdateInstall.rawValue,
+                paramsJSON: paramsJSON))
+        #expect(installResponse.ok)
+        await MainActor.run {
+            #expect(services.installedVersion == "2026.7.29")
+            #expect(services.installedBuild == "2026072901")
+        }
     }
 
     @Test func `handle invoke browser proxy uses injected request`() async {

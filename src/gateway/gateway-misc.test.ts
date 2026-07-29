@@ -351,6 +351,28 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("system.notify")).toBe(true);
   });
 
+  it("allows declared signed-app update RPCs only on macOS by default", () => {
+    const macAllow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "macos",
+        deviceFamily: "Mac",
+      },
+    );
+    const iosAllow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "ios",
+        deviceFamily: "iPhone",
+      },
+    );
+
+    expect(macAllow.has("system.appUpdate.status")).toBe(true);
+    expect(macAllow.has("system.appUpdate.install")).toBe(true);
+    expect(iosAllow.has("system.appUpdate.status")).toBe(false);
+    expect(iosAllow.has("system.appUpdate.install")).toBe(false);
+  });
+
   it("can explicitly allow dangerous commands via allowCommands", () => {
     const allow = resolveNodeCommandAllowlist(
       {

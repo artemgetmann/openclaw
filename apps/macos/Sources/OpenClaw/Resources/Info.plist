@@ -39,6 +39,10 @@
     <string>15.0</string>
     <key>LSUIElement</key>
     <true/>
+    <!-- Sparkle remains the source of truth. A four-hour cadence makes stale
+         installs visible to Jarvis without creating a separate watchdog. -->
+    <key>SUScheduledCheckInterval</key>
+    <integer>14400</integer>
 
     <key>OpenClawBuildTimestamp</key>
     <string></string>

@@ -90,10 +90,15 @@ final class MacNodeModeCoordinator {
                             guard let self else { return }
                             await self.session.sendEvent(event: event, payloadJSON: payload)
                         }
+                        await AppUpdateControllerRegistry.shared.setEventSink { [weak self] event, payload in
+                            guard let self else { return }
+                            await self.session.sendEvent(event: event, payloadJSON: payload)
+                        }
                     },
                     onDisconnected: { [weak self] reason in
                         guard let self else { return }
                         await self.runtime.setEventSender(nil)
+                        await AppUpdateControllerRegistry.shared.setEventSink(nil)
                         self.logger.error("mac node disconnected: \(reason, privacy: .public)")
                     },
                     onInvoke: { [weak self] req in
@@ -150,6 +155,8 @@ final class MacNodeModeCoordinator {
             OpenClawSystemCommand.notify.rawValue,
             OpenClawSystemCommand.which.rawValue,
             OpenClawSystemCommand.run.rawValue,
+            OpenClawSystemCommand.appUpdateStatus.rawValue,
+            OpenClawSystemCommand.appUpdateInstall.rawValue,
             OpenClawSystemCommand.execApprovalsGet.rawValue,
             OpenClawSystemCommand.execApprovalsSet.rawValue,
         ]

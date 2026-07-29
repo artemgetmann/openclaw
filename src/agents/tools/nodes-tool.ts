@@ -797,6 +797,11 @@ export function createNodesTool(options?: {
             const nodeId = await resolveNodeId(gatewayOpts, node);
             const invokeCommand = readStringParam(params, "invokeCommand", { required: true });
             const invokeCommandNormalized = invokeCommand.trim().toLowerCase();
+            if (invokeCommandNormalized === "system.appupdate.install") {
+              throw new Error(
+                'invokeCommand "system.appUpdate.install" is confirmation-gated; use the gateway tool action="app.update.install"',
+              );
+            }
             const dedicatedAction =
               MEDIA_INVOKE_ACTIONS[invokeCommandNormalized as keyof typeof MEDIA_INVOKE_ACTIONS];
             if (dedicatedAction && !options?.allowMediaInvokeCommands) {

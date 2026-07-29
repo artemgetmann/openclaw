@@ -4,8 +4,54 @@ public enum OpenClawSystemCommand: String, Codable, Sendable {
     case run = "system.run"
     case which = "system.which"
     case notify = "system.notify"
+    case appUpdateStatus = "system.appUpdate.status"
+    case appUpdateInstall = "system.appUpdate.install"
     case execApprovalsGet = "system.execApprovals.get"
     case execApprovalsSet = "system.execApprovals.set"
+}
+
+/// The signed app's view of a Sparkle update.
+///
+/// Keeping this response typed prevents the agent from treating an arbitrary
+/// backend URL as an update. Sparkle's configured feed and signature checks
+/// remain the only source of executable update bytes.
+public struct OpenClawAppUpdateStatus: Codable, Sendable, Equatable {
+    public var available: Bool
+    public var readyToInstall: Bool
+    public var gatewayRestartRequired: Bool
+    public var version: String?
+    public var build: String?
+    public var error: String?
+
+    public init(
+        available: Bool,
+        readyToInstall: Bool,
+        gatewayRestartRequired: Bool = false,
+        version: String? = nil,
+        build: String? = nil,
+        error: String? = nil)
+    {
+        self.available = available
+        self.readyToInstall = readyToInstall
+        self.gatewayRestartRequired = gatewayRestartRequired
+        self.version = version
+        self.build = build
+        self.error = error
+    }
+}
+
+/// Pins an install request to the exact update the user approved.
+///
+/// Sparkle may refresh its feed between the prompt and the user's reply. The
+/// app rejects that race instead of silently installing a different release.
+public struct OpenClawAppUpdateInstallParams: Codable, Sendable, Equatable {
+    public var expectedVersion: String
+    public var expectedBuild: String
+
+    public init(expectedVersion: String, expectedBuild: String) {
+        self.expectedVersion = expectedVersion
+        self.expectedBuild = expectedBuild
+    }
 }
 
 public enum OpenClawNotificationPriority: String, Codable, Sendable {

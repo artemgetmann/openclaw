@@ -344,6 +344,49 @@ describe("node exec events", () => {
   });
 });
 
+describe("signed app update events", () => {
+  beforeEach(() => {
+    enqueueSystemEventMock.mockReset();
+    enqueueSystemEventMock.mockReturnValue(true);
+    requestHeartbeatNowMock.mockReset();
+  });
+
+  it("wakes the main Jarvis session with the exact version and consent instructions", async () => {
+    await handleNodeEvent(buildCtx(), "mac-test", {
+      event: "app.update.available",
+      payloadJSON: JSON.stringify({
+        version: "2026.7.29",
+        build: "2026072901",
+        readyToInstall: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "A signed Jarvis app update is available: version 2026.7.29 (build 2026072901).",
+      ),
+      {
+        sessionKey: "agent:main:main",
+        contextKey: "app-update:2026.7.29:2026072901",
+      },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "app-update-available",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("ignores malformed update events", async () => {
+    await handleNodeEvent(buildCtx(), "mac-test", {
+      event: "app.update.available",
+      payloadJSON: JSON.stringify({ version: "2026.7.29" }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("voice transcript events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
