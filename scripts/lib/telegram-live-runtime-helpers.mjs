@@ -1944,6 +1944,8 @@ export function buildTelegramLiveRuntimeConfig(params) {
   const assignedToken = String(params?.assignedToken ?? "").trim();
   const runtimePort = Number.parseInt(String(params?.runtimePort ?? ""), 10);
   const gatewayAuthToken = String(params?.gatewayAuthToken ?? "").trim();
+  const enableHooks = isTruthyEnvFlag(params?.enableHooks);
+  const hooksToken = String(params?.hooksToken ?? "").trim();
   const acpValidation = isTelegramLiveAcpValidationEnabled(params);
   const fallbackWorkspaceDir =
     acpValidation &&
@@ -2005,6 +2007,27 @@ export function buildTelegramLiveRuntimeConfig(params) {
       allowedOrigins: [`http://localhost:${runtimePort}`, `http://127.0.0.1:${runtimePort}`],
     },
   };
+
+  if (enableHooks) {
+    if (!hooksToken) {
+      throw new Error("Telegram live hook enablement requires a dedicated hooks token.");
+    }
+    if (effectiveGatewayAuthToken && hooksToken === effectiveGatewayAuthToken) {
+      throw new Error("Telegram live hooks token must be distinct from gateway auth.");
+    }
+    const hooks = config.hooks && typeof config.hooks === "object" ? config.hooks : {};
+    // This is deliberately opt-in. A normal tester lane must preserve inherited
+    // hook behavior, while a monitor-listener lane needs one isolated endpoint
+    // whose bearer secret cannot authenticate gateway RPC or another runtime.
+    config.hooks = {
+      ...hooks,
+      enabled: true,
+      // Fix the isolated child to one known loopback route. Inherited custom
+      // paths belong to another runtime and must not redirect this listener.
+      path: "/hooks",
+      token: hooksToken,
+    };
+  }
 
   const baseChannels =
     config.channels && typeof config.channels === "object" ? config.channels : {};

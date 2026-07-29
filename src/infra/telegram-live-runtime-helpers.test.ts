@@ -575,6 +575,71 @@ describe("telegram live runtime helpers", () => {
     });
   });
 
+  it("enables one isolated hook route only with a dedicated listener token", () => {
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig: {
+        hooks: {
+          enabled: false,
+          path: "/inherited",
+          token: "base-hook-token",
+        },
+      },
+      assignedToken: "tester-token",
+      enableHooks: true,
+      gatewayAuthToken: "isolated-gateway-token",
+      hooksToken: "isolated-hooks-token",
+      runtimePort: 24567,
+    });
+
+    expect(config.hooks).toEqual({
+      enabled: true,
+      path: "/hooks",
+      token: "isolated-hooks-token",
+    });
+  });
+
+  it("does not alter inherited hook behavior without listener opt-in", () => {
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig: {
+        hooks: {
+          enabled: false,
+          token: "base-hook-token",
+        },
+      },
+      assignedToken: "tester-token",
+      hooksToken: "ignored-isolated-hooks-token",
+      runtimePort: 24567,
+    });
+
+    expect(config.hooks).toEqual({
+      enabled: false,
+      token: "base-hook-token",
+    });
+  });
+
+  it("rejects listener hook enablement without auth distinct from gateway RPC", () => {
+    expect(() =>
+      buildTelegramLiveRuntimeConfig({
+        baseConfig: {},
+        assignedToken: "tester-token",
+        enableHooks: true,
+        gatewayAuthToken: "shared-token",
+        hooksToken: "",
+        runtimePort: 24567,
+      }),
+    ).toThrow(/dedicated hooks token/);
+    expect(() =>
+      buildTelegramLiveRuntimeConfig({
+        baseConfig: {},
+        assignedToken: "tester-token",
+        enableHooks: true,
+        gatewayAuthToken: "shared-token",
+        hooksToken: "shared-token",
+        runtimePort: 24567,
+      }),
+    ).toThrow(/distinct from gateway auth/);
+  });
+
   it("derives default tester state under app-owned Application Support, not legacy ~/.openclaw", () => {
     const home = makeTempDir();
     const previousHome = process.env.HOME;

@@ -17,6 +17,7 @@ export type ListenerHealthState = "healthy" | "degraded" | "stale" | "unknown";
 export type ListenerHealthTransition = "degraded" | "recovered" | null;
 
 export type ListenerHealthOwner = {
+  instanceId?: string;
   pid?: number;
   profile?: string;
   startedAtMs?: number;
@@ -82,6 +83,9 @@ export function resolveListenerHealthStorePath(
 
 function sanitizeOwner(owner: ListenerHealthOwner): ListenerHealthOwner {
   return {
+    ...(owner.instanceId && /^[a-f0-9]{48}$/u.test(owner.instanceId)
+      ? { instanceId: owner.instanceId }
+      : {}),
     ...(Number.isSafeInteger(owner.pid) && (owner.pid ?? 0) > 0 ? { pid: owner.pid } : {}),
     ...(owner.profile?.trim() ? { profile: owner.profile.trim().slice(0, 128) } : {}),
     ...(Number.isFinite(owner.startedAtMs) && (owner.startedAtMs ?? 0) >= 0

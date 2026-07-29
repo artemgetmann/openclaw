@@ -74,6 +74,7 @@ const {
 describe("telegram-user commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE;
   });
 
   it("forwards exact button selectors and renders bounded JSON", async () => {
@@ -1189,6 +1190,8 @@ describe("telegram-user commands", () => {
   });
 
   it("runs monitor-poll watch mode repeatedly until max-runs", async () => {
+    const instanceId = "c".repeat(48);
+    process.env.OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE = instanceId;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
     const monitorStore = path.join(root, "monitors.json");
     await fs.writeFile(monitorStore, JSON.stringify({ version: 1, monitors: [] }), "utf-8");
@@ -1215,6 +1218,7 @@ describe("telegram-user commands", () => {
     expect(listenerHealthMocks.updateListenerHealth).toHaveBeenLastCalledWith(
       expect.objectContaining({
         check: "success",
+        owner: expect.objectContaining({ instanceId }),
         routedEvent: false,
         service: "telegram-user",
       }),
@@ -1444,7 +1448,20 @@ describe("telegram-user commands", () => {
     expect(fetchUrl).toBe("http://127.0.0.1:18789/hooks/telegram-user-monitor-event");
   });
 
-  it("uses OPENCLAW_GATEWAY_TOKEN for monitor-poll hook auth when --hook-token is omitted", async () => {
+  it.each([
+    {
+      expectedToken: "dedicated-hooks-token",
+      gatewayToken: "legacy-gateway-token",
+      hooksToken: "dedicated-hooks-token",
+      source: "OPENCLAW_HOOKS_TOKEN before the gateway compatibility fallback",
+    },
+    {
+      expectedToken: "legacy-gateway-token",
+      gatewayToken: "legacy-gateway-token",
+      hooksToken: "",
+      source: "OPENCLAW_GATEWAY_TOKEN as a compatibility fallback",
+    },
+  ])("uses $source for monitor-poll hook auth without exposing it", async (tokenCase) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
     const monitorStore = path.join(root, "monitors.json");
     await fs.writeFile(
@@ -1518,7 +1535,8 @@ describe("telegram-user commands", () => {
         },
       ),
     );
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-hook-token");
+    vi.stubEnv("OPENCLAW_HOOKS_TOKEN", tokenCase.hooksToken);
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", tokenCase.gatewayToken);
 
     let headers: unknown;
     try {
@@ -1537,8 +1555,15 @@ describe("telegram-user commands", () => {
     }
 
     expect(headers).toMatchObject({
-      Authorization: "Bearer env-hook-token",
+      Authorization: `Bearer ${tokenCase.expectedToken}`,
     });
+    expect(
+      JSON.stringify([
+        ...vi.mocked(runtime.log).mock.calls,
+        ...vi.mocked(runtime.error).mock.calls,
+        ...vi.mocked(runtime.exit).mock.calls,
+      ]),
+    ).not.toContain(tokenCase.expectedToken);
   });
 
   it("waits until a reply matches by DM topic id", async () => {

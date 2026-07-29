@@ -18,6 +18,11 @@ declare module "*telegram-live-runtime-helpers.mjs" {
         allowedOrigins: string[];
       };
     };
+    hooks?: {
+      enabled?: boolean;
+      token?: string;
+      [key: string]: unknown;
+    };
     channels: {
       telegram: {
         allowFrom?: string[];

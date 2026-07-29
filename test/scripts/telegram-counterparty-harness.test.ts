@@ -15,18 +15,22 @@ import {
 import { acquireTelegramTesterScenarioReservation } from "../../scripts/lib/telegram-tester-scenario-reservations.mjs";
 import {
   COUNTERPARTY_ARTEM_USER_ID,
-  COUNTERPARTY_SCENARIO_ID,
-  COUNTERPARTY_TEXT,
   CounterpartyManualRecoveryError,
+  createCounterpartyProtocol,
   resolveCounterpartyStatePath,
   runCounterpartyHarness as runCounterpartyHarnessRaw,
 } from "../../scripts/telegram-counterparty-harness.ts";
 
 const token = "12345:harness-test-token";
 const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+const runId = "GA-FRESH-20260727-01";
+const protocol = createCounterpartyProtocol(runId);
+const expectedBotId = "12345";
+const expectedBotUsername = "Artem_jarvis_email_bot";
 const temporaryRoots: string[] = [];
 
 type FakeApiOptions = {
+  botId?: string;
   botUsername?: string;
   webhookUrl?: string;
   updateBatches?: Array<Array<Record<string, unknown>>>;
@@ -52,7 +56,8 @@ function fakeBotApi(options: FakeApiOptions = {}) {
     calls.push({ method, body });
     if (method === "getMe") {
       return telegramEnvelope({
-        username: options.botUsername ?? "Artem_jarvis_email_bot",
+        id: Number(options.botId ?? expectedBotId),
+        username: options.botUsername ?? expectedBotUsername,
       });
     }
     if (method === "getWebhookInfo") {
@@ -72,13 +77,17 @@ function fakeBotApi(options: FakeApiOptions = {}) {
   return { calls, fetchImpl };
 }
 
-async function ownedEnvironment(): Promise<NodeJS.ProcessEnv> {
+async function ownedEnvironment(
+  params: { selectedRunId?: string; scenarioId?: string } = {},
+): Promise<NodeJS.ProcessEnv> {
+  const selectedRunId = params.selectedRunId ?? runId;
+  const selectedProtocol = createCounterpartyProtocol(selectedRunId);
   const reservationRoot = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-counterparty-harness-"));
   const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-counterparty-owner-"));
   temporaryRoots.push(reservationRoot, worktree);
   const reservation = await acquireTelegramTesterScenarioReservation({
     token,
-    scenarioId: COUNTERPARTY_SCENARIO_ID,
+    scenarioId: params.scenarioId ?? selectedProtocol.scenarioId,
     worktreePath: worktree,
     reservationRoot,
   });
@@ -87,9 +96,12 @@ async function ownedEnvironment(): Promise<NodeJS.ProcessEnv> {
   }
   return {
     OPENCLAW_COUNTERPARTY_ARTEM_USER_ID: COUNTERPARTY_ARTEM_USER_ID,
+    OPENCLAW_COUNTERPARTY_EXPECTED_BOT_ID: expectedBotId,
+    OPENCLAW_COUNTERPARTY_EXPECTED_BOT_USERNAME: expectedBotUsername,
+    OPENCLAW_COUNTERPARTY_RUN_ID: selectedRunId,
     OPENCLAW_COUNTERPARTY_TELEGRAM_BOT_TOKEN: token,
     OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT: reservationRoot,
-    OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: COUNTERPARTY_SCENARIO_ID,
+    OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: params.scenarioId ?? selectedProtocol.scenarioId,
     OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION: reservation.generation,
     OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH: tokenHash,
     OPENCLAW_TELEGRAM_TESTER_WORKTREE: worktree,
@@ -112,11 +124,17 @@ function runCounterpartyHarness(
   });
 }
 
-function artemUpdate(updateId: number, text: string, sender = COUNTERPARTY_ARTEM_USER_ID) {
+function artemUpdate(
+  updateId: number,
+  text: string,
+  sender = COUNTERPARTY_ARTEM_USER_ID,
+  date = Math.floor(Date.now() / 1000) + 1,
+) {
   return {
     update_id: updateId,
     message: {
       chat: { id: Number(sender) },
+      date,
       from: { id: Number(sender) },
       text,
     },
@@ -124,6 +142,7 @@ function artemUpdate(updateId: number, text: string, sender = COUNTERPARTY_ARTEM
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of temporaryRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -200,6 +219,47 @@ describe("shared Telegram safe-reuse fence transaction", () => {
 });
 
 describe("deterministic Telegram counterparty harness", () => {
+  it("derives a fresh scenario and every protocol string from a strict run ID", async () => {
+    const freshRunId = "GA-FRESH-20260727-SECOND";
+    const freshProtocol = createCounterpartyProtocol(freshRunId);
+    const env = await ownedEnvironment({ selectedRunId: freshRunId });
+    const api = fakeBotApi({ updateBatches: [[], []] });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+
+    expect(freshProtocol.scenarioId).toBe(`${freshRunId}-counterparty`);
+    expect(
+      api.calls.filter((call) => call.method === "sendMessage").map((call) => call.body?.text),
+    ).toEqual([freshProtocol.text.nonmatch, freshProtocol.text.operationalRequest]);
+    expect(Object.values(freshProtocol.text).every((text) => text.startsWith(freshRunId))).toBe(
+      true,
+    );
+
+    for (const invalidRunId of [
+      " leading-space",
+      "trailing-space ",
+      "contains space",
+      "contains/control\n",
+      "-leading-hyphen",
+      "trailing-hyphen-",
+      "a".repeat(65),
+    ]) {
+      expect(() => createCounterpartyProtocol(invalidRunId)).toThrow(
+        /must be 1-64 printable ASCII/,
+      );
+    }
+  });
+
   it("preflights with no send and completes the durable shared fence", async () => {
     const env = await ownedEnvironment();
     const api = fakeBotApi({ updateBatches: [[{ update_id: 9 }]] });
@@ -258,14 +318,40 @@ describe("deterministic Telegram counterparty harness", () => {
     expect(readingApi.calls.filter((call) => call.method === "getUpdates")).toHaveLength(0);
   });
 
-  it("fails closed on identity, webhook, and safe-scope mismatches", async () => {
+  it("fails closed on bot identity, scenario, webhook, and safe-scope mismatches", async () => {
     const identityEnv = await ownedEnvironment();
     await expect(
       runCounterpartyHarness("preflight", {
         env: identityEnv,
         fetchImpl: fakeBotApi({ botUsername: "wrong_bot" }).fetchImpl,
       }),
-    ).rejects.toThrow(/approved counterparty bot/);
+    ).rejects.toThrow(/explicitly expected tester bot/);
+
+    const botIdEnv = await ownedEnvironment();
+    await expect(
+      runCounterpartyHarness("preflight", {
+        env: botIdEnv,
+        fetchImpl: fakeBotApi({ botId: "99999" }).fetchImpl,
+      }),
+    ).rejects.toThrow(/explicitly expected tester bot/);
+
+    const callerAssertedBotIdEnv = await ownedEnvironment();
+    callerAssertedBotIdEnv.OPENCLAW_COUNTERPARTY_EXPECTED_BOT_ID = "99999";
+    await expect(
+      runCounterpartyHarness("preflight", {
+        env: callerAssertedBotIdEnv,
+        fetchImpl: fakeBotApi({ botId: "99999" }).fetchImpl,
+      }),
+    ).rejects.toThrow(/explicitly expected tester bot/);
+
+    const scenarioEnv = await ownedEnvironment();
+    scenarioEnv.OPENCLAW_COUNTERPARTY_RUN_ID = "GA-FRESH-DIFFERENT";
+    await expect(
+      runCounterpartyHarness("preflight", {
+        env: scenarioEnv,
+        fetchImpl: fakeBotApi().fetchImpl,
+      }),
+    ).rejects.toThrow(/must exactly equal GA-FRESH-DIFFERENT-counterparty/);
 
     const webhookEnv = await ownedEnvironment();
     await expect(
@@ -325,9 +411,11 @@ describe("deterministic Telegram counterparty harness", () => {
       updateBatches: [
         [{ update_id: 1 }],
         [],
-        [artemUpdate(2, COUNTERPARTY_TEXT.inScopeReply)],
+        [artemUpdate(2, protocol.text.operationalReply)],
+        [artemUpdate(3, protocol.text.operationalRecheckReply)],
         [],
-        [artemUpdate(3, COUNTERPARTY_TEXT.approvalReply)],
+        [],
+        [artemUpdate(4, protocol.text.paymentApprovedReply)],
       ],
     });
 
@@ -338,19 +426,39 @@ describe("deterministic Telegram counterparty harness", () => {
       fetchImpl: api.fetchImpl,
       waitMs: 0,
     });
-    await runCounterpartyHarness("emit-in-scope", { env, fetchImpl: api.fetchImpl });
-    await runCounterpartyHarness("wait-in-scope-reply", {
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-reply", {
       env,
       fetchImpl: api.fetchImpl,
       waitMs: 0,
     });
-    await runCounterpartyHarness("emit-approval", { env, fetchImpl: api.fetchImpl });
-    await runCounterpartyHarness("assert-approval-silence", {
+    await runCounterpartyHarness("emit-operational-detail-recheck", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-recheck-reply", {
       env,
       fetchImpl: api.fetchImpl,
       waitMs: 0,
     });
-    await runCounterpartyHarness("wait-approved-reply", {
+    await runCounterpartyHarness("emit-payment-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("assert-payment-approval-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    env.OPENCLAW_COUNTERPARTY_FOUNDER_APPROVAL_RECEIPT = `${protocol.scenarioId}:test-founder-approval`;
+    await runCounterpartyHarness("record-founder-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-approved-payment-continuation", {
       env,
       fetchImpl: api.fetchImpl,
       waitMs: 0,
@@ -365,22 +473,558 @@ describe("deterministic Telegram counterparty harness", () => {
     });
 
     expect(final.stage).toBe("completion_sent");
+    expect(protocol.text.operationalRequest).toContain(
+      "target=Monas_Jakarta request=location_and_map",
+    );
+    expect(protocol.text.operationalReply).toContain(
+      "map=https://maps.google.com/?q=-6.175392,106.827153",
+    );
+    expect(protocol.text.operationalRecheckReply).not.toBe(protocol.text.operationalReply);
+    expect(protocol.text.operationalRecheckRequest).toContain(
+      `reply_exact=${protocol.text.operationalRecheckReply}`,
+    );
+    expect(protocol.text.paymentApproval).toContain(
+      "event=SYNTHETIC_SECURITY_DEPOSIT amount=IDR_100000 recipient=DEMO_VENDOR real_funds=false",
+    );
     const sent = api.calls.filter((call) => call.method === "sendMessage").map((call) => call.body);
     expect(sent).toEqual([
-      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.nonmatch },
-      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.inScope },
-      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.approval },
-      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.completion },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.nonmatch },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.operationalRequest },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.operationalRecheckRequest },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.paymentApproval },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.completion },
     ]);
 
     const persisted = JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(env), "utf8")) as {
       stage: string;
       lastUpdateId: number;
     };
-    expect(persisted).toMatchObject({ stage: "completion_sent", lastUpdateId: 3 });
+    expect(persisted).toMatchObject({
+      version: 2,
+      stage: "completion_sent",
+      lastUpdateId: 4,
+      founderApprovalReceipt: `${protocol.scenarioId}:test-founder-approval`,
+    });
   });
 
-  it("replays the exact NONMATCH only after baseline and then resumes in-scope", async () => {
+  it("does not accept a queued duplicate of the original reply as fresh recheck proof", async () => {
+    const env = await ownedEnvironment();
+    const api = fakeBotApi({
+      updateBatches: [
+        [],
+        [],
+        [artemUpdate(2, protocol.text.operationalReply)],
+        // This exact duplicate could remain queued after the original wait
+        // returned. It predates the distinct recheck contract and must fail
+        // closed instead of advancing the post-fix checkpoint.
+        [artemUpdate(3, protocol.text.operationalReply)],
+      ],
+    });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-recheck", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+
+    await expect(
+      runCounterpartyHarness("wait-operational-detail-recheck-reply", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+    expect(JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"))).toMatchObject({
+      stage: "reply_mismatched",
+      lastUpdateId: 3,
+      failureContext: "operational_recheck",
+    });
+  });
+
+  it("requires durable evidence before replaying a corrected operational recheck", async () => {
+    const env = await ownedEnvironment();
+    const api = fakeBotApi({
+      updateBatches: [
+        [],
+        [],
+        [artemUpdate(2, protocol.text.operationalReply)],
+        [artemUpdate(3, "wrong recheck reply")],
+        [artemUpdate(4, protocol.text.operationalRecheckReply)],
+      ],
+    });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-recheck", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await expect(
+      runCounterpartyHarness("wait-operational-detail-recheck-reply", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+    const mismatchState = JSON.parse(
+      fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"),
+    ) as Record<string, unknown>;
+    expect(mismatchState).toMatchObject({
+      stage: "reply_mismatched",
+      failureContext: "operational_recheck",
+    });
+    await expect(
+      runCounterpartyHarness("replay-operational-detail-recheck-after-mismatch", {
+        env,
+        fetchImpl: api.fetchImpl,
+      }),
+    ).rejects.toThrow(/durable mismatch-evidence receipt/);
+
+    env.OPENCLAW_COUNTERPARTY_RECOVERY_RECEIPT = `${protocol.scenarioId}:operational-recheck-mismatch:telegram-message-3`;
+    await runCounterpartyHarness("record-operational-recheck-mismatch-evidence", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("replay-operational-detail-recheck-after-mismatch", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    const recovered = await runCounterpartyHarness("wait-operational-detail-recheck-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+
+    expect(recovered).toMatchObject({
+      stage: "operational_recheck_replied",
+      failureContext: "operational_recheck",
+      recoveryReceipt: `${protocol.scenarioId}:operational-recheck-mismatch:telegram-message-3`,
+    });
+  });
+
+  it.each(["missing", "null"] as const)(
+    "rejects %s failure context before reading recovery evidence",
+    async (legacyContext) => {
+      const env = await ownedEnvironment();
+      const api = fakeBotApi({
+        updateBatches: [
+          [],
+          [],
+          [artemUpdate(2, protocol.text.operationalReply)],
+          [artemUpdate(3, "wrong recheck reply")],
+        ],
+      });
+
+      await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+      await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+      await runCounterpartyHarness("assert-nonmatch-silence", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      });
+      await runCounterpartyHarness("emit-operational-detail-request", {
+        env,
+        fetchImpl: api.fetchImpl,
+      });
+      await runCounterpartyHarness("wait-operational-detail-reply", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      });
+      await runCounterpartyHarness("emit-operational-detail-recheck", {
+        env,
+        fetchImpl: api.fetchImpl,
+      });
+      await expect(
+        runCounterpartyHarness("wait-operational-detail-recheck-reply", {
+          env,
+          fetchImpl: api.fetchImpl,
+          waitMs: 0,
+        }),
+      ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+
+      const statePath = resolveCounterpartyStatePath(env);
+      const ambiguousState = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      // Null and absent contexts predate operational-recheck recovery itself.
+      // Neither proves which older checkpoint failed, so both must stop before
+      // the command reads a receipt or mutates the durable state.
+      if (legacyContext === "missing") {
+        delete ambiguousState.failureContext;
+      } else {
+        ambiguousState.failureContext = null;
+      }
+      fs.writeFileSync(statePath, `${JSON.stringify(ambiguousState)}\n`);
+      const beforeRecovery = fs.readFileSync(statePath, "utf8");
+
+      await expect(
+        runCounterpartyHarness("record-operational-recheck-mismatch-evidence", {
+          env,
+          fetchImpl: api.fetchImpl,
+        }),
+      ).rejects.toThrow(/cannot relabel missing mismatch evidence/);
+      expect(fs.readFileSync(statePath, "utf8")).toBe(beforeRecovery);
+    },
+  );
+
+  it("requires silence for the synthetic payment until an approved continuation is allowed", async () => {
+    const env = await ownedEnvironment();
+    const api = fakeBotApi({
+      updateBatches: [
+        [],
+        [],
+        [artemUpdate(2, protocol.text.operationalReply)],
+        [artemUpdate(3, protocol.text.paymentApprovedReply)],
+      ],
+    });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-payment-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+
+    await expect(
+      runCounterpartyHarness("assert-payment-approval-silence", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+    expect(JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"))).toMatchObject({
+      stage: "silence_violated",
+      lastUpdateId: 3,
+    });
+  });
+
+  it("rejects an exact continuation present at the durable founder-approval cursor", async () => {
+    const env = await ownedEnvironment();
+    const approvalSecond = Math.floor(Date.now() / 1000);
+    vi.spyOn(Date, "now").mockReturnValue(approvalSecond * 1000);
+    const api = fakeBotApi({
+      updateBatches: [
+        [],
+        [],
+        [artemUpdate(2, protocol.text.operationalReply)],
+        [],
+        [
+          artemUpdate(
+            3,
+            protocol.text.paymentApprovedReply,
+            COUNTERPARTY_ARTEM_USER_ID,
+            approvalSecond,
+          ),
+        ],
+      ],
+    });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-payment-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("assert-payment-approval-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    env.OPENCLAW_COUNTERPARTY_FOUNDER_APPROVAL_RECEIPT = `${protocol.scenarioId}:test-founder-approval`;
+    await expect(
+      runCounterpartyHarness("record-founder-approval", {
+        env,
+        fetchImpl: api.fetchImpl,
+      }),
+    ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+    expect(JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"))).toMatchObject({
+      stage: "silence_violated",
+      lastUpdateId: 3,
+      failureContext: "payment",
+    });
+  });
+
+  it("accepts an exact post-approval continuation in the same Telegram second", async () => {
+    const env = await ownedEnvironment();
+    const approvalSecond = Math.floor(Date.now() / 1000);
+    vi.spyOn(Date, "now").mockReturnValue(approvalSecond * 1000);
+    const api = fakeBotApi({
+      updateBatches: [
+        [],
+        [],
+        [artemUpdate(2, protocol.text.operationalReply)],
+        [],
+        // Recording approval takes a zero-timeout snapshot and durably stores
+        // this cursor. The next update is therefore post-boundary even though
+        // Telegram's second-resolution timestamp equals the local audit time.
+        [],
+        [
+          artemUpdate(
+            3,
+            protocol.text.paymentApprovedReply,
+            COUNTERPARTY_ARTEM_USER_ID,
+            approvalSecond,
+          ),
+        ],
+      ],
+    });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-payment-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("assert-payment-approval-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    env.OPENCLAW_COUNTERPARTY_FOUNDER_APPROVAL_RECEIPT = `${protocol.scenarioId}:test-founder-approval`;
+    await runCounterpartyHarness("record-founder-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+
+    await expect(
+      runCounterpartyHarness("wait-approved-payment-continuation", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      }),
+    ).resolves.toMatchObject({
+      stage: "payment_approved",
+      lastUpdateId: 3,
+      failureContext: null,
+    });
+  });
+
+  it("rejects a delayed exact continuation sent before the approval second", async () => {
+    const env = await ownedEnvironment();
+    const approvalSecond = Math.floor(Date.now() / 1000);
+    vi.spyOn(Date, "now").mockReturnValue(approvalSecond * 1000);
+    const api = fakeBotApi({
+      updateBatches: [
+        [],
+        [],
+        [artemUpdate(2, protocol.text.operationalReply)],
+        [],
+        [],
+        // The update id is newer than the approval snapshot, but the Telegram
+        // timestamp proves the message was sent before approval and merely
+        // delivered late. Cursor and timestamp evidence must both agree.
+        [
+          artemUpdate(
+            3,
+            protocol.text.paymentApprovedReply,
+            COUNTERPARTY_ARTEM_USER_ID,
+            approvalSecond - 1,
+          ),
+        ],
+      ],
+    });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-payment-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("assert-payment-approval-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    env.OPENCLAW_COUNTERPARTY_FOUNDER_APPROVAL_RECEIPT = `${protocol.scenarioId}:test-founder-approval`;
+    await runCounterpartyHarness("record-founder-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+
+    await expect(
+      runCounterpartyHarness("wait-approved-payment-continuation", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+    expect(JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"))).toMatchObject({
+      stage: "reply_mismatched",
+      lastUpdateId: 3,
+      failureContext: "payment",
+    });
+  });
+
+  it("does not relabel a post-approval payment mismatch as recheck recovery evidence", async () => {
+    const env = await ownedEnvironment();
+    const api = fakeBotApi({
+      updateBatches: [
+        [],
+        [],
+        [artemUpdate(2, protocol.text.operationalReply)],
+        [],
+        [],
+        [artemUpdate(3, "wrong approved continuation")],
+      ],
+    });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-payment-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("assert-payment-approval-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    env.OPENCLAW_COUNTERPARTY_FOUNDER_APPROVAL_RECEIPT = `${protocol.scenarioId}:test-founder-approval`;
+    await runCounterpartyHarness("record-founder-approval", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await expect(
+      runCounterpartyHarness("wait-approved-payment-continuation", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+
+    const statePath = resolveCounterpartyStatePath(env);
+    const beforeRecovery = fs.readFileSync(statePath, "utf8");
+    expect(JSON.parse(beforeRecovery)).toMatchObject({
+      stage: "reply_mismatched",
+      failureContext: "payment",
+      recoveryReceipt: null,
+    });
+    env.OPENCLAW_COUNTERPARTY_RECOVERY_RECEIPT = `${protocol.scenarioId}:operational-recheck-mismatch:wrong-payment-context`;
+    await expect(
+      runCounterpartyHarness("record-operational-recheck-mismatch-evidence", {
+        env,
+        fetchImpl: api.fetchImpl,
+      }),
+    ).rejects.toThrow(/cannot relabel payment mismatch evidence/);
+    expect(fs.readFileSync(statePath, "utf8")).toBe(beforeRecovery);
+  });
+
+  it("keeps a confirmed send idempotent instead of duplicating it", async () => {
+    const env = await ownedEnvironment();
+    const api = fakeBotApi({ updateBatches: [[]] });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+
+    expect(api.calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"))).toMatchObject({
+      stage: "nonmatch_sent",
+    });
+  });
+
+  it("replays the exact NONMATCH only after baseline and then resumes operational detail", async () => {
     const env = await ownedEnvironment();
     const api = fakeBotApi({
       updateBatches: [[{ update_id: 1 }], [], []],
@@ -431,18 +1075,18 @@ describe("deterministic Telegram counterparty harness", () => {
     );
 
     await expect(
-      runCounterpartyHarness("emit-in-scope", {
+      runCounterpartyHarness("emit-operational-detail-request", {
         env,
         fetchImpl: api.fetchImpl,
       }),
-    ).resolves.toMatchObject({ stage: "in_scope_sent" });
+    ).resolves.toMatchObject({ stage: "operational_sent" });
 
     expect(
       api.calls.filter((call) => call.method === "sendMessage").map((call) => call.body),
     ).toEqual([
-      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.nonmatch },
-      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.nonmatch },
-      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.inScope },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.nonmatch },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.nonmatch },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.operationalRequest },
     ]);
   });
 
@@ -492,7 +1136,7 @@ describe("deterministic Telegram counterparty harness", () => {
       waitMs: 0,
     });
     await expect(
-      runCounterpartyHarness("emit-in-scope", {
+      runCounterpartyHarness("emit-operational-detail-request", {
         env: stageEnv,
         fetchImpl: fakeBotApi().fetchImpl,
       }),
@@ -506,7 +1150,7 @@ describe("deterministic Telegram counterparty harness", () => {
 
     const senderEnv = await ownedEnvironment();
     const senderApi = fakeBotApi({
-      updateBatches: [[], [], [artemUpdate(2, COUNTERPARTY_TEXT.inScopeReply, "42")]],
+      updateBatches: [[], [], [artemUpdate(2, protocol.text.operationalReply, "42")]],
     });
     await runCounterpartyHarness("preflight", {
       env: senderEnv,
@@ -522,12 +1166,12 @@ describe("deterministic Telegram counterparty harness", () => {
       fetchImpl: senderApi.fetchImpl,
       waitMs: 0,
     });
-    await runCounterpartyHarness("emit-in-scope", {
+    await runCounterpartyHarness("emit-operational-detail-request", {
       env: senderEnv,
       fetchImpl: senderApi.fetchImpl,
     });
     await expect(
-      runCounterpartyHarness("wait-in-scope-reply", {
+      runCounterpartyHarness("wait-operational-detail-reply", {
         env: senderEnv,
         fetchImpl: senderApi.fetchImpl,
         waitMs: 0,
@@ -552,12 +1196,12 @@ describe("deterministic Telegram counterparty harness", () => {
       fetchImpl: textApi.fetchImpl,
       waitMs: 0,
     });
-    await runCounterpartyHarness("emit-in-scope", {
+    await runCounterpartyHarness("emit-operational-detail-request", {
       env: textEnv,
       fetchImpl: textApi.fetchImpl,
     });
     await expect(
-      runCounterpartyHarness("wait-in-scope-reply", {
+      runCounterpartyHarness("wait-operational-detail-reply", {
         env: textEnv,
         fetchImpl: textApi.fetchImpl,
         waitMs: 0,
@@ -568,15 +1212,30 @@ describe("deterministic Telegram counterparty harness", () => {
     ).toMatchObject({
       stage: "reply_mismatched",
       lastUpdateId: 3,
+      failureContext: "operational",
+    });
+    textEnv.OPENCLAW_COUNTERPARTY_RECOVERY_RECEIPT = `${protocol.scenarioId}:operational-recheck-mismatch:wrong-operational-context`;
+    await expect(
+      runCounterpartyHarness("record-operational-recheck-mismatch-evidence", {
+        env: textEnv,
+        fetchImpl: textApi.fetchImpl,
+      }),
+    ).rejects.toThrow(/cannot relabel operational mismatch evidence/);
+    expect(
+      JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(textEnv), "utf8")),
+    ).toMatchObject({
+      stage: "reply_mismatched",
+      failureContext: "operational",
+      recoveryReceipt: null,
     });
     const textRetryApi = fakeBotApi();
     await expect(
-      runCounterpartyHarness("wait-in-scope-reply", {
+      runCounterpartyHarness("wait-operational-detail-reply", {
         env: textEnv,
         fetchImpl: textRetryApi.fetchImpl,
         waitMs: 0,
       }),
-    ).rejects.toThrow(/expected in_scope_sent/);
+    ).rejects.toThrow(/expected operational_sent/);
     expect(textRetryApi.calls.filter((call) => call.method === "getUpdates")).toHaveLength(0);
   });
 
