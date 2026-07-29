@@ -291,6 +291,44 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads.map((payload) => payload.text)).toEqual(["Final answer."]);
   });
 
+  it("preserves a terminal provider error when later commentary is only a source preview", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+
+    const terminalError = {
+      text: "The AI service is temporarily overloaded. Please try again in a moment.",
+      isError: true,
+    };
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      preserveFinalPayloadsAfterBlockStreaming: true,
+      payloads: [
+        terminalError,
+        {
+          text: "I’ll set the reminder first, then audit the current schedule.",
+          channelData: {
+            openclaw: {
+              sourcePreview: true,
+              assistantPhase: "commentary",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject(terminalError);
+  });
+
   it("keeps only the last text final after transient Telegram preview streaming", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,

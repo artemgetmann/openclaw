@@ -46,6 +46,11 @@ export type EmbeddedRunAttemptResult = {
   systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
+  /**
+   * Provider-authored phase for each assistantTexts entry. Undefined preserves
+   * legacy providers that do not expose commentary/final-answer structure.
+   */
+  assistantPhases?: Array<"commentary" | "final_answer" | undefined>;
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
   lastErroredAssistant?: AssistantMessage;
