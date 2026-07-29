@@ -114,7 +114,10 @@ describe("telegram-live-runtime.sh", () => {
     const sourcePath = path.join(tempDir, "runtime-source.sh");
     const ownerPath = path.join(tempDir, "owner.json");
     const healthPath = path.join(tempDir, "listener-health.json");
+    const runtimeConfigPath = path.join(tempDir, "openclaw.telegram-live.json");
     const profile = "tg-live-a1b2c3d4e5";
+    const hookToken = "dedicated-listener-secret";
+    const hookTokenHash = crypto.createHash("sha256").update(hookToken).digest("hex");
     const cronStore = path.join(laneDir, "cron", "jobs.json");
     const monitorStore = path.join(laneDir, "cron", "monitors.json");
     const cursorStore = path.join(laneDir, "cron", "telegram-user-listener-cursors.json");
@@ -150,12 +153,17 @@ describe("telegram-live-runtime.sh", () => {
     const expectedCommand = `${executable} ${argv.join(" ")}`;
     writeFileSync(sourcePath, readSourceableRuntimeScript());
     writeFileSync(
+      runtimeConfigPath,
+      `${JSON.stringify({ hooks: { enabled: true, token: hookToken } })}\n`,
+    );
+    writeFileSync(
       ownerPath,
       `${JSON.stringify({
-        version: 2,
+        version: 3,
         pid: 31337,
         birthIdentity,
         instanceId,
+        hookTokenHash,
         executable,
         argv,
         cwd: laneDir,
@@ -188,7 +196,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; kill() { [[ "$1" == "-0" && "$2" == "31337" ]]; }; ps() { if [[ "$*" == *"lstart="* ]]; then printf '%s\\n' ${JSON.stringify(birthIdentity)}; elif [[ "$*" == *"eww"* ]]; then printf '%s %s\\n' 'openclaw-telegram-user' ${JSON.stringify(`OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE=${instanceId}`)}; else printf '%s\\n' 'openclaw-telegram-user'; fi; }; lsof() { printf 'p31337\\nfcwd\\nn%s\\n' ${JSON.stringify(laneDir)}; }; PROFILE_ID=${profile}; WORKTREE=${JSON.stringify(laneDir)}; RUNTIME_PORT=24567; MONITOR_LISTENER_OWNER_PATH=${JSON.stringify(ownerPath)}; MONITOR_LISTENER_HEALTH_STORE_PATH=${JSON.stringify(healthPath)}; MONITOR_LISTENER_CRON_STORE_PATH=${JSON.stringify(cronStore)}; MONITOR_LISTENER_MONITOR_STORE_PATH=${JSON.stringify(monitorStore)}; MONITOR_LISTENER_CURSOR_STORE_PATH=${JSON.stringify(cursorStore)}; resolve_monitor_listener_owner; probe_monitor_listener_health; printf 'ownership=%s\\nhealth=%s\\n' "$MONITOR_LISTENER_OWNERSHIP" "$MONITOR_LISTENER_HEALTH"`,
+        `source ${JSON.stringify(sourcePath)}; kill() { [[ "$1" == "-0" && "$2" == "31337" ]]; }; ps() { if [[ "$*" == *"lstart="* ]]; then printf '%s\\n' ${JSON.stringify(birthIdentity)}; elif [[ "$*" == *"eww"* ]]; then printf '%s %s\\n' 'openclaw-telegram-user' ${JSON.stringify(`OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE=${instanceId}`)}; else printf '%s\\n' 'openclaw-telegram-user'; fi; }; lsof() { printf 'p31337\\nfcwd\\nn%s\\n' ${JSON.stringify(laneDir)}; }; PROFILE_ID=${profile}; WORKTREE=${JSON.stringify(laneDir)}; RUNTIME_PORT=24567; RUNTIME_CONFIG_PATH=${JSON.stringify(runtimeConfigPath)}; MONITOR_LISTENER_OWNER_PATH=${JSON.stringify(ownerPath)}; MONITOR_LISTENER_HEALTH_STORE_PATH=${JSON.stringify(healthPath)}; MONITOR_LISTENER_CRON_STORE_PATH=${JSON.stringify(cronStore)}; MONITOR_LISTENER_MONITOR_STORE_PATH=${JSON.stringify(monitorStore)}; MONITOR_LISTENER_CURSOR_STORE_PATH=${JSON.stringify(cursorStore)}; resolve_monitor_listener_owner; probe_monitor_listener_health; printf 'ownership=%s\\nhealth=%s\\n' "$MONITOR_LISTENER_OWNERSHIP" "$MONITOR_LISTENER_HEALTH"`,
       ],
       { cwd: process.cwd(), encoding: "utf8" },
     );
@@ -204,11 +212,14 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; kill() { [[ "$1" == "-0" && "$2" == "31337" ]]; }; ps() { if [[ "$*" == *"lstart="* ]]; then printf '%s\\n' ${JSON.stringify(birthIdentity)}; else printf '%s\\n' ${JSON.stringify(expectedCommand)}; fi; }; lsof() { printf 'p31337\\nfcwd\\nn%s\\n' ${JSON.stringify(laneDir)}; }; PROFILE_ID=${profile}; WORKTREE=${JSON.stringify(laneDir)}; RUNTIME_PORT=24567; MONITOR_LISTENER_OWNER_PATH=${JSON.stringify(ownerPath)}; MONITOR_LISTENER_CRON_STORE_PATH=${JSON.stringify(cronStore)}; MONITOR_LISTENER_MONITOR_STORE_PATH=${JSON.stringify(monitorStore)}; MONITOR_LISTENER_CURSOR_STORE_PATH=${JSON.stringify(cursorStore)}; resolve_monitor_listener_owner; printf '%s\\n' "$MONITOR_LISTENER_OWNERSHIP"`,
+        `source ${JSON.stringify(sourcePath)}; kill() { [[ "$1" == "-0" && "$2" == "31337" ]]; }; ps() { if [[ "$*" == *"lstart="* ]]; then printf '%s\\n' ${JSON.stringify(birthIdentity)}; else printf '%s\\n' ${JSON.stringify(expectedCommand)}; fi; }; lsof() { printf 'p31337\\nfcwd\\nn%s\\n' ${JSON.stringify(laneDir)}; }; PROFILE_ID=${profile}; WORKTREE=${JSON.stringify(laneDir)}; RUNTIME_PORT=24567; RUNTIME_CONFIG_PATH=${JSON.stringify(runtimeConfigPath)}; MONITOR_LISTENER_OWNER_PATH=${JSON.stringify(ownerPath)}; MONITOR_LISTENER_CRON_STORE_PATH=${JSON.stringify(cronStore)}; MONITOR_LISTENER_MONITOR_STORE_PATH=${JSON.stringify(monitorStore)}; MONITOR_LISTENER_CURSOR_STORE_PATH=${JSON.stringify(cursorStore)}; resolve_monitor_listener_owner; printf '%s\\n' "$MONITOR_LISTENER_OWNERSHIP"`,
       ],
       { cwd: process.cwd(), encoding: "utf8" },
     );
-    expect(missingMarkerStdout).toBe("foreign-process\n");
+    // Before the listener writes health, birth identity plus cwd still bind the
+    // process tightly enough to authorize cleanup. It is deliberately not
+    // "ok", because readiness requires the random child marker from health.
+    expect(missingMarkerStdout).toBe("record-only\n");
 
     const sharedHealth = JSON.parse(readFileSync(healthPath, "utf8"));
     sharedHealth.records["telegram-user"].owner.pid = 99999;
@@ -220,7 +231,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; kill() { [[ "$1" == "-0" && "$2" == "31337" ]]; }; ps() { if [[ "$*" == *"lstart="* ]]; then printf '%s\\n' ${JSON.stringify(birthIdentity)}; elif [[ "$*" == *"eww"* ]]; then printf '%s %s\\n' ${JSON.stringify(expectedCommand)} ${JSON.stringify(`OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE=${instanceId}`)}; else printf '%s\\n' ${JSON.stringify(expectedCommand)}; fi; }; lsof() { printf 'p31337\\nfcwd\\nn%s\\n' ${JSON.stringify(laneDir)}; }; PROFILE_ID=${profile}; WORKTREE=${JSON.stringify(laneDir)}; RUNTIME_PORT=24567; MONITOR_LISTENER_OWNER_PATH=${JSON.stringify(ownerPath)}; MONITOR_LISTENER_HEALTH_STORE_PATH=${JSON.stringify(healthPath)}; MONITOR_LISTENER_CRON_STORE_PATH=${JSON.stringify(cronStore)}; MONITOR_LISTENER_MONITOR_STORE_PATH=${JSON.stringify(monitorStore)}; MONITOR_LISTENER_CURSOR_STORE_PATH=${JSON.stringify(cursorStore)}; resolve_monitor_listener_owner; probe_monitor_listener_health; printf '%s\\n' "$MONITOR_LISTENER_HEALTH"`,
+        `source ${JSON.stringify(sourcePath)}; kill() { [[ "$1" == "-0" && "$2" == "31337" ]]; }; ps() { if [[ "$*" == *"lstart="* ]]; then printf '%s\\n' ${JSON.stringify(birthIdentity)}; elif [[ "$*" == *"eww"* ]]; then printf '%s %s\\n' ${JSON.stringify(expectedCommand)} ${JSON.stringify(`OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE=${instanceId}`)}; else printf '%s\\n' ${JSON.stringify(expectedCommand)}; fi; }; lsof() { printf 'p31337\\nfcwd\\nn%s\\n' ${JSON.stringify(laneDir)}; }; PROFILE_ID=${profile}; WORKTREE=${JSON.stringify(laneDir)}; RUNTIME_PORT=24567; RUNTIME_CONFIG_PATH=${JSON.stringify(runtimeConfigPath)}; MONITOR_LISTENER_OWNER_PATH=${JSON.stringify(ownerPath)}; MONITOR_LISTENER_HEALTH_STORE_PATH=${JSON.stringify(healthPath)}; MONITOR_LISTENER_CRON_STORE_PATH=${JSON.stringify(cronStore)}; MONITOR_LISTENER_MONITOR_STORE_PATH=${JSON.stringify(monitorStore)}; MONITOR_LISTENER_CURSOR_STORE_PATH=${JSON.stringify(cursorStore)}; resolve_monitor_listener_owner; probe_monitor_listener_health; printf '%s\\n' "$MONITOR_LISTENER_HEALTH"`,
       ],
       { cwd: process.cwd(), encoding: "utf8" },
     );
@@ -542,12 +553,15 @@ describe("telegram-live-runtime.sh", () => {
     const sourcePath = path.join(tempDir, "runtime-source.sh");
     const ownerPath = path.join(tempDir, "owner.json");
     const healthPath = path.join(tempDir, "health.json");
+    const runtimeConfigPath = path.join(tempDir, "openclaw.telegram-live.json");
     const killLog = path.join(tempDir, "kills.log");
     const birthCheckLog = path.join(tempDir, "birth-checks.log");
     const executable = "/usr/local/bin/node";
     const profile = "tg-live-exact";
     const birthIdentity = "Mon Jul 27 07:00:00 2026";
     const instanceId = "b".repeat(48);
+    const hookToken = "original-listener-secret";
+    const hookTokenHash = crypto.createHash("sha256").update(hookToken).digest("hex");
     const cronStore = path.join(tempDir, "cron/jobs.json");
     const monitorStore = path.join(tempDir, "cron/monitors.json");
     const cursorStore = path.join(tempDir, "cron/cursors.json");
@@ -576,14 +590,19 @@ describe("telegram-live-runtime.sh", () => {
     ];
     const expectedCommand = `${executable} ${argv.join(" ")}`;
     writeFileSync(sourcePath, readSourceableRuntimeScript());
+    writeFileSync(
+      runtimeConfigPath,
+      `${JSON.stringify({ hooks: { enabled: true, token: hookToken } })}\n`,
+    );
     const writeOwner = (profileId: string) =>
       writeFileSync(
         ownerPath,
         `${JSON.stringify({
-          version: 2,
+          version: 3,
           pid: 31337,
           birthIdentity,
           instanceId,
+          hookTokenHash,
           executable,
           argv,
           cwd: tempDir,
@@ -610,7 +629,7 @@ describe("telegram-live-runtime.sh", () => {
       );
     writeOwner(profile);
     writeHealth();
-    const common = `PROFILE_ID=${profile}; WORKTREE=${JSON.stringify(tempDir)}; RUNTIME_PORT=24567; MONITOR_LISTENER_OWNER_PATH=${JSON.stringify(ownerPath)}; MONITOR_LISTENER_HEALTH_STORE_PATH=${JSON.stringify(healthPath)}; MONITOR_LISTENER_CRON_STORE_PATH=${JSON.stringify(cronStore)}; MONITOR_LISTENER_MONITOR_STORE_PATH=${JSON.stringify(monitorStore)}; MONITOR_LISTENER_CURSOR_STORE_PATH=${JSON.stringify(cursorStore)}`;
+    const common = `PROFILE_ID=${profile}; WORKTREE=${JSON.stringify(tempDir)}; RUNTIME_PORT=24567; RUNTIME_CONFIG_PATH=${JSON.stringify(runtimeConfigPath)}; MONITOR_LISTENER_OWNER_PATH=${JSON.stringify(ownerPath)}; MONITOR_LISTENER_HEALTH_STORE_PATH=${JSON.stringify(healthPath)}; MONITOR_LISTENER_CRON_STORE_PATH=${JSON.stringify(cronStore)}; MONITOR_LISTENER_MONITOR_STORE_PATH=${JSON.stringify(monitorStore)}; MONITOR_LISTENER_CURSOR_STORE_PATH=${JSON.stringify(cursorStore)}`;
     const exactStdout = execFileSync(
       BASH_BIN,
       [
@@ -625,6 +644,44 @@ describe("telegram-live-runtime.sh", () => {
     expect(readFileSync(killLog, "utf8")).toBe("31337\n");
 
     writeOwner(profile);
+    writeFileSync(healthPath, "{}\n");
+    const preHealthStdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; alive=1; kill() { if [[ "$1" == "-0" ]]; then [[ "$alive" == "1" ]]; else printf '%s\\n' "$1" >> ${JSON.stringify(killLog)}; alive=0; fi; }; ps() { if [[ "$*" == *"lstart="* ]]; then printf '%s\\n' ${JSON.stringify(birthIdentity)}; else printf '%s\\n' ${JSON.stringify(expectedCommand)}; fi; }; lsof() { printf 'p31337\\nfcwd\\nn%s\\n' ${JSON.stringify(tempDir)}; }; ${common}; stop_owned_monitor_listener; printf '%s\\n' "$MONITOR_LISTENER_STOP_RESULT"`,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(preHealthStdout).toBe("stopped\n");
+    expect(readFileSync(killLog, "utf8")).toBe("31337\n31337\n");
+
+    writeOwner(profile);
+    writeHealth();
+    writeFileSync(
+      runtimeConfigPath,
+      `${JSON.stringify({ hooks: { enabled: true, token: "rotated-listener-secret" } })}\n`,
+    );
+    const rotatedTokenStdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; alive=1; kill() { if [[ "$1" == "-0" ]]; then [[ "$alive" == "1" ]]; else printf '%s\\n' "$1" >> ${JSON.stringify(killLog)}; alive=0; fi; }; ps() { if [[ "$*" == *"lstart="* ]]; then printf '%s\\n' ${JSON.stringify(birthIdentity)}; else printf '%s\\n' ${JSON.stringify(expectedCommand)}; fi; }; lsof() { printf 'p31337\\nfcwd\\nn%s\\n' ${JSON.stringify(tempDir)}; }; ${common}; resolve_monitor_listener_owner; printf 'ownership=%s\\n' "$MONITOR_LISTENER_OWNERSHIP"; stop_owned_monitor_listener; printf 'stop=%s\\n' "$MONITOR_LISTENER_STOP_RESULT"`,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(rotatedTokenStdout).toBe("ownership=hook-token-mismatch\nstop=stopped\n");
+    expect(readFileSync(killLog, "utf8")).toBe("31337\n31337\n31337\n");
+
+    writeFileSync(
+      runtimeConfigPath,
+      `${JSON.stringify({ hooks: { enabled: true, token: hookToken } })}\n`,
+    );
+    writeOwner(profile);
     writeHealth();
     const reusedStdout = execFileSync(
       BASH_BIN,
@@ -637,7 +694,7 @@ describe("telegram-live-runtime.sh", () => {
       { cwd: process.cwd(), encoding: "utf8" },
     );
     expect(reusedStdout).toBe("identity-changed\n");
-    expect(readFileSync(killLog, "utf8")).toBe("31337\n");
+    expect(readFileSync(killLog, "utf8")).toBe("31337\n31337\n31337\n");
 
     writeOwner("tg-live-other");
     const foreignStdout = execFileSync(
@@ -651,7 +708,7 @@ describe("telegram-live-runtime.sh", () => {
       { cwd: process.cwd(), encoding: "utf8" },
     );
     expect(foreignStdout).toBe("not-owned\n");
-    expect(readFileSync(killLog, "utf8")).toBe("31337\n");
+    expect(readFileSync(killLog, "utf8")).toBe("31337\n31337\n31337\n");
   });
 
   it("accepts the exact tester profile marker after gateway cwd changes", () => {

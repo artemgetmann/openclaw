@@ -589,12 +589,14 @@ try {
     return index >= 0 && argv[index + 1] === value;
   };
   const completeIdentity =
-    owner.version === 2 &&
+    owner.version === 3 &&
     Number.isSafeInteger(owner.pid) &&
     typeof owner.birthIdentity === "string" &&
     owner.birthIdentity.trim() &&
     typeof owner.instanceId === "string" &&
     /^[a-f0-9]{48}$/u.test(owner.instanceId) &&
+    typeof owner.hookTokenHash === "string" &&
+    /^[a-f0-9]{64}$/u.test(owner.hookTokenHash) &&
     typeof owner.executable === "string" &&
     owner.executable.startsWith("/") &&
     typeof owner.cwd === "string" &&
@@ -624,6 +626,7 @@ try {
     owner.hookUrl,
     owner.birthIdentity.trim(),
     owner.instanceId,
+    owner.hookTokenHash,
     owner.executable,
     `${owner.executable} ${argv.join(" ")}`,
     owner.cwd,
@@ -641,7 +644,7 @@ NODE
 
   local owner_pid owner_profile owner_worktree owner_cron owner_monitor owner_cursor owner_hook
   local owner_birth owner_executable owner_command owner_cwd owner_env_file owner_session
-  local owner_instance
+  local owner_instance owner_hook_token_hash
   owner_pid="$(printf '%s\n' "$owner_lines" | sed -n '1p')"
   owner_profile="$(printf '%s\n' "$owner_lines" | sed -n '2p')"
   owner_worktree="$(printf '%s\n' "$owner_lines" | sed -n '3p')"
@@ -651,11 +654,12 @@ NODE
   owner_hook="$(printf '%s\n' "$owner_lines" | sed -n '7p')"
   owner_birth="$(printf '%s\n' "$owner_lines" | sed -n '8p')"
   owner_instance="$(printf '%s\n' "$owner_lines" | sed -n '9p')"
-  owner_executable="$(printf '%s\n' "$owner_lines" | sed -n '10p')"
-  owner_command="$(printf '%s\n' "$owner_lines" | sed -n '11p')"
-  owner_cwd="$(printf '%s\n' "$owner_lines" | sed -n '12p')"
-  owner_env_file="$(printf '%s\n' "$owner_lines" | sed -n '13p')"
-  owner_session="$(printf '%s\n' "$owner_lines" | sed -n '14p')"
+  owner_hook_token_hash="$(printf '%s\n' "$owner_lines" | sed -n '10p')"
+  owner_executable="$(printf '%s\n' "$owner_lines" | sed -n '11p')"
+  owner_command="$(printf '%s\n' "$owner_lines" | sed -n '12p')"
+  owner_cwd="$(printf '%s\n' "$owner_lines" | sed -n '13p')"
+  owner_env_file="$(printf '%s\n' "$owner_lines" | sed -n '14p')"
+  owner_session="$(printf '%s\n' "$owner_lines" | sed -n '15p')"
   MONITOR_LISTENER_PID="$owner_pid"
   MONITOR_LISTENER_BIRTH_IDENTITY="$owner_birth"
   MONITOR_LISTENER_INSTANCE_ID="$owner_instance"
@@ -687,16 +691,57 @@ NODE
   current_cwd="$(lsof -a -p "$owner_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p')"
   # OpenClaw intentionally rewrites the process title after launch, so the live
   # command line cannot be compared with the immutable launch argv in the owner
-  # record. Birth time closes PID reuse, the random 192-bit child-only instance
-  # marker proves this exact spawn, and cwd binds it to this worktree.
+  # record. Birth time closes PID reuse and cwd binds the live process to this
+  # worktree. The random child-only marker upgrades that identity to fully ready
+  # ownership once health is published.
   if [[ -z "$current_birth" || "$current_birth" != "$owner_birth" ]] ||
-    [[ "$current_cwd" != "$owner_cwd" ]] ||
-    ! process_has_monitor_listener_instance "$owner_pid" "$owner_instance"; then
+    [[ "$current_cwd" != "$owner_cwd" ]]; then
     MONITOR_LISTENER_OWNERSHIP="foreign-process"
     return 0
   fi
 
+  if ! process_has_monitor_listener_instance "$owner_pid" "$owner_instance"; then
+    # The exact detached child can be alive before its first health write, or
+    # after health persistence fails. Keep a stop-only ownership state in that
+    # window: birth identity plus cwd safely authorize cleanup, while readiness
+    # remains impossible until the child publishes its random instance marker.
+    MONITOR_LISTENER_OWNERSHIP="record-only"
+    return 0
+  fi
+
+  local current_hook_token_hash=""
+  current_hook_token_hash="$(
+    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" node --input-type=module - <<'NODE'
+import crypto from "node:crypto";
+import fs from "node:fs";
+try {
+  const config = JSON.parse(fs.readFileSync(process.env.RUNTIME_CONFIG_PATH, "utf8"));
+  const token = config?.hooks?.token;
+  if (typeof token !== "string" || !token.trim()) {
+    process.exit(1);
+  }
+  process.stdout.write(crypto.createHash("sha256").update(token.trim()).digest("hex"));
+} catch {
+  process.exit(1);
+}
+NODE
+  )" || true
+  if [[ -z "$current_hook_token_hash" ||
+    "$current_hook_token_hash" != "$owner_hook_token_hash" ]]; then
+    # The PID is still the exact listener child, so it is safe to stop, but it
+    # cannot be reused with a gateway that now authenticates a different hook
+    # bearer. Keep the secret itself out of both owner state and diagnostics.
+    MONITOR_LISTENER_OWNERSHIP="hook-token-mismatch"
+    return 0
+  fi
+
   MONITOR_LISTENER_OWNERSHIP="ok"
+}
+
+monitor_listener_owner_is_stoppable() {
+  [[ "$MONITOR_LISTENER_OWNERSHIP" == "ok" ||
+    "$MONITOR_LISTENER_OWNERSHIP" == "record-only" ||
+    "$MONITOR_LISTENER_OWNERSHIP" == "hook-token-mismatch" ]]
 }
 
 probe_monitor_listener_health() {
@@ -744,7 +789,7 @@ stop_owned_monitor_listener() {
   if [[ "$MONITOR_LISTENER_OWNERSHIP" == "missing" ]]; then
     return 0
   fi
-  if [[ "$MONITOR_LISTENER_OWNERSHIP" != "ok" ]]; then
+  if ! monitor_listener_owner_is_stoppable; then
     MONITOR_LISTENER_STOP_RESULT="not-owned"
     add_failure "monitor_listener_not_owned:${MONITOR_LISTENER_OWNERSHIP}"
     return 0
@@ -756,10 +801,10 @@ stop_owned_monitor_listener() {
   # Re-resolve immediately before TERM. Validation done even milliseconds ago
   # is not authority to signal a PID that may since have been recycled.
   resolve_monitor_listener_owner
-  if [[ "$MONITOR_LISTENER_OWNERSHIP" != "ok" ||
-    "$MONITOR_LISTENER_PID" != "$owned_pid" ||
-    "$MONITOR_LISTENER_BIRTH_IDENTITY" != "$owned_birth" ||
-    "$MONITOR_LISTENER_INSTANCE_ID" != "$owned_instance" ]]; then
+  if ! monitor_listener_owner_is_stoppable ||
+    [[ "$MONITOR_LISTENER_PID" != "$owned_pid" ||
+      "$MONITOR_LISTENER_BIRTH_IDENTITY" != "$owned_birth" ||
+      "$MONITOR_LISTENER_INSTANCE_ID" != "$owned_instance" ]]; then
     MONITOR_LISTENER_STOP_RESULT="identity-changed"
     add_failure "monitor_listener_identity_changed_before_term"
     return 0
@@ -771,10 +816,10 @@ stop_owned_monitor_listener() {
       if [[ "$MONITOR_LISTENER_OWNERSHIP" == "stale-record" ]]; then
         break
       fi
-      if [[ "$MONITOR_LISTENER_OWNERSHIP" != "ok" ||
-        "$MONITOR_LISTENER_PID" != "$owned_pid" ||
-        "$MONITOR_LISTENER_BIRTH_IDENTITY" != "$owned_birth" ||
-        "$MONITOR_LISTENER_INSTANCE_ID" != "$owned_instance" ]]; then
+      if ! monitor_listener_owner_is_stoppable ||
+        [[ "$MONITOR_LISTENER_PID" != "$owned_pid" ||
+          "$MONITOR_LISTENER_BIRTH_IDENTITY" != "$owned_birth" ||
+          "$MONITOR_LISTENER_INSTANCE_ID" != "$owned_instance" ]]; then
         MONITOR_LISTENER_STOP_RESULT="identity-changed"
         add_failure "monitor_listener_identity_changed_while_stopping"
         return 0
@@ -783,10 +828,10 @@ stop_owned_monitor_listener() {
       waited=$((waited + 1))
     done
     resolve_monitor_listener_owner
-    if [[ "$MONITOR_LISTENER_OWNERSHIP" == "ok" &&
-      "$MONITOR_LISTENER_PID" == "$owned_pid" &&
-      "$MONITOR_LISTENER_BIRTH_IDENTITY" == "$owned_birth" &&
-      "$MONITOR_LISTENER_INSTANCE_ID" == "$owned_instance" ]]; then
+    if monitor_listener_owner_is_stoppable &&
+      [[ "$MONITOR_LISTENER_PID" == "$owned_pid" &&
+        "$MONITOR_LISTENER_BIRTH_IDENTITY" == "$owned_birth" &&
+        "$MONITOR_LISTENER_INSTANCE_ID" == "$owned_instance" ]]; then
       # KILL is separately authorized against the same birth identity; never
       # inherit authority from the earlier TERM validation.
       kill -9 "$owned_pid" 2>/dev/null || true
@@ -1875,7 +1920,7 @@ start_isolated_monitor_listener() {
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
 
@@ -2012,10 +2057,13 @@ try {
     throw new Error("Could not capture isolated monitor listener birth identity.");
   }
   const owner = {
-    version: 2,
+    version: 3,
     pid: child.pid,
     birthIdentity: childBirthIdentity,
     instanceId,
+    // Bind reuse to the gateway's current hook credential without persisting
+    // the bearer itself. A rotated gateway token makes this owner stop-only.
+    hookTokenHash: createHash("sha256").update(hooksToken.trim()).digest("hex"),
     executable: process.execPath,
     argv: args,
     cwd: process.env.REPO_ROOT,
@@ -2066,7 +2114,7 @@ ensure_isolated_monitor_listener() {
     MONITOR_LISTENER_START_ACTION="reused"
     return 0
   fi
-  if [[ "$MONITOR_LISTENER_OWNERSHIP" == "ok" ]]; then
+  if monitor_listener_owner_is_stoppable; then
     stop_owned_monitor_listener
   elif [[ "$MONITOR_LISTENER_OWNERSHIP" == "stale-record" ]]; then
     rm -f "$MONITOR_LISTENER_OWNER_PATH" "$MONITOR_LISTENER_HEALTH_STORE_PATH"

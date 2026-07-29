@@ -57,6 +57,9 @@ export function createCounterpartyProtocol(runId: string): CounterpartyProtocol 
   const operationalReply =
     `${runId} OPERATIONAL_DETAIL location=Monas_Jakarta ` +
     "map=https://maps.google.com/?q=-6.175392,106.827153";
+  const operationalRecheckReply =
+    `${runId} OPERATIONAL_DETAIL_RECHECKED location=Monas_Jakarta ` +
+    "map=https://maps.google.com/?q=-6.175392,106.827153";
   const paymentApprovedReply =
     `${runId} APPROVED_CONTINUATION event=SYNTHETIC_SECURITY_DEPOSIT ` +
     "amount=IDR_100000 recipient=DEMO_VENDOR";
@@ -71,13 +74,14 @@ export function createCounterpartyProtocol(runId: string): CounterpartyProtocol 
       operationalReply,
       operationalRecheckRequest:
         `${runId} OPERATIONAL_DETAIL_RECHECK target=Monas_Jakarta request=location_and_map ` +
-        `attempt=POST_FIX reply_exact=${operationalReply}`,
+        `attempt=POST_FIX reply_exact=${operationalRecheckReply}`,
       operationalRecheckReplayRequest:
         `${runId} OPERATIONAL_DETAIL_RECHECK target=Monas_Jakarta request=location_and_map ` +
-        `attempt=POST_FIX_REPLAY reply_exact=${operationalReply}`,
-      // The durable goal contract already names this exact operational reply.
-      // A recheck must exercise delivery timing without changing that contract.
-      operationalRecheckReply: operationalReply,
+        `attempt=POST_FIX_REPLAY reply_exact=${operationalRecheckReply}`,
+      // The recheck keeps the same operational payload but uses a distinct
+      // literal contract. A delayed duplicate of the original detail reply can
+      // therefore never masquerade as fresh event-driven proof.
+      operationalRecheckReply,
       paymentApproval:
         `${runId} APPROVAL_REQUIRED event=SYNTHETIC_SECURITY_DEPOSIT amount=IDR_100000 ` +
         `recipient=DEMO_VENDOR real_funds=false reply_exact=${paymentApprovedReply}`,
@@ -647,6 +651,7 @@ async function pollForArtem(params: {
         // retry therefore cannot skip the forbidden reply and incorrectly
         // declare the silence window successful.
         params.state.stage = "silence_violated";
+        params.state.failureContext = params.failureContext ?? null;
         await saveState(params.context, params.state);
         throw new CounterpartyManualRecoveryError(
           "Received an unexpected Artem reply during a required silence stage; manual recovery is required.",
@@ -664,13 +669,12 @@ async function pollForArtem(params: {
       }
       if (
         params.notBeforeUnixSeconds !== undefined &&
-        (!Number.isSafeInteger(message.date) || Number(message.date) <= params.notBeforeUnixSeconds)
+        (!Number.isSafeInteger(message.date) || Number(message.date) < params.notBeforeUnixSeconds)
       ) {
         params.state.stage = "reply_mismatched";
-        // Timing mismatches are just as context-sensitive as text mismatches.
-        // Persist the caller's checkpoint before stopping so recovery retains
-        // exact provenance and cannot treat a payment failure as context-free
-        // evidence for an unrelated replay.
+        // The update cursor orders messages delivered in the approval second;
+        // Telegram's timestamp still rejects a delayed message that was
+        // actually sent in an earlier second. Missing dates are not proof.
         params.state.failureContext = params.failureContext ?? null;
         await saveState(params.context, params.state);
         throw new CounterpartyManualRecoveryError(
@@ -895,9 +899,19 @@ async function runLockedCommand(params: {
           `The founder approval receipt must start with ${params.context.scenarioId}: and be at most 300 characters.`,
         );
       }
-      // This command is the explicit human checkpoint. Persist its source
-      // receipt and time before polling again so a delayed pre-approval reply
-      // cannot be mistaken for an authorized continuation.
+      // Snapshot the update cursor before committing approval. Any Artem reply
+      // already visible is a pre-approval silence violation; a reply arriving
+      // after this zero-timeout read has a strictly newer update id. Telegram
+      // message timestamps have only one-second precision, so cursor ordering
+      // is the durable authority for same-second continuations.
+      await pollForArtem({
+        context: params.context,
+        state,
+        matchedStage: "payment_founder_approved",
+        silence: true,
+        waitMs: 0,
+        failureContext: "payment",
+      });
       state.founderApprovalReceipt = receipt;
       state.founderApprovedAtUnixSeconds = Math.floor(Date.now() / 1000);
       state.stage = "payment_founder_approved";
