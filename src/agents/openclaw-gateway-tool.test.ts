@@ -12,6 +12,10 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 
+const appUpdateMockState = vi.hoisted(() => ({
+  gatewayRestartRequired: true,
+}));
+
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(
     async (method: string, _opts: unknown, params: Record<string, unknown>) => {
@@ -58,6 +62,7 @@ vi.mock("./tools/gateway.js", () => ({
             payload: {
               available: true,
               readyToInstall: true,
+              gatewayRestartRequired: appUpdateMockState.gatewayRestartRequired,
               version: "2026.7.29",
               build: "2026072901",
             },
@@ -288,6 +293,7 @@ describe("gateway tool", () => {
       result: {
         available: true,
         readyToInstall: true,
+        gatewayRestartRequired: true,
         version: "2026.7.29",
         build: "2026072901",
       },
@@ -343,6 +349,7 @@ describe("gateway tool", () => {
     expect(result.details).toMatchObject({
       ok: true,
       accepted: true,
+      gatewayRestartRequired: true,
       nodeId: "mac-test",
       version: "2026.7.29",
       build: "2026072901",
@@ -361,6 +368,44 @@ describe("gateway tool", () => {
     );
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store[sessionKey]?.pendingRestartConfirmation).toBeUndefined();
+  });
+
+  it("does not arm local gateway recovery when updating a remote-mode app", async () => {
+    const pending = createPendingRestartConfirmation({ now: Date.now() - 1_000 });
+    const { storePath, sessionKey } = await createSessionStoreFixture({
+      entry: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt + 500,
+        pendingRestartConfirmation: pending,
+      },
+    });
+    const stateDir = path.dirname(storePath);
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    appUpdateMockState.gatewayRestartRequired = false;
+    try {
+      const result = await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
+        () =>
+          tool.execute("app-update-remote", {
+            action: "app.update.install",
+            expectedVersion: "2026.7.29",
+            expectedBuild: "2026072901",
+          }),
+      );
+
+      expect(result.details).toMatchObject({
+        ok: true,
+        accepted: true,
+        gatewayRestartRequired: false,
+      });
+      await expect(fs.access(path.join(stateDir, "restart-sentinel.json"))).rejects.toThrow();
+    } finally {
+      appUpdateMockState.gatewayRestartRequired = true;
+    }
   });
 
   it("returns a path-scoped schema lookup result", async () => {

@@ -127,6 +127,7 @@ struct MacNodeRuntimeTests {
                 OpenClawAppUpdateStatus(
                     available: true,
                     readyToInstall: true,
+                    gatewayRestartRequired: true,
                     version: "2026.7.29",
                     build: "2026072901")
             }
@@ -180,6 +181,7 @@ struct MacNodeRuntimeTests {
         #expect(status.version == "2026.7.29")
         #expect(status.build == "2026072901")
         #expect(status.readyToInstall)
+        #expect(status.gatewayRestartRequired)
 
         let params = OpenClawAppUpdateInstallParams(
             expectedVersion: "2026.7.29",

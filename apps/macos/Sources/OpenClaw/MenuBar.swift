@@ -718,6 +718,9 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         OpenClawAppUpdateStatus(
             available: self.updateStatus.availableVersion != nil,
             readyToInstall: self.immediateInstallHandler != nil,
+            // A remote-mode app may replace and relaunch itself without
+            // interrupting the gateway that owns the active agent threads.
+            gatewayRestartRequired: !CommandResolver.connectionModeIsRemote(),
             version: self.updateStatus.availableVersion,
             build: self.updateStatus.availableBuild,
             error: self.updateStatus.lastError)
@@ -795,9 +798,14 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         state: SPUUserUpdateState)
     {
         switch choice {
-        case .install, .skip:
+        case .install:
             self.updateStatus.isUpdateReady = false
             self.immediateInstallHandler = nil
+        case .skip:
+            // Sparkle will suppress the skipped item. Mirror that decision in
+            // the agent-facing state so Jarvis cannot keep nudging the user
+            // about an update they explicitly declined.
+            self.clearAvailableUpdate()
         case .dismiss:
             self.updateStatus.isUpdateReady = (state.stage == .downloaded)
         @unknown default:

@@ -18,6 +18,7 @@ public enum OpenClawSystemCommand: String, Codable, Sendable {
 public struct OpenClawAppUpdateStatus: Codable, Sendable, Equatable {
     public var available: Bool
     public var readyToInstall: Bool
+    public var gatewayRestartRequired: Bool
     public var version: String?
     public var build: String?
     public var error: String?
@@ -25,12 +26,14 @@ public struct OpenClawAppUpdateStatus: Codable, Sendable, Equatable {
     public init(
         available: Bool,
         readyToInstall: Bool,
+        gatewayRestartRequired: Bool = false,
         version: String? = nil,
         build: String? = nil,
         error: String? = nil)
     {
         self.available = available
         self.readyToInstall = readyToInstall
+        self.gatewayRestartRequired = gatewayRestartRequired
         self.version = version
         self.build = build
         self.error = error

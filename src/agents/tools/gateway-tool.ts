@@ -368,35 +368,44 @@ export function createGatewayTool(opts?: {
             "The approved app update is no longer ready or has changed. Check status and ask again.",
           );
         }
+        if (typeof status.gatewayRestartRequired !== "boolean") {
+          throw new Error(
+            "The Jarvis Mac app did not report its gateway restart mode. Update status and try again.",
+          );
+        }
         await requirePendingRestartConfirmation();
 
         const { sessionKey, note } = resolveGatewayWriteMeta();
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
-        const payload: RestartSentinelPayload = {
-          kind: "update",
-          // "ok" means the restart-capable update operation was accepted.
-          // The sentinel watcher still verifies the replacement process after
-          // Sparkle relaunches the app and its managed gateway.
-          status: "ok",
-          ts: Date.now(),
-          sessionKey,
-          deliveryContext,
-          threadId,
-          message:
-            note ??
-            `Jarvis updated to ${expectedVersion} (${expectedBuild}) and resumed this chat.`,
-          doctorHint: formatDoctorNonInteractiveHint(),
-          stats: {
-            mode: "app.update.install",
-            phase: "requested",
-            verified: false,
-            after: {
-              version: expectedVersion,
-              build: expectedBuild,
-            },
-          },
-        };
-        await writeRestartSentinel(payload);
+        const payload: RestartSentinelPayload | undefined = status.gatewayRestartRequired
+          ? {
+              kind: "update",
+              // "ok" means the restart-capable update operation was accepted.
+              // The sentinel watcher still verifies the replacement process
+              // after Sparkle relaunches the app and its managed gateway.
+              status: "ok",
+              ts: Date.now(),
+              sessionKey,
+              deliveryContext,
+              threadId,
+              message:
+                note ??
+                `Jarvis updated to ${expectedVersion} (${expectedBuild}) and resumed this chat.`,
+              doctorHint: formatDoctorNonInteractiveHint(),
+              stats: {
+                mode: "app.update.install",
+                phase: "requested",
+                verified: false,
+                after: {
+                  version: expectedVersion,
+                  build: expectedBuild,
+                },
+              },
+            }
+          : undefined;
+        if (payload) {
+          await writeRestartSentinel(payload);
+        }
         let result: unknown;
         try {
           result = await invokeAppUpdateNode(node.nodeId, "system.appUpdate.install", {
@@ -404,18 +413,21 @@ export function createGatewayTool(opts?: {
             expectedBuild,
           });
         } catch (error) {
-          // Replace the active operation so the detached watcher cannot report
-          // a false recovery when the app rejected the install request.
-          await writeRestartSentinel({
-            ...payload,
-            status: "error",
-            message: error instanceof Error ? error.message : String(error),
-          });
+          if (payload) {
+            // Replace the active operation so the detached watcher cannot
+            // report a false recovery when the app rejected the install.
+            await writeRestartSentinel({
+              ...payload,
+              status: "error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
           throw error;
         }
         return jsonResult({
           ok: true,
           accepted: true,
+          gatewayRestartRequired: status.gatewayRestartRequired,
           nodeId: node.nodeId,
           version: expectedVersion,
           build: expectedBuild,
