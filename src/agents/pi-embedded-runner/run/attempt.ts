@@ -1601,6 +1601,7 @@ export async function runEmbeddedAttempt(
           agentAccountId: params.agentAccountId,
           messageTo: params.messageTo,
           messageThreadId: params.messageThreadId,
+          cronDefaultDelivery: params.cronDefaultDelivery,
           groupId: params.groupId,
           groupChannel: params.groupChannel,
           groupSpace: params.groupSpace,

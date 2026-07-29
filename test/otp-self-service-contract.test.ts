@@ -3,19 +3,22 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("OTP self-service contract", () => {
-  it("keeps retrieval separate from sensitive entry and unsafe secret transport", () => {
+  it("checks connection health without persisting OTP content through ordinary tools", () => {
     const skill = fs.readFileSync(
       path.join(process.cwd(), "skills/jarvis-computer-use/SKILL.md"),
       "utf8",
     );
     const normalized = skill.replace(/\s+/g, " ");
 
-    expect(normalized).toContain("do not immediately ask the user to relay an OTP");
-    expect(normalized).toContain("already-connected read-capable source");
-    expect(normalized).toContain("read-only health or auth probe");
-    expect(normalized).toContain("one unique fresh candidate");
+    expect(normalized).toContain("checking what is already authorized");
+    expect(normalized).toContain("available capability inventory");
+    expect(normalized).toContain("non-content read-only health or auth probe");
+    expect(normalized).toContain("Do not open, read, or search OTP messages with ordinary");
+    expect(normalized).toContain("first-class secret-safe path");
+    expect(normalized).toContain("keep the value out of model context, transcripts, logs");
     expect(normalized).toContain("Retrieving a code does not authorize entering or submitting it");
-    expect(normalized).toContain("argv, shell, logs, memory, or ordinary tool parameters");
-    expect(normalized).toContain("ask the user to enter it locally");
+    expect(normalized).toContain(
+      "ask the user to enter the code locally without pasting it into chat",
+    );
   });
 });

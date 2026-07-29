@@ -95,7 +95,7 @@ describe("runHeartbeatOnce", () => {
           },
         });
 
-        replySpy.mockImplementation(async (ctx: Record<string, unknown>) => {
+        replySpy.mockImplementation(async (ctx, opts) => {
           expect(ctx.To).toBe("-1003841603622");
           expect(ctx.From).toBe("-1003841603622");
           expect(ctx.OriginatingChannel).toBe("telegram");
@@ -108,6 +108,14 @@ describe("runHeartbeatOnce", () => {
             sourceTo: "telegram:group:-1003841603622",
             sourceThreadId: 928,
             sourceAccountId: "default",
+          });
+          // Source-topic replies remain intentional, but future reminders must
+          // default to the configured private heartbeat destination.
+          expect(opts?.cronDefaultDelivery).toEqual({
+            mode: "announce",
+            channel: "telegram",
+            to: "123456",
+            accountId: undefined,
           });
           return {
             text: `<heartbeat_attention>
@@ -138,6 +146,54 @@ describe("runHeartbeatOnce", () => {
         );
       },
       { prefix: "openclaw-hb-" },
+    );
+  });
+
+  it("disables implicit reminder delivery when no heartbeat destination is configured", async () => {
+    await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "none",
+              },
+            },
+          },
+          channels: { telegram: { botToken: "telegram-test" } },
+          session: { store: storePath },
+        };
+
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "telegram:123456",
+          origin: {
+            provider: "telegram",
+            to: "telegram:group:-1003841603622",
+            accountId: "default",
+            threadId: 928,
+          },
+        });
+
+        replySpy.mockImplementation(async (_ctx, opts) => {
+          expect(opts?.cronDefaultDelivery).toEqual({ mode: "none" });
+          return { text: "HEARTBEAT_OK" };
+        });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            getQueueSize: () => 0,
+            nowMs: () => 0,
+          },
+        });
+
+        expect(replySpy).toHaveBeenCalledTimes(1);
+      },
+      { prefix: "openclaw-hb-no-reminder-route-" },
     );
   });
 

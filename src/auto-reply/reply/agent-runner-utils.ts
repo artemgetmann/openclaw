@@ -192,6 +192,7 @@ export function buildEmbeddedRunBaseParams(params: {
     senderIsOwner: params.run.senderIsOwner,
     enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    cronDefaultDelivery: params.run.cronDefaultDelivery,
     provider: params.provider,
     model: params.model,
     ...params.authProfile,

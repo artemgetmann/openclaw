@@ -3,6 +3,7 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-rep
 import type { ReplyPayload, SourceReplyDeliveryMode } from "../../../auto-reply/types.js";
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { CronDelivery } from "../../../cron/types.js";
 import type { HeartbeatSourceReceiptContext } from "../../../infra/outbound/source-receipt.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -70,6 +71,8 @@ export type RunEmbeddedPiAgentParams = {
   disableGoalTools?: boolean;
   /** Controls whether final assistant replies are source-delivered or private. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Runtime-trusted default for cron reminders created during this run. */
+  cronDefaultDelivery?: CronDelivery;
   sessionFile: string;
   /** Last known prompt pressure from persisted session metadata. */
   persistedPromptTokens?: number;

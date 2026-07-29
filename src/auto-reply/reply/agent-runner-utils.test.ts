@@ -83,7 +83,16 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true, persistedPromptTokens: 200_470 });
+    const cronDefaultDelivery = {
+      mode: "announce" as const,
+      channel: "telegram" as const,
+      to: "123456",
+    };
+    const run = makeRun({
+      enforceFinalTag: true,
+      persistedPromptTokens: 200_470,
+      cronDefaultDelivery,
+    });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -108,6 +117,7 @@ describe("agent-runner-utils", () => {
       skillsSnapshot: run.skillsSnapshot,
       ownerNumbers: run.ownerNumbers,
       enforceFinalTag: true,
+      cronDefaultDelivery,
       provider: "openai",
       model: "gpt-4.1-mini",
       authProfileId: "profile-openai",

@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { CronDelivery } from "../cron/types.js";
 import type { InteractiveReply } from "../interactive/payload.js";
 import type { TypingController } from "./reply/typing.js";
 
@@ -65,6 +66,13 @@ export type GetReplyOptions = {
   suppressTyping?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
+  /**
+   * Runtime-trusted destination for reminders created during this run.
+   *
+   * Heartbeats may inspect a source topic while delivering private reminders
+   * elsewhere, so this must not be inferred from the visible source context.
+   */
+  cronDefaultDelivery?: CronDelivery;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
