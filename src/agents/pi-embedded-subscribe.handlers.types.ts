@@ -32,6 +32,14 @@ export type ToolCallSummary = {
 
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
+  /**
+   * Provider-authored phase for each assistantTexts entry.
+   *
+   * Keep this index-aligned with assistantTexts so commentary can remain a
+   * transient source preview even when the provider ends without a final-answer
+   * message after a tool call.
+   */
+  assistantPhases: Array<"commentary" | "final_answer" | undefined>;
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;

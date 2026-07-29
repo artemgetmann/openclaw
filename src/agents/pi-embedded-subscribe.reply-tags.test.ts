@@ -12,7 +12,7 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
 
-    subscribeEmbeddedPiSession({
+    const subscription = subscribeEmbeddedPiSession({
       session,
       runId: "run",
       onBlockReply,
@@ -25,7 +25,7 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
       },
     });
 
-    return { emit, onBlockReply };
+    return { emit, onBlockReply, subscription };
   }
 
   it("carries reply_to_current across tag-only block chunks", async () => {
@@ -79,6 +79,48 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     expect(payload?.channelData).toMatchObject({
       openclaw: { assistantPhase: "final_answer" },
     });
+  });
+
+  it("keeps assistant text phases aligned for terminal payload selection", async () => {
+    const { emit, subscription } = createBlockReplyHarness();
+    const commentarySignature = JSON.stringify({
+      v: 1,
+      id: "msg_commentary_only",
+      phase: "commentary",
+    });
+
+    emit({
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "I’ll verify the reminder.",
+            textSignature: commentarySignature,
+          },
+        ],
+      },
+    });
+    emitAssistantTextDelta({ emit, delta: "I’ll verify the reminder." });
+    emitAssistantTextEnd({ emit });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "I’ll verify the reminder.",
+            textSignature: commentarySignature,
+          },
+        ],
+      } as AssistantMessage,
+    });
+    await Promise.resolve();
+
+    expect(subscription.assistantTexts).toEqual(["I’ll verify the reminder."]);
+    expect(subscription.assistantPhases).toEqual(["commentary"]);
   });
 
   it("carries explicit final phase metadata into cumulative partial replies", () => {

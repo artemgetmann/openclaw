@@ -2423,6 +2423,7 @@ export async function runEmbeddedAttempt(
 
       const {
         assistantTexts,
+        assistantPhases,
         toolMetas,
         unsubscribe,
         waitForCompactionRetry,
@@ -3096,6 +3097,7 @@ export async function runEmbeddedAttempt(
         systemPromptReport,
         messagesSnapshot,
         assistantTexts,
+        assistantPhases: assistantPhases.slice(),
         toolMetas: toolMetasNormalized,
         lastAssistant,
         lastErroredAssistant,

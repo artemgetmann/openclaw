@@ -158,6 +158,53 @@ describe("buildEmbeddedRunPayloads", () => {
     );
   });
 
+  it("keeps commentary-only output transient when the provider never emits a final answer", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I’ll set the reminder first, then verify the current schedule."],
+      assistantPhases: ["commentary"],
+      lastAssistant: makeStoppedAssistant(),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      text: "I’ll set the reminder first, then verify the current schedule.",
+      channelData: {
+        openclaw: {
+          sourcePreview: true,
+          assistantPhase: "commentary",
+        },
+      },
+    });
+  });
+
+  it("keeps a phase-tagged final answer durable after commentary", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I’m checking.", "The reminder is set."],
+      assistantPhases: ["commentary", "final_answer"],
+      lastAssistant: makeStoppedAssistant(),
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.channelData).toMatchObject({
+      openclaw: {
+        sourcePreview: true,
+        assistantPhase: "commentary",
+      },
+    });
+    expect(payloads[1]).toMatchObject({
+      text: "The reminder is set.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(
+      (payloads[1]?.channelData as { openclaw?: { sourcePreview?: boolean } } | undefined)?.openclaw
+        ?.sourcePreview,
+    ).not.toBe(true);
+  });
+
   it("uses a distinct stopped final when deciding whether a prior error was masked", () => {
     const finalAnswer =
       "[[reply_to_current]] Example.com is a placeholder demo page, IANA explains reserved example domains, and MDN documents HTML.";

@@ -40,6 +40,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
+    assistantPhases: [],
     toolMetas: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
@@ -95,6 +96,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   let compactionCount = 0;
 
   const assistantTexts = state.assistantTexts;
+  const assistantPhases = state.assistantPhases;
   const toolMetas = state.toolMetas;
   const toolMetaById = state.toolMetaById;
   const toolSummaryById = state.toolSummaryById;
@@ -199,6 +201,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
     assistantTexts.push(text);
+    assistantPhases.push(state.currentAssistantPhase);
     rememberAssistantText(text);
   };
 
@@ -217,6 +220,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           state.assistantTextBaseline,
           assistantTexts.length - state.assistantTextBaseline,
           text,
+        );
+        assistantPhases.splice(
+          state.assistantTextBaseline,
+          assistantPhases.length - state.assistantTextBaseline,
+          state.currentAssistantPhase,
         );
         rememberAssistantText(text);
       } else {
@@ -531,6 +539,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
     state.lastBlockReplyText = chunk;
     assistantTexts.push(chunk);
+    assistantPhases.push(state.currentAssistantPhase);
     rememberAssistantText(chunk);
     if (!params.onBlockReply) {
       return;
@@ -624,6 +633,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const resetForCompactionRetry = () => {
     assistantTexts.length = 0;
+    assistantPhases.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
@@ -716,6 +726,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   return {
     assistantTexts,
+    assistantPhases,
     toolMetas,
     unsubscribe,
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,

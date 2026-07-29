@@ -42,6 +42,7 @@ type ReplyPayload = {
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
+  channelData?: Record<string, unknown>;
 };
 type ResolvedAssistantErrorState = {
   errorText?: string;
@@ -145,6 +146,7 @@ function resolveToolErrorWarningPolicy(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantPhases?: Array<"commentary" | "final_answer" | undefined>;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastErroredAssistant?: AssistantMessage;
@@ -170,6 +172,7 @@ export function buildEmbeddedRunPayloads(params: {
     replyToId?: string;
     replyToTag?: boolean;
     replyToCurrent?: boolean;
+    assistantPhase?: "commentary" | "final_answer";
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
@@ -228,39 +231,44 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const answerTexts = rawAnswerTexts.filter((text) => {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return false;
-    }
-    if (!activeErrorAssistant) {
+  const answerTexts = rawAnswerTexts
+    .map((text, index) => ({
+      text,
+      assistantPhase: params.assistantPhases?.[index],
+    }))
+    .filter(({ text }) => {
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return false;
+      }
+      if (!activeErrorAssistant) {
+        return true;
+      }
+      if (shouldSuppressRawErrorText(trimmed)) {
+        return false;
+      }
+      const normalized = normalizeTextForComparison(trimmed);
+      if (
+        activeErrorState.normalizedErrorText &&
+        normalized === activeErrorState.normalizedErrorText
+      ) {
+        return false;
+      }
+      if (trimmed === genericErrorText) {
+        return false;
+      }
+      if (
+        normalized &&
+        normalizedGenericBillingErrorText &&
+        normalized === normalizedGenericBillingErrorText
+      ) {
+        return false;
+      }
       return true;
-    }
-    if (shouldSuppressRawErrorText(trimmed)) {
-      return false;
-    }
-    const normalized = normalizeTextForComparison(trimmed);
-    if (
-      activeErrorState.normalizedErrorText &&
-      normalized === activeErrorState.normalizedErrorText
-    ) {
-      return false;
-    }
-    if (trimmed === genericErrorText) {
-      return false;
-    }
-    if (
-      normalized &&
-      normalizedGenericBillingErrorText &&
-      normalized === normalizedGenericBillingErrorText
-    ) {
-      return false;
-    }
-    return true;
-  });
+    });
 
   let hasUserFacingAssistantReply = false;
-  for (const text of answerTexts) {
+  for (const { text, assistantPhase } of answerTexts) {
     const {
       text: cleanedText,
       mediaUrls,
@@ -279,6 +287,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
+      assistantPhase,
     });
     hasUserFacingAssistantReply = true;
   }
@@ -335,6 +344,17 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,
       audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+      // The live block stream already routes commentary through transient
+      // progress. Preserve that same structural truth when rebuilding terminal
+      // payloads so a tool-adjacent status line cannot become the final answer.
+      channelData: item.assistantPhase
+        ? {
+            openclaw: {
+              assistantPhase: item.assistantPhase,
+              ...(item.assistantPhase === "commentary" ? { sourcePreview: true } : {}),
+            },
+          }
+        : undefined,
     }))
     .filter((p) => {
       if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {
