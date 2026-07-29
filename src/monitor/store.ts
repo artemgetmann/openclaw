@@ -11,6 +11,7 @@ import type {
   MonitorCreateInput,
   MonitorActionPolicy,
   MonitorAuthorityGrant,
+  MonitorAuthorityGrantInput,
   MonitorDisclosure,
   MonitorGoalSnapshot,
   MonitorListenerEvidence,
@@ -47,7 +48,7 @@ type MonitorIdentityInput = {
   sourceTarget: MonitorSourceTarget;
   actionPolicy?: MonitorActionPolicy;
   purposeLabel?: string;
-  authority?: MonitorAuthorityGrant;
+  authority?: MonitorAuthorityGrant | MonitorAuthorityGrantInput;
 };
 
 function normalizeIdentityValue(value: unknown): unknown {

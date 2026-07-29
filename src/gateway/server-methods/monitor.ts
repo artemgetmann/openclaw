@@ -337,7 +337,7 @@ function createMonitorCreateIdentityKey(params: {
   sourceTarget: Record<string, unknown>;
   actionPolicy?: MonitorActionPolicy;
   purposeLabel?: string;
-  authority?: MonitorAuthorityGrant;
+  authority?: MonitorAuthorityGrant | MonitorAuthorityGrantInput;
 }): string {
   return createMonitorIdentityKey({
     ...params,
@@ -348,7 +348,7 @@ function createMonitorCreateIdentityKey(params: {
   });
 }
 
-function findActiveMonitorByCreateIdentity(
+function findMonitorByCreateIdentity(
   store: Awaited<ReturnType<typeof loadMonitorStore>>,
   input: {
     agentId: string;
@@ -356,22 +356,35 @@ function findActiveMonitorByCreateIdentity(
     sourceTarget: Record<string, unknown>;
     actionPolicy?: MonitorActionPolicy;
     purposeLabel?: string;
-    authority?: MonitorAuthorityGrant;
+    authority?: MonitorAuthorityGrant | MonitorAuthorityGrantInput;
   },
 ) {
   const identityKey = createMonitorCreateIdentityKey(input);
-  return store.monitors.find(
-    (monitor) =>
+  return store.monitors.find((monitor) => {
+    const monitorIdentityKey = createMonitorCreateIdentityKey({
+      agentId: monitor.agentId,
+      sourceType: monitor.sourceType,
+      sourceTarget: monitor.sourceTarget,
+      actionPolicy: monitor.actionPolicy,
+      purposeLabel: monitor.name,
+      authority: monitor.authority,
+    });
+    if (input.authority) {
+      // Authority history is an execution ledger, not merely an active
+      // watcher. Terminal records must participate in dedupe so a timed-out
+      // create retry cannot mint a second one-shot external mutation.
+      return (
+        monitor.authority !== undefined &&
+        monitor.agentId === input.agentId &&
+        (monitorIdentityKey === identityKey ||
+          monitor.authority.idempotencyKey === input.authority.idempotencyKey)
+      );
+    }
+    return (
       (monitor.status === "active" || monitor.status === "degraded") &&
-      createMonitorCreateIdentityKey({
-        agentId: monitor.agentId,
-        sourceType: monitor.sourceType,
-        sourceTarget: monitor.sourceTarget,
-        actionPolicy: monitor.actionPolicy,
-        purposeLabel: monitor.name,
-        authority: monitor.authority,
-      }) === identityKey,
-  );
+      monitorIdentityKey === identityKey
+    );
+  });
 }
 
 function buildScheduleMonitorTrigger(cadence: CronJobCreate["schedule"]): MonitorTrigger {
@@ -685,6 +698,43 @@ export const monitorHandlers: GatewayRequestHandlers = {
     await withMonitorStoreWriteLock(storePath, async () => {
       const store = await loadMonitorStore(storePath);
       const cfg = loadConfig();
+      const requestedAuthorityIdentity = p.authority
+        ? {
+            agentId: p.agentId,
+            sourceType: p.sourceType,
+            sourceTarget: p.sourceTarget,
+            actionPolicy: p.actionPolicy,
+            purposeLabel: p.name,
+            authority: p.authority,
+          }
+        : undefined;
+      const terminalAuthorityRetry = requestedAuthorityIdentity
+        ? findMonitorByCreateIdentity(store, requestedAuthorityIdentity)
+        : undefined;
+      if (
+        requestedAuthorityIdentity &&
+        terminalAuthorityRetry &&
+        terminalAuthorityRetry.status !== "active" &&
+        terminalAuthorityRetry.status !== "degraded"
+      ) {
+        const terminalIdentity = createMonitorCreateIdentityKey({
+          agentId: terminalAuthorityRetry.agentId,
+          sourceType: terminalAuthorityRetry.sourceType,
+          sourceTarget: terminalAuthorityRetry.sourceTarget,
+          actionPolicy: terminalAuthorityRetry.actionPolicy,
+          purposeLabel: terminalAuthorityRetry.name,
+          authority: terminalAuthorityRetry.authority,
+        });
+        if (terminalIdentity !== createMonitorCreateIdentityKey(requestedAuthorityIdentity)) {
+          throw new Error(
+            "durable authority idempotency key is already bound to a different purpose or action",
+          );
+        }
+        // Return the durable terminal receipt even if the originating goal has
+        // since completed. A create retry is observation, not a new grant.
+        respond(true, terminalAuthorityRetry, undefined);
+        return;
+      }
       let goal = await resolveMonitorGoalSnapshot({
         explicitGoal: p.goal,
         originSessionKey: p.originSessionKey,
@@ -727,19 +777,33 @@ export const monitorHandlers: GatewayRequestHandlers = {
         sourceTarget: p.sourceTarget,
         cadence: p.cadence,
       });
-      const existingMonitor = findActiveMonitorByCreateIdentity(store, {
+      const createIdentityInput = {
         agentId: p.agentId,
         sourceType: p.sourceType,
         sourceTarget: p.sourceTarget,
         actionPolicy: p.actionPolicy,
         purposeLabel: p.name,
         authority,
-      });
+      };
+      const existingMonitor = findMonitorByCreateIdentity(store, createIdentityInput);
       if (existingMonitor) {
-        if (existingMonitor.authority && goal?.id !== existingMonitor.authority.goalId) {
+        if (
+          authority &&
+          createMonitorCreateIdentityKey({
+            agentId: existingMonitor.agentId,
+            sourceType: existingMonitor.sourceType,
+            sourceTarget: existingMonitor.sourceTarget,
+            actionPolicy: existingMonitor.actionPolicy,
+            purposeLabel: existingMonitor.name,
+            authority: existingMonitor.authority,
+          }) !== createMonitorCreateIdentityKey(createIdentityInput)
+        ) {
           throw new Error(
-            "an active durable-authority monitor cannot be rebound to a different goal",
+            "durable authority idempotency key is already bound to a different purpose or action",
           );
+        }
+        if (existingMonitor.authority && goal?.id !== existingMonitor.authority.goalId) {
+          throw new Error("a durable-authority monitor cannot be rebound to a different goal");
         }
         const reconciledTrigger = resolveMonitorCreateTrigger({
           explicitTrigger: p.trigger,

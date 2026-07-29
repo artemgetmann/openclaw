@@ -134,6 +134,29 @@ export type SessionGoalStatus =
   | "budget_limited"
   | "complete";
 
+export const SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION =
+  "codex.thread.unarchive_resume" as const;
+
+/**
+ * Exact consequential action approved with the goal itself.
+ *
+ * Generic allowedActions remain useful for human-readable autonomy, but they
+ * cannot authorize a durable external mutation. A monitor grant must match one
+ * of these persisted contracts byte-for-byte before it can be issued.
+ */
+export type SessionGoalAuthorityGrant = {
+  purposeKey: string;
+  action: {
+    kind: typeof SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION;
+    threadId: string;
+    prompt: string;
+  };
+  idempotencyKey: string;
+  expiresAt: string;
+  stopCondition: string;
+  maxExecutions: 1;
+};
+
 export type SessionGoalAutonomy = {
   /** Missing autonomy on legacy goals is intentionally interpreted as observe_only. */
   level: "observe_only" | "act_within_scope";
@@ -141,6 +164,8 @@ export type SessionGoalAutonomy = {
   allowedActions?: string[];
   /** Boundaries where Jarvis must stop and ask before acting. */
   approvalRequired?: string[];
+  /** Exact one-shot grants approved when the goal was created. */
+  authorityGrants?: SessionGoalAuthorityGrant[];
 };
 
 export type SessionGoal = {

@@ -42,11 +42,25 @@ function appendAudit(
   return [...grant.audit, entry].slice(-MAX_AUDIT_EVENTS);
 }
 
-function actionIsAllowedByGoal(goal: MonitorGoalSnapshot): boolean {
+function actionIsAllowedByGoal(
+  goal: MonitorGoalSnapshot,
+  authority: Pick<
+    MonitorAuthorityGrant,
+    "purposeKey" | "action" | "idempotencyKey" | "expiresAt" | "stopCondition" | "maxExecutions"
+  >,
+): boolean {
   return (
     goal.autonomy?.level === "act_within_scope" &&
-    goal.autonomy.allowedActions?.some(
-      (action) => action.trim() === CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+    goal.autonomy.authorityGrants?.some(
+      (approved) =>
+        approved.purposeKey === authority.purposeKey &&
+        approved.action.kind === authority.action.kind &&
+        approved.action.threadId === authority.action.threadId &&
+        approved.action.prompt === authority.action.prompt &&
+        approved.idempotencyKey === authority.idempotencyKey &&
+        approved.expiresAt === authority.expiresAt &&
+        approved.stopCondition === authority.stopCondition &&
+        approved.maxExecutions === authority.maxExecutions,
     ) === true
   );
 }
@@ -58,9 +72,6 @@ export function createMonitorAuthorityGrant(params: {
 }): MonitorAuthorityGrant {
   if (!params.goal) {
     throw new Error("durable authority requires an active bound goal");
-  }
-  if (!actionIsAllowedByGoal(params.goal)) {
-    throw new Error(`goal autonomy must explicitly allow ${CODEX_THREAD_UNARCHIVE_RESUME_ACTION}`);
   }
   if (params.input.action.kind !== CODEX_THREAD_UNARCHIVE_RESUME_ACTION) {
     // The static input type admits only the supported literal, but persisted
@@ -74,11 +85,7 @@ export function createMonitorAuthorityGrant(params: {
     throw new Error("authority.expiresAt must be a future ISO timestamp");
   }
 
-  const grantedAtMs = params.nowMs;
-  return {
-    schemaVersion: 1,
-    grantId: randomBytes(12).toString("hex"),
-    goalId: params.goal.id,
+  const approvedContract = {
     purposeKey: requireBoundedText(
       params.input.purposeKey,
       "authority.purposeKey",
@@ -108,7 +115,20 @@ export function createMonitorAuthorityGrant(params: {
       "authority.stopCondition",
       MAX_STOP_CONDITION_LENGTH,
     ),
-    maxExecutions: 1,
+    maxExecutions: 1 as const,
+  };
+  if (!actionIsAllowedByGoal(params.goal, approvedContract)) {
+    throw new Error(
+      `goal autonomy must contain the exact approved ${CODEX_THREAD_UNARCHIVE_RESUME_ACTION} grant`,
+    );
+  }
+
+  const grantedAtMs = params.nowMs;
+  return {
+    schemaVersion: 1,
+    grantId: randomBytes(12).toString("hex"),
+    goalId: params.goal.id,
+    ...approvedContract,
     grantedAtMs,
     execution: { status: "available", executions: 0 },
     audit: [{ event: "granted", atMs: grantedAtMs }],
@@ -221,7 +241,7 @@ export async function claimMonitorAuthorityAction(params: {
       goal.status === "found" &&
       goal.goal?.id === authority.goalId &&
       goal.goal.status === "active" &&
-      actionIsAllowedByGoal(goal.goal);
+      actionIsAllowedByGoal(goal.goal, authority);
     const monitorIsActive = monitor.status === "active" || monitor.status === "degraded";
     if (!goalIsAuthorized || !monitorIsActive) {
       const reason = !goalIsAuthorized

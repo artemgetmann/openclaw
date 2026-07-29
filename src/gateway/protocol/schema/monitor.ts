@@ -17,11 +17,33 @@ const MonitorActionPolicySchema = Type.Union([
   Type.Literal("auto_send"),
 ]);
 
+const MonitorAuthorityActionSchema = Type.Object(
+  {
+    kind: Type.Literal("codex.thread.unarchive_resume"),
+    threadId: NonEmptyString,
+    prompt: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+const MonitorGoalAuthorityGrantSchema = Type.Object(
+  {
+    purposeKey: NonEmptyString,
+    action: MonitorAuthorityActionSchema,
+    idempotencyKey: NonEmptyString,
+    expiresAt: NonEmptyString,
+    stopCondition: NonEmptyString,
+    maxExecutions: Type.Literal(1),
+  },
+  { additionalProperties: false },
+);
+
 const MonitorAutonomySchema = Type.Object(
   {
     level: Type.Union([Type.Literal("observe_only"), Type.Literal("act_within_scope")]),
     allowedActions: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
     approvalRequired: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+    authorityGrants: Type.Optional(Type.Array(MonitorGoalAuthorityGrantSchema, { maxItems: 4 })),
   },
   { additionalProperties: false },
 );
@@ -148,15 +170,6 @@ const MonitorGoalSnapshotSchema = Type.Object(
     id: NonEmptyString,
     objective: NonEmptyString,
     autonomy: Type.Optional(MonitorAutonomySchema),
-  },
-  { additionalProperties: false },
-);
-
-const MonitorAuthorityActionSchema = Type.Object(
-  {
-    kind: Type.Literal("codex.thread.unarchive_resume"),
-    threadId: NonEmptyString,
-    prompt: NonEmptyString,
   },
   { additionalProperties: false },
 );

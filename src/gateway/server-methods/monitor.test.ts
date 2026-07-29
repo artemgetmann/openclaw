@@ -765,16 +765,6 @@ describe("monitor gateway handlers", () => {
     await updateSessionStore(configState.sessionStorePath, (store) => {
       store[originSessionKey] = { sessionId: "origin-release-session", updatedAt: 1 };
     });
-    const goal = await createSessionGoal({
-      sessionKey: originSessionKey,
-      storePath: configState.sessionStorePath,
-      objective: "Verify the mounted-volume fix after the next Mac release.",
-      autonomy: {
-        level: "act_within_scope",
-        allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
-        approvalRequired: ["Any other Codex thread or prompt."],
-      },
-    });
     const authority = {
       purposeKey: "mac-release:verify-mounted-login-item-fix",
       action: {
@@ -786,6 +776,17 @@ describe("monitor gateway handlers", () => {
       expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       stopCondition: "Stop after the exact Codex continuation is accepted once.",
     };
+    const goal = await createSessionGoal({
+      sessionKey: originSessionKey,
+      storePath: configState.sessionStorePath,
+      objective: "Verify the mounted-volume fix after the next Mac release.",
+      autonomy: {
+        level: "act_within_scope",
+        allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+        approvalRequired: ["Any other Codex thread or prompt."],
+        authorityGrants: [{ ...authority, maxExecutions: 1 }],
+      },
+    });
 
     await invokeMonitorCreate(
       invokeContext,
@@ -833,6 +834,53 @@ describe("monitor gateway handlers", () => {
       authority: { grantId: created?.authority?.grantId },
     });
     expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
+
+    const storePath = resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath });
+    const terminalStore = await loadMonitorStore(storePath);
+    const terminal = terminalStore.monitors[0];
+    if (!terminal?.authority) {
+      throw new Error("expected persisted authority monitor");
+    }
+    terminal.status = "completed";
+    terminal.authority.execution = {
+      status: "completed",
+      executions: 1,
+      consumedAtMs: 2,
+      completedAtMs: 3,
+      externalRef: "turn-release-proof",
+    };
+    await saveMonitorStore(storePath, terminalStore);
+    await updateSessionStore(configState.sessionStorePath, (sessions) => {
+      const entry = sessions[originSessionKey];
+      if (entry?.goal) {
+        entry.goal.status = "complete";
+        entry.goal.completedAt = 4;
+      }
+    });
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Retry after the original create response was lost.",
+        agentId: "main",
+        name: "Post-completion retry",
+        originSessionKey,
+        sourceType: "github-release",
+        sourceTarget: { repo: "artemgetmann/openclaw", channel: "mac" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        authority,
+      },
+      "req-release-authority-terminal-retry",
+    );
+    expect(invokeContext.respond.mock.calls[2]?.[1]).toMatchObject({
+      monitorId: created?.monitorId,
+      status: "completed",
+      authority: {
+        grantId: created?.authority?.grantId,
+        execution: { status: "completed", executions: 1 },
+      },
+    });
+    expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
   });
 
   it("rejects durable authority when the bound goal did not grant the action", async () => {
@@ -863,6 +911,20 @@ describe("monitor gateway handlers", () => {
             autonomy: {
               level: "act_within_scope",
               allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+              authorityGrants: [
+                {
+                  purposeKey: "mac-release:unauthorized-resume",
+                  action: {
+                    kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+                    threadId: "thread-release-proof",
+                    prompt: "Run the proof.",
+                  },
+                  idempotencyKey: "unauthorized-release-proof",
+                  expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+                  stopCondition: "Resume once.",
+                  maxExecutions: 1,
+                },
+              ],
             },
           },
           authority: {
@@ -879,7 +941,7 @@ describe("monitor gateway handlers", () => {
         },
         "req-release-authority-denied",
       ),
-    ).rejects.toThrow(`explicitly allow ${CODEX_THREAD_UNARCHIVE_RESUME_ACTION}`);
+    ).rejects.toThrow(`exact approved ${CODEX_THREAD_UNARCHIVE_RESUME_ACTION} grant`);
     expect(invokeContext.cronAdd).not.toHaveBeenCalled();
   });
 

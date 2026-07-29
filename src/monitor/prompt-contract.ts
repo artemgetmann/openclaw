@@ -15,6 +15,7 @@ export function buildMonitorAuthorityLines(authority: MonitorAuthorityGrant | un
     "Durable one-shot authority is bound to this monitor.",
     `Authorized action: ${authority.action.kind}`,
     `Authorized Codex thread: ${authority.action.threadId}`,
+    `Authorized continuation prompt (use exactly): ${JSON.stringify(authority.action.prompt)}`,
     `Authority idempotency key: ${authority.idempotencyKey}`,
     `Authority expiry: ${authority.expiresAt}`,
     `Authority stop condition: ${authority.stopCondition}`,

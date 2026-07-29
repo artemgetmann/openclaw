@@ -920,24 +920,27 @@ describe("Codex natural-language delegation", () => {
     const sessionKey = "agent:main:monitor:release-proof";
     const text = "The Mac release is available. Run the deferred verification now.";
     const idempotencyKey = "release-2026-08:thread-natural";
-    const grant = createMonitorAuthorityGrant({
-      input: {
-        purposeKey: "mac-release:verify-login-item-fix",
-        action: {
-          kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
-          threadId: "thread-natural",
-          prompt: text,
-        },
-        idempotencyKey,
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        stopCondition: "Accept the exact Codex continuation once.",
+    const grantInput = {
+      purposeKey: "mac-release:verify-login-item-fix",
+      action: {
+        kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+        threadId: "thread-natural",
+        prompt: text,
       },
+      idempotencyKey,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      stopCondition: "Accept the exact Codex continuation once.",
+    };
+    const approvedGrant = { ...grantInput, maxExecutions: 1 as const };
+    const grant = createMonitorAuthorityGrant({
+      input: grantInput,
       goal: {
         id: "goal-release",
         objective: "Verify the next release.",
         autonomy: {
           level: "act_within_scope",
           allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+          authorityGrants: [approvedGrant],
         },
       },
       nowMs: Date.now(),
@@ -959,6 +962,7 @@ describe("Codex natural-language delegation", () => {
           autonomy: {
             level: "act_within_scope",
             allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+            authorityGrants: [approvedGrant],
           },
         },
       };
@@ -980,6 +984,7 @@ describe("Codex natural-language delegation", () => {
           autonomy: {
             level: "act_within_scope",
             allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+            authorityGrants: [approvedGrant],
           },
         },
         authority: grant,

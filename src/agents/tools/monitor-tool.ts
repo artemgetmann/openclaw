@@ -113,6 +113,29 @@ const MonitorToolSchema = Type.Object(
               level: stringEnum(["observe_only", "act_within_scope"] as const),
               allowedActions: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
               approvalRequired: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+              authorityGrants: Type.Optional(
+                Type.Array(
+                  Type.Object(
+                    {
+                      purposeKey: Type.String(),
+                      action: Type.Object(
+                        {
+                          kind: Type.Literal("codex.thread.unarchive_resume"),
+                          threadId: Type.String(),
+                          prompt: Type.String(),
+                        },
+                        { additionalProperties: false },
+                      ),
+                      idempotencyKey: Type.String(),
+                      expiresAt: Type.String(),
+                      stopCondition: Type.String(),
+                      maxExecutions: Type.Literal(1),
+                    },
+                    { additionalProperties: false },
+                  ),
+                  { maxItems: 4 },
+                ),
+              ),
             },
             { additionalProperties: false },
           ),

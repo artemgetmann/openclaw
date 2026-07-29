@@ -22,18 +22,30 @@ const threadId = "thread-release-proof";
 const prompt = "The release is available. Run the deferred verification now.";
 const idempotencyKey = "release-2026-08-01:thread-release-proof";
 
+function approvedGrant(nowMs = 1_000) {
+  return {
+    purposeKey: "mac-release:verify-mounted-login-item-fix",
+    action: {
+      kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+      threadId,
+      prompt,
+    },
+    idempotencyKey,
+    expiresAt: new Date(nowMs + 60_000).toISOString(),
+    stopCondition: "Stop after the exact Codex continuation is accepted once.",
+    maxExecutions: 1 as const,
+  };
+}
+
 function authority(nowMs = 1_000): MonitorAuthorityGrant {
+  const approved = approvedGrant(nowMs);
   return createMonitorAuthorityGrant({
     input: {
-      purposeKey: "mac-release:verify-mounted-login-item-fix",
-      action: {
-        kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
-        threadId,
-        prompt,
-      },
-      idempotencyKey,
-      expiresAt: new Date(nowMs + 60_000).toISOString(),
-      stopCondition: "Stop after the exact Codex continuation is accepted once.",
+      purposeKey: approved.purposeKey,
+      action: approved.action,
+      idempotencyKey: approved.idempotencyKey,
+      expiresAt: approved.expiresAt,
+      stopCondition: approved.stopCondition,
     },
     goal: {
       id: "goal-release",
@@ -42,6 +54,7 @@ function authority(nowMs = 1_000): MonitorAuthorityGrant {
         level: "act_within_scope",
         allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
         approvalRequired: ["Any other Codex thread or prompt."],
+        authorityGrants: [approved],
       },
     },
     nowMs,
@@ -53,6 +66,15 @@ async function createStore(overrides: Partial<MonitorRecord> = {}) {
   tempDirs.push(dir);
   const storePath = path.join(dir, "monitors.json");
   const sessionStorePath = path.join(dir, "sessions.json");
+  const grant = overrides.authority ?? authority();
+  const goalAuthorityGrant = {
+    purposeKey: grant.purposeKey,
+    action: grant.action,
+    idempotencyKey: grant.idempotencyKey,
+    expiresAt: grant.expiresAt,
+    stopCondition: grant.stopCondition,
+    maxExecutions: grant.maxExecutions,
+  };
   await updateSessionStore(sessionStorePath, (store) => {
     store["agent:main:telegram:direct:owner"] = {
       sessionId: "origin-session",
@@ -70,11 +92,11 @@ async function createStore(overrides: Partial<MonitorRecord> = {}) {
         autonomy: {
           level: "act_within_scope",
           allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+          authorityGrants: [goalAuthorityGrant],
         },
       },
     };
   });
-  const grant = overrides.authority ?? authority();
   const monitor = createMonitorRecord(
     {
       monitorId: "monitor-release",
@@ -94,6 +116,7 @@ async function createStore(overrides: Partial<MonitorRecord> = {}) {
         autonomy: {
           level: "act_within_scope",
           allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+          authorityGrants: [goalAuthorityGrant],
         },
       },
       authority: grant,
@@ -138,7 +161,7 @@ afterEach(async () => {
 });
 
 describe("durable monitor authority", () => {
-  it("requires an active goal that explicitly allows the typed action", () => {
+  it("requires an active goal with the exact typed target and prompt grant", () => {
     expect(() =>
       createMonitorAuthorityGrant({
         input: {
@@ -151,11 +174,53 @@ describe("durable monitor authority", () => {
         goal: {
           id: "goal-1",
           objective: "Verify release.",
-          autonomy: { level: "observe_only" },
+          autonomy: {
+            level: "act_within_scope",
+            allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+          },
         },
         nowMs: 1,
       }),
-    ).toThrow(`explicitly allow ${CODEX_THREAD_UNARCHIVE_RESUME_ACTION}`);
+    ).toThrow(`exact approved ${CODEX_THREAD_UNARCHIVE_RESUME_ACTION} grant`);
+  });
+
+  it("rejects a monitor grant whose thread or prompt differs from persisted goal approval", () => {
+    const approved = approvedGrant();
+    expect(() =>
+      createMonitorAuthorityGrant({
+        input: {
+          purposeKey: approved.purposeKey,
+          action: { ...approved.action, threadId: "other-thread" },
+          idempotencyKey: approved.idempotencyKey,
+          expiresAt: approved.expiresAt,
+          stopCondition: approved.stopCondition,
+        },
+        goal: {
+          id: "goal-1",
+          objective: "Verify release.",
+          autonomy: { level: "act_within_scope", authorityGrants: [approved] },
+        },
+        nowMs: 1_000,
+      }),
+    ).toThrow(`exact approved ${CODEX_THREAD_UNARCHIVE_RESUME_ACTION} grant`);
+
+    expect(() =>
+      createMonitorAuthorityGrant({
+        input: {
+          purposeKey: approved.purposeKey,
+          action: { ...approved.action, prompt: "Run different work." },
+          idempotencyKey: approved.idempotencyKey,
+          expiresAt: approved.expiresAt,
+          stopCondition: approved.stopCondition,
+        },
+        goal: {
+          id: "goal-1",
+          objective: "Verify release.",
+          autonomy: { level: "act_within_scope", authorityGrants: [approved] },
+        },
+        nowMs: 1_000,
+      }),
+    ).toThrow(`exact approved ${CODEX_THREAD_UNARCHIVE_RESUME_ACTION} grant`);
   });
 
   it("rejects a wrong thread, prompt, or idempotency key without consuming authority", async () => {

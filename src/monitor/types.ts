@@ -1,4 +1,8 @@
 import type { SessionGoalAutonomy } from "../config/sessions/types.js";
+import {
+  SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+  type SessionGoalAuthorityGrant,
+} from "../config/sessions/types.js";
 import type { CronDelivery, CronSchedule } from "../cron/types.js";
 
 export type MonitorStatus = "active" | "degraded" | "stopped" | "completed" | "expired";
@@ -11,7 +15,8 @@ export function isTerminalMonitorStatus(status: MonitorStatus): boolean {
 
 export type MonitorActionPolicy = "notify_draft" | "notify_only" | "auto_send";
 
-export const CODEX_THREAD_UNARCHIVE_RESUME_ACTION = "codex.thread.unarchive_resume" as const;
+export const CODEX_THREAD_UNARCHIVE_RESUME_ACTION =
+  SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION;
 
 export type MonitorAuthorityAction = {
   kind: typeof CODEX_THREAD_UNARCHIVE_RESUME_ACTION;
@@ -58,10 +63,7 @@ export type MonitorAuthorityGrant = {
   audit: MonitorAuthorityAuditEvent[];
 };
 
-export type MonitorAuthorityGrantInput = Pick<
-  MonitorAuthorityGrant,
-  "purposeKey" | "action" | "idempotencyKey" | "expiresAt" | "stopCondition"
->;
+export type MonitorAuthorityGrantInput = Omit<SessionGoalAuthorityGrant, "maxExecutions">;
 
 /**
  * Monitor instructions are replayed in every wake, so retain enough context
