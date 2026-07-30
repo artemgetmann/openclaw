@@ -1,3 +1,4 @@
+import type { InlineKeyboardMarkup } from "@grammyjs/types";
 import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "../../../src/channels/draft-stream-controls.js";
 import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
@@ -131,6 +132,8 @@ export function createTelegramDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  /** Inline controls that stay attached while this mutable preview is active. */
+  replyMarkup?: InlineKeyboardMarkup;
   /** Audit fields for conservative delete suppression and opt-in delete attempts. */
   deleteAudit?: Partial<
     Pick<
@@ -210,12 +213,11 @@ export function createTelegramDraftStream(params: {
     renderedRichMessage?: TelegramInputRichMessage;
     fallbackWarnMessage: string;
   }) => {
-    const sendParams = sendArgs.renderedParseMode
-      ? {
-          ...replyParams,
-          parse_mode: sendArgs.renderedParseMode,
-        }
-      : replyParams;
+    const sendParams = {
+      ...replyParams,
+      ...(sendArgs.renderedParseMode ? { parse_mode: sendArgs.renderedParseMode } : {}),
+      ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
+    };
     const usedThreadParams =
       "message_thread_id" in (sendParams ?? {}) &&
       typeof (sendParams as { message_thread_id?: unknown }).message_thread_id === "number";
@@ -231,6 +233,9 @@ export function createTelegramDraftStream(params: {
           message_id: params.replyToMessageId,
           allow_sending_without_reply: true,
         };
+      }
+      if (params.replyMarkup) {
+        richParams.reply_markup = params.replyMarkup;
       }
       try {
         assertTelegramRichMessageInputHasContent(richMessage);
@@ -304,6 +309,7 @@ export function createTelegramDraftStream(params: {
             chat_id: chatId,
             message_id: streamMessageId,
             rich_message: renderedRichMessage!,
+            ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
           });
           assertTelegramRichSendResponseHasVisibleContent(richEdited);
         } catch (err) {
@@ -315,6 +321,11 @@ export function createTelegramDraftStream(params: {
           if (renderedParseMode) {
             await params.api.editMessageText(chatId, streamMessageId, renderedText, {
               parse_mode: renderedParseMode,
+              ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
+            });
+          } else if (params.replyMarkup) {
+            await params.api.editMessageText(chatId, streamMessageId, renderedText, {
+              reply_markup: params.replyMarkup,
             });
           } else {
             await params.api.editMessageText(chatId, streamMessageId, renderedText);
@@ -323,6 +334,11 @@ export function createTelegramDraftStream(params: {
       } else if (renderedParseMode) {
         await params.api.editMessageText(chatId, streamMessageId, renderedText, {
           parse_mode: renderedParseMode,
+          ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
+        });
+      } else if (params.replyMarkup) {
+        await params.api.editMessageText(chatId, streamMessageId, renderedText, {
+          reply_markup: params.replyMarkup,
         });
       } else {
         await params.api.editMessageText(chatId, streamMessageId, renderedText);

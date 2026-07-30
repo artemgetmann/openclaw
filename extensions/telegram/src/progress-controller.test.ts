@@ -76,6 +76,44 @@ describe("createTelegramProgressController", () => {
     );
   });
 
+  it("hosts an active Stop control on a temporary Working bubble and removes it safely", async () => {
+    const onDispose = vi.fn();
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),
+      editMessageText: vi.fn().mockResolvedValue(true),
+      editMessageReplyMarkup: vi.fn().mockResolvedValue(true),
+      deleteMessage: vi.fn().mockResolvedValue(true),
+    };
+    const controller = createTelegramProgressController({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      minInitialChars: 1,
+      activeReplyMarkup: {
+        inline_keyboard: [[{ text: "⏹ Stop", callback_data: "ors:1", style: "danger" }]],
+      },
+      onDispose,
+      renderText: (text) => ({ text }),
+    });
+
+    controller.start("Working…");
+    await vi.waitFor(() =>
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Working…", {
+        reply_markup: {
+          inline_keyboard: [[{ text: "⏹ Stop", callback_data: "ors:1", style: "danger" }]],
+        },
+      }),
+    );
+    await expect(controller.retainAsWorkLog()).resolves.toEqual({ retained: false });
+    await controller.clear();
+
+    expect(api.editMessageReplyMarkup).toHaveBeenCalledWith(123, 77, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
+    expect(onDispose).toHaveBeenCalledTimes(1);
+  });
+
   it("can adopt an existing visible stream as the progress bubble", async () => {
     const adoptedStream = {
       update: vi.fn(),

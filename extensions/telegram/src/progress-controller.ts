@@ -1,3 +1,4 @@
+import type { InlineKeyboardMarkup } from "@grammyjs/types";
 import type { Bot } from "grammy";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramDeleteAuditMetadata } from "./delete-guard.js";
@@ -22,6 +23,7 @@ const PROGRESS_ENTRY_SEPARATOR = "\n\n";
 const PROGRESS_RENDER_HEADROOM_CHARS = 64;
 
 export type TelegramProgressController = {
+  start: (text: string) => void;
   update: (text: string) => void;
   preview: (text: string) => void;
   updatePlan: (text: string) => void;
@@ -49,6 +51,8 @@ export function createTelegramProgressController(params: {
   replyToMessageId?: number;
   throttleMs?: number;
   minInitialChars?: number;
+  activeReplyMarkup?: InlineKeyboardMarkup;
+  onDispose?: () => void;
   deleteAudit?: Partial<
     Pick<
       TelegramDeleteAuditMetadata,
@@ -79,6 +83,7 @@ export function createTelegramProgressController(params: {
       replyToMessageId: params.replyToMessageId,
       ...(params.throttleMs != null ? { throttleMs: params.throttleMs } : {}),
       minInitialChars: params.minInitialChars,
+      replyMarkup: params.activeReplyMarkup,
       deleteAudit: {
         callsite: params.deleteAudit?.callsite ?? "telegram-progress-controller-clear",
         reason: params.deleteAudit?.reason ?? "progress_cleanup",
@@ -101,6 +106,32 @@ export function createTelegramProgressController(params: {
   const progressEntries: string[] = [];
   const progressEntryKeys = new Set<string>();
   let planEntryIndex: number | undefined;
+  let disposed = false;
+
+  const dispose = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    params.onDispose?.();
+  };
+
+  const removeActiveReplyMarkup = async (messageId: number | undefined) => {
+    if (!params.activeReplyMarkup || typeof messageId !== "number") {
+      return;
+    }
+    try {
+      await params.api.editMessageReplyMarkup(params.chatId, messageId, {
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch (err) {
+      params.warn?.(
+        `telegram active run controls cleanup failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  };
 
   const normalizeProgressEntryKey = (entry: string) => entry.replace(/\s+/g, " ").trim();
 
@@ -218,6 +249,17 @@ export function createTelegramProgressController(params: {
   };
 
   return {
+    start: (text: string) => {
+      if (cleared || hasProgress) {
+        return;
+      }
+      const placeholder = text.trim();
+      if (!placeholder) {
+        return;
+      }
+      lastRenderedProgressText = placeholder;
+      stream.update(placeholder);
+    },
     update: (text: string) => {
       if (cleared) {
         return;
@@ -283,10 +325,17 @@ export function createTelegramProgressController(params: {
         // stale visible bubble under Telegram preview throttling.
         await stream.flush();
       }
+      // Remove the control before deleting the transient bubble. If Telegram
+      // rejects the delete, the stale button still cannot stop a later run.
+      await removeActiveReplyMarkup(stream.messageId());
       // Final-answer cleanup can explicitly skip in-flight preview edits. At
       // that point the next durable message is the final answer, so deleting
       // the visible progress bubble beats faithfully rendering stale progress.
-      await stream.clear({ waitForInFlight: options?.waitForInFlight });
+      try {
+        await stream.clear({ waitForInFlight: options?.waitForInFlight });
+      } finally {
+        dispose();
+      }
     },
     materialize: async () => {
       if (cleared || !hasProgress) {
@@ -305,7 +354,9 @@ export function createTelegramProgressController(params: {
         stream.forceNewMessage();
         return undefined;
       }
+      await removeActiveReplyMarkup(messageId);
       cleared = true;
+      dispose();
       return messageId;
     },
     retainAsWorkLog: async (options?: { toolNames?: readonly string[] }) => {
@@ -342,6 +393,8 @@ export function createTelegramProgressController(params: {
         params.warn?.(
           `telegram work log buttons failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+      } finally {
+        dispose();
       }
       return { retained: true, messageId, workLogId: workLog.id };
     },

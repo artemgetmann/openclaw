@@ -114,6 +114,7 @@ import {
   buildTelegramSteeredButtons,
   parseTelegramQueueCallback,
 } from "./queue-buttons.js";
+import { claimTelegramRunStop } from "./run-stop-control.js";
 import { buildInlineKeyboard } from "./send.js";
 import { getSentMessageMetadata, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 import {
@@ -1647,6 +1648,34 @@ export const registerTelegramHandlers = ({
         senderId,
         messageThreadId: messageThreadId ?? undefined,
       });
+      const runStopClaim = claimTelegramRunStop({
+        data,
+        accountId,
+        chatId,
+        requesterId: senderId,
+        threadId: messageThreadId ?? resolvedThreadId ?? dmThreadId,
+      });
+      if (runStopClaim) {
+        if (runStopClaim.status === "mismatch") {
+          return;
+        }
+        // Stale and duplicate controls are removed in place. Only the first
+        // valid claim enters the normal /stop pipeline.
+        await clearCallbackButtons();
+        if (runStopClaim.status === "stale") {
+          return;
+        }
+        const syntheticStopMessage = buildSyntheticTextMessage({
+          base: callbackMessage,
+          from: callback.from,
+          text: "/stop",
+        });
+        await processMessage(buildSyntheticContext(ctx, syntheticStopMessage), [], storeAllowFrom, {
+          forceWasMentioned: true,
+          messageIdOverride: callback.id,
+        });
+        return;
+      }
       const queueCallback = parseTelegramQueueCallback(data);
       if (queueCallback) {
         // A cached receipt gives us an extra exact-message check in the hot

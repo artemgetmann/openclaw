@@ -9,6 +9,7 @@ import {
   answerCallbackQuerySpy,
   botCtorSpy,
   commandSpy,
+  editMessageReplyMarkupSpy,
   editMessageTextSpy,
   getLoadConfigMock,
   getLoadWebMediaMock,
@@ -38,6 +39,8 @@ const { setActiveEmbeddedRun, __testing: embeddedRunTesting } =
   await import("../../../src/agents/pi-embedded-runner/runs.js");
 const { FOLLOWUP_QUEUES, getFollowupQueue } =
   await import("../../../src/auto-reply/reply/queue/state.js");
+const { registerTelegramRunStop, __testing: runStopTesting } =
+  await import("./run-stop-control.js");
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -149,6 +152,46 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+  it("routes one exact active-run Stop callback through the existing /stop command", async () => {
+    const registration = registerTelegramRunStop({
+      accountId: "default",
+      chatId: 1234,
+      requesterId: 9,
+    });
+    try {
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-stop-1",
+          data: registration.buttons[0]?.[0]?.callback_data,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 10,
+            text: "Working…",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-stop-1");
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledWith("1234", "⚙️ Agent was aborted.", {
+        parse_mode: "HTML",
+      });
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+        reply_markup: { inline_keyboard: [] },
+      });
+    } finally {
+      runStopTesting.resetTelegramRunStopsForTests();
+    }
   });
   it("promotes one exact queued message through the Telegram Steer callback", async () => {
     const durableId = "12345678-1234-4234-8234-123456789abc";
