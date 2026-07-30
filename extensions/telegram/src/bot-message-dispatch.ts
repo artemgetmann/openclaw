@@ -91,6 +91,7 @@ import {
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
 import { getTelegramRichRawApi } from "./rich-message.js";
+import { registerTelegramRunStop } from "./run-stop-control.js";
 import { buildInlineKeyboard, editMessageTelegram } from "./send.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { getTelegramSequentialKey, markTelegramSequentialKeyBusy } from "./sequential-key.js";
@@ -786,6 +787,7 @@ export const dispatchTelegramMessage = async ({
     inlineButtonsScope === "allowlist" ||
     (inlineButtonsScope === "dm" && !isGroup) ||
     (inlineButtonsScope === "group" && isGroup);
+  const canShowRunStopButton = canShowQueueButtons && msg.from?.id != null;
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   let partialCallbackCount = 0;
@@ -1152,6 +1154,17 @@ export const dispatchTelegramMessage = async ({
       return existingController;
     }
     if (adoptedStream || !progressController) {
+      const runStopRegistration = canShowRunStopButton
+        ? registerTelegramRunStop({
+            accountId: route.accountId,
+            chatId,
+            requesterId: msg.from!.id,
+            threadId: threadSpec?.id,
+          })
+        : undefined;
+      const activeReplyMarkup = runStopRegistration
+        ? buildInlineKeyboard(runStopRegistration.buttons)
+        : undefined;
       progressController = createTelegramProgressController({
         api: bot.api,
         chatId,
@@ -1162,6 +1175,8 @@ export const dispatchTelegramMessage = async ({
         replyToMessageId: draftReplyToMessageId,
         ...(dmMessagePreviewThrottleMs != null ? { throttleMs: dmMessagePreviewThrottleMs } : {}),
         minInitialChars: draftMinInitialChars,
+        activeReplyMarkup,
+        onDispose: runStopRegistration?.release,
         deleteAudit: {
           callsite: "telegram-progress-controller-clear",
           reason: "progress_cleanup",
@@ -1363,6 +1378,10 @@ export const dispatchTelegramMessage = async ({
       const retained = await controller.retainAsWorkLog({ toolNames: workLogToolNames });
       if (!retained.retained) {
         retainResult = "none";
+        // A controller can exist solely to host the active Stop affordance.
+        // If no substantive progress became a Work log, remove that temporary
+        // bubble instead of leaving "Working…" behind after the final answer.
+        await controller.clear();
       }
     } catch (err) {
       retainResult = "failed";
@@ -3196,6 +3215,16 @@ export const dispatchTelegramMessage = async ({
           releaseBusySequentialKey ??= markTelegramSequentialKeyBusy(
             getTelegramSequentialKey({ message: msg }),
           );
+          if (canShowRunStopButton) {
+            // Surface the stop control as soon as real model work begins. The
+            // same progress bubble is reused for later commentary and removed
+            // or converted into Work log before the final answer. Do not add a
+            // standalone "Working…" bubble when buttons are disabled: typing
+            // already communicates that state without adding chat clutter.
+            void enqueueDraftLaneEvent(async () => {
+              getProgressController()?.start("Working…");
+            });
+          }
         },
         onTypingCleanup: () => {
           releaseBusySequentialKey?.();

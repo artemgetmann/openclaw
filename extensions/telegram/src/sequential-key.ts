@@ -3,6 +3,7 @@ import { isAbortRequestText } from "../../../src/auto-reply/reply/abort.js";
 import { isBtwRequestText } from "../../../src/auto-reply/reply/btw-command.js";
 import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 import { resolveTelegramForumThreadId, resolveTelegramInboundThreadId } from "./bot/helpers.js";
+import { parseTelegramRunStopCallbackData } from "./run-stop-control.js";
 
 export type TelegramSequentialKeyContext = {
   chat?: { id?: number };
@@ -109,6 +110,10 @@ export function getTelegramBusyAwareSequentialKey(ctx: TelegramSequentialKeyCont
 
   const callback = ctx.update?.callback_query;
   const callbackData = (callback as { data?: unknown } | undefined)?.data;
+  if (typeof callbackData === "string" && parseTelegramRunStopCallbackData(callbackData) != null) {
+    const callbackId = (callback as { id?: unknown } | undefined)?.id;
+    return `${baseKey}:run-stop-control:${String(callbackId ?? "unknown")}`;
+  }
   if (typeof callbackData === "string" && /^oq[ksd]:/.test(callbackData)) {
     const callbackId = (callback as { id?: unknown } | undefined)?.id;
     return `${baseKey}:queue-control:${String(callbackId ?? "unknown")}`;

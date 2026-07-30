@@ -162,6 +162,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       api: {
         sendMessage: vi.fn(),
         editMessageText: vi.fn(),
+        editMessageReplyMarkup: vi.fn().mockResolvedValue(true),
         deleteMessage: vi.fn().mockResolvedValue(true),
         ...(options?.richMessages ? { raw: { sendRichMessage: vi.fn() } } : {}),
       },
@@ -387,10 +388,58 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(getTelegramBusyAwareSequentialKey(followupContext)).toBe(baseKey);
   });
 
+  it("shows one explicit Stop control while the agent run is active", async () => {
+    const progressStream = createDraftStream(701);
+    createTelegramDraftStream.mockReturnValueOnce(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions, replyOptions }) => {
+        replyOptions.onAgentRunStart?.("run-1");
+        await dispatcherOptions.deliver({ text: "Finished." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    const bot = createBot();
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123",
+        } as TelegramMessageContext["ctxPayload"],
+        msg: {
+          from: { id: 9, is_bot: false, first_name: "Ada" },
+        } as TelegramMessageContext["msg"],
+      }),
+      bot,
+    });
+
+    expect(progressStream.update).toHaveBeenCalledWith("Working…");
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyMarkup: {
+          inline_keyboard: [
+            [
+              expect.objectContaining({
+                text: "⏹ Stop",
+                callback_data: expect.stringMatching(/^ors:/),
+                style: "danger",
+              }),
+            ],
+          ],
+        },
+      }),
+    );
+    expect(bot.api.editMessageReplyMarkup).toHaveBeenCalledWith(123, 701, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(progressStream.clear).toHaveBeenCalled();
+  });
+
   it("does not expose a dead Queue/Steer keyboard when inline buttons are off", async () => {
     const bot = createBot();
     vi.mocked(bot.api.sendMessage).mockResolvedValue({ message_id: 901 } as never);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async ({ replyOptions }) => {
+      replyOptions.onAgentRunStart?.("run-1");
       await replyOptions.onFollowupQueued?.({
         durableId: "12345678-1234-4234-8234-123456789abc",
       });
@@ -415,6 +464,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       "Adding this to what I’m doing now.",
       expect.not.objectContaining({ reply_markup: expect.anything() }),
     );
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
   });
 
   it("retains direct-turn recovery when only a non-terminal payload was delivered", async () => {
