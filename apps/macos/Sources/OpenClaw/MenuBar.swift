@@ -252,6 +252,21 @@ private final class StatusItemMouseHandlerView: NSView {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    enum VisibleSurfaceRequestReason: String, CaseIterable {
+        case backgroundDuplicate = "background-duplicate"
+        case backgroundReopen = "background-reopen"
+        case foregroundDuplicate = "foreground-duplicate"
+        case initialLaunch = "initial-launch"
+        case passiveActivation = "passive-activation"
+        case userReopen = "user-reopen"
+    }
+
+    enum VisibleSurfaceRequestDecision: Equatable {
+        case deferToAppKit
+        case suppress(VisibleSurfaceRequestReason)
+        case reveal(VisibleSurfaceRequestReason)
+    }
+
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app.delegate")
     private static let showVisibleSurfaceNotification = Notification.Name("ai.openclaw.consumer.showVisibleSurface")
     private var state: AppState?
@@ -271,7 +286,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
         if self.isDuplicateInstance() {
-            self.signalExistingConsumerInstanceToShowVisibleSurface()
+            switch Self.duplicateInstanceSurfaceDecision(
+                isConsumer: AppFlavor.current.isConsumer,
+                applicationIsActive: NSApp.isActive)
+            {
+            case .deferToAppKit:
+                break
+            case let .suppress(reason):
+                Self.logSuppressedVisibleSurface(reason: reason)
+            case let .reveal(reason):
+                Self.logger.info(
+                    "signaling existing consumer instance reason=\(reason.rawValue, privacy: .public)")
+                self.signalExistingConsumerInstanceToShowVisibleSurface()
+            }
             NSApp.terminate(nil)
             return
         }
@@ -324,13 +351,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard Self.shouldHandleConsumerReopen(
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        switch Self.reopenSurfaceDecision(
             isConsumer: AppFlavor.current.isConsumer,
-            hasVisibleWindows: flag)
-        else { return true }
-        self.requestVisibleSurface(reason: "reopen")
-        return true
+            applicationIsActive: sender.isActive)
+        {
+        case .deferToAppKit:
+            return true
+        case let .suppress(reason):
+            // A reopen AppleEvent does not imply a foreground user action.
+            // In particular, the login item intentionally uses `open -g`, so
+            // an inactive app must consume that event without surfacing UI.
+            Self.logSuppressedVisibleSurface(reason: reason)
+            return false
+        case let .reveal(reason):
+            self.requestVisibleSurface(reason: reason)
+            return true
+        }
     }
 
     @MainActor
@@ -342,7 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return }
 
         Self.logger.info("consumer app became active without a visible surface")
-        self.requestVisibleSurface(reason: "became-active")
+        self.requestVisibleSurface(reason: .passiveActivation)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -383,7 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            self.requestVisibleSurface(reason: "initial-launch")
+            self.requestVisibleSurface(reason: .initialLaunch)
         }
     }
 
@@ -411,7 +448,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard AppFlavor.current.isConsumer else { return }
         guard self.consumerReopenObserver == nil else { return }
         let bundleID = Bundle.main.bundleIdentifier
-        Self.logger.info("installing consumer visible-surface observer bundleID=\(bundleID ?? "missing", privacy: .public)")
+        Self.logger
+            .info("installing consumer visible-surface observer bundleID=\(bundleID ?? "missing", privacy: .public)")
         self.consumerReopenObserver = DistributedNotificationCenter.default().addObserver(
             forName: Self.showVisibleSurfaceNotification,
             object: bundleID,
@@ -419,14 +457,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         { [weak self] _ in
             Task { @MainActor [weak self] in
                 Self.logger.info("received consumer visible-surface request from duplicate instance")
-                self?.requestVisibleSurface(reason: "duplicate-instance")
+                self?.requestVisibleSurface(reason: .foregroundDuplicate)
             }
         }
     }
 
     private func signalExistingConsumerInstanceToShowVisibleSurface() {
         guard AppFlavor.current.isConsumer, let bundleID = Bundle.main.bundleIdentifier else { return }
-        Self.logger.info("signaling existing consumer instance to show visible surface")
         DistributedNotificationCenter.default().postNotificationName(
             Self.showVisibleSurfaceNotification,
             object: bundleID,
@@ -447,7 +484,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    func requestVisibleSurface(reason: String, preferredSettingsTab: SettingsTab? = nil) {
+    func requestVisibleSurface(
+        reason: VisibleSurfaceRequestReason,
+        preferredSettingsTab: SettingsTab? = nil)
+    {
+        Self.logger.info(
+            "consumer visible-surface request reason=\(reason.rawValue, privacy: .public)")
         self.showVisibleSurface(preferredSettingsTab: preferredSettingsTab)
         self.scheduleVisibleSurfaceRecovery(
             reason: reason,
@@ -457,7 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func scheduleVisibleSurfaceRecovery(
-        reason: String,
+        reason: VisibleSurfaceRequestReason,
         preferredSettingsTab: SettingsTab?,
         attemptsRemaining: Int)
     {
@@ -481,7 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 attemptsRemaining: attemptsRemaining)
             else { return }
             Self.logger.info(
-                "consumer visible surface still missing after \(reason, privacy: .public); retrying (\(attemptsRemaining, privacy: .public) left)")
+                "surface missing \(reason.rawValue, privacy: .public) retry=\(attemptsRemaining, privacy: .public)")
             self.showVisibleSurface(preferredSettingsTab: preferredSettingsTab)
             self.scheduleVisibleSurfaceRecovery(
                 reason: reason,
@@ -498,12 +540,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isConsumer && (onboardingPending || didLaunchFromFinder)
     }
 
-    static func shouldHandleConsumerReopen(isConsumer: Bool, hasVisibleWindows: Bool) -> Bool {
-        // A consumer Dock click is an explicit request for Jarvis, even if
-        // AppKit thinks a window is already visible somewhere. Always route it
-        // through the reveal path so hidden, backgrounded, or stale Settings
-        // windows get raised instead of producing a no-op click.
-        isConsumer
+    static func reopenSurfaceDecision(
+        isConsumer: Bool,
+        applicationIsActive: Bool) -> VisibleSurfaceRequestDecision
+    {
+        guard isConsumer else { return .deferToAppKit }
+        // Dock and Finder foreground opens make Jarvis active. Launch-at-login
+        // and `open -g` reopen AppleEvents do not. AppKit exposes no richer
+        // reopen provenance, so active state is the narrow intent boundary.
+        return applicationIsActive
+            ? .reveal(.userReopen)
+            : .suppress(.backgroundReopen)
+    }
+
+    static func duplicateInstanceSurfaceDecision(
+        isConsumer: Bool,
+        applicationIsActive: Bool) -> VisibleSurfaceRequestDecision
+    {
+        guard isConsumer else { return .deferToAppKit }
+        // A foreground duplicate is an explicit Finder/Dock launch and should
+        // raise the existing app. A launchd/background duplicate must exit
+        // silently so it cannot reset an existing Settings tab.
+        return applicationIsActive
+            ? .reveal(.foregroundDuplicate)
+            : .suppress(.backgroundDuplicate)
+    }
+
+    private static func logSuppressedVisibleSurface(reason: VisibleSurfaceRequestReason) {
+        // Reasons are a fixed enum, never a URL, path, message, or user value.
+        self.logger.info(
+            "consumer visible-surface request suppressed reason=\(reason.rawValue, privacy: .public)")
     }
 
     static func shouldRecoverVisibleSurfaceOnActivation(
@@ -527,7 +593,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         attemptsRemaining: Int) -> Bool
     {
         attemptsRemaining > 0 &&
-            !Self.hasVisibleConsumerSurface(
+            !self.hasVisibleConsumerSurface(
                 hasVisibleContentWindow: hasVisibleContentWindow,
                 hasVisibleOnboardingWindow: hasVisibleOnboardingWindow)
     }

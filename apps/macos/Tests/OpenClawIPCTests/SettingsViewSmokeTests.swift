@@ -291,16 +291,52 @@ struct SettingsViewSmokeTests {
             didLaunchFromFinder: true))
     }
 
-    @Test func `consumer app delegate requests surface on every dock reopen`() {
-        #expect(AppDelegate.shouldHandleConsumerReopen(
+    @Test func `consumer foreground reopen preserves dock and finder reveal`() {
+        #expect(AppDelegate.reopenSurfaceDecision(
             isConsumer: true,
-            hasVisibleWindows: false))
-        #expect(AppDelegate.shouldHandleConsumerReopen(
-            isConsumer: true,
-            hasVisibleWindows: true))
-        #expect(!AppDelegate.shouldHandleConsumerReopen(
+            applicationIsActive: true) == .reveal(.userReopen))
+        #expect(AppDelegate.reopenSurfaceDecision(
             isConsumer: false,
-            hasVisibleWindows: false))
+            applicationIsActive: true) == .deferToAppKit)
+    }
+
+    @Test func `consumer background open does not reveal or reset about`() {
+        // `open -gja` delivers a reopen AppleEvent while Jarvis is inactive.
+        // Suppression occurs before SettingsWindowOpener can activate the app
+        // or post a `.general` tab-selection notification.
+        #expect(AppDelegate.reopenSurfaceDecision(
+            isConsumer: true,
+            applicationIsActive: false) == .suppress(.backgroundReopen))
+    }
+
+    @Test func `consumer duplicate reveals only with foreground user intent`() {
+        #expect(AppDelegate.duplicateInstanceSurfaceDecision(
+            isConsumer: true,
+            applicationIsActive: true) == .reveal(.foregroundDuplicate))
+        #expect(AppDelegate.duplicateInstanceSurfaceDecision(
+            isConsumer: true,
+            applicationIsActive: false) == .suppress(.backgroundDuplicate))
+        #expect(AppDelegate.duplicateInstanceSurfaceDecision(
+            isConsumer: false,
+            applicationIsActive: true) == .deferToAppKit)
+    }
+
+    @Test func `visible surface log reasons are fixed non-sensitive values`() {
+        let values = AppDelegate.VisibleSurfaceRequestReason.allCases.map(\.rawValue)
+
+        #expect(Set(values) == Set([
+            "background-duplicate",
+            "background-reopen",
+            "foreground-duplicate",
+            "initial-launch",
+            "passive-activation",
+            "user-reopen",
+        ]))
+        #expect(values.allSatisfy { value in
+            !value.contains("/") &&
+                !value.contains(":") &&
+                value.allSatisfy { $0.isLowercase || $0 == "-" }
+        })
     }
 
     @Test func `consumer app delegate never treats passive activation as surface intent`() {
