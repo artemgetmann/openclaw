@@ -33,6 +33,9 @@ function createOpenclawLocalHarness(): {
     [
       "#!/usr/bin/env bash",
       'printf "node:%s\\n" "$*" >> "$OPENCLAW_TEST_CALLS"',
+      'printf "state:%s\\n" "${OPENCLAW_STATE_DIR:-}" >> "$OPENCLAW_TEST_CALLS"',
+      'printf "config:%s\\n" "${OPENCLAW_CONFIG_PATH:-}" >> "$OPENCLAW_TEST_CALLS"',
+      'printf "port:%s\\n" "${OPENCLAW_GATEWAY_PORT:-}" >> "$OPENCLAW_TEST_CALLS"',
       'printf "telegram-compat:%s\\n" "${OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT:-}" >> "$OPENCLAW_TEST_CALLS"',
       "exit 0",
     ].join("\n"),
@@ -109,6 +112,39 @@ function createOpenclawLocalHarness(): {
     cleanup: () => fs.rmSync(temp, { recursive: true, force: true }),
   };
 }
+
+describe("scripts/openclaw-local.sh runtime selector routing", () => {
+  it("keeps explicit isolated runtime selectors ahead of the lane baseline", () => {
+    const harness = createOpenclawLocalHarness();
+    try {
+      fs.writeFileSync(
+        path.join(harness.root, ".dev-launch.env"),
+        [
+          "OPENCLAW_STATE_DIR=/tmp/lane-state",
+          "OPENCLAW_CONFIG_PATH=/tmp/lane-state/openclaw.json",
+          "OPENCLAW_GATEWAY_PORT=18830",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = harness.run(["gateway", "call", "monitor.list", "--json"], {
+        OPENCLAW_STATE_DIR: "/tmp/isolated-state",
+        OPENCLAW_CONFIG_PATH: "/tmp/isolated-state/openclaw.telegram-live.json",
+        OPENCLAW_GATEWAY_PORT: "28030",
+      });
+      const calls = fs.readFileSync(harness.callsPath, "utf8");
+
+      expect(result.status).toBe(0);
+      expect(calls).toContain("state:/tmp/isolated-state");
+      expect(calls).toContain("config:/tmp/isolated-state/openclaw.telegram-live.json");
+      expect(calls).toContain("port:28030");
+      expect(calls).not.toContain("port:18830");
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
 
 describe("scripts/openclaw-local.sh restart routing", () => {
   it("lets canonical sacred main gateway restart reach the CLI instead of the local helper", () => {
