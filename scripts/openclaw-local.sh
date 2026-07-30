@@ -203,17 +203,16 @@ if [[ -f "$DEV_ENV_FILE" ]]; then
   lane_config_path="$(read_last_env_value "$DEV_ENV_FILE" "OPENCLAW_CONFIG_PATH")"
   lane_gateway_port="$(read_last_env_value "$DEV_ENV_FILE" "OPENCLAW_GATEWAY_PORT")"
 
-  # A generated lane baseline is authoritative for isolated runtimes such as
-  # Telegram live worktrees. If we infer a consumer instance first, the checkout
-  # name hijacks restart/status onto ~/Library/Application Support/OpenClaw
-  # Consumer/... instead of the lane that is actually running.
-  if [[ -n "$lane_state_dir" ]]; then
+  # The generated lane baseline supplies safe defaults, while explicit
+  # selectors must remain authoritative for nested isolated runtimes (for
+  # example, a Telegram live runtime with its own state, config, and port).
+  if [[ -z "${OPENCLAW_STATE_DIR:-}" && -n "$lane_state_dir" ]]; then
     export OPENCLAW_STATE_DIR="$lane_state_dir"
   fi
-  if [[ -n "$lane_config_path" ]]; then
+  if [[ -z "${OPENCLAW_CONFIG_PATH:-}" && -n "$lane_config_path" ]]; then
     export OPENCLAW_CONFIG_PATH="$lane_config_path"
   fi
-  if [[ -n "$lane_gateway_port" ]]; then
+  if [[ -z "${OPENCLAW_GATEWAY_PORT:-}" && -n "$lane_gateway_port" ]]; then
     export OPENCLAW_GATEWAY_PORT="$lane_gateway_port"
   fi
 fi
