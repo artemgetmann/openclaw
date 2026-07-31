@@ -1733,7 +1733,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("keeps table-and-blockquote drafts on copy-safe legacy delivery", async () => {
+  it("keeps tables rich when the same final contains a copy-safe blockquote draft", async () => {
     const draftText = [
       "| Plan | Owner |",
       "| --- | --- |",
@@ -1753,11 +1753,127 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       bot: createRichBot(),
     });
 
+    const call = deliverReplies.mock.calls[0]?.[0];
+    expect(call).toEqual(
+      expect.objectContaining({
+        copySafeBlockquotes: true,
+        replies: [expect.objectContaining({ text: draftText })],
+      }),
+    );
+    expect(call).not.toHaveProperty("richMessages");
+  });
+
+  it("keeps explicitly marked draft payloads on legacy delivery even when they contain a table", async () => {
+    const draftText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "> Hi Sveta, here is the booking link: https://example.com.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: draftText,
+          channelData: { openclaw: { copySafeDraft: true } },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      bot: createRichBot(),
+    });
+
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         copySafeBlockquotes: true,
         richMessages: false,
         replies: [expect.objectContaining({ text: draftText })],
+      }),
+    );
+  });
+
+  it("keeps an unmarked quoted-table draft on legacy delivery", async () => {
+    const draftText = [
+      "> | Day | Time |",
+      "> | --- | --- |",
+      "> | Friday | 10:00 |",
+      ">",
+      "> Let me know whether that works.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: draftText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      bot: createRichBot(),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        copySafeBlockquotes: true,
+        richMessages: false,
+        replies: [expect.objectContaining({ text: draftText })],
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "Telegram buttons",
+      extra: {
+        channelData: {
+          telegram: { buttons: [[{ text: "Open", callback_data: "open:1" }]] },
+        },
+      },
+    },
+    {
+      name: "shared interactive buttons",
+      extra: {
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Open", value: "open:1" }],
+            },
+          ],
+        },
+      },
+    },
+  ])("keeps mixed replies with $name on legacy delivery", async ({ extra }) => {
+    const mixedText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "> Hi Sveta, use https://example.com/booking.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: mixedText, ...extra }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      bot: createRichBot(),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        copySafeBlockquotes: true,
+        richMessages: false,
+        replies: [expect.objectContaining({ text: mixedText })],
       }),
     );
   });
@@ -2185,6 +2301,36 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
 
     expect(deliverReplies).toHaveBeenCalled();
+    expect(answerStream.clear).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("retains a streamed mixed table-and-draft preview when rich delivery reports false", async () => {
+    const answerStream = createDraftStream(9106);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    const mixedText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "> Hi Sveta, use https://example.com/booking.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: mixedText });
+        await dispatcherOptions.deliver({ text: mixedText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: false });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
+
+    expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("richMessages");
     expect(answerStream.clear).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });

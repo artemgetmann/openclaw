@@ -53,7 +53,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { guardedTelegramDeleteMessage } from "./delete-guard.js";
 import { createTelegramDraftStream, type TelegramDraftStream } from "./draft-stream.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
-import { renderTelegramHtmlText } from "./format.js";
+import { markdownToTelegramRichHtml, renderTelegramHtmlText } from "./format.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
   type ArchivedPreview,
@@ -567,11 +567,16 @@ export const dispatchTelegramMessage = async ({
   });
   const isEligibleRichTableFinalText = (payload: ReplyPayload, text: string) => {
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const hasTelegramButtons = Boolean(
+      (payload.channelData?.telegram as { buttons?: unknown } | undefined)?.buttons,
+    );
     if (
       tableMode !== "block" ||
       telegramCfg.richMessages === false ||
       !getTelegramRichRawApi(bot.api) ||
       hasMedia ||
+      hasTelegramButtons ||
+      payload.interactive ||
       payload.isError ||
       isControlCommandReplyPayload(payload) ||
       isCopySafeDraftReplyPayload(payload)
@@ -579,10 +584,17 @@ export const dispatchTelegramMessage = async ({
       return false;
     }
     const parsed = markdownToIRWithMeta(text, { tableMode });
-    // Recipient drafts need literal, one-tap-copy quote bodies. Parse the
-    // Markdown IR instead of guessing from `>` so quoted code/text cannot
-    // accidentally enable a native table send.
-    return parsed.hasTables && !parsed.ir.styles.some((span) => span.style === "blockquote");
+    if (!parsed.hasTables) {
+      return false;
+    }
+    // A mixed answer can contain both comparison tables and recipient-ready
+    // quoted drafts. Check the post-rewrite rich HTML so a table outside the
+    // quote stays native, while a table wholly inside a copy-safe draft does
+    // not opt into rich transport after it has become a pre block.
+    return markdownToTelegramRichHtml(text, {
+      tableMode,
+      copySafeBlockquotes: true,
+    }).includes("<table");
   };
   const renderDraftPreview = (text: string) => ({
     text: renderTelegramHtmlText(text, { tableMode, copySafeBlockquotes: true }),
