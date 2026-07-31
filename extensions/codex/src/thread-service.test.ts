@@ -146,6 +146,16 @@ function createService(client: FakeCodexClient) {
 }
 
 describe("CodexThreadService", () => {
+  it("reports the exact analysis and implementation execution policies", async () => {
+    const service = createService(new FakeCodexClient());
+
+    await expect(service.status()).resolves.toMatchObject({
+      ok: true,
+      executionPolicy:
+        "analysis=read-only/network-off/approval-never; implementation=isolated-worktree/workspace-write/network-on/approval-on-request/auto-review",
+    });
+  });
+
   it("routes native lifecycle operations to the exact requested thread", async () => {
     const client = new FakeCodexClient();
     const service = createService(client);

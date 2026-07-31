@@ -183,7 +183,7 @@ export class CodexThreadService {
       threadCatalogReachable: Array.isArray(threads.data),
       activeContinuations: this.activeThreadIds.size,
       executionPolicy:
-        "analysis=read-only; implementation=isolated-worktree/workspace-write; no-network/no-approval",
+        "analysis=read-only/network-off/approval-never; implementation=isolated-worktree/workspace-write/network-on/approval-on-request/auto-review",
     };
   }
 
