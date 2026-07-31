@@ -25,7 +25,31 @@ const appServer = vi.hoisted(() => {
   >();
   let autoComplete = true;
   let threadReadResponse: unknown = undefined;
-  return { requests, handlers, serverRequestHandlers, autoComplete, threadReadResponse };
+  let failCompletedAuthorityReceipt = false;
+  return {
+    requests,
+    handlers,
+    serverRequestHandlers,
+    autoComplete,
+    threadReadResponse,
+    failCompletedAuthorityReceipt,
+  };
+});
+
+vi.mock("../../src/monitor/authority.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/monitor/authority.js")>();
+  return {
+    ...actual,
+    finalizeMonitorAuthorityAction: async (
+      params: Parameters<typeof actual.finalizeMonitorAuthorityAction>[0],
+    ) => {
+      if (appServer.failCompletedAuthorityReceipt && params.outcome === "completed") {
+        appServer.failCompletedAuthorityReceipt = false;
+        throw new Error("simulated completed receipt persistence failure");
+      }
+      return await actual.finalizeMonitorAuthorityAction(params);
+    },
+  };
 });
 
 vi.mock("./src/app-server-client.js", () => ({
@@ -138,10 +162,12 @@ async function createDurableAuthorityFixture(label: string) {
   appServer.serverRequestHandlers = new Set();
   appServer.autoComplete = false;
   appServer.threadReadResponse = undefined;
+  appServer.failCompletedAuthorityReceipt = false;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-codex-authority-${label}-`));
   const cronStorePath = path.join(dir, "cron.json");
   const sessionStorePath = path.join(dir, "sessions.json");
   const monitorStorePath = resolveMonitorStorePath({ cronStorePath });
+  const relayRegistry = new CodexDelegationRegistry(path.join(dir, "codex", "async-relays.json"));
   const sessionKey = `agent:main:monitor:${label}`;
   const originSessionKey = `agent:main:telegram:direct:${label}`;
   const text = `Run the deferred ${label} proof exactly once.`;
@@ -243,7 +269,7 @@ async function createDurableAuthorityFixture(label: string) {
       session: { store: sessionStorePath },
     },
   }) as AnyAgentTool;
-  return { dir, idempotencyKey, monitorStorePath, text, tool };
+  return { dir, idempotencyKey, monitorStorePath, relayRegistry, text, tool };
 }
 
 describe("Codex natural-language delegation", () => {
@@ -1244,6 +1270,63 @@ describe("Codex natural-language delegation", () => {
       finishNaturalTurn();
     } finally {
       markAccepted.mockRestore();
+      await fs.rm(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("keeps authority consumed when the completed receipt cannot be persisted", async () => {
+    const fixture = await createDurableAuthorityFixture("ambiguous-completed-receipt");
+    appServer.failCompletedAuthorityReceipt = true;
+    try {
+      await expect(
+        fixture.tool.execute("authorized-resume-ambiguous-receipt", {
+          action: "unarchive_resume_authorized_once",
+          thread_id: "thread-natural",
+          text: fixture.text,
+          idempotency_key: fixture.idempotencyKey,
+        }),
+      ).rejects.toThrow("receipt became ambiguous");
+      expect(appServer.requests.map((request) => request.method)).toEqual([
+        "thread/read",
+        "thread/unarchive",
+        "thread/resume",
+        "turn/start",
+      ]);
+      expect((await loadMonitorStore(fixture.monitorStorePath)).monitors[0]).toMatchObject({
+        status: "stopped",
+        authority: {
+          execution: { status: "consumed", executions: 1 },
+        },
+      });
+
+      appServer.requests.splice(0);
+      await expect(
+        fixture.tool.execute("authorized-resume-ambiguous-receipt-retry", {
+          action: "unarchive_resume_authorized_once",
+          thread_id: "thread-natural",
+          text: fixture.text,
+          idempotency_key: fixture.idempotencyKey,
+        }),
+      ).resolves.toMatchObject({
+        details: {
+          status: "consumed",
+          executed: false,
+        },
+      });
+      expect(appServer.requests).toEqual([]);
+      finishNaturalTurn();
+      // Terminal handback writes asynchronously after the App Server event.
+      // Wait for its durable boundary before deleting the fixture directory.
+      await vi.waitFor(async () => {
+        const snapshot = await fixture.relayRegistry.snapshot();
+        expect(snapshot.records).toHaveLength(1);
+        expect(snapshot.records[0]).toMatchObject({
+          lifecycle: "delivered",
+          terminalStatus: "completed",
+        });
+      });
+    } finally {
+      appServer.failCompletedAuthorityReceipt = false;
       await fs.rm(fixture.dir, { recursive: true });
     }
   });

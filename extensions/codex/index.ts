@@ -544,13 +544,20 @@ function createCodexTool(
               threadId,
               text: claim.prompt,
             });
-            await finalizeMonitorAuthorityAction({
-              storePath,
-              monitorSessionKey: sessionKey,
-              grantId: claim.grantId,
-              outcome: "completed",
-              externalRef: started.turnId,
-            });
+            try {
+              await finalizeMonitorAuthorityAction({
+                storePath,
+                monitorSessionKey: sessionKey,
+                grantId: claim.grantId,
+                outcome: "completed",
+                externalRef: started.turnId,
+              });
+            } catch (error) {
+              // The native turn is already durably accepted. If recording the
+              // terminal monitor receipt fails, the safe truth is "consumed
+              // with an ambiguous receipt"—never "failed and retryable."
+              throw new CodexAuthorityReceiptAmbiguousError(error);
+            }
             result = {
               ...started,
               mode: "durable-monitor-authority",
@@ -559,7 +566,10 @@ function createCodexTool(
               unarchived: unarchive.changed,
             };
           } catch (error) {
-            if (!(error instanceof CodexRelayAcceptanceAmbiguousError)) {
+            if (
+              !(error instanceof CodexRelayAcceptanceAmbiguousError) &&
+              !(error instanceof CodexAuthorityReceiptAmbiguousError)
+            ) {
               await finalizeMonitorAuthorityAction({
                 storePath,
                 monitorSessionKey: sessionKey,
@@ -586,6 +596,13 @@ class CodexRelayAcceptanceAmbiguousError extends Error {
   constructor(cause: unknown) {
     super("Codex relay acceptance became ambiguous after the native turn started", { cause });
     this.name = "CodexRelayAcceptanceAmbiguousError";
+  }
+}
+
+class CodexAuthorityReceiptAmbiguousError extends Error {
+  constructor(cause: unknown) {
+    super("Codex authority receipt became ambiguous after the native turn was accepted", { cause });
+    this.name = "CodexAuthorityReceiptAmbiguousError";
   }
 }
 
