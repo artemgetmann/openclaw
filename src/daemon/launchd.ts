@@ -5,6 +5,10 @@ import {
   PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL,
   PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL,
 } from "../consumer/runtime-identity.js";
+import {
+  ensureGatewayLifecycleLeaseForRestart,
+  GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE,
+} from "../infra/gateway-lifecycle-lease.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { resolveCanonicalMainRepoRoot } from "../infra/telegram-live-token-claims.js";
@@ -1197,13 +1201,34 @@ export async function restartLaunchAgent({
     const handoff = await scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
       mode: "kickstart",
-      waitForPid: process.pid,
+      // This direct service API does not own the gateway run-loop shutdown
+      // sequence. Give the response a bounded handoff window, then let the
+      // detached lease owner perform the cutover without waiting for a caller
+      // that only the eventual kickstart will terminate.
+      delayMs: 2_000,
     });
     if (!handoff.ok) {
       throw new Error(`launchd restart handoff failed: ${handoff.detail ?? "unknown error"}`);
     }
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
+  }
+
+  if (isGatewayServiceKind(serviceEnv)) {
+    // Some setup, doctor, and daemon-configuration callers invoke the service
+    // API directly. Re-enter the canonical CLI beneath the machine lease here,
+    // at the final common mutation boundary, so none can bypass admission.
+    // A guarded CLI descendant proves inherited ownership and continues below
+    // without another process hop.
+    const lease = await ensureGatewayLifecycleLeaseForRestart({}, { env: serviceEnv });
+    if (lease.outcome === "reexecuted") {
+      if (lease.exitCode !== 0) {
+        throw new Error(
+          `LaunchAgent restart temporarily unavailable (exit ${lease.exitCode || GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE})`,
+        );
+      }
+      return { outcome: "completed" };
+    }
   }
 
   if (!(await sharedMainLaunchAgentLooksHealthy(serviceEnv))) {

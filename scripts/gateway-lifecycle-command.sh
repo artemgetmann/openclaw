@@ -157,13 +157,14 @@ run_handoff() {
     [[ -n "$wait_pid_start" ]] || fail_closed "launchd caller start identity is missing"
     # shellcheck source=scripts/lib/heavy-local-slot.sh
     source "$lifecycle_helper"
-    local wait_pid_count=0
     local wait_status=0
     while true; do
       [[ ! -f "$cancel_path" ]] || exit "$TEMPORARY_UNAVAILABLE_EXIT_CODE"
       if openclaw_heavy_local_slot_owner_is_live "$wait_pid" "$wait_pid_start"; then
-        wait_pid_count=$((wait_pid_count + 1))
-        [[ "$wait_pid_count" -lt 300 ]] || exit "$TEMPORARY_UNAVAILABLE_EXIT_CODE"
+        # Hold admission for the caller's complete drain and validation window.
+        # The PID/start identity prevents reuse from extending ownership, and a
+        # live but wedged caller intentionally pins the lane fail-closed rather
+        # than allowing a second lifecycle mutation into an ambiguous cutover.
         sleep 0.1
         continue
       else

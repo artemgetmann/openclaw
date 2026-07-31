@@ -62,6 +62,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(lifecycleCommand).toContain(
       'openclaw_heavy_local_slot_owner_is_live "$wait_pid" "$wait_pid_start"',
     );
+    expect(lifecycleCommand).not.toContain('[[ "$wait_pid_count" -lt 300 ]]');
     expect(lifecycleCommand).toContain('launchctl kickstart -k "$service_target" >/dev/null 2>&1');
     expect(args[1]).toContain('"$wrapper" --policy gateway-lifecycle --label "$label"');
     expect(lifecycleCommand).toContain('[[ "$ack_wait_count" -lt 800 ]]');
