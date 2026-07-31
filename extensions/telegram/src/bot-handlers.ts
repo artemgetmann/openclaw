@@ -1675,6 +1675,7 @@ export const registerTelegramHandlers = ({
           // this Stop claim.
           date: Math.floor(Date.now() / 1000),
         });
+        let stopSucceeded = false;
         try {
           // Cancellation is the product contract. Run it before touching
           // Telegram markup so a transient edit failure cannot consume the
@@ -1688,10 +1689,27 @@ export const registerTelegramHandlers = ({
               messageIdOverride: callback.id,
             },
           );
-        } finally {
-          await clearCallbackButtons().catch((err) => {
-            logVerbose(`telegram: active-run Stop button cleanup failed: ${String(err)}`);
+          stopSucceeded = true;
+        } catch (err) {
+          // Keep the same control claimable if the abort pipeline itself fails.
+          // The explanatory reply also gives the user a plain /stop fallback
+          // if Telegram later removes or stops rendering the old keyboard.
+          runStopClaim.restore();
+          logVerbose(`telegram: active-run Stop processing failed: ${String(err)}`);
+          await replyToCallbackChat(
+            "I couldn't stop that run. Tap Stop again or send /stop to retry.",
+          ).catch((replyErr) => {
+            logVerbose(`telegram: active-run Stop failure reply failed: ${String(replyErr)}`);
           });
+          return;
+        } finally {
+          // A failed abort restores the token and keeps the button as a retry
+          // path. Only a successful cancellation retires the keyboard.
+          if (stopSucceeded) {
+            await clearCallbackButtons().catch((err) => {
+              logVerbose(`telegram: active-run Stop button cleanup failed: ${String(err)}`);
+            });
+          }
         }
         return;
       }

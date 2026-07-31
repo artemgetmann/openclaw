@@ -1,8 +1,9 @@
+import { randomBytes } from "node:crypto";
 import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 
 const RUN_STOP_CALLBACK_PREFIX = "ors:";
-const RUN_STOP_TOKEN_RE = /^[a-z0-9]{1,20}$/;
+const RUN_STOP_TOKEN_RE = /^[a-f0-9]{24}$/;
 
 type TelegramRunStopEntry = {
   accountId: string;
@@ -12,12 +13,11 @@ type TelegramRunStopEntry = {
 };
 
 type TelegramRunStopState = {
-  nextId: number;
   entries: Map<string, TelegramRunStopEntry>;
 };
 
 export type TelegramRunStopClaim =
-  | { status: "claimed" }
+  | { status: "claimed"; restore: () => void }
   | { status: "stale" }
   | { status: "mismatch" };
 
@@ -25,15 +25,16 @@ const TELEGRAM_RUN_STOP_STATE_KEY = Symbol.for("openclaw.telegramRunStopState");
 const runStopState = resolveGlobalSingleton<TelegramRunStopState>(
   TELEGRAM_RUN_STOP_STATE_KEY,
   () => ({
-    nextId: 0,
     entries: new Map(),
   }),
 );
 
 function allocateRunStopToken(): string {
-  runStopState.nextId =
-    runStopState.nextId >= Number.MAX_SAFE_INTEGER ? 1 : runStopState.nextId + 1;
-  return runStopState.nextId.toString(36);
+  // A process-local counter can reuse a still-visible callback after restart
+  // and let an old button cancel a new run on the same route. A 96-bit random
+  // token stays well within Telegram's 64-byte callback_data limit while
+  // making reuse across registrations and restarts negligible.
+  return randomBytes(12).toString("hex");
 }
 
 function normalizeThreadId(value: string | number | null | undefined): string | undefined {
@@ -119,12 +120,21 @@ export function claimTelegramRunStop(params: {
   // Claim before cancellation begins. Duplicate Telegram deliveries or
   // impatient repeat taps then become harmless stale callbacks.
   runStopState.entries.delete(token);
-  return { status: "claimed" };
+  let restored = false;
+  return {
+    status: "claimed",
+    restore: () => {
+      if (restored || runStopState.entries.has(token)) {
+        return;
+      }
+      restored = true;
+      runStopState.entries.set(token, entry);
+    },
+  };
 }
 
 export const __testing = {
   resetTelegramRunStopsForTests() {
-    runStopState.nextId = 0;
     runStopState.entries.clear();
   },
 };
