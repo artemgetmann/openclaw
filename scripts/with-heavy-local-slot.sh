@@ -755,14 +755,22 @@ if [ -n "$task_worktree" ] && [ -n "$task_generated_before_kib" ]; then
       awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print $4; exit }'
   )"
   task_generated_created_kib=$((task_generated_after_kib - task_generated_before_kib))
-  if [ "$task_generated_created_kib" -ge "$TASK_DISK_RECEIPT_THRESHOLD_KIB" ]; then
-    printf 'HEAVY_LOCAL_DISK_RECEIPT status=owner_cleanup_required worktree=%s generated_before_kib=%s generated_after_kib=%s created_kib=%s disk_before_kib=%s disk_after_kib=%s threshold_kib=%s\n' \
+  task_disk_consumed_kib=0
+  if [[ "${task_disk_before_kib:-}" =~ ^[0-9]+$ ]] &&
+    [[ "${task_disk_after_kib:-}" =~ ^[0-9]+$ ]] &&
+    [ "$task_disk_before_kib" -gt "$task_disk_after_kib" ]; then
+    task_disk_consumed_kib=$((task_disk_before_kib - task_disk_after_kib))
+  fi
+  if [ "$task_generated_created_kib" -ge "$TASK_DISK_RECEIPT_THRESHOLD_KIB" ] ||
+    [ "$task_disk_consumed_kib" -ge "$TASK_DISK_RECEIPT_THRESHOLD_KIB" ]; then
+    printf 'HEAVY_LOCAL_DISK_RECEIPT status=owner_cleanup_required worktree=%s generated_before_kib=%s generated_after_kib=%s created_kib=%s disk_before_kib=%s disk_after_kib=%s disk_consumed_kib=%s threshold_kib=%s\n' \
       "$(openclaw_heavy_local_slot_safe_text "$task_worktree")" \
       "$task_generated_before_kib" \
       "$task_generated_after_kib" \
       "$task_generated_created_kib" \
       "${task_disk_before_kib:-unknown}" \
       "${task_disk_after_kib:-unknown}" \
+      "$task_disk_consumed_kib" \
       "$TASK_DISK_RECEIPT_THRESHOLD_KIB" >&2
     printf 'Owner action: preserve needed outputs; otherwise report this exact worktree with cleanup-build-artifacts.sh and retire it with gc-worktrees.sh only after its branch is recoverable.\n' >&2
   fi
