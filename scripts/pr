@@ -1713,10 +1713,18 @@ merge_verify() {
   local checks_json
   local checks_err_file
   checks_err_file=$(mktemp)
-  checks_json=$(gh pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file" || true)
+  # The post-watch snapshot is the decisive check truth. A network or auth
+  # failure here must not become an empty required-check set and silently move
+  # the release worker toward merge.
+  if ! checks_json=$(gh pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file"); then
+    rm -f "$checks_err_file"
+    echo "Required-check state is indeterminate; no merge mutation was attempted."
+    exit 75
+  fi
   rm -f "$checks_err_file"
   if [ -z "$checks_json" ]; then
-    checks_json='[]'
+    echo "Required-check state is indeterminate because GitHub returned an empty response."
+    exit 75
   fi
   local required_count
   required_count=$(printf '%s\n' "$checks_json" | jq 'length')

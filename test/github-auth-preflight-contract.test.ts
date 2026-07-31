@@ -23,6 +23,10 @@ describe("GitHub PR transport contract", () => {
     expect(fastPath.match(/--match-head-commit/g)).toHaveLength(4);
     expect(canonicalPr).toContain("openclaw_github_pr_mutation_once");
     expect(canonicalPr).toContain('--match-head-commit "$PREP_HEAD_SHA"');
+    expect(canonicalPr).toContain("Required-check state is indeterminate");
+    expect(canonicalPr).not.toContain(
+      'checks_json=$(gh pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file" || true)',
+    );
     expect(fastPath).toContain("result=indeterminate-required-check-read-failed");
     expect(fastPath).not.toContain("|| printf '[]'");
   });
