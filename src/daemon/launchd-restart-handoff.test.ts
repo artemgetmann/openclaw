@@ -2,6 +2,9 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const spawnSyncMock = vi.hoisted(() =>
+  vi.fn((..._args: unknown[]) => ({ status: 0, stdout: "Sat Aug  1 00:00:00 2026\n" })),
+);
 const unrefMock = vi.hoisted(() => vi.fn());
 const receiptDirs: string[] = [];
 
@@ -10,6 +13,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return {
     ...actual,
     spawn: (...args: unknown[]) => spawnMock(...args),
+    spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
   };
 });
 
@@ -23,6 +27,8 @@ afterEach(() => {
     fs.rmSync(receiptDir, { recursive: true, force: true });
   }
   spawnMock.mockReset();
+  spawnSyncMock.mockReset();
+  spawnSyncMock.mockReturnValue({ status: 0, stdout: "Sat Aug  1 00:00:00 2026\n" });
   unrefMock.mockReset();
 });
 
@@ -143,6 +149,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
   });
 
   it("fails closed when the caller PID/start identity cannot be proven", async () => {
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "" });
     const result = await scheduleDetachedLaunchdRestartHandoff({
       env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
       mode: "start-after-exit",
