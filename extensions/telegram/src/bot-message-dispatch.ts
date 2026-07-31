@@ -3661,6 +3661,14 @@ export const dispatchTelegramMessage = async ({
       !terminalDeliveryAttempted &&
       deliverySummary.skippedNonSilent === 0 &&
       deliverySummary.failedNonSilent === 0);
+  if (settledSilentTerminal) {
+    // A silent terminal response has no final-delivery callback to retire the
+    // temporary Working/Stop bubble. Remove it here so its one-shot token
+    // cannot abort a later run or advance the queued-followup cutoff.
+    await clearProgressController("after-silent-terminal", {
+      timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+    });
+  }
   if (durableDirectTurnId && (terminalDeliveryConfirmed || settledSilentTerminal)) {
     // Publish the processed-message receipt before Telegram middleware may
     // advance its update offset. If the process dies earlier, startup delivers
