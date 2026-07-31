@@ -155,7 +155,12 @@ claimed guarantee cannot be proven mechanically.
     `main` for the shared developer service or an approved break-glass hotfix
     only. Prove runtime provenance separately from PR merge state.
 12. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
-13. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
+13. If the heavy wrapper emitted `HEAVY_LOCAL_DISK_RECEIPT`, include it in the
+    handoff. Preserve outputs still needed by an unmerged PR or release; once
+    the branch is recoverable and the lane is inactive, reclaim the owning
+    temporary worktree through the repository GC instead of leaving another
+    dependency/build footprint behind.
+14. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
 
 ## Next-step handoff
 

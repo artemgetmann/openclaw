@@ -13,6 +13,9 @@ RUNNER="$ROOT_DIR/scripts/lib/heavy-local-slot-runner.pl"
 readonly MIN_MEMORY_FREE_PERCENT=25
 readonly PREFLIGHT_MIN_CPU_IDLE_PERCENT=35
 readonly RUNTIME_MIN_CPU_IDLE_PERCENT=20
+readonly MIN_DISK_FREE_KIB=$((25 * 1024 * 1024))
+readonly DISK_REPORT_BELOW_KIB=$((35 * 1024 * 1024))
+readonly TASK_DISK_RECEIPT_THRESHOLD_KIB=$((1024 * 1024))
 readonly MONITOR_INTERVAL_SECONDS=15
 readonly UNHEALTHY_STRIKES_BEFORE_STOP=2
 readonly HOST_HEALTH_HTTP_TIMEOUT_SECONDS=3
@@ -42,6 +45,7 @@ check_only=false
 policy='standard'
 wait_seconds=0
 display_label=''
+telemetry_label=''
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -77,6 +81,7 @@ done
 [ -n "$label" ] || usage
 display_label="$(openclaw_heavy_local_slot_safe_text "$label")"
 [ -n "$display_label" ] || usage
+telemetry_label="$(printf '%s' "$display_label" | /usr/bin/tr ' ' '_')"
 [[ "$wait_seconds" =~ ^(0|[1-9][0-9]*)$ ]] || usage
 [ "${#wait_seconds}" -le "${#MAX_WAIT_SECONDS}" ] || usage
 [ "$wait_seconds" -le "$MAX_WAIT_SECONDS" ] || usage
@@ -103,6 +108,9 @@ last_refusal_class=''
 last_refusal_code=''
 last_refusal_message=''
 last_refusal_data=''
+task_worktree=''
+task_generated_before_kib=''
+task_disk_before_kib=''
 
 emit_refusal() {
   local refusal_class="$1"
@@ -132,6 +140,38 @@ emit_wait_timeout() {
     "wait_timeout" \
     "timed out after ${wait_seconds}s; last reason: $last_refusal_message" \
     "last_code=$last_refusal_code${last_refusal_data:+ $last_refusal_data}"
+}
+
+measure_task_generated_kib() {
+  local worktree_root="$1"
+  local generated_path=""
+  local size_kib=""
+  local total_kib=0
+
+  # Keep ownership attribution narrow and identical before/after the guarded
+  # command. An unreadable generated tree is indeterminate, never zero.
+  for generated_path in \
+    node_modules \
+    dist \
+    .build \
+    .build-ui-smoke \
+    dist-ui-smoke \
+    DerivedData \
+    .swiftpm \
+    .turbo \
+    coverage; do
+    [ -e "$worktree_root/$generated_path" ] || continue
+    size_kib="$(du -sk "$worktree_root/$generated_path" 2>/dev/null | awk '{ print $1; exit }')" ||
+      return 1
+    [[ "$size_kib" =~ ^[0-9]+$ ]] || return 1
+    total_kib=$((total_kib + size_kib))
+  done
+  printf '%s\n' "$total_kib"
+}
+
+disk_available_kib_for_path() {
+  df -Pk "$1" 2>/dev/null |
+    awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print $4; exit }'
 }
 
 queue_or_refuse() {
@@ -431,6 +471,9 @@ fi
 host_health_reason() {
   local required_cpu_idle=$1
   local require_jarvis_health=$2
+  local emit_disk_report="${3:-0}"
+  local disk_target="/"
+  local disk_free=""
 
   [ "$(uname -s)" = "Darwin" ] || return 0
 
@@ -472,6 +515,38 @@ host_health_reason() {
       "$cpu_idle" \
       "$required_cpu_idle"
     return 0
+  fi
+
+  # Disk pressure is a machine-survival boundary just like CPU and memory.
+  # Report below 35 GiB so the owner can reclaim its own generated state before
+  # the 25 GiB hard floor becomes an incident. Runtime monitoring enforces only
+  # the floor and does not repeat the advisory every fifteen seconds.
+  if [[ -d /System/Volumes/Data ]]; then
+    disk_target=/System/Volumes/Data
+  fi
+  disk_free="$(
+    df -Pk "$disk_target" 2>/dev/null |
+      awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print $4; exit }'
+  )"
+  if [ -z "$disk_free" ]; then
+    printf '%s' \
+      'guard_internal|disk_measurement_failed|could not measure disk headroom|metric=disk_available_kib status=unavailable'
+    return 0
+  fi
+  if [ "$disk_free" -lt "$MIN_DISK_FREE_KIB" ]; then
+    printf 'host_unhealthy|disk_pressure|disk availability is %s KiB (minimum %s KiB)|metric=disk_available_kib observed=%s threshold=%s unit=KiB' \
+      "$disk_free" \
+      "$MIN_DISK_FREE_KIB" \
+      "$disk_free" \
+      "$MIN_DISK_FREE_KIB"
+    return 0
+  fi
+  if [ "$emit_disk_report" = "1" ] && [ "$disk_free" -lt "$DISK_REPORT_BELOW_KIB" ]; then
+    printf 'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=%s report_below_kib=%s hard_floor_kib=%s owner=%s\n' \
+      "$disk_free" \
+      "$DISK_REPORT_BELOW_KIB" \
+      "$MIN_DISK_FREE_KIB" \
+      "$telemetry_label" >&2
   fi
 
   # If Tailscale is configured on this Mac, disconnected means the remote
@@ -519,13 +594,13 @@ while true; do
       "${OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CLASS:-guard_internal}" \
       "${OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CODE:-acquire_failed}" \
       "${OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_MESSAGE:-heavy-local slot acquisition failed}" \
-      ""; then
+      "${OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_DATA:-}"; then
       continue
     fi
     exit "$acquire_status"
   fi
 
-  preflight_result=$(host_health_reason "$PREFLIGHT_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health")
+  preflight_result=$(host_health_reason "$PREFLIGHT_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health" 1)
   if [ -z "$preflight_result" ]; then
     # The final health probe may itself consume the remaining wait budget.
     # Preserve the same no-late-launch boundary after that probe completes.
@@ -555,6 +630,12 @@ health_stop_file="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/health_stop_reason"
 printf 'Heavy-local slot granted to "%s".\n' "$display_label"
 if [ "$check_only" = true ]; then
   exit 0
+fi
+
+task_worktree="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$task_worktree" ] && [ -d "$task_worktree" ]; then
+  task_generated_before_kib="$(measure_task_generated_kib "$task_worktree" || true)"
+  task_disk_before_kib="$(disk_available_kib_for_path "$task_worktree")"
 fi
 
 # Publish a pending handshake before spawn. The runner atomically renames this
@@ -623,7 +704,7 @@ monitor_guarded_child() {
   trap - EXIT INT TERM HUP
 
   while kill -0 "$child_pid" 2>/dev/null; do
-    runtime_result=$(host_health_reason "$RUNTIME_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health")
+    runtime_result=$(host_health_reason "$RUNTIME_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health" 0)
     if [ -n "$runtime_result" ]; then
       IFS='|' read -r runtime_class runtime_code runtime_reason runtime_data <<<"$runtime_result"
       unhealthy_strikes=$((unhealthy_strikes + 1))
@@ -663,6 +744,56 @@ stop_health_monitor
 # Root exit is not proof that every worker exited. Stop and verify the dedicated
 # group before returning the root status or releasing the machine lease.
 stop_guarded_child || true
+
+# Attribute only generated directories inside the guarded command's starting
+# worktree. The receipt never scans source, shared caches, sessions, browser
+# state, or another lane. It is advisory because successful task output can be
+# intentionally needed until the PR or release handoff is complete.
+if [ -n "$task_worktree" ] && [ -n "$task_generated_before_kib" ]; then
+  task_generated_after_kib="$(measure_task_generated_kib "$task_worktree" || true)"
+  task_disk_after_kib="$(disk_available_kib_for_path "$task_worktree")"
+  task_worktree_telemetry="$(
+    openclaw_heavy_local_slot_safe_text "$task_worktree" |
+      /usr/bin/sed 's/ /%20/g'
+  )"
+  if [ -z "$task_generated_after_kib" ]; then
+    printf 'HEAVY_LOCAL_DISK_RECEIPT status=measurement_unavailable worktree=%s disk_before_kib=%s disk_after_kib=%s threshold_kib=%s\n' \
+      "$task_worktree_telemetry" \
+      "${task_disk_before_kib:-unknown}" \
+      "${task_disk_after_kib:-unknown}" \
+      "$TASK_DISK_RECEIPT_THRESHOLD_KIB" >&2
+  else
+    task_generated_created_kib=$((task_generated_after_kib - task_generated_before_kib))
+    task_disk_consumed_kib=0
+    if [[ "${task_disk_before_kib:-}" =~ ^[0-9]+$ ]] &&
+      [[ "${task_disk_after_kib:-}" =~ ^[0-9]+$ ]] &&
+      [ "$task_disk_before_kib" -gt "$task_disk_after_kib" ]; then
+      task_disk_consumed_kib=$((task_disk_before_kib - task_disk_after_kib))
+    fi
+    if [ "$task_generated_created_kib" -ge "$TASK_DISK_RECEIPT_THRESHOLD_KIB" ] ||
+      [ "$task_disk_consumed_kib" -ge "$TASK_DISK_RECEIPT_THRESHOLD_KIB" ]; then
+      printf 'HEAVY_LOCAL_DISK_RECEIPT status=owner_cleanup_required worktree=%s generated_before_kib=%s generated_after_kib=%s created_kib=%s disk_before_kib=%s disk_after_kib=%s disk_consumed_kib=%s threshold_kib=%s\n' \
+        "$task_worktree_telemetry" \
+        "$task_generated_before_kib" \
+        "$task_generated_after_kib" \
+        "$task_generated_created_kib" \
+        "${task_disk_before_kib:-unknown}" \
+        "${task_disk_after_kib:-unknown}" \
+        "$task_disk_consumed_kib" \
+        "$TASK_DISK_RECEIPT_THRESHOLD_KIB" >&2
+      printf 'Owner action: preserve needed outputs; otherwise report this exact worktree with cleanup-build-artifacts.sh and retire it with gc-worktrees.sh only after its branch is recoverable.\n' >&2
+    fi
+  fi
+elif [ -n "$task_worktree" ]; then
+  task_worktree_telemetry="$(
+    openclaw_heavy_local_slot_safe_text "$task_worktree" |
+      /usr/bin/sed 's/ /%20/g'
+  )"
+  printf 'HEAVY_LOCAL_DISK_RECEIPT status=measurement_unavailable worktree=%s disk_before_kib=%s disk_after_kib=unknown threshold_kib=%s\n' \
+    "$task_worktree_telemetry" \
+    "${task_disk_before_kib:-unknown}" \
+    "$TASK_DISK_RECEIPT_THRESHOLD_KIB" >&2
+fi
 
 if [ -s "$health_stop_file" ]; then
   IFS='|' read -r health_stop_class health_stop_code health_stop_reason health_stop_data \

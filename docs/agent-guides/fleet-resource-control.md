@@ -114,8 +114,17 @@ On macOS the wrapper currently refuses admission when:
 - another heavy command owns the slot;
 - system memory headroom is below 25%;
 - CPU idle capacity is below 35%;
+- Data-volume free space is below 25 GiB;
 - configured Tailscale is disconnected; or
 - the managed Jarvis gateway is installed but unhealthy.
+
+Between 25 GiB and 35 GiB free, admission remains honest but prints one
+`HEAVY_LOCAL_DISK_REPORT` warning with the exact available KiB, report
+threshold, hard floor, and owner label. That is the trigger to run the
+repository retention report before the next build grows the incident. The
+runtime monitor also enforces the 25 GiB floor, so a guarded build that consumes
+the remaining margin is stopped through the same two-strike tree cleanup used
+for CPU and memory pressure.
 
 Refusals retain exit code `75` for compatibility and also emit a stable line:
 
@@ -130,6 +139,11 @@ expires emits the last retryable class with `code=wait_timeout`.
 Measured CPU, memory, Tailscale, and Jarvis refusals also expose stable
 `metric`, `observed`, `threshold`, `expected`, and `unit` fields when relevant.
 These are refusal telemetry, not a complete capacity profile.
+
+An owner-metadata publication failure also includes the exact atomic
+publication stage and owner path. Inspect that generated lease path and its
+live process references; do not delete it or retry-loop the guard merely
+because the old message was opaque.
 
 Admitted commands run with background scheduling and reduced process priority.
 While the command runs, the wrapper rechecks the host every 15 seconds. Two
@@ -153,9 +167,26 @@ restarting a deterministic offender is not autonomous completion; it is just a
 slower denial of service.
 
 The 25% memory threshold, 35% admission CPU-idle threshold, 20% runtime
-CPU-idle threshold, 15-second interval, two-strike stop rule, and three-second
-health timeout remain fixed product policy in this revision. Environment
-variables cannot lower, disable, corrupt, or stretch them.
+CPU-idle threshold, 25 GiB disk floor, 35 GiB disk-report threshold, 15-second
+interval, two-strike stop rule, and three-second health timeout remain fixed
+product policy in this revision. Environment variables cannot lower, disable,
+corrupt, or stretch them.
+
+## Task-owned disk receipts
+
+The wrapper measures only known generated directories inside the guarded
+command's starting Git worktree. It never scans source, shared caches, Codex
+history, browser state, credentials, or another lane. When one guarded task
+creates at least 1 GiB there, task exit prints
+`HEAVY_LOCAL_DISK_RECEIPT` with the exact worktree, before/after generated KiB,
+host free-space KiB, and threshold.
+
+That receipt is accountability, not deletion authority. The owner must preserve
+outputs still needed for its PR/release handoff. Otherwise it runs the
+repository cleanup report for that exact lane's generated state and retires the
+whole temporary worktree through `gc-worktrees.sh` only after clean,
+recoverable, process-free proof. Active, dirty, unmerged, release, runtime, and
+ambiguous state remains protected.
 
 ## Dedicated-host capacity policy
 
@@ -168,8 +199,8 @@ Current protection is narrower than the failure list:
   reduced priority. There is no direct thermal-pressure or shutdown-risk probe.
 - Memory: `memory_pressure` accounts for compression, but the guard does not
   separately bound swap size or swap-growth rate.
-- Disk: retention tooling can report pressure, but admission has no free-space
-  or exhaustion check.
+- Disk: admission reports below 35 GiB and refuses below 25 GiB; retention
+  tooling still owns candidate classification and deletion.
 - Availability: configured Tailscale connectivity and managed Jarvis HTTP
   health are checked. VNC or another remote-desktop path is not probed directly.
 - Overlap: the machine-wide lease and process-group supervision prevent two
