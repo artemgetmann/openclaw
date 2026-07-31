@@ -1659,10 +1659,10 @@ export const registerTelegramHandlers = ({
         if (runStopClaim.status === "mismatch") {
           return;
         }
-        // Stale and duplicate controls are removed in place. Only the first
-        // valid claim enters the normal /stop pipeline.
-        await clearCallbackButtons();
         if (runStopClaim.status === "stale") {
+          // Nothing remains to cancel, so stale and duplicate controls only
+          // need best-effort visual cleanup.
+          await clearCallbackButtons();
           return;
         }
         const syntheticStopMessage = buildSyntheticTextMessage({
@@ -1675,10 +1675,24 @@ export const registerTelegramHandlers = ({
           // this Stop claim.
           date: Math.floor(Date.now() / 1000),
         });
-        await processMessage(buildSyntheticContext(ctx, syntheticStopMessage), [], storeAllowFrom, {
-          forceWasMentioned: true,
-          messageIdOverride: callback.id,
-        });
+        try {
+          // Cancellation is the product contract. Run it before touching
+          // Telegram markup so a transient edit failure cannot consume the
+          // one-shot claim while leaving the model run alive.
+          await processMessage(
+            buildSyntheticContext(ctx, syntheticStopMessage),
+            [],
+            storeAllowFrom,
+            {
+              forceWasMentioned: true,
+              messageIdOverride: callback.id,
+            },
+          );
+        } finally {
+          await clearCallbackButtons().catch((err) => {
+            logVerbose(`telegram: active-run Stop button cleanup failed: ${String(err)}`);
+          });
+        }
         return;
       }
       const queueCallback = parseTelegramQueueCallback(data);

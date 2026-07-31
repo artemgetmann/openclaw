@@ -391,6 +391,36 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(progressStream.clear).toHaveBeenCalled();
   });
 
+  it("retires the Stop control when an active run settles silently", async () => {
+    const progressStream = createDraftStream(702);
+    createTelegramDraftStream.mockReturnValueOnce(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions, replyOptions }) => {
+        replyOptions.onAgentRunStart?.("run-silent");
+        dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "final" });
+        return { queuedFinal: false };
+      },
+    );
+    const bot = createBot();
+
+    await dispatchWithContext({
+      context: createContext({
+        msg: {
+          from: { id: 9, is_bot: false, first_name: "Ada" },
+        } as TelegramMessageContext["msg"],
+      }),
+      bot,
+      streamMode: "off",
+    });
+
+    expect(progressStream.update).toHaveBeenCalledWith("Working…");
+    expect(bot.api.editMessageReplyMarkup).toHaveBeenCalledWith(123, 702, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(progressStream.clear).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not expose a dead Queue/Steer keyboard when inline buttons are off", async () => {
     const bot = createBot();
     vi.mocked(bot.api.sendMessage).mockResolvedValue({ message_id: 901 } as never);

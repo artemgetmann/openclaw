@@ -220,6 +220,69 @@ describe("createTelegramBot", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+  it("still aborts when clearing the active-run Stop button fails", async () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-telegram-run-stop-edit-fail-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "session-stop-edit-fail",
+          updatedAt: Date.parse("2026-07-31T03:00:00.000Z"),
+        },
+      }),
+    );
+    loadConfig.mockReturnValue({
+      session: { store: storePath },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    editMessageReplyMarkupSpy.mockRejectedValueOnce(new Error("Telegram edit failed"));
+    const registration = registerTelegramRunStop({
+      accountId: "default",
+      chatId: 1234,
+      requesterId: 9,
+    });
+    try {
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-stop-edit-fail",
+          data: registration.buttons[0]?.[0]?.callback_data,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 11,
+            text: "Working…",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(sendMessageSpy).toHaveBeenCalledWith("1234", "⚙️ Agent was aborted.", {
+        parse_mode: "HTML",
+      });
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 11, {
+        reply_markup: { inline_keyboard: [] },
+      });
+      const stored = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+        string,
+        { abortCutoffTimestamp?: number }
+      >;
+      expect(stored[sessionKey]?.abortCutoffTimestamp).toBeTypeOf("number");
+    } finally {
+      runStopTesting.resetTelegramRunStopsForTests();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
   it("promotes one exact queued message through the Telegram Steer callback", async () => {
     const durableId = "12345678-1234-4234-8234-123456789abc";
     const queueMessage = vi.fn(async () => undefined);
