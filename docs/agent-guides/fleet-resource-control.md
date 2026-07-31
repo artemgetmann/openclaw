@@ -86,6 +86,15 @@ waiting. `occupied` and `host_unhealthy` are retryable; `guard_internal` fails
 immediately because retrying ambiguous guard state could hide a sandbox,
 measurement, metadata, or identity failure.
 
+On macOS, run the guard itself outside a restricted sandbox because safe owner
+identity requires native `/bin/ps` access. A restricted
+`guard_internal owner_publish_failed stage=process_start_unavailable` permits
+exactly one identical native rerun; do not poll or delete lease metadata. Run
+the real workload in that same native acquire-and-run transaction—a successful
+`--check` never authorizes a later unguarded command. A native `occupied` or
+`host_unhealthy` result remains a queue/stop outcome; a native `guard_internal`
+result requires diagnosis before any workload starts.
+
 The wrapper stores an atomic lease at a stable per-user machine path, so
 independent clones and worktrees contend for the same slot. Canonical
 build/package/release/runtime entrypoints self-acquire this lease when called
