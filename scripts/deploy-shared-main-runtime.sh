@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# This helper is sourced by guard tests and recovery dispatchers. Resolve from
+# the script itself; $0 belongs to the parent shell when sourced and can point
+# at an unrelated checkout or temporary directory.
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/heavy-local-slot.sh
 source "$SCRIPT_ROOT/scripts/lib/heavy-local-slot.sh"
 ORIGINAL_ARGS=("$@")

@@ -256,9 +256,12 @@ export async function scheduleDetachedLaunchdRestartHandoff(params: {
   const uid = typeof process.getuid === "function" ? process.getuid() : 501;
   let receiptDir: string | undefined;
   try {
-    const createdReceiptDir = fssync.mkdtempSync(
-      path.join(os.tmpdir(), `openclaw-gateway-lifecycle-${uid}-`),
-    );
+    // Keep the UID in the mkdtemp prefix so the shell owner can reject a
+    // receipt path for another account. Build the trusted prefix separately:
+    // runtime paths must never interpolate untrusted data directly inside a
+    // tmpdir join, even though this value is numeric and process-derived.
+    const receiptPrefix = `openclaw-gateway-lifecycle-${uid}-`;
+    const createdReceiptDir = fssync.mkdtempSync(path.join(os.tmpdir(), receiptPrefix));
     receiptDir = createdReceiptDir;
     fssync.chmodSync(createdReceiptDir, 0o700);
     const childEnv = { ...process.env, ...params.env };

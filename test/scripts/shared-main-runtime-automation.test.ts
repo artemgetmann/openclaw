@@ -95,13 +95,24 @@ describe("scripts/ship-main-gateway-fix.sh worktree safety", () => {
     const worktreeRepo = path.join(temp, "worktree");
     const mainScript = path.join(mainRepo, "scripts", "ship-main-gateway-fix.sh");
     const worktreeScript = path.join(worktreeRepo, "scripts", "ship-main-gateway-fix.sh");
+    const mainGuard = path.join(mainRepo, "scripts", "lib", "heavy-local-slot.sh");
+    const worktreeGuard = path.join(worktreeRepo, "scripts", "lib", "heavy-local-slot.sh");
 
     fs.mkdirSync(path.dirname(mainScript), { recursive: true });
     fs.mkdirSync(path.dirname(worktreeScript), { recursive: true });
+    fs.mkdirSync(path.dirname(mainGuard), { recursive: true });
+    fs.mkdirSync(path.dirname(worktreeGuard), { recursive: true });
     fs.copyFileSync(SHIP_MAIN_GATEWAY_FIX_SCRIPT, mainScript);
     fs.copyFileSync(SHIP_MAIN_GATEWAY_FIX_SCRIPT, worktreeScript);
+    // The production helper deliberately fails closed if its machine-lease
+    // library is absent. Mirror that packaged dependency in both synthetic
+    // checkouts so this test reaches the linked-worktree delegation boundary.
+    fs.copyFileSync(path.join(ROOT, "scripts", "lib", "heavy-local-slot.sh"), mainGuard);
+    fs.copyFileSync(path.join(ROOT, "scripts", "lib", "heavy-local-slot.sh"), worktreeGuard);
     fs.chmodSync(mainScript, 0o755);
     fs.chmodSync(worktreeScript, 0o755);
+    fs.chmodSync(mainGuard, 0o755);
+    fs.chmodSync(worktreeGuard, 0o755);
 
     const output = runBash(
       `OPENCLAW_MAIN_REPO=main bash ${JSON.stringify(path.relative(temp, worktreeScript))} --help 2>&1`,
