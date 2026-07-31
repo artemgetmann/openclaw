@@ -203,6 +203,13 @@ openclaw_heavy_local_slot_default_path() {
   [[ -n "${OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH:-}" ]] || return 1
   printf '%s\n' "$OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH"
 }
+
+openclaw_heavy_local_slot_after_mkdir() {
+  if [[ "${OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_BLOCK_OWNER_WRITE:-0}" == "1" ]]; then
+    OPENCLAW_HEAVY_LOCAL_SLOT_OWNER_PUBLISH_ERROR="fixture_before_owner_write"
+    return 1
+  fi
+}
 EOF
 
   # Policy validation resolves this exact fixture-root entrypoint. Its body is
@@ -266,7 +273,11 @@ EOF
       print "readonly WAIT_POLL_SECONDS=1"
       next
     }
-    $0 == "  preflight_result=$(host_health_reason \"$PREFLIGHT_MIN_CPU_IDLE_PERCENT\" \"$require_jarvis_health\")" {
+    $0 == "readonly TASK_DISK_RECEIPT_THRESHOLD_KIB=$((1024 * 1024))" {
+      print "readonly TASK_DISK_RECEIPT_THRESHOLD_KIB=1"
+      next
+    }
+    $0 == "  preflight_result=$(host_health_reason \"$PREFLIGHT_MIN_CPU_IDLE_PERCENT\" \"$require_jarvis_health\" 1)" {
       print "source \"${ROOT_DIR}/scripts/lib/heavy-local-slot-health-fixture.sh\""
     }
     $0 == "  kill -TERM -- \"-$child_pgid\" 2>/dev/null || true" {
@@ -459,6 +470,12 @@ test_production_has_no_ambient_test_bypass() {
     fail "production preflight CPU threshold is not fixed at 35%"
   grep -Fq 'readonly RUNTIME_MIN_CPU_IDLE_PERCENT=20' "$WRAPPER" ||
     fail "production runtime CPU threshold is not fixed at 20%"
+  grep -Fq 'readonly MIN_DISK_FREE_KIB=$((25 * 1024 * 1024))' "$WRAPPER" ||
+    fail "production disk floor is not fixed at 25 GiB"
+  grep -Fq 'readonly DISK_REPORT_BELOW_KIB=$((35 * 1024 * 1024))' "$WRAPPER" ||
+    fail "production disk report threshold is not fixed at 35 GiB"
+  grep -Fq 'readonly TASK_DISK_RECEIPT_THRESHOLD_KIB=$((1024 * 1024))' "$WRAPPER" ||
+    fail "production task disk receipt threshold is not fixed at 1 GiB"
   grep -Fq 'readonly MONITOR_INTERVAL_SECONDS=15' "$WRAPPER" ||
     fail "production monitor interval is not fixed at 15 seconds"
   grep -Fq 'readonly UNHEALTHY_STRIKES_BEFORE_STOP=2' "$WRAPPER" ||
@@ -466,6 +483,65 @@ test_production_has_no_ambient_test_bypass() {
   grep -Fq 'readonly HOST_HEALTH_HTTP_TIMEOUT_SECONDS=3' "$WRAPPER" ||
     fail "production health timeout is not fixed at three seconds"
   pass "production wrapper exposes no ambient bypass or health tuning"
+}
+
+test_owner_publish_failure_is_actionable() {
+  local lock_path="$TMP_DIR/owner-publish.lock"
+  local health_path="$TMP_DIR/owner-publish.health"
+  local output="$TMP_DIR/owner-publish.out"
+  local status=0
+
+  write_healthy_samples "$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_BLOCK_OWNER_WRITE=1 \
+    "$FIXTURE_WRAPPER" --label "owner-publish-proof" --check >"$output" 2>&1
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "owner publication failure returned $status instead of 75"
+  grep -Fq \
+    "HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=owner_publish_failed stage=fixture_before_owner_write owner_path=${lock_path}/owner" \
+    "$output" ||
+    fail "owner publication refusal omitted exact stage/path metadata"
+  grep -Fq \
+    "Refusing heavy work: could not publish lease owner metadata" \
+    "$output" ||
+    fail "owner publication refusal lost its human remediation message"
+  [[ ! -e "$lock_path" ]] || fail "failed owner publication leaked its fixture lease"
+  pass "owner publication failure reports exact stage and metadata path"
+}
+
+test_large_generated_state_emits_owner_receipt() {
+  local lock_path="$TMP_DIR/task-disk-receipt.lock"
+  local health_path="$TMP_DIR/task-disk-receipt.health"
+  local repo_path="$TMP_DIR/task-disk-receipt-repo"
+  local output="$TMP_DIR/task-disk-receipt.out"
+
+  mkdir -p "$repo_path"
+  git -C "$repo_path" init -q
+  write_healthy_samples "$health_path"
+  (
+    cd "$repo_path"
+    OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+    OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+      "$FIXTURE_WRAPPER" \
+        --label "task-disk-receipt" \
+        -- \
+        bash -c 'mkdir -p dist && dd if=/dev/zero of=dist/generated.bin bs=1024 count=4 status=none'
+  ) >"$output" 2>&1
+
+  grep -Fq \
+    "HEAVY_LOCAL_DISK_RECEIPT status=owner_cleanup_required worktree=${repo_path}" \
+    "$output" ||
+    fail "large generated task state omitted its owner receipt"
+  grep -Eq 'created_kib=[1-9][0-9]*' "$output" ||
+    fail "task disk receipt omitted a positive created-state measurement"
+  grep -Fq 'threshold_kib=1' "$output" ||
+    fail "task disk receipt omitted its threshold"
+  [[ ! -e "$lock_path" ]] || fail "task disk receipt test leaked its fixture lease"
+  pass "large generated task state emits an exact owner receipt"
 }
 
 test_wrapper_waits_for_explicit_handshake_commit() {
@@ -2142,6 +2218,8 @@ fi
 if [[ "${1:-}" == "--coordination-only" ]]; then
   SUITE_PHASE="create_instrumented_runtime"
   create_instrumented_runtime
+  run_suite_test test_owner_publish_failure_is_actionable
+  run_suite_test test_large_generated_state_emits_owner_receipt
   run_suite_test test_refusal_classes_and_internal_failure_distinction
   run_suite_test test_wait_argument_bounds_fail_before_admission
   run_suite_test test_queue_notice_sanitizes_untrusted_label
@@ -2174,6 +2252,8 @@ create_sigint_reset_launcher
 SUITE_PHASE="create_term_attribution_holder"
 create_term_attribution_holder
 run_suite_test test_production_has_no_ambient_test_bypass
+run_suite_test test_owner_publish_failure_is_actionable
+run_suite_test test_large_generated_state_emits_owner_receipt
 run_suite_test test_wrapper_waits_for_explicit_handshake_commit
 run_suite_test test_pending_signal_never_executes_guarded_body
 run_suite_test test_authoritative_session_identity_ignores_macos_ps_zero

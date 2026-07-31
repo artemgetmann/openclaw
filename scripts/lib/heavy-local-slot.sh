@@ -15,11 +15,14 @@ OPENCLAW_HEAVY_LOCAL_SLOT_TOKEN=""
 OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CLASS=""
 OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CODE=""
 OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_MESSAGE=""
+OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_DATA=""
+OPENCLAW_HEAVY_LOCAL_SLOT_OWNER_PUBLISH_ERROR=""
 
 openclaw_heavy_local_slot_set_refusal() {
   OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CLASS="$1"
   OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CODE="$2"
   OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_MESSAGE="$3"
+  OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_DATA="${4:-}"
 }
 
 openclaw_heavy_local_slot_value() {
@@ -169,10 +172,14 @@ openclaw_heavy_local_slot_write_owner() {
   local owner_tmp="${owner_path}.tmp.$$"
   local process_start=""
 
-  process_start="$(openclaw_heavy_local_slot_process_start "$$")" || return 1
-  [[ -n "$process_start" ]] || return 1
+  OPENCLAW_HEAVY_LOCAL_SLOT_OWNER_PUBLISH_ERROR=""
+  if ! process_start="$(openclaw_heavy_local_slot_process_start "$$")" ||
+    [[ -z "$process_start" ]]; then
+    OPENCLAW_HEAVY_LOCAL_SLOT_OWNER_PUBLISH_ERROR="process_start_unavailable"
+    return 1
+  fi
 
-  {
+  if ! {
     printf 'pid=%s\n' "$$"
     printf 'token=%s\n' "$token"
     printf 'process_start=%s\n' "$process_start"
@@ -182,9 +189,21 @@ openclaw_heavy_local_slot_write_owner() {
     if [[ -n "${CODEX_THREAD_ID:-}" ]]; then
       printf 'thread_id=%s\n' "$(openclaw_heavy_local_slot_safe_text "$CODEX_THREAD_ID")"
     fi
-  } >"$owner_tmp"
-  /bin/chmod 600 "$owner_tmp"
-  /bin/mv "$owner_tmp" "$owner_path"
+  } >"$owner_tmp"; then
+    OPENCLAW_HEAVY_LOCAL_SLOT_OWNER_PUBLISH_ERROR="owner_tmp_write_failed"
+    /bin/rm -f "$owner_tmp"
+    return 1
+  fi
+  if ! /bin/chmod 600 "$owner_tmp"; then
+    OPENCLAW_HEAVY_LOCAL_SLOT_OWNER_PUBLISH_ERROR="owner_tmp_chmod_failed"
+    /bin/rm -f "$owner_tmp"
+    return 1
+  fi
+  if ! /bin/mv "$owner_tmp" "$owner_path"; then
+    OPENCLAW_HEAVY_LOCAL_SLOT_OWNER_PUBLISH_ERROR="owner_atomic_rename_failed"
+    /bin/rm -f "$owner_tmp"
+    return 1
+  fi
 }
 
 openclaw_heavy_local_slot_child_group_status() {
@@ -369,7 +388,7 @@ openclaw_heavy_local_slot_acquire() {
   local token="" owner_pid="" owner_token="" owner_start="" owner_label=""
   local metadata_wait=0 live_status=0 child_status=0
 
-  openclaw_heavy_local_slot_set_refusal "" "" ""
+  openclaw_heavy_local_slot_set_refusal "" "" "" ""
   lock_path="$(openclaw_heavy_local_slot_resolve_path)" || {
     openclaw_heavy_local_slot_set_refusal \
       "guard_internal" \
@@ -408,7 +427,8 @@ openclaw_heavy_local_slot_acquire() {
         openclaw_heavy_local_slot_set_refusal \
           "guard_internal" \
           "owner_publish_failed" \
-          "could not publish lease owner metadata"
+          "could not publish lease owner metadata" \
+          "stage=${OPENCLAW_HEAVY_LOCAL_SLOT_OWNER_PUBLISH_ERROR:-unknown} owner_path=${owner_path}"
         return 75
       fi
       OPENCLAW_HEAVY_LOCAL_SLOT_HELD=1
