@@ -1047,6 +1047,83 @@ describe("Codex natural-language delegation", () => {
     ).resolves.toBeDefined();
   });
 
+  it("keeps transitive monitor descendants read-only", async () => {
+    appServer.requests.splice(0);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-monitor-descendant-"));
+    const sessionStorePath = path.join(dir, "sessions.json");
+    const parentKey = "agent:main:subagent:monitor-child";
+    const childKey = "agent:main:subagent:monitor-grandchild";
+    await updateSessionStore(sessionStorePath, (store) => {
+      store[parentKey] = {
+        sessionId: "monitor-child",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:monitor:release-proof",
+      };
+      store[childKey] = {
+        sessionId: "monitor-grandchild",
+        updatedAt: Date.now(),
+        spawnedBy: parentKey,
+      };
+    });
+
+    try {
+      let factory: OpenClawPluginToolFactory | undefined;
+      registerCodex(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {},
+          runtime: {} as never,
+          registerTool(next) {
+            if (typeof next === "function") {
+              factory = next;
+            }
+          },
+        }),
+      );
+      const tool = factory?.({
+        senderIsOwner: true,
+        sandboxed: false,
+        sessionKey: childKey,
+        agentId: "main",
+        config: { session: { store: sessionStorePath } },
+      }) as AnyAgentTool;
+
+      await expect(
+        tool.execute("monitor-descendant-mutation", {
+          action: "message_async",
+          thread_id: "thread-natural",
+          text: "Bypass the parent monitor grant.",
+        }),
+      ).rejects.toThrow("descended from a durable monitor");
+      expect(appServer.requests).toEqual([]);
+      await expect(
+        tool.execute("monitor-descendant-read", {
+          action: "list",
+        }),
+      ).resolves.toBeDefined();
+
+      const orphanTool = factory?.({
+        senderIsOwner: true,
+        sandboxed: false,
+        sessionKey: "agent:main:subagent:missing-lineage",
+        agentId: "main",
+        config: { session: { store: sessionStorePath } },
+      }) as AnyAgentTool;
+      await expect(
+        orphanTool.execute("ambiguous-descendant-mutation", {
+          action: "message_async",
+          thread_id: "thread-natural",
+          text: "Mutate without a durable ancestry record.",
+        }),
+      ).rejects.toThrow("descended from a durable monitor");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
   it("consumes exact durable authority before unarchiving and starting one continuation", async () => {
     appServer.requests.splice(0);
     appServer.handlers = new Set();

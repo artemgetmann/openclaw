@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { loadConfig } from "../../src/config/config.js";
 import { resolveStorePath as resolveSessionStorePath } from "../../src/config/sessions/paths.js";
+import { loadSessionStore } from "../../src/config/sessions/store.js";
 import { resolveCronStorePath } from "../../src/cron/store.js";
 import {
   claimMonitorAuthorityAction,
@@ -74,6 +75,13 @@ type ToolParams = {
 const APPROVAL_NAMESPACE = "codexpilot";
 const BINDING_KIND = "codex-app-server-pilot";
 const JARVIS_RELAY_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
+const MONITOR_READ_ONLY_ACTIONS = new Set(["status", "fleet", "list", "search", "read"]);
+
+type CodexMonitorScope =
+  | "direct-monitor"
+  | "monitor-descendant"
+  | "unrestricted"
+  | "ambiguous-descendant";
 
 // Keep this bundled extension dependency-free. The plugin API accepts standard
 // JSON Schema, so pulling TypeBox into a new workspace package would add no
@@ -403,17 +411,25 @@ function createCodexTool(
     parameters: ToolSchema,
     execute: async (_toolCallId: string, raw: ToolParams) => {
       const action = raw.action ?? "";
-      const monitorSessionKey = ctx.sessionKey?.trim();
-      const isMonitorSession =
-        parseAgentSessionKey(monitorSessionKey)?.rest.startsWith("monitor:") === true;
+      const monitorScope = resolveCodexMonitorScope(ctx);
       if (
-        isMonitorSession &&
-        !["status", "fleet", "list", "search", "read", "unarchive_resume_authorized_once"].includes(
-          action,
-        )
+        monitorScope === "direct-monitor" &&
+        !MONITOR_READ_ONLY_ACTIONS.has(action) &&
+        action !== "unarchive_resume_authorized_once"
       ) {
         throw new Error(
           `monitor sessions must use a durable authority grant for mutating Codex action ${action}`,
+        );
+      }
+      if (
+        (monitorScope === "monitor-descendant" || monitorScope === "ambiguous-descendant") &&
+        !MONITOR_READ_ONLY_ACTIONS.has(action)
+      ) {
+        // A spawned child gets a fresh subagent/acp session key, so the key
+        // prefix alone cannot prove it is outside a monitor's authority scope.
+        // Descendants stay read-only; ambiguous lineage also fails closed.
+        throw new Error(
+          `sessions descended from a durable monitor cannot use mutating Codex action ${action}`,
         );
       }
       let result: unknown;
@@ -500,7 +516,7 @@ function createCodexTool(
       } else if (action === "fork") {
         result = await service.fork(required(raw.thread_id, "thread_id"));
       } else if (action === "unarchive_resume_authorized_once") {
-        const sessionKey = required(monitorSessionKey, "monitor session");
+        const sessionKey = required(ctx.sessionKey?.trim(), "monitor session");
         const threadId = required(raw.thread_id, "thread_id");
         const text = requiredPayload(raw.text, "text");
         const idempotencyKey = required(raw.idempotency_key, "idempotency_key");
@@ -590,6 +606,61 @@ function createCodexTool(
       return jsonToolResult(result);
     },
   };
+}
+
+function resolveCodexMonitorScope(ctx: OpenClawPluginToolContext): CodexMonitorScope {
+  const initialSessionKey = ctx.sessionKey?.trim();
+  if (!initialSessionKey) {
+    return "unrestricted";
+  }
+  const initialParsed = parseAgentSessionKey(initialSessionKey);
+  if (!initialParsed) {
+    return "unrestricted";
+  }
+  if (initialParsed.rest.startsWith("monitor:")) {
+    return "direct-monitor";
+  }
+  if (!initialParsed.rest.startsWith("subagent:") && !initialParsed.rest.startsWith("acp:")) {
+    return "unrestricted";
+  }
+
+  const cfg = ctx.config ?? loadConfig();
+  const visited = new Set<string>();
+  let sessionKey = initialSessionKey;
+
+  // Spawn depth is bounded elsewhere, but keep this walk independently
+  // bounded and cycle-safe because it is part of a permission decision.
+  for (let hop = 0; hop < 32; hop += 1) {
+    if (visited.has(sessionKey)) {
+      return "ambiguous-descendant";
+    }
+    visited.add(sessionKey);
+
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (!parsed) {
+      return "ambiguous-descendant";
+    }
+    if (parsed.rest.startsWith("monitor:")) {
+      return "monitor-descendant";
+    }
+    if (!parsed.rest.startsWith("subagent:") && !parsed.rest.startsWith("acp:")) {
+      return "unrestricted";
+    }
+
+    // Skip the shared cache so a child cannot race the durable spawnedBy write
+    // that established its authority ancestry.
+    const store = loadSessionStore(
+      resolveSessionStorePath(cfg.session?.store, { agentId: parsed.agentId }),
+      { skipCache: true },
+    );
+    const spawnedBy = store[sessionKey]?.spawnedBy?.trim();
+    if (!spawnedBy) {
+      return "ambiguous-descendant";
+    }
+    sessionKey = spawnedBy;
+  }
+
+  return "ambiguous-descendant";
 }
 
 class CodexRelayAcceptanceAmbiguousError extends Error {
