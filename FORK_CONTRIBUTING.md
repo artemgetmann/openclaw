@@ -15,12 +15,15 @@ Make the PR easy to review in under two minutes.
 
 The reviewer should be able to answer:
 
-1. What exact user path got fixed?
-2. What exact proof shows it worked?
-3. What exact shared-state or runtime footgun got removed?
-4. What still hurts?
+1. What observable claim and acceptance criteria does this PR own?
+2. What exact current-head proof shows it worked?
+3. Did risk require an independent tester, and what was the receipt or skip
+   reason?
+4. What must merge before or after it, and what overlaps?
+5. What proof, cleanup, or rollback remains?
+6. What still hurts?
 
-If the PR body does not answer those four questions immediately, it is not ready.
+If the PR body does not answer those questions immediately, it is not ready.
 
 ## Required Top Block
 
@@ -29,13 +32,18 @@ Every fork PR should start with this section:
 ```md
 ## Review Fast Path
 
-- User path fixed:
-- Proof:
-- Shared-state footgun removed:
+- Observable claim + acceptance criteria:
+- Exact head + builder proof:
+- Independent tester: (`Required` + status/receipt, or `Skipped` + risk reason)
+- Dependencies / merge order / overlap:
+- Remaining proof / cleanup / rollback:
 - Still hurts:
 ```
 
-Write this in plain language. Keep it tight. No filler.
+Write this in plain language. Keep it tight. No filler. Use
+`None — standalone` only when there are no dependencies or overlapping PRs.
+Use `None — source-only` only when no package, deployment, runtime, GUI,
+provider/backend, real-user, or cleanup proof remains.
 
 Examples:
 
@@ -73,6 +81,10 @@ Do not blindly paste the full upstream PR template into fork PRs unless the targ
 ## Verification Rules
 
 Fork PRs should include exact proof, not vague confidence language.
+`Proof` contains only checks completed on the stated head. Keep pending CI,
+package, deployment, runtime, GUI, and real-user work in the remaining-proof
+field; keep provider/backend health there too, and never present pending work as
+proof.
 
 For CI and merge eligibility, use `docs/ci.md` as the source of truth. In
 short: GitHub owns waiting and auto-merge; agents own diagnosis, review-bot

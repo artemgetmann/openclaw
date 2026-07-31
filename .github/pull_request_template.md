@@ -27,10 +27,17 @@ Describe the problem and fix in 2–5 bullets:
 - [ ] UI / DX
 - [ ] CI/CD / infra
 
-## Linked Issue/PR
+## PR Contract
 
 - Closes #
 - Related #
+- Observable claim + acceptance criteria:
+- Exact head SHA:
+- Builder proof completed on that head:
+- Independent tester: (`Required` + status/receipt, or `Skipped` + risk reason)
+- Tester/runtime cleanup:
+- Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
+- Proof still required after merge: (`None — source-only` or exact package/deploy/provider/backend/runtime/GUI/real-user work)
 
 ## User-visible / Behavior Changes
 
@@ -47,6 +54,10 @@ If none, write `None`.
 - If any `Yes`, explain risk + mitigation:
 
 ## Repro + Verification
+
+List only proof completed on the exact head above. Pending CI, package,
+deployment, runtime, GUI, and real-user checks belong in the PR contract as
+proof still required.
 
 ### Environment
 
