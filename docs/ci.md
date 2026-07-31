@@ -59,6 +59,14 @@ Fast path for normal PRs:
 scripts/pr-merge watch-auto <PR>
 ```
 
+Before GitHub reads or mutation, the helper performs the canonical
+secret-silent authenticated API preflight from
+`docs/agent-guides/workflow.md`. A restricted failure is indeterminate until
+the same read-only probe succeeds in authorized host context or an authenticated
+connector confirms access. The release worker selects one mutation transport
+and binds merge or auto-merge to the tested head; an ambiguous mutation result
+is reconciled read-only and is never retried automatically.
+
 GitHub Copilot pull-request review is disabled for this repository because the
 current account has no code-review entitlement. Do not request `@copilot` or
 wait for a Copilot artifact. The legacy `copilot-check` command remains only as

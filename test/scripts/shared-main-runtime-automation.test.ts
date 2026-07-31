@@ -84,7 +84,7 @@ describe("scripts/pr-merge-fastpath.sh", () => {
     const script = fs.readFileSync(PR_FASTPATH_SCRIPT, "utf8");
 
     expect(script).toContain('"${merge_state}" == "BEHIND" || "${merge_state}" == "DIRTY"');
-    expect(script).toContain('gh pr update-branch "${PR_NUMBER}"');
+    expect(script).toContain("result=blocked-builder-refresh-required");
   });
 });
 

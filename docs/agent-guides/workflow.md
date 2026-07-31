@@ -137,6 +137,38 @@ identity isolates state; it does not allocate CPU, memory, disk, ports, provider
 determinism, packaging, or runtime capacity. All guarded work still follows
 `docs/agent-guides/fleet-resource-control.md`.
 
+### 5. Restricted results do not prove host failure
+
+Before reporting a blocker, identify whether the failed check depends on state
+that a restricted process may not share with the host: credentials or keyring,
+network, signing or trust, TCC, launchd, services, listeners, or similar
+machine-owned state. A restricted-only failure is indeterminate. Rerun only the
+smallest decisive read-only diagnostic in authorized host context. Do not move
+an arbitrary command outside the sandbox merely because it failed there.
+
+For GitHub, `gh auth status` is not decisive because it reads local credential
+metadata without proving authenticated API access. Use the secret-silent API
+probe:
+
+```bash
+scripts/github-auth-preflight.sh --context restricted
+```
+
+If it returns `status=indeterminate`, rerun that exact read-only probe with
+`--context host` in authorized host context, or confirm an authenticated GitHub
+connector. The repository cannot self-elevate and shell scripts cannot invoke a
+connector. A host probe failure is a real blocker; do not log out, log in,
+modify keyring state, or print tokens as recovery theater.
+
+Choose exactly one mutation transport before any PR change: authorized host
+`gh`, or an authenticated GitHub connector that supports expected-head
+protection. A connector is not an admin, bypass, or permission-escalation path.
+Never use both transports for one mutation. Bind merges and auto-merge requests
+to the immutable expected head. If any mutation, send, merge, deploy, restart,
+credential change, or destructive action returns ambiguously, inspect state
+read-only and stop; never blindly retry it. A new attempt requires a confirmed
+unchanged state plus the original approval and idempotency contract.
+
 ### Reusable handoff and receipt contract
 
 Use these fields in the PR contract and worker prompts. Values are immutable for

@@ -42,6 +42,7 @@ Describe the problem and fix in 2–5 bullets:
 - Tester/runtime cleanup:
 - Tester lifecycle closure: (exact task archive, or exact nested-agent terminal receipt)
 - Release worker: (fresh user-visible project task ID + host ID + explicit normal-merge authority; fill after tester `PASS`)
+- GitHub mutation transport: (`host-gh` or authenticated connector + expected head; exactly one)
 - Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
 - Proof still required after merge: (`None — source-only` or exact package/deploy/provider/backend/runtime/GUI/real-user work)
 

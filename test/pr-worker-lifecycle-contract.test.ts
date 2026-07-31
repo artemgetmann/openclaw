@@ -77,4 +77,17 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(prTemplate).toContain("Tester lifecycle closure");
     expect(prTemplate).toContain("fresh user-visible project task ID");
   });
+
+  it("treats restricted host-state failures and ambiguous mutations safely", () => {
+    // A restricted credential or network result cannot establish host truth.
+    // The one-transport rule prevents a failed shell mutation from falling
+    // through to a connector and duplicating an external side effect.
+    expect(agents).toContain("A sandbox-only failure is indeterminate");
+    expect(normalizedWorkflow).toContain("smallest decisive read-only diagnostic");
+    expect(normalizedWorkflow).toContain("gh auth status` is not decisive");
+    expect(normalizedWorkflow).toContain("Choose exactly one mutation transport");
+    expect(normalizedWorkflow).toContain("Never use both transports for one mutation");
+    expect(normalizedWorkflow).toContain("never blindly retry it");
+    expect(prTemplate).toContain("authenticated connector + expected head; exactly one");
+  });
 });

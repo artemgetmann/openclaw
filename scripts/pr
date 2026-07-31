@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/github-auth-preflight.sh
+source "${script_root}/scripts/lib/github-auth-preflight.sh"
+
 # If invoked from a linked worktree copy of this script, re-exec the canonical
 # script from the repository root so behavior stays consistent across worktrees.
 script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -100,7 +104,7 @@ enter_worktree() {
   fi
 
   cd "$root"
-  gh auth status >/dev/null
+  openclaw_github_preflight "${OPENCLAW_GITHUB_CONTEXT:-restricted}" host-gh
   git fetch origin main
 
   local dir=".worktrees/pr-$pr"
@@ -211,11 +215,6 @@ wait_for_pr_head_sha() {
   done
 
   return 1
-}
-
-is_author_email_merge_error() {
-  local msg="$1"
-  printf '%s\n' "$msg" | rg -qi 'author.?email|email.*associated|associated.*email|invalid.*email'
 }
 
 merge_author_email_candidates() {
@@ -1871,18 +1870,21 @@ merge_watch_enable_auto_merge_if_needed() {
   local pr="$1"
   local pr_json="$2"
   local auto_merge_enabled
+  local expected_head
   auto_merge_enabled=$(printf '%s\n' "$pr_json" | jq -r '.autoMergeRequest != null')
+  expected_head=$(printf '%s\n' "$pr_json" | jq -r '.headRefOid')
 
   if [ "$auto_merge_enabled" = "true" ]; then
     return 0
   fi
 
   echo "auto-merge=disabled; enabling squash auto-merge"
-  if gh pr merge "$pr" --squash --delete-branch --auto; then
+  if openclaw_github_pr_mutation_once "$pr" "$expected_head" \
+    gh pr merge "$pr" --squash --delete-branch --auto --match-head-commit "$expected_head"; then
     return 0
   fi
 
-  echo "Failed to enable auto-merge for PR #$pr."
+  echo "Auto-merge result is not safely confirmed for PR #$pr; no retry was attempted."
   return 1
 }
 
@@ -1891,10 +1893,7 @@ merge_watch_snapshot() {
   local enable_auto_merge="$2"
   local pr_json
 
-  if ! gh auth status >/dev/null 2>&1; then
-    echo "GitHub CLI auth is not available."
-    return 2
-  fi
+  openclaw_github_preflight "${OPENCLAW_GITHUB_CONTEXT:-restricted}" host-gh || return $?
 
   pr_json=$(merge_watch_pr_json "$pr") || return $?
 
@@ -2120,41 +2119,23 @@ EOF_BODY
 
   run_merge_with_email() {
     local email="$1"
-    local merge_output_file
-    merge_output_file=$(mktemp)
-    if gh pr merge "$pr" \
+    if openclaw_github_pr_mutation_once "$pr" "$PREP_HEAD_SHA" gh pr merge "$pr" \
       --squash \
       --delete-branch \
       --match-head-commit "$PREP_HEAD_SHA" \
       --author-email "$email" \
       --subject "$pr_title (#$pr_number)" \
-      --body-file .local/merge-body.txt \
-      >"$merge_output_file" 2>&1
+      --body-file .local/merge-body.txt
     then
-      rm -f "$merge_output_file"
       return 0
     fi
-
-    MERGE_ERR_MSG=$(cat "$merge_output_file")
-    print_relevant_log_excerpt "$merge_output_file"
-    rm -f "$merge_output_file"
     return 1
   }
 
-  local MERGE_ERR_MSG=""
   local selected_merge_author_email="$reviewer_email"
   if ! run_merge_with_email "$selected_merge_author_email"; then
-    if is_author_email_merge_error "$MERGE_ERR_MSG" && [ "${#reviewer_email_candidates[@]}" -ge 2 ]; then
-      selected_merge_author_email="${reviewer_email_candidates[1]}"
-      echo "Retrying merge once with fallback author email: $selected_merge_author_email"
-      run_merge_with_email "$selected_merge_author_email" || {
-        echo "Merge failed after fallback retry."
-        exit 1
-      }
-    else
-      echo "Merge failed."
-      exit 1
-    fi
+    echo "Merge result is indeterminate or failed; inspect PR state read-only and do not retry."
+    exit 1
   fi
 
   local state
@@ -2213,11 +2194,8 @@ EOF_BODY
   printf '%s\n' "$commit_body" | rg -q "^Co-authored-by: $contrib <" || { echo "Missing PR author co-author trailer"; exit 1; }
   printf '%s\n' "$commit_body" | rg -q "^Co-authored-by: $reviewer <" || { echo "Missing reviewer co-author trailer"; exit 1; }
 
-  local ok=0
   local comment_output=""
-  local attempt
-  for attempt in 1 2 3; do
-    if comment_output=$(gh pr comment "$pr" -F - 2>&1 <<EOF_COMMENT
+  if ! comment_output=$(gh pr comment "$pr" -F - 2>&1 <<EOF_COMMENT
 Merged via squash.
 
 - Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)
@@ -2226,12 +2204,9 @@ Merged via squash.
 Thanks @$contrib!
 EOF_COMMENT
 ); then
-      ok=1
-      break
-    fi
-    sleep 2
-  done
-  [ "$ok" -eq 1 ] || { echo "Failed to post PR comment after retries"; exit 1; }
+    echo "Completion comment result is ambiguous; inspect comments read-only and do not retry."
+    exit 1
+  fi
 
   local comment_url=""
   comment_url=$(printf '%s\n' "$comment_output" | rg -o 'https://github.com/[^ ]+/pull/[0-9]+#issuecomment-[0-9]+' -m1 || true)
