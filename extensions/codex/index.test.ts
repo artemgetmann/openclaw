@@ -26,6 +26,8 @@ const appServer = vi.hoisted(() => {
   let autoComplete = true;
   let threadReadResponse: unknown = undefined;
   let failCompletedAuthorityReceipt = false;
+  let failTurnStartAmbiguously = false;
+  const disabledCronJobIds: string[] = [];
   return {
     requests,
     handlers,
@@ -33,8 +35,16 @@ const appServer = vi.hoisted(() => {
     autoComplete,
     threadReadResponse,
     failCompletedAuthorityReceipt,
+    failTurnStartAmbiguously,
+    disabledCronJobIds,
   };
 });
+
+vi.mock("../../src/cron/active-runtime.js", () => ({
+  disableActiveCronJob: vi.fn(async (jobId: string) => {
+    appServer.disabledCronJobIds.push(jobId);
+  }),
+}));
 
 vi.mock("../../src/monitor/authority.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/monitor/authority.js")>();
@@ -53,6 +63,14 @@ vi.mock("../../src/monitor/authority.js", async (importOriginal) => {
 });
 
 vi.mock("./src/app-server-client.js", () => ({
+  CodexRpcResponseError: class extends Error {
+    readonly method: string;
+
+    constructor(method: string, message: string) {
+      super(message);
+      this.method = method;
+    }
+  },
   CodexAppServerClient: class {
     async initialize() {}
     async request(method: string, params?: unknown) {
@@ -91,6 +109,10 @@ vi.mock("./src/app-server-client.js", () => ({
         };
       }
       if (method === "turn/start") {
+        if (appServer.failTurnStartAmbiguously) {
+          appServer.failTurnStartAmbiguously = false;
+          throw new Error("simulated turn/start timeout");
+        }
         // The service registers its collector before starting the turn. Delay
         // the terminal notification one event-loop tick so it first records
         // the turn id returned by the App Server.
@@ -163,6 +185,8 @@ async function createDurableAuthorityFixture(label: string) {
   appServer.autoComplete = false;
   appServer.threadReadResponse = undefined;
   appServer.failCompletedAuthorityReceipt = false;
+  appServer.failTurnStartAmbiguously = false;
+  appServer.disabledCronJobIds.splice(0);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-codex-authority-${label}-`));
   const cronStorePath = path.join(dir, "cron.json");
   const sessionStorePath = path.join(dir, "sessions.json");
@@ -1130,6 +1154,7 @@ describe("Codex natural-language delegation", () => {
     appServer.serverRequestHandlers = new Set();
     appServer.autoComplete = false;
     appServer.threadReadResponse = undefined;
+    appServer.disabledCronJobIds.splice(0);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-authority-"));
     const cronStorePath = path.join(dir, "cron.json");
     const sessionStorePath = path.join(dir, "sessions.json");
@@ -1268,6 +1293,7 @@ describe("Codex natural-language delegation", () => {
       "thread/resume",
       "turn/start",
     ]);
+    expect(appServer.disabledCronJobIds).toEqual(["cron-release"]);
     expect((await loadMonitorStore(monitorStorePath)).monitors[0]).toMatchObject({
       status: "completed",
       authority: {
@@ -1290,6 +1316,7 @@ describe("Codex natural-language delegation", () => {
       },
     });
     expect(appServer.requests).toEqual([]);
+    expect(appServer.disabledCronJobIds).toEqual(["cron-release", "cron-release"]);
     finishNaturalTurn();
     await vi.waitFor(() => {
       expect(run).toHaveBeenCalledWith(
@@ -1347,6 +1374,51 @@ describe("Codex natural-language delegation", () => {
       finishNaturalTurn();
     } finally {
       markAccepted.mockRestore();
+      await fs.rm(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("keeps authority consumed when turn-start acceptance times out ambiguously", async () => {
+    const fixture = await createDurableAuthorityFixture("ambiguous-turn-start");
+    appServer.failTurnStartAmbiguously = true;
+    try {
+      await expect(
+        fixture.tool.execute("authorized-resume-turn-start-timeout", {
+          action: "unarchive_resume_authorized_once",
+          thread_id: "thread-natural",
+          text: fixture.text,
+          idempotency_key: fixture.idempotencyKey,
+        }),
+      ).rejects.toThrow("turn acceptance became ambiguous");
+      expect((await loadMonitorStore(fixture.monitorStorePath)).monitors[0]).toMatchObject({
+        status: "stopped",
+        authority: {
+          execution: { status: "consumed", executions: 1 },
+        },
+      });
+      expect(appServer.disabledCronJobIds).toEqual(["cron-ambiguous-turn-start"]);
+
+      appServer.requests.splice(0);
+      await expect(
+        fixture.tool.execute("authorized-resume-turn-start-timeout-retry", {
+          action: "unarchive_resume_authorized_once",
+          thread_id: "thread-natural",
+          text: fixture.text,
+          idempotency_key: fixture.idempotencyKey,
+        }),
+      ).resolves.toMatchObject({
+        details: {
+          status: "consumed",
+          executed: false,
+        },
+      });
+      expect(appServer.requests).toEqual([]);
+      expect(appServer.disabledCronJobIds).toEqual([
+        "cron-ambiguous-turn-start",
+        "cron-ambiguous-turn-start",
+      ]);
+    } finally {
+      appServer.failTurnStartAmbiguously = false;
       await fs.rm(fixture.dir, { recursive: true });
     }
   });

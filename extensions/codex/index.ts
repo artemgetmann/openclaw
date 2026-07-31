@@ -3,6 +3,7 @@ import path from "node:path";
 import { loadConfig } from "../../src/config/config.js";
 import { resolveStorePath as resolveSessionStorePath } from "../../src/config/sessions/paths.js";
 import { loadSessionStore } from "../../src/config/sessions/store.js";
+import { disableActiveCronJob } from "../../src/cron/active-runtime.js";
 import { resolveCronStorePath } from "../../src/cron/store.js";
 import {
   claimMonitorAuthorityAction,
@@ -35,6 +36,7 @@ import {
   type CodexRelayDispatchOutcome,
 } from "./src/relay-reconciliation.js";
 import {
+  CodexTurnStartAcceptanceAmbiguousError,
   CodexThreadService,
   CodexTurnTerminalError,
   requireThreadId,
@@ -534,6 +536,11 @@ function createCodexTool(
           prompt: text,
           idempotencyKey,
         });
+        // Claiming authority makes the monitor terminal before any Codex
+        // mutation. Disable its exact scheduler job through the live
+        // CronService as part of that same fail-closed boundary. Exact retries
+        // repeat this safe repair step without repeating the continuation.
+        await disableActiveCronJob(claim.cronJobId);
         if (!claim.execute) {
           result = {
             mode: "durable-monitor-authority",
@@ -584,7 +591,8 @@ function createCodexTool(
           } catch (error) {
             if (
               !(error instanceof CodexRelayAcceptanceAmbiguousError) &&
-              !(error instanceof CodexAuthorityReceiptAmbiguousError)
+              !(error instanceof CodexAuthorityReceiptAmbiguousError) &&
+              !(error instanceof CodexTurnStartAcceptanceAmbiguousError)
             ) {
               await finalizeMonitorAuthorityAction({
                 storePath,

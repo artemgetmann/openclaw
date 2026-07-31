@@ -162,6 +162,7 @@ export function revokeMonitorAuthorityGrant(
 export type MonitorAuthorityClaim = {
   execute: boolean;
   monitorId: string;
+  cronJobId: string;
   originSessionKey: string;
   grantId: string;
   status: MonitorAuthorityGrant["execution"]["status"];
@@ -228,6 +229,7 @@ export async function claimMonitorAuthorityAction(params: {
       return {
         execute: false,
         monitorId: monitor.monitorId,
+        cronJobId: monitor.cronJobId,
         originSessionKey: monitor.originSessionKey,
         grantId: authority.grantId,
         status: authority.execution.status,
@@ -321,6 +323,7 @@ export async function claimMonitorAuthorityAction(params: {
     return {
       execute: true,
       monitorId: monitor.monitorId,
+      cronJobId: monitor.cronJobId,
       originSessionKey: monitor.originSessionKey,
       grantId: consumed.grantId,
       status: consumed.execution.status,
