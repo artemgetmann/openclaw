@@ -162,6 +162,26 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
   it("routes one exact active-run Stop callback through the existing /stop command", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-run-stop-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    // The default dmScope routes direct messages through the canonical main
+    // session; seed that exact target so /stop persists its cutoff metadata.
+    const sessionKey = "agent:main:main";
+    const callbackTime = "2026-07-31T04:00:05.000Z";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "session-stop-1",
+          updatedAt: Date.parse("2026-07-31T03:00:00.000Z"),
+        },
+      }),
+    );
+    loadConfig.mockReturnValue({
+      session: { store: storePath },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse(callbackTime));
     const registration = registerTelegramRunStop({
       accountId: "default",
       chatId: 1234,
@@ -197,8 +217,15 @@ describe("createTelegramBot", () => {
       expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
         reply_markup: { inline_keyboard: [] },
       });
+      const stored = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+        string,
+        { abortCutoffTimestamp?: number }
+      >;
+      expect(stored[sessionKey]?.abortCutoffTimestamp).toBe(Date.parse(callbackTime));
     } finally {
       runStopTesting.resetTelegramRunStopsForTests();
+      dateNowSpy.mockRestore();
+      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
   it("promotes one exact queued message through the Telegram Steer callback", async () => {

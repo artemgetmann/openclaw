@@ -1675,6 +1675,11 @@ export const registerTelegramHandlers = ({
           base: callbackMessage,
           from: callback.from,
           text: "/stop",
+          // The progress bubble may be much older than the tap. Stamp the
+          // synthetic command at callback time so the existing abort cutoff
+          // also suppresses follow-ups that raced between bubble creation and
+          // this Stop claim.
+          date: Math.floor(Date.now() / 1000),
         });
         await processMessage(buildSyntheticContext(ctx, syntheticStopMessage), [], storeAllowFrom, {
           forceWasMentioned: true,
