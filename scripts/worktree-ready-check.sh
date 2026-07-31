@@ -92,6 +92,36 @@ if [[ "$MODE" == "clean" && ! -f "$ROOT/dist/index.js" ]]; then
   fail "clean lanes require build output at $ROOT/dist/index.js"
 fi
 
+if [[ "$MODE" == "clean" ]]; then
+  BUILD_INFO_PATH="$ROOT/dist/build-info.json"
+  [[ -f "$BUILD_INFO_PATH" ]] || fail "clean lanes require build metadata at $BUILD_INFO_PATH"
+
+  # Artifact presence alone is not readiness. A prior branch or commit can
+  # leave a perfectly executable dist/ tree behind, then silently run stale
+  # code during Telegram proof. Bind clean readiness to the current Git head;
+  # bootstrap-worktree-runtime.sh owns automatic recovery when these differ.
+  HEAD_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" ||
+    fail "could not resolve current Git head for clean readiness: $ROOT"
+  BUILD_COMMIT="$(
+    BUILD_INFO_PATH="$BUILD_INFO_PATH" "$OPENCLAW_NODE_BIN" --input-type=module - <<'NODE'
+import fs from "node:fs";
+
+const buildInfoPath = process.env.BUILD_INFO_PATH;
+try {
+  const parsed = JSON.parse(fs.readFileSync(buildInfoPath, "utf8"));
+  if (typeof parsed?.commit === "string") {
+    process.stdout.write(parsed.commit.trim());
+  }
+} catch {
+  // The shell emits the stable operator-facing classification below.
+}
+NODE
+  )"
+  [[ -n "$BUILD_COMMIT" ]] || fail "clean lane build metadata has no commit: $BUILD_INFO_PATH"
+  [[ "$BUILD_COMMIT" == "$HEAD_COMMIT" ]] ||
+    fail "clean lane build is stale: built $BUILD_COMMIT, current head $HEAD_COMMIT"
+fi
+
 # The specific failure we are closing is "pnpm exec vitest" resolving to
 # nothing in a supposedly ready lane. Prove the local tool is executable from
 # this worktree before handing it to an agent.
