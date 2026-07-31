@@ -219,7 +219,7 @@ run_canonical_wrapper_and_finalize() {
   # later legitimate owner that may acquire the shared path immediately.
   while kill -0 "$wrapper_pid" 2>/dev/null && [[ "$attempt" -lt 200 ]]; do
     if [[ "$(openclaw_heavy_local_slot_value "$lock_path/owner" pid)" == "$wrapper_pid" ]]; then
-      wrapper_owner_token="$(openclaw_heavy_local_slot_value "$lock_path/owner" token)"
+      wrapper_owner_token="$(openclaw_heavy_local_slot_value "$lock_path/owner" token || true)"
       [[ -n "$wrapper_owner_token" ]] && break
     fi
     sleep 0.01

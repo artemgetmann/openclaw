@@ -62,6 +62,10 @@ openclaw_heavy_local_slot_resolve_path() {
 }
 
 openclaw_heavy_local_slot_value() {
+  if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "observation_race" &&
+    "${PAIR_TEST_IN_WRAPPER:-0}" != "1" && "$2" == "token" ]]; then
+    return 1
+  fi
   awk -F= -v key="$2" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$1" 2>/dev/null
 }
 
@@ -212,6 +216,23 @@ test_shared_health_or_cleanup_failure_fails_closed() {
   done
   rm -rf "$TMP_DIR/guard"
   pass "shared health or cleanup failure returns nonzero durable receipt"
+}
+
+test_owner_observation_race_fails_with_receipt() {
+  local receipt_dir="$TMP_DIR/observation-race-receipt"
+  rm -rf "$TMP_DIR/guard" "$receipt_dir" "$TMP_DIR/state"
+  mkdir -p "$TMP_DIR/state"
+  : >"$TMP_DIR/pnpm.calls"
+  set +e
+  run_pair "$receipt_dir" observation_race >/dev/null 2>&1
+  local status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "owner observation race returned $status"
+  assert_contains "$receipt_dir/receipt.env" "status=passed"
+  assert_contains "$receipt_dir/shared-health-cleanup.env" "status=failed"
+  assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_health=passed"
+  assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_cleanup=owner_identity_not_observed"
+  pass "owner observation race fails closed with durable shared receipt"
 }
 
 test_argument_validation_precedes_guard() {
@@ -456,6 +477,7 @@ test_unrelated_inherited_lease_is_refused
 test_expected_head_drift_is_refused
 test_receipt_creation_race_is_refused
 test_shared_health_or_cleanup_failure_fails_closed
+test_owner_observation_race_fails_with_receipt
 test_two_children_have_fixed_allowlists_and_caps
 test_failure_propagates_after_complete_receipt
 test_signal_stops_both_children_and_records_interrupt
