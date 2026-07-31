@@ -114,6 +114,65 @@ describe("createTelegramProgressController", () => {
     expect(onDispose).toHaveBeenCalledTimes(1);
   });
 
+  it("releases the active Stop claim when progress cleanup flush fails", async () => {
+    const onDispose = vi.fn();
+    const adoptedStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockRejectedValue(new Error("flush failed")),
+      messageId: vi.fn().mockReturnValue(88),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      materialize: vi.fn().mockResolvedValue(88),
+      forceNewMessage: vi.fn(),
+    };
+    const controller = createTelegramProgressController({
+      api: { editMessageReplyMarkup: vi.fn() } as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      stream: adoptedStream,
+      activeReplyMarkup: {
+        inline_keyboard: [[{ text: "⏹ Stop", callback_data: "ors:1", style: "danger" }]],
+      },
+      onDispose,
+      renderText: (text) => ({ text }),
+    });
+
+    await expect(controller.clear()).rejects.toThrow("flush failed");
+
+    expect(adoptedStream.clear).not.toHaveBeenCalled();
+    expect(onDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the active Stop claim when Work log conversion flush fails", async () => {
+    const onDispose = vi.fn();
+    const adoptedStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockRejectedValue(new Error("flush failed")),
+      messageId: vi.fn().mockReturnValue(88),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      materialize: vi.fn().mockResolvedValue(88),
+      forceNewMessage: vi.fn(),
+    };
+    const controller = createTelegramProgressController({
+      api: { editMessageText: vi.fn() } as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      stream: adoptedStream,
+      activeReplyMarkup: {
+        inline_keyboard: [[{ text: "⏹ Stop", callback_data: "ors:1", style: "danger" }]],
+      },
+      onDispose,
+      renderText: (text) => ({ text }),
+    });
+    controller.update("Checking workspace state.");
+
+    await expect(controller.retainAsWorkLog()).rejects.toThrow("flush failed");
+
+    expect(adoptedStream.materialize).not.toHaveBeenCalled();
+    expect(onDispose).toHaveBeenCalledTimes(1);
+  });
+
   it("can adopt an existing visible stream as the progress bubble", async () => {
     const adoptedStream = {
       update: vi.fn(),
