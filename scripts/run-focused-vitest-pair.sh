@@ -151,7 +151,7 @@ write_shared_wrapper_receipt() {
   local wrapper_exit="$1"
   local cleanup_status="$2"
   local receipt_status="failed"
-  local health_status="failed"
+  local health_status="not_proven"
   local workload_status="missing"
   local shared_receipt="$RECEIPT_DIR/shared-health-cleanup.env"
   local shared_tmp="$shared_receipt.tmp.$$"
@@ -160,10 +160,12 @@ write_shared_wrapper_receipt() {
   if [[ -f "$RECEIPT_DIR/receipt.env" ]]; then
     workload_status="$(awk -F= '$1 == "status" { print $2; exit }' "$RECEIPT_DIR/receipt.env")"
   fi
+  if [[ "$wrapper_exit" -eq 0 ]]; then
+    health_status="passed"
+  fi
   if [[ "$wrapper_exit" -eq 0 && "$cleanup_status" == "owner_token_released" &&
     "$workload_status" == "passed" ]]; then
     receipt_status="passed"
-    health_status="passed"
   elif [[ "$workload_status" == "interrupted" || "$wrapper_exit" =~ ^(129|130|143)$ ]]; then
     receipt_status="interrupted"
   fi

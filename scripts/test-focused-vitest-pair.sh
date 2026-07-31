@@ -203,9 +203,10 @@ test_shared_health_or_cleanup_failure_fails_closed() {
     [[ "$status" -eq 75 ]] || fail "$mode returned $status"
     assert_contains "$receipt_dir/shared-health-cleanup.env" "status=failed"
     if [[ "$mode" == "health_stop" ]]; then
-      assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_health=failed"
+      assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_health=not_proven"
       assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_cleanup=owner_token_released"
     else
+      assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_health=passed"
       assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_cleanup=owner_token_retained"
     fi
   done
@@ -415,6 +416,7 @@ test_failure_propagates_after_complete_receipt() {
   assert_contains "$TMP_DIR/failure-receipt/job-a.receipt.env" "exit=7"
   assert_contains "$TMP_DIR/failure-receipt/job-b.receipt.env" "exit=0"
   assert_contains "$TMP_DIR/failure-receipt/shared-health-cleanup.env" "status=failed"
+  assert_contains "$TMP_DIR/failure-receipt/shared-health-cleanup.env" "shared_health=not_proven"
   assert_contains "$TMP_DIR/failure-receipt/shared-health-cleanup.env" "shared_cleanup=owner_token_released"
   pass "child failure propagates with both exits recorded"
 }
