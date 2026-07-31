@@ -309,6 +309,24 @@ export async function channelsStatusCommand(
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
     runtime.error(`Gateway not reachable: ${String(err)}`);
+    if (opts.json) {
+      // Machine-readable callers must never receive the human config-only
+      // fallback with a successful exit. Emit one JSON object and fail closed
+      // so scripts can distinguish an RPC result from degraded local status.
+      runtime.log(
+        JSON.stringify(
+          {
+            ok: false,
+            gatewayReachable: false,
+            error: String(err),
+          },
+          null,
+          2,
+        ),
+      );
+      runtime.exit(1);
+      return;
+    }
     const cfg = await requireValidConfigSnapshot(runtime);
     if (!cfg) {
       return;
