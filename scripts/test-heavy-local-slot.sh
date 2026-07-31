@@ -520,6 +520,7 @@ test_large_generated_state_emits_owner_receipt() {
   local output="$TMP_DIR/task-disk-receipt.out"
 
   mkdir -p "$repo_path"
+  repo_path="$(cd "$repo_path" && pwd -P)"
   git -C "$repo_path" init -q
   write_healthy_samples "$health_path"
   (
@@ -532,10 +533,12 @@ test_large_generated_state_emits_owner_receipt() {
         bash -c 'mkdir -p dist && dd if=/dev/zero of=dist/generated.bin bs=1024 count=4 status=none'
   ) >"$output" 2>&1
 
-  grep -Fq \
+  if ! grep -Fq \
     "HEAVY_LOCAL_DISK_RECEIPT status=owner_cleanup_required worktree=${repo_path}" \
-    "$output" ||
+    "$output"; then
+    cat "$output" >&2
     fail "large generated task state omitted its owner receipt"
+  fi
   grep -Eq 'created_kib=[1-9][0-9]*' "$output" ||
     fail "task disk receipt omitted a positive created-state measurement"
   grep -Fq 'threshold_kib=1' "$output" ||
