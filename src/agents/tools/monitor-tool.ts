@@ -113,11 +113,53 @@ const MonitorToolSchema = Type.Object(
               level: stringEnum(["observe_only", "act_within_scope"] as const),
               allowedActions: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
               approvalRequired: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+              authorityGrants: Type.Optional(
+                Type.Array(
+                  Type.Object(
+                    {
+                      purposeKey: Type.String(),
+                      action: Type.Object(
+                        {
+                          kind: Type.Literal("codex.thread.unarchive_resume"),
+                          threadId: Type.String(),
+                          prompt: Type.String(),
+                        },
+                        { additionalProperties: false },
+                      ),
+                      idempotencyKey: Type.String(),
+                      expiresAt: Type.String(),
+                      stopCondition: Type.String(),
+                      maxExecutions: Type.Literal(1),
+                    },
+                    { additionalProperties: false },
+                  ),
+                  { maxItems: 4 },
+                ),
+              ),
             },
             { additionalProperties: false },
           ),
         ),
       }),
+    ),
+    authority: Type.Optional(
+      Type.Object(
+        {
+          purposeKey: Type.String(),
+          action: Type.Object(
+            {
+              kind: Type.Literal("codex.thread.unarchive_resume"),
+              threadId: Type.String(),
+              prompt: Type.String(),
+            },
+            { additionalProperties: false },
+          ),
+          idempotencyKey: Type.String(),
+          expiresAt: Type.String(),
+          stopCondition: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
     ),
     status: Type.Optional(stringEnum(MONITOR_STATUSES)),
     checkpoint: Type.Optional(
@@ -162,6 +204,7 @@ For monitor creation:
 - default actionPolicy is notify_draft.
 - actionPolicy controls delivery only; it never grants or removes goal autonomy.
 - use actionPolicy=auto_send only when watched-surface delivery is available. Goal-bound in-scope actions come from goal.autonomy, not auto_send.
+- authority is optional and must be supplied only after the user explicitly grants act_within_scope autonomy for the exact codex.thread.unarchive_resume action. It binds one purpose, exact thread, exact continuation prompt, expiry, stop condition, and idempotency key; it is consumed before the action and cannot be reused.
 - for auto_send, provide watchDelivery when sourceTarget alone does not resolve to the external conversation; green-zone replies go to that watched surface, while approval questions must go back to the origin chat.
 - default report route is the origin chat from the current session.
 
@@ -250,6 +293,12 @@ For monitor-related user replies/status:
             goal:
               params.goal && typeof params.goal === "object" && !Array.isArray(params.goal)
                 ? params.goal
+                : undefined,
+            authority:
+              params.authority &&
+              typeof params.authority === "object" &&
+              !Array.isArray(params.authority)
+                ? params.authority
                 : undefined,
             watchDelivery:
               params.watchDelivery &&

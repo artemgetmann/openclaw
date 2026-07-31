@@ -9,6 +9,7 @@ import {
 } from "../config/sessions.js";
 import { getSessionGoal, recordSessionGoalContinuation } from "../config/sessions/goals.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { setActiveCronJobDisabler } from "../cron/active-runtime.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
@@ -731,6 +732,12 @@ export function buildGatewayCronService(params: {
         });
       }
     },
+  });
+  // Plugin tools do not receive Gateway method context. Publish only the
+  // terminal operation needed by durable one-shot monitors, backed by the
+  // scheduler's normal lock, persistence, and timer re-arming path.
+  setActiveCronJobDisabler(async (jobId) => {
+    await cron.update(jobId, { enabled: false });
   });
 
   return { cron, storePath, cronEnabled };

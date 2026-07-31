@@ -9,7 +9,14 @@ import {
   updateSessionStoreEntry,
 } from "./store.js";
 import { mergeSessionEntry, resolveFreshSessionTotalTokens } from "./types.js";
-import type { SessionEntry, SessionGoal, SessionGoalAutonomy, SessionGoalStatus } from "./types.js";
+import {
+  SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+  type SessionEntry,
+  type SessionGoal,
+  type SessionGoalAuthorityGrant,
+  type SessionGoalAutonomy,
+  type SessionGoalStatus,
+} from "./types.js";
 
 export type SessionGoalSnapshot = {
   status: "missing" | "found";
@@ -73,6 +80,8 @@ function normalizeTokenBudget(value: number | undefined): number | undefined {
 
 const MAX_AUTONOMY_ITEMS = 12;
 const MAX_AUTONOMY_ITEM_CHARS = 160;
+const MAX_AUTHORITY_GRANTS = 4;
+const MAX_AUTHORITY_TEXT_CHARS = 8_000;
 
 function normalizeAutonomyItems(values: string[] | undefined): string[] | undefined {
   if (!values) {
@@ -84,6 +93,53 @@ function normalizeAutonomyItems(values: string[] | undefined): string[] | undefi
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeAuthorityText(value: unknown, maxLength = MAX_AUTHORITY_TEXT_CHARS): string {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function normalizeSessionGoalAuthorityGrants(
+  values: SessionGoalAuthorityGrant[] | undefined,
+): SessionGoalAuthorityGrant[] | undefined {
+  if (!Array.isArray(values)) {
+    return undefined;
+  }
+  const normalized: SessionGoalAuthorityGrant[] = [];
+  const seen = new Set<string>();
+  for (const value of values.slice(0, MAX_AUTHORITY_GRANTS)) {
+    const action = value?.action;
+    const grant: SessionGoalAuthorityGrant = {
+      purposeKey: normalizeAuthorityText(value?.purposeKey, 240),
+      action: {
+        kind: SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+        threadId: normalizeAuthorityText(action?.threadId, 256),
+        prompt: normalizeAuthorityText(action?.prompt),
+      },
+      idempotencyKey: normalizeAuthorityText(value?.idempotencyKey, 256),
+      expiresAt: normalizeAuthorityText(value?.expiresAt, 80),
+      stopCondition: normalizeAuthorityText(value?.stopCondition, 1_000),
+      maxExecutions: 1,
+    };
+    if (
+      action?.kind !== SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION ||
+      value?.maxExecutions !== 1 ||
+      !grant.purposeKey ||
+      !grant.action.threadId ||
+      !grant.action.prompt ||
+      !grant.idempotencyKey ||
+      !grant.expiresAt ||
+      !grant.stopCondition
+    ) {
+      continue;
+    }
+    const identity = JSON.stringify(grant);
+    if (!seen.has(identity)) {
+      seen.add(identity);
+      normalized.push(grant);
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export function normalizeSessionGoalAutonomy(
   autonomy: SessionGoalAutonomy | undefined,
 ): SessionGoalAutonomy | undefined {
@@ -92,10 +148,12 @@ export function normalizeSessionGoalAutonomy(
   }
   const allowedActions = normalizeAutonomyItems(autonomy.allowedActions);
   const approvalRequired = normalizeAutonomyItems(autonomy.approvalRequired);
+  const authorityGrants = normalizeSessionGoalAuthorityGrants(autonomy.authorityGrants);
   return {
     level: autonomy.level,
     ...(allowedActions ? { allowedActions } : {}),
     ...(approvalRequired ? { approvalRequired } : {}),
+    ...(authorityGrants ? { authorityGrants } : {}),
   };
 }
 

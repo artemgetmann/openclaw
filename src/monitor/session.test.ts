@@ -1,7 +1,42 @@
 import { describe, expect, it } from "vitest";
 import { buildMonitorBootstrapPrompt } from "./session.js";
+import { CODEX_THREAD_UNARCHIVE_RESUME_ACTION } from "./types.js";
 
 describe("monitor bootstrap contract", () => {
+  it("includes the exact approved continuation prompt in the seeded session", () => {
+    const prompt = buildMonitorBootstrapPrompt({
+      instructions: "Watch for the release.",
+      sourceType: "github-release",
+      sourceTarget: { repo: "artemgetmann/openclaw" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_only",
+      authority: {
+        schemaVersion: 1,
+        grantId: "grant-1",
+        goalId: "goal-1",
+        purposeKey: "release-proof",
+        action: {
+          kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+          threadId: "thread-release-proof",
+          prompt: "Run the deferred release proof exactly once.",
+        },
+        idempotencyKey: "release-proof-1",
+        expiresAt: "2026-08-31T00:00:00.000Z",
+        stopCondition: "Stop after one accepted continuation.",
+        maxExecutions: 1,
+        grantedAtMs: 1,
+        execution: { status: "available", executions: 0 },
+        audit: [{ event: "granted", atMs: 1 }],
+      },
+      watchDeliveryConfigured: false,
+      originSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toContain(
+      'Authorized continuation prompt (use exactly): "Run the deferred release proof exactly once."',
+    );
+  });
+
   it("requires the actual requested draft for notify_draft completion", () => {
     const prompt = buildMonitorBootstrapPrompt({
       instructions: "Quote the matching inbound text and draft the next response for approval.",

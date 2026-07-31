@@ -13,6 +13,7 @@ class FakeCodexClient implements CodexRpcClient {
   closed = false;
   holdTurn = false;
   persistedThreadResponse: Record<string, unknown> | undefined;
+  archivedThreadIds = new Set<string>();
   listedThreads: Array<Record<string, unknown>> = [];
   listedThreadPages = new Map<
     string,
@@ -41,7 +42,12 @@ class FakeCodexClient implements CodexRpcClient {
     }
     if (method === "thread/read") {
       return (this.persistedThreadResponse ?? {
-        thread: { id: threadId, status: { type: "idle" }, turns: [] },
+        thread: {
+          id: threadId,
+          status: { type: "idle" },
+          archived: this.archivedThreadIds.has(threadId),
+          turns: [],
+        },
       }) as T;
     }
     if (method === "thread/resume") {
@@ -553,6 +559,37 @@ describe("CodexThreadService", () => {
       {
         method: "thread/archive",
         params: { threadId: "thread-1" },
+      },
+    ]);
+  });
+
+  it("unarchives only when the fresh native thread state is archived", async () => {
+    const client = new FakeCodexClient();
+    client.archivedThreadIds.add("thread-1");
+    const service = createService(client);
+
+    await expect(service.unarchiveIfNeeded("thread-1")).resolves.toEqual({ changed: true });
+    expect(client.requests.slice(-2)).toEqual([
+      {
+        method: "thread/read",
+        params: { threadId: "thread-1", includeTurns: false },
+      },
+      {
+        method: "thread/unarchive",
+        params: { threadId: "thread-1" },
+      },
+    ]);
+  });
+
+  it("does not repeat unarchive for an already active thread", async () => {
+    const client = new FakeCodexClient();
+    const service = createService(client);
+
+    await expect(service.unarchiveIfNeeded("thread-1")).resolves.toEqual({ changed: false });
+    expect(client.requests).toEqual([
+      {
+        method: "thread/read",
+        params: { threadId: "thread-1", includeTurns: false },
       },
     ]);
   });

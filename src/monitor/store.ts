@@ -10,6 +10,8 @@ import { resolveMonitorNotificationPolicy } from "./notifications.js";
 import type {
   MonitorCreateInput,
   MonitorActionPolicy,
+  MonitorAuthorityGrant,
+  MonitorAuthorityGrantInput,
   MonitorDisclosure,
   MonitorGoalSnapshot,
   MonitorListenerEvidence,
@@ -46,6 +48,7 @@ type MonitorIdentityInput = {
   sourceTarget: MonitorSourceTarget;
   actionPolicy?: MonitorActionPolicy;
   purposeLabel?: string;
+  authority?: MonitorAuthorityGrant | MonitorAuthorityGrantInput;
 };
 
 function normalizeIdentityValue(value: unknown): unknown {
@@ -64,8 +67,24 @@ function normalizeIdentityValue(value: unknown): unknown {
 }
 
 export function createMonitorIdentityKey(input: MonitorIdentityInput): string {
-  // Keep identity intentionally narrow: this dedupes the same active watcher
-  // without merging different response policies or user-visible purposes.
+  // A durable authority grant carries its own stable purpose + exact action
+  // scope. Prefer that over caller-generated names, source descriptors, and
+  // idempotency tokens so harmless retries cannot create a second conceptual
+  // release-triggered execution.
+  if (input.authority) {
+    return JSON.stringify({
+      agentId: input.agentId.trim(),
+      authorityScope: {
+        purposeKey: input.authority.purposeKey,
+        action: {
+          kind: input.authority.action.kind,
+          threadId: input.authority.action.threadId,
+          prompt: input.authority.action.prompt,
+        },
+      },
+    });
+  }
+  // Legacy monitors retain their existing identity contract.
   return JSON.stringify({
     agentId: input.agentId.trim(),
     sourceType: input.sourceType.trim(),
@@ -89,6 +108,7 @@ export function findActiveMonitorByIdentity(
         sourceTarget: monitor.sourceTarget,
         actionPolicy: monitor.actionPolicy,
         purposeLabel: monitor.name,
+        authority: monitor.authority,
       }) === identityKey,
   );
 }
@@ -246,6 +266,7 @@ export function createMonitorRecord(input: MonitorCreateInput, nowMs: number): M
     ...(input.stopCondition?.trim() ? { stopCondition: input.stopCondition.trim() } : {}),
     actionPolicy,
     ...(input.goal ? { goal: input.goal } : {}),
+    ...(input.authority ? { authority: input.authority } : {}),
     notificationPolicy,
     notificationState: { consecutiveUnchangedChecks: 0 },
     disclosure: buildMonitorDisclosure({ ...input, actionPolicy, notificationPolicy }),

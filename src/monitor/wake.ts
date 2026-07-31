@@ -4,6 +4,7 @@ import {
 } from "./media-reference-sanitizer.js";
 import {
   buildMonitorAutonomyLines,
+  buildMonitorAuthorityLines,
   buildMonitorDraftCompletionLines,
   buildMonitorNotificationLines,
 } from "./prompt-contract.js";
@@ -278,6 +279,7 @@ export function buildMonitorWakeMessage(params: {
     "Do not keep or re-mark the monitor completed solely because older checkpoint data looked settled.",
     "Use normal tools/skills to inspect fresh source state.",
     ...buildMonitorAutonomyLines(monitor.goal),
+    ...buildMonitorAuthorityLines(monitor.authority),
     ...buildMonitorNotificationLines({
       policy: monitor.notificationPolicy,
       state: monitor.notificationState,

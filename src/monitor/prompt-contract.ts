@@ -1,10 +1,29 @@
 import { resolveSessionGoalAutonomy } from "../config/sessions/goals.js";
 import { resolveMonitorNotificationPolicy } from "./notifications.js";
 import type {
+  MonitorAuthorityGrant,
   MonitorGoalSnapshot,
   MonitorNotificationPolicy,
   MonitorNotificationState,
 } from "./types.js";
+
+export function buildMonitorAuthorityLines(authority: MonitorAuthorityGrant | undefined): string[] {
+  if (!authority) {
+    return [];
+  }
+  return [
+    "Durable one-shot authority is bound to this monitor.",
+    `Authorized action: ${authority.action.kind}`,
+    `Authorized Codex thread: ${authority.action.threadId}`,
+    `Authorized continuation prompt (use exactly): ${JSON.stringify(authority.action.prompt)}`,
+    `Authority idempotency key: ${authority.idempotencyKey}`,
+    `Authority expiry: ${authority.expiresAt}`,
+    `Authority stop condition: ${authority.stopCondition}`,
+    `Authority execution status: ${authority.execution.status}`,
+    "When the monitored condition is satisfied, call codex_threads action unarchive_resume_authorized_once with the exact thread, prompt, and idempotency key above.",
+    "Do not use generic Codex resume/message/delegate actions from this monitor. The durable action is consumed before mutation and exact retries never execute twice.",
+  ];
+}
 
 export function buildMonitorAutonomyLines(goal: MonitorGoalSnapshot | undefined): string[] {
   if (!goal) {
