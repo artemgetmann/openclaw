@@ -92,6 +92,11 @@ build_skipped=0
 install_attempted=0
 build_attempted=0
 
+if [[ -L "$ROOT/node_modules" ]]; then
+  warn "node_modules must be installed in this worktree, not symlinked: $ROOT/node_modules"
+  exit 2
+fi
+
 if [[ ! -d "$ROOT/node_modules" ]]; then
   if [[ "$SKIP_INSTALL" == "1" ]]; then
     warn "node_modules missing in $ROOT but install step was skipped."
@@ -103,13 +108,37 @@ if [[ ! -d "$ROOT/node_modules" ]]; then
   install_attempted=1
 fi
 
-if [[ ! -f "$ROOT/dist/index.js" ]]; then
+build_is_current() {
+  local build_info_path="$ROOT/dist/build-info.json"
+  local head_commit=""
+  local build_commit=""
+
+  [[ -f "$ROOT/dist/index.js" && -f "$build_info_path" ]] || return 1
+  head_commit="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" || return 1
+  build_commit="$(
+    BUILD_INFO_PATH="$build_info_path" "$VALIDATED_NODE_BIN" --input-type=module - <<'NODE'
+import fs from "node:fs";
+
+try {
+  const parsed = JSON.parse(fs.readFileSync(process.env.BUILD_INFO_PATH, "utf8"));
+  if (typeof parsed?.commit === "string") {
+    process.stdout.write(parsed.commit.trim());
+  }
+} catch {
+  // Invalid metadata is stale and will be rebuilt below.
+}
+NODE
+  )"
+  [[ -n "$build_commit" && "$build_commit" == "$head_commit" ]]
+}
+
+if ! build_is_current; then
   if [[ "$SKIP_BUILD" == "1" ]]; then
-    log "Skipping build step in $ROOT because --skip-build was requested"
+    log "Skipping missing or stale build recovery in $ROOT because --skip-build was requested"
     build_skipped=1
     READY_MODE="warm"
   else
-    log "Bootstrapping worktree build artifacts in $ROOT"
+    log "Bootstrapping missing or stale worktree build artifacts in $ROOT"
     openclaw_run_repo_pnpm "$ROOT" build
     did_work=1
     build_attempted=1

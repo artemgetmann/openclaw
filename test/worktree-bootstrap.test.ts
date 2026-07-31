@@ -20,6 +20,18 @@ const runResult = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.P
 
 const installValidatedNodeStub = (root: string) => {
   mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
+  // The production bootstrap self-guards heavy work. These unit fixtures run
+  // entirely against stubbed install/build commands, so retain the call shape
+  // while making admission a deterministic no-op.
+  writeFileSync(
+    path.join(root, "scripts", "lib", "heavy-local-slot.sh"),
+    `#!/usr/bin/env bash
+openclaw_heavy_local_slot_require_or_reexec() {
+  return 0
+}
+`,
+    { encoding: "utf8", mode: 0o755 },
+  );
   writeFileSync(
     path.join(root, "scripts", "lib", "validated-node.sh"),
     `#!/usr/bin/env bash
@@ -47,6 +59,8 @@ EOF
     build)
       mkdir -p "$root/dist"
       printf 'export {}\\n' > "$root/dist/index.js"
+      head_commit="$(git -C "$root" rev-parse HEAD)"
+      printf '{"commit":"%s"}\\n' "$head_commit" > "$root/dist/build-info.json"
       ;;
     exec)
       if [[ "$2" == "vitest" && "$3" == "--version" && -x "$root/node_modules/.bin/vitest" ]]; then
@@ -72,6 +86,11 @@ const installBootstrapFixture = () => {
     path.join(root, "package.json"),
     '{"name":"fixture","packageManager":"pnpm@10.23.0"}\n',
   );
+  run(root, "git", ["init", "--initial-branch=main"]);
+  run(root, "git", ["config", "user.name", "Test User"]);
+  run(root, "git", ["config", "user.email", "test@example.com"]);
+  run(root, "git", ["add", "package.json"]);
+  run(root, "git", ["commit", "-m", "fixture"]);
   installValidatedNodeStub(root);
   symlinkSync(
     path.join(process.cwd(), "scripts", "bootstrap-worktree-runtime.sh"),
@@ -117,5 +136,24 @@ describe("worktree bootstrap readiness", () => {
 
     expect(result.status).not.toBe(0);
     expect(run(root, "bash", ["-lc", "test ! -e node_modules/.bin/vitest && echo ok"])).toBe("ok");
+  });
+
+  it("rebuilds dist when build metadata belongs to a prior commit", () => {
+    const root = installBootstrapFixture();
+
+    run(root, "bash", ["scripts/bootstrap-worktree-runtime.sh", "--root", root]);
+    writeFileSync(path.join(root, "package.json"), '{"name":"fixture","version":"2.0.0"}\n');
+    run(root, "git", ["add", "package.json"]);
+    run(root, "git", ["commit", "-m", "advance head"]);
+
+    run(root, "bash", ["scripts/bootstrap-worktree-runtime.sh", "--root", root]);
+
+    const buildInfo = JSON.parse(
+      run(root, "node", [
+        "-e",
+        "process.stdout.write(require('fs').readFileSync('dist/build-info.json','utf8'))",
+      ]),
+    ) as { commit: string };
+    expect(buildInfo.commit).toBe(run(root, "git", ["rev-parse", "HEAD"]));
   });
 });
