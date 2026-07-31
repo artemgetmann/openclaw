@@ -644,6 +644,48 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("starts the shutdown deadline only after launchd lifecycle admission", async () => {
+    vi.clearAllMocks();
+    detectRespawnSupervisor.mockReturnValueOnce("launchd");
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    restartGatewayProcessWithFreshPid.mockImplementationOnce(() => {
+      // Final restart validation has its own timeout. The 5-second shutdown
+      // deadline must not exist until the machine-wide lifecycle admission has
+      // completed, because admission may legitimately wait longer than that.
+      expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 5_000)).toBe(false);
+      return { mode: "supervised", pid: 4242 };
+    });
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const close = vi.fn(async () => {
+          expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 5_000)).toBe(true);
+        });
+        const { start, started } = createSignaledStart(close);
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        const prepareRestart = vi.fn(async () => ({
+          prepared: { id: "prepared" },
+          validate: vi.fn(async () => {}),
+        }));
+        vi.resetModules();
+        const { runGatewayLoop } = await import("./run-loop.js");
+        void runGatewayLoop({
+          prepareRestart,
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        });
+        await waitForStart(started);
+
+        captureSignal("SIGUSR1")();
+
+        await expect(exited).resolves.toBe(0);
+        expect(close).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("cancels an admitted launchd handoff when stop supersedes restart during close", async () => {
     vi.clearAllMocks();
     detectRespawnSupervisor.mockReturnValueOnce("launchd");

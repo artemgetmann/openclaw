@@ -28,6 +28,10 @@ struct ConsumerBundledRuntimeTests {
         "scripts/lib/heavy-local-slot.sh",
         "scripts/lib/heavy-local-slot-runner.pl",
     ]
+    private static let executableGatewayLifecycleToolingPaths = [
+        "scripts/gateway-lifecycle-command.sh",
+        "scripts/with-heavy-local-slot.sh",
+    ]
 
     @Test func `seeding writes bundled runtime into app prefix and is idempotent`() throws {
         let resourceRoot = try makeTempDirForTests()
@@ -88,6 +92,16 @@ struct ConsumerBundledRuntimeTests {
             into: installPrefix,
             fileManager: fm)
         #expect(lifecycleRepaired == .seeded)
+        self.assertInstalledGatewayLifecycleTooling(at: installPrefix, fileManager: fm)
+
+        let lifecycleEntrypoint = installPrefix
+            .appendingPathComponent("lib/openclaw-bundled/scripts/with-heavy-local-slot.sh")
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: lifecycleEntrypoint.path)
+        let permissionsRepaired = try ConsumerBundledRuntime.seedIfNeeded(
+            from: bundledRoot,
+            into: installPrefix,
+            fileManager: fm)
+        #expect(permissionsRepaired == .seeded)
         self.assertInstalledGatewayLifecycleTooling(at: installPrefix, fileManager: fm)
     }
 
@@ -392,6 +406,9 @@ struct ConsumerBundledRuntimeTests {
                 }
             #expect(fileManager.fileExists(atPath: fileURL.path))
             #expect(fileManager.isReadableFile(atPath: fileURL.path))
+            if Self.executableGatewayLifecycleToolingPaths.contains(relativePath) {
+                #expect(fileManager.isExecutableFile(atPath: fileURL.path))
+            }
         }
     }
 

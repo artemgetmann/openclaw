@@ -37,9 +37,11 @@ enum ConsumerBundledRuntime {
         "scripts/telegram-e2e/telethon_cli.py",
         "scripts/telegram-e2e/telethon_compat.py",
     ]
-    private static let requiredGatewayLifecycleToolingFiles = [
+    private static let requiredExecutableGatewayLifecycleToolingFiles = [
         "scripts/gateway-lifecycle-command.sh",
         "scripts/with-heavy-local-slot.sh",
+    ]
+    private static let requiredReadableGatewayLifecycleToolingFiles = [
         "scripts/lib/heavy-local-slot.sh",
         "scripts/lib/heavy-local-slot-runner.pl",
     ]
@@ -292,7 +294,20 @@ enum ConsumerBundledRuntime {
             return fileManager.isReadableFile(
                 atPath: fileURL.path)
         }
-        let gatewayLifecycleToolingReady = self.requiredGatewayLifecycleToolingFiles.allSatisfy {
+        // The two public entrypoints are executed directly by the CLI and the
+        // runtime hotfix lane. Readability alone would accept a damaged package
+        // that cannot acquire the lifecycle lease at all.
+        let executableGatewayLifecycleToolingReady =
+            self.requiredExecutableGatewayLifecycleToolingFiles.allSatisfy {
+                relativePath in
+                let fileURL = relativePath
+                    .split(separator: "/")
+                    .reduce(installedPayloadRootURL) { partialURL, component in
+                        partialURL.appendingPathComponent(String(component))
+                    }
+                return fileManager.isExecutableFile(atPath: fileURL.path)
+            }
+        let readableGatewayLifecycleToolingReady = self.requiredReadableGatewayLifecycleToolingFiles.allSatisfy {
             relativePath in
             let fileURL = relativePath
                 .split(separator: "/")
@@ -316,7 +331,8 @@ enum ConsumerBundledRuntime {
             && self.installedRuntimeCodeIsValid(installPrefixURL: installPrefixURL, fileManager: fileManager)
             && templatesReady
             && telegramUserToolingReady
-            && gatewayLifecycleToolingReady
+            && executableGatewayLifecycleToolingReady
+            && readableGatewayLifecycleToolingReady
     }
 
     private static func loadManifest(from resourceURL: URL) throws -> Manifest {

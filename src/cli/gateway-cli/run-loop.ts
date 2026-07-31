@@ -325,7 +325,6 @@ export async function runGatewayLoop<TPrepared = never>(params: {
             return;
           }
           pendingPreparedRestart = restartPreparation.prepared;
-          armForceExit(SHUTDOWN_TIMEOUT_MS);
         }
 
         if (isRestart && detectRespawnSupervisor(process.env) === "launchd") {
@@ -345,6 +344,14 @@ export async function runGatewayLoop<TPrepared = never>(params: {
           if (respawn.mode === "supervised") {
             preparedRespawn = respawn;
           }
+        }
+
+        if (restartPreparation) {
+          // Admission can legitimately wait while another lifecycle owner exits.
+          // Start the shutdown deadline only after we have committed to cutover;
+          // otherwise lock contention can consume the entire close budget while
+          // the old listener is still intentionally serving.
+          armForceExit(SHUTDOWN_TIMEOUT_MS);
         }
 
         if (drainTimedOut) {
