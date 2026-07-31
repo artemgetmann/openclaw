@@ -319,21 +319,24 @@ export function createTelegramProgressController(params: {
         return;
       }
       cleared = true;
-      if (options?.flushBeforeDelete !== false) {
-        // Normal progress cleanup flushes pending progress edits before
-        // deletion so "step 1 -> step 2 -> cleanup" cannot collapse into a
-        // stale visible bubble under Telegram preview throttling.
-        await stream.flush();
-      }
-      // Remove the control before deleting the transient bubble. If Telegram
-      // rejects the delete, the stale button still cannot stop a later run.
-      await removeActiveReplyMarkup(stream.messageId());
-      // Final-answer cleanup can explicitly skip in-flight preview edits. At
-      // that point the next durable message is the final answer, so deleting
-      // the visible progress bubble beats faithfully rendering stale progress.
       try {
+        if (options?.flushBeforeDelete !== false) {
+          // Normal progress cleanup flushes pending progress edits before
+          // deletion so "step 1 -> step 2 -> cleanup" cannot collapse into a
+          // stale visible bubble under Telegram preview throttling.
+          await stream.flush();
+        }
+        // Remove the control before deleting the transient bubble. If Telegram
+        // rejects the delete, the stale button still cannot stop a later run.
+        await removeActiveReplyMarkup(stream.messageId());
+        // Final-answer cleanup can explicitly skip in-flight preview edits. At
+        // that point the next durable message is the final answer, so deleting
+        // the visible progress bubble beats faithfully rendering stale progress.
         await stream.clear({ waitForInFlight: options?.waitForInFlight });
       } finally {
+        // Cleanup failures must never leave an exact route-bound Stop token
+        // authorized after this controller has become terminal. A visible
+        // leftover button then resolves as stale instead of aborting a later run.
         dispose();
       }
     },
@@ -376,27 +379,31 @@ export function createTelegramProgressController(params: {
       }
       const collapsed = renderTelegramWorkLog(workLog, false);
       cleared = true;
-      // Retention converts the mutable progress bubble in place before final
-      // delivery starts. That keeps Telegram ordering stable: Work log first,
-      // then a separate final answer message.
-      stream.update(collapsed.text);
-      await stream.flush();
-      const messageId = await stream.materialize?.();
-      if (typeof messageId !== "number") {
-        return { retained: false };
-      }
       try {
-        await params.api.editMessageText(params.chatId, messageId, collapsed.text, {
-          reply_markup: buildTelegramWorkLogReplyMarkup(collapsed),
-        });
-      } catch (err) {
-        params.warn?.(
-          `telegram work log buttons failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        // Retention converts the mutable progress bubble in place before final
+        // delivery starts. That keeps Telegram ordering stable: Work log first,
+        // then a separate final answer message.
+        stream.update(collapsed.text);
+        await stream.flush();
+        const messageId = await stream.materialize?.();
+        if (typeof messageId !== "number") {
+          return { retained: false };
+        }
+        try {
+          await params.api.editMessageText(params.chatId, messageId, collapsed.text, {
+            reply_markup: buildTelegramWorkLogReplyMarkup(collapsed),
+          });
+        } catch (err) {
+          params.warn?.(
+            `telegram work log buttons failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        return { retained: true, messageId, workLogId: workLog.id };
       } finally {
+        // Work-log conversion is terminal for the active control even when
+        // Telegram rejects a flush or cannot return a durable message id.
         dispose();
       }
-      return { retained: true, messageId, workLogId: workLog.id };
     },
     messageId: () => stream.messageId(),
     lastText: () => lastRenderedProgressText,
