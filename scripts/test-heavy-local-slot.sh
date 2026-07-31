@@ -255,6 +255,12 @@ host_health_reason() {
   elif [[ "$test_health_sample" == "guard-internal" ]]; then
     printf '%s' \
       'guard_internal|fixture_measurement_failed|synthetic measurement backend failed|metric=fixture status=unavailable'
+  elif [[ "$test_health_sample" == "disk-low" ]]; then
+    printf '%s' \
+      'host_unhealthy|disk_pressure|disk availability is 25000000 KiB (minimum 26214400 KiB)|metric=disk_available_kib observed=25000000 threshold=26214400 unit=KiB'
+  elif [[ "$test_health_sample" == "disk-warning" ]]; then
+    printf '%s\n' \
+      'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=34000000 report_below_kib=36700160 hard_floor_kib=26214400 owner=disk-warning' >&2
   elif [[ -n "$test_health_sample" && "$test_health_sample" != "healthy" ]]; then
     printf 'host_unhealthy|fixture_host_pressure|%s|metric=fixture observed=unhealthy' \
       "$test_health_sample"
@@ -545,6 +551,40 @@ test_large_generated_state_emits_owner_receipt() {
     fail "task disk receipt omitted its threshold"
   [[ ! -e "$lock_path" ]] || fail "task disk receipt test leaked its fixture lease"
   pass "large generated task state emits an exact owner receipt"
+}
+
+test_disk_pressure_refuses_and_warning_admits() {
+  local lock_path="$TMP_DIR/disk-health.lock"
+  local health_path="$TMP_DIR/disk-health.health"
+  local output="$TMP_DIR/disk-health.out"
+  local status=0
+
+  printf 'disk-low\n' >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" --label "disk-low" --check >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "disk floor refusal returned $status instead of 75"
+  grep -Fq \
+    'HEAVY_LOCAL_SLOT_REFUSAL class=host_unhealthy code=disk_pressure metric=disk_available_kib observed=25000000 threshold=26214400 unit=KiB' \
+    "$output" ||
+    fail "disk floor refusal omitted stable measurements"
+  [[ ! -e "$lock_path" ]] || fail "disk floor refusal leaked its fixture lease"
+
+  printf 'disk-warning\n' >"$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" --label "disk-warning" --check >"$output" 2>&1
+  grep -Fq \
+    'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=34000000 report_below_kib=36700160 hard_floor_kib=26214400 owner=disk-warning' \
+    "$output" ||
+    fail "disk warning omitted its exact report thresholds"
+  grep -Fq 'Heavy-local slot granted to "disk-warning".' "$output" ||
+    fail "disk warning incorrectly blocked admission above the hard floor"
+  [[ ! -e "$lock_path" ]] || fail "disk warning check leaked its fixture lease"
+  pass "disk floor refuses with telemetry while the warning band admits honestly"
 }
 
 test_wrapper_waits_for_explicit_handshake_commit() {
@@ -2223,6 +2263,7 @@ if [[ "${1:-}" == "--coordination-only" ]]; then
   create_instrumented_runtime
   run_suite_test test_owner_publish_failure_is_actionable
   run_suite_test test_large_generated_state_emits_owner_receipt
+  run_suite_test test_disk_pressure_refuses_and_warning_admits
   run_suite_test test_refusal_classes_and_internal_failure_distinction
   run_suite_test test_wait_argument_bounds_fail_before_admission
   run_suite_test test_queue_notice_sanitizes_untrusted_label
@@ -2257,6 +2298,7 @@ create_term_attribution_holder
 run_suite_test test_production_has_no_ambient_test_bypass
 run_suite_test test_owner_publish_failure_is_actionable
 run_suite_test test_large_generated_state_emits_owner_receipt
+run_suite_test test_disk_pressure_refuses_and_warning_admits
 run_suite_test test_wrapper_waits_for_explicit_handshake_commit
 run_suite_test test_pending_signal_never_executes_guarded_body
 run_suite_test test_authoritative_session_identity_ignores_macos_ps_zero
