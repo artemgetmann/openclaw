@@ -62,7 +62,7 @@ openclaw_heavy_local_slot_resolve_path() {
 }
 
 openclaw_heavy_local_slot_value() {
-  awk -F= -v key="$2" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$1" 2>/dev/null || true
+  awk -F= -v key="$2" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$1" 2>/dev/null
 }
 
 openclaw_heavy_local_slot_inherited_lease_is_valid() {

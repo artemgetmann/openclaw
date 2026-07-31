@@ -236,7 +236,10 @@ run_canonical_wrapper_and_finalize() {
   set -e
   trap - TERM INT HUP
 
-  current_owner_token="$(openclaw_heavy_local_slot_value "$lock_path/owner" token)"
+  # Successful cleanup removes the owner file. Under `set -o pipefail`, the
+  # metadata reader therefore returns nonzero precisely on the expected clean
+  # path; normalize that absence to an empty token before writing the receipt.
+  current_owner_token="$(openclaw_heavy_local_slot_value "$lock_path/owner" token || true)"
   if [[ -n "$wrapper_owner_token" && "$current_owner_token" != "$wrapper_owner_token" ]]; then
     cleanup_status="owner_token_released"
   elif [[ -n "$wrapper_owner_token" ]]; then
