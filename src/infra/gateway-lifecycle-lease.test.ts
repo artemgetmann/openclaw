@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   ensureGatewayLifecycleLease,
+  ensureGatewayLifecycleLeaseForRestart,
   GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE,
 } from "./gateway-lifecycle-lease.js";
 
@@ -126,5 +127,39 @@ describe("gateway lifecycle lease", () => {
       outcome: "reexecuted",
       exitCode: GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE,
     });
+  });
+
+  it("reexecutes a canonical restart instead of a programmatic caller's parent command", async () => {
+    const spawnSync = vi.fn(() => ({ status: 1 }));
+    const spawn = vi.fn(() => createSpawnedChild(75));
+
+    const result = await ensureGatewayLifecycleLeaseForRestart(
+      { json: true },
+      {
+        platform: "darwin",
+        cwd: process.cwd(),
+        argv: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "update"],
+        execPath: process.execPath,
+        env: { ...process.env, OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway" },
+        fileExists: () => true,
+        spawnSync: spawnSync as never,
+        spawn: spawn as never,
+      },
+    );
+
+    expect(result).toEqual({ outcome: "reexecuted", exitCode: 75 });
+    const [, guardedArgs] = spawn.mock.calls[0] as unknown as [string, string[]];
+    expect(guardedArgs).toEqual(
+      expect.arrayContaining([
+        "cli",
+        "--",
+        process.execPath,
+        path.join(process.cwd(), "openclaw.mjs"),
+        "gateway",
+        "restart",
+        "--json",
+      ]),
+    );
+    expect(guardedArgs).not.toContain("update");
   });
 });

@@ -1,6 +1,4 @@
 import type { Command } from "commander";
-import { ensureGatewayLifecycleLease } from "../../infra/gateway-lifecycle-lease.js";
-import { defaultRuntime } from "../../runtime.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import {
   runDaemonInstall,
@@ -106,11 +104,6 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
-      const lease = await ensureGatewayLifecycleLease();
-      if (lease.outcome === "reexecuted") {
-        defaultRuntime.exit(lease.exitCode);
-        return;
-      }
       await runDaemonRestart(cmdOpts);
     });
 }

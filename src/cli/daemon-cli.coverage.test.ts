@@ -95,6 +95,7 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../infra/gateway-lifecycle-lease.js", () => ({
   ensureGatewayLifecycleLease: () => ensureGatewayLifecycleLease(),
+  ensureGatewayLifecycleLeaseForRestart: () => ensureGatewayLifecycleLease(),
 }));
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({

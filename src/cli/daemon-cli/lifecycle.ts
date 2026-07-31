@@ -6,6 +6,7 @@ import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js
 import { resolveGatewayRuntimeIdentityEnv } from "../../daemon/service-env.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
+import { ensureGatewayLifecycleLeaseForRestart } from "../../infra/gateway-lifecycle-lease.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
@@ -230,6 +231,16 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
+  // This shared runner is also called by `openclaw update` and recovery code.
+  // Admission belongs here so no caller can reach signal, stale-process
+  // cleanup, bootstrap, or kickstart by bypassing the Commander action.
+  const lease = await ensureGatewayLifecycleLeaseForRestart({ json });
+  if (lease.outcome === "reexecuted") {
+    if (lease.exitCode !== 0) {
+      defaultRuntime.exit(lease.exitCode);
+    }
+    return true;
+  }
   const service = resolveGatewayService();
   const installWarnings: string[] = [];
   let restartedWithoutServiceManager = false;

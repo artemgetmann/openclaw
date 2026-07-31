@@ -176,3 +176,40 @@ export async function ensureGatewayLifecycleLease(
     };
   }
 }
+
+/**
+ * Admit the shared restart runner by re-executing only the canonical gateway
+ * restart command. Programmatic callers such as `openclaw update` must not
+ * re-run their entire parent command merely to serialize its final restart.
+ */
+export async function ensureGatewayLifecycleLeaseForRestart(
+  opts: { json?: boolean } = {},
+  overrides: Partial<GatewayLifecycleLeaseDeps> = {},
+): Promise<GatewayLifecycleLeaseResult> {
+  const deps = { ...defaultDeps(), ...overrides };
+  if (deps.platform !== "darwin") {
+    return { outcome: "held" };
+  }
+
+  const paths = resolveGatewayLifecycleLeasePaths(deps);
+  if (!paths) {
+    process.stderr.write(
+      "Gateway restart temporarily unavailable: packaged lifecycle lease helpers are missing.\n",
+    );
+    return {
+      outcome: "reexecuted",
+      exitCode: GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE,
+    };
+  }
+
+  // Prefer the source/package launcher because it is the stable entrypoint in
+  // both development checkouts and packaged runtimes. Keep dist as the narrow
+  // fallback already accepted by the shell validator.
+  const sourceEntrypoint = path.join(paths.root, "openclaw.mjs");
+  const distEntrypoint = path.join(paths.root, "dist", "index.js");
+  const entrypoint = deps.fileExists(sourceEntrypoint) ? sourceEntrypoint : distEntrypoint;
+  return await ensureGatewayLifecycleLease({
+    ...deps,
+    argv: [deps.execPath, entrypoint, "gateway", "restart", ...(opts.json ? ["--json"] : [])],
+  });
+}
