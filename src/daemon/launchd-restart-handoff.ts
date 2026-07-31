@@ -84,96 +84,6 @@ export function isCurrentProcessLaunchdServiceLabel(
   return Number.parseInt(pidMatch[1] ?? "", 10) === process.pid;
 }
 
-function buildLaunchdRestartScript(mode: LaunchdRestartHandoffMode): string {
-  const publishAdmission = `receipt_dir="$6"
-ready_path="$receipt_dir/ready"
-ack_path="$receipt_dir/ack"
-ready_tmp="$receipt_dir/ready.tmp.$$"
-umask 077
-printf 'admitted\\n' >"$ready_tmp"
-/bin/mv "$ready_tmp" "$ready_path"
-cleanup_receipt() {
-  /bin/rm -f "$ready_path" "$ready_tmp" "$ack_path"
-  /bin/rmdir "$receipt_dir" 2>/dev/null || true
-}
-trap cleanup_receipt EXIT
-# Mutation starts only after the caller observes admission. Without this
-# acknowledgment, a fast handoff could delete the ready receipt between polls and
-# make a completed launchctl mutation look like a lease refusal.
-while [ ! -f "$ack_path" ]; do
-  ack_wait_count=$((\${ack_wait_count:-0} + 1))
-  if [ "$ack_wait_count" -ge 800 ]; then
-    # A killed caller cannot acknowledge admission. Bound the lease lifetime
-    # to 20 seconds instead of pinning every machine-wide lifecycle owner.
-    exit ${GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE}
-  fi
-  sleep 0.025
-done
-`;
-  const waitForDelay = `delay_ms="$5"
-if [ -n "$delay_ms" ] && [ "$delay_ms" -gt 0 ] 2>/dev/null; then
-  delay_seconds=$((delay_ms / 1000))
-  delay_millis=$((delay_ms % 1000))
-  sleep "\${delay_seconds}.$(printf '%03d' "$delay_millis")"
-fi
-`;
-  const waitForCallerPid = `wait_pid="$4"
-if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
-  wait_pid_start="$7"
-  lifecycle_helper="$8"
-  # Bare PID liveness is ambiguous after PID reuse. The canonical helper
-  # distinguishes the original live identity, proven exit, and ambiguity.
-  . "$lifecycle_helper"
-  wait_pid_count=0
-  while true; do
-    if openclaw_heavy_local_slot_owner_is_live "$wait_pid" "$wait_pid_start"; then
-      wait_pid_count=$((wait_pid_count + 1))
-      [ "$wait_pid_count" -lt 300 ] ||
-        exit ${GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE}
-      sleep 0.1
-      continue
-    else
-      wait_status=$?
-    fi
-    [ "$wait_status" -eq 1 ] && break
-    exit ${GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE}
-  done
-fi
-`;
-
-  if (mode === "kickstart") {
-    return `${publishAdmission}
-service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForDelay}
-${waitForCallerPid}
-if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
-  launchctl enable "$service_target" >/dev/null 2>&1
-  if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
-    launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
-  fi
-fi
-`;
-  }
-
-  return `${publishAdmission}
-service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForDelay}
-${waitForCallerPid}
-if ! launchctl start "$service_target" >/dev/null 2>&1; then
-  launchctl enable "$service_target" >/dev/null 2>&1
-  if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
-    launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
-  else
-    launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
-  fi
-fi
-`;
-}
-
 function resolveProcessStartIdentity(pid: number): string | null {
   const result = spawnSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
     encoding: "utf8",
@@ -186,13 +96,14 @@ function resolveProcessStartIdentity(pid: number): string | null {
   return start || null;
 }
 
-function buildLeaseOwnerScript(handoffScript: string): string {
+function buildLeaseOwnerScript(): string {
   return `wrapper="$1"
-label="$2"
-receipt_dir="$3"
-shift 3
+lifecycle_command="$2"
+label="$3"
+receipt_dir="$4"
+shift 4
 set +e
-"$wrapper" --policy gateway-lifecycle --label "$label" -- /bin/sh -c '${handoffScript.replaceAll("'", "'\\''")}' openclaw-launchd-restart-handoff "$@"
+"$wrapper" --policy gateway-lifecycle --label "$label" -- "$lifecycle_command" handoff "$@"
 status=$?
 if [ -d "$receipt_dir" ] && [ ! -f "$receipt_dir/ready" ]; then
   failed_tmp="$receipt_dir/failed.tmp.$$"
@@ -330,16 +241,17 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
     );
     receiptDir = createdReceiptDir;
     fssync.chmodSync(createdReceiptDir, 0o700);
-    const handoffScript = buildLaunchdRestartScript(params.mode);
     const child = spawn(
       "/bin/sh",
       [
         "-c",
-        buildLeaseOwnerScript(handoffScript),
+        buildLeaseOwnerScript(),
         "openclaw-launchd-restart-lease-owner",
         leasePaths.wrapper,
+        leasePaths.commandHelper,
         `gateway-restart-handoff:${target.label}`,
         createdReceiptDir,
+        params.mode,
         target.serviceTarget,
         target.domain,
         target.plistPath,

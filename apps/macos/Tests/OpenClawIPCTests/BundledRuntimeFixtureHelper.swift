@@ -80,6 +80,10 @@ enum BundledRuntimeFixtureHelper {
             atomically: true,
             encoding: .utf8)
         try "#!/usr/bin/env bash\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/gateway-lifecycle-command.sh"),
+            atomically: true,
+            encoding: .utf8)
+        try "#!/usr/bin/env bash\n".write(
             to: bundledRoot.appendingPathComponent("openclaw/scripts/with-heavy-local-slot.sh"),
             atomically: true,
             encoding: .utf8)

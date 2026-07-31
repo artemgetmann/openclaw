@@ -38,6 +38,7 @@ enum ConsumerBundledRuntime {
         "scripts/telegram-e2e/telethon_compat.py",
     ]
     private static let requiredGatewayLifecycleToolingFiles = [
+        "scripts/gateway-lifecycle-command.sh",
         "scripts/with-heavy-local-slot.sh",
         "scripts/lib/heavy-local-slot.sh",
         "scripts/lib/heavy-local-slot-runner.pl",

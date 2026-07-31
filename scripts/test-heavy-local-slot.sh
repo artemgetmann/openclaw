@@ -140,6 +140,7 @@ create_instrumented_runtime() {
   local fixture_helper_tmp="$fixture_helper.tmp"
   local fixture_health_hook="$FIXTURE_ROOT/scripts/lib/heavy-local-slot-health-fixture.sh"
   local fixture_hotfix="$FIXTURE_ROOT/scripts/ship-jarvis-hotfix.sh"
+  local fixture_lifecycle_command="$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh"
   local fixture_runner="$FIXTURE_ROOT/scripts/lib/heavy-local-slot-runner.pl"
   local fixture_runner_tmp="$fixture_runner.tmp"
   local fixture_wrapper_tmp="$FIXTURE_WRAPPER.tmp"
@@ -223,6 +224,21 @@ sleep 0.2
 : >"$marker"
 EOF
   chmod +x "$fixture_hotfix"
+
+  # The production lifecycle command validates the real Node entrypoint and
+  # launchd target. This disposable counterpart keeps the wrapper policy proof
+  # focused: only the canonical path and explicit `cli` mode can reach work.
+  cat >"$fixture_lifecycle_command" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ "${1:-}" == "cli" ]] || exit 75
+shift
+[[ "${1:-}" == "--" ]] || exit 75
+shift
+exec "$@"
+EOF
+  chmod +x "$fixture_lifecycle_command"
 
   cat >"$fixture_health_hook" <<'EOF'
 host_health_reason() {
@@ -819,6 +835,9 @@ create_minimal_clone_pair() {
 
   mkdir -p "$seed/scripts/lib"
   cp "$FIXTURE_WRAPPER" "$seed/scripts/with-heavy-local-slot.sh"
+  cp \
+    "$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh" \
+    "$seed/scripts/gateway-lifecycle-command.sh"
   cp "$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh" "$seed/scripts/lib/heavy-local-slot.sh"
   cp \
     "$FIXTURE_ROOT/scripts/lib/heavy-local-slot-runner.pl" \
@@ -927,7 +946,7 @@ test_machine_wide_default_and_separate_clone_contention() {
     "$clone_b/scripts/with-heavy-local-slot.sh" \
       --policy gateway-lifecycle \
       --label "gateway-restart:clone-b-contender" \
-      -- bash -c \
+      -- "$clone_b/scripts/gateway-lifecycle-command.sh" cli -- bash -c \
         'printf "signal\nbootstrap\nkickstart\n" >>"$1"' \
         openclaw-gateway-restart-contender \
         "$loser_mutations" \
@@ -1997,6 +2016,7 @@ test_gateway_lifecycle_policy_skips_only_gateway_health() {
   local lock_path="$TMP_DIR/gateway-lifecycle.lock"
   local health_path="$TMP_DIR/gateway-lifecycle.health"
   local marker="$TMP_DIR/gateway-lifecycle.marker"
+  local stdout_path="$TMP_DIR/gateway-lifecycle.stdout"
   local sample=0
 
   : >"$health_path"
@@ -2011,9 +2031,12 @@ test_gateway_lifecycle_policy_skips_only_gateway_health() {
       --policy gateway-lifecycle \
       --label "gateway-restart:test-unhealthy-listener" \
       -- \
-      touch "$marker"
+      "$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh" cli -- touch "$marker" \
+      >"$stdout_path"
 
   [[ -f "$marker" ]] || fail "gateway lifecycle policy deadlocked on the listener it must restart"
+  [[ ! -s "$stdout_path" ]] ||
+    fail "gateway lifecycle wrapper polluted structured command stdout"
   [[ ! -e "$lock_path" ]] || fail "gateway lifecycle policy leaked its lease"
   pass "gateway lifecycle policy preserves the lease while skipping gateway self-health"
 }
@@ -2033,7 +2056,7 @@ test_gateway_lifecycle_policy_rejects_unrelated_labels() {
       --policy gateway-lifecycle \
       --label "not-a-gateway-restart" \
       -- \
-      touch "$marker" \
+      "$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh" cli -- touch "$marker" \
       2>"$stderr_path"
   status=$?
   set -e
@@ -2046,6 +2069,73 @@ test_gateway_lifecycle_policy_rejects_unrelated_labels() {
     fail "invalid gateway lifecycle label omitted structured refusal"
   [[ ! -e "$lock_path" ]] || fail "invalid gateway lifecycle label created a lease"
   pass "gateway lifecycle policy rejects unrelated labels before mutation"
+}
+
+test_gateway_lifecycle_policy_rejects_arbitrary_commands() {
+  local lock_path="$TMP_DIR/gateway-lifecycle-invalid-command.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle-invalid-command.health"
+  local marker="$TMP_DIR/gateway-lifecycle-invalid-command.marker"
+  local stderr_path="$TMP_DIR/gateway-lifecycle-invalid-command.err"
+  local status=0
+
+  : >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy gateway-lifecycle \
+      --label "gateway-restart:test-arbitrary-command" \
+      -- \
+      touch "$marker" \
+      2>"$stderr_path"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "arbitrary gateway lifecycle command returned $status instead of 75"
+  [[ ! -e "$marker" ]] || fail "arbitrary gateway lifecycle command reached guarded mutation"
+  grep -Fq \
+    "HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=invalid_gateway_lifecycle_command" \
+    "$stderr_path" ||
+    fail "arbitrary gateway lifecycle command omitted structured refusal"
+  [[ ! -e "$lock_path" ]] || fail "arbitrary gateway lifecycle command created a lease"
+  pass "gateway lifecycle policy rejects arbitrary commands before mutation"
+}
+
+test_gateway_lifecycle_command_accepts_only_restart_shape() {
+  local fake_bin="$TMP_DIR/gateway-lifecycle-command-bin"
+  local fake_node="$fake_bin/node"
+  local marker="$TMP_DIR/gateway-lifecycle-command.marker"
+  local stderr_path="$TMP_DIR/gateway-lifecycle-command.err"
+  local status=0
+
+  mkdir -p "$fake_bin"
+  cat >"$fake_node" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"$OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER"
+EOF
+  chmod +x "$fake_node"
+
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER="$marker" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+      cli -- "$fake_node" "$ROOT_DIR/openclaw.mjs" gateway restart --json
+  grep -Fq "$ROOT_DIR/openclaw.mjs gateway restart --json" "$marker" ||
+    fail "canonical lifecycle command did not preserve the restart argv"
+
+  : >"$marker"
+  set +e
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER="$marker" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+      cli -- "$fake_node" "$ROOT_DIR/openclaw.mjs" gateway status \
+      2>"$stderr_path"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "non-restart lifecycle command returned $status instead of 75"
+  [[ ! -s "$marker" ]] || fail "non-restart lifecycle command reached the fake Node mutation"
+  grep -Fq "guarded CLI is not gateway restart" "$stderr_path" ||
+    fail "non-restart lifecycle command omitted its fail-closed reason"
+  pass "canonical lifecycle command preserves restart argv and rejects other CLI shapes"
 }
 
 create_lock_order_fixture() {
@@ -2363,6 +2453,8 @@ if [[ "${1:-}" == "--gateway-lifecycle-only" ]]; then
   run_suite_test test_machine_wide_default_and_separate_clone_contention
   run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
   run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
+  run_suite_test test_gateway_lifecycle_policy_rejects_arbitrary_commands
+  run_suite_test test_gateway_lifecycle_command_accepts_only_restart_shape
   SUITE_PHASE="complete"
   echo "Gateway lifecycle contention tests passed."
   exit 0
@@ -2404,6 +2496,8 @@ run_suite_test test_signal_cleanup_kills_tree_and_releases
 run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient
 run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
 run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
+run_suite_test test_gateway_lifecycle_policy_rejects_arbitrary_commands
+run_suite_test test_gateway_lifecycle_command_accepts_only_restart_shape
 run_suite_test test_fleet_and_release_lock_coexistence_and_wiring
 
 SUITE_PHASE="complete"

@@ -265,11 +265,12 @@ through the verified ancestry contract above.
 
 `openclaw gateway restart` is a packaged CLI boundary, not only a repository
 shell entrypoint. On macOS its complete mutation transaction re-executes through
-the same wrapper, and the npm/runtime package therefore includes the wrapper,
-lease helper, and session runner. The detached launchd handoff acquires that
-lease independently and publishes an admission receipt before restart is
-reported as scheduled. Missing packaged helpers fail closed with exit `75`;
-they never downgrade to raw signal, bootstrap, or kickstart.
+the same wrapper, and the npm/runtime package therefore includes the canonical
+lifecycle command, wrapper, lease helper, and session runner. The detached
+launchd handoff acquires that lease independently and publishes an admission
+receipt before restart is reported as scheduled. Missing packaged helpers fail
+closed with exit `75`; they never downgrade to raw signal, bootstrap, or
+kickstart.
 The narrow `gateway-lifecycle` admission policy skips only the managed
 gateway's own health probe, because an in-process handoff blocks or closes that
 listener while acquiring the lease. CPU, memory, remote-access, ownership,

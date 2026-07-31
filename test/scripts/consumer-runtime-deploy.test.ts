@@ -20,6 +20,7 @@ describe("consumer runtime dependency deployment", () => {
   it("ships every helper required by the gateway lifecycle lease", () => {
     const packageScript = fs.readFileSync(path.join(root, "scripts", "package-mac-app.sh"), "utf8");
     const requiredPaths = [
+      "scripts/gateway-lifecycle-command.sh",
       "scripts/with-heavy-local-slot.sh",
       "scripts/lib/heavy-local-slot.sh",
       "scripts/lib/heavy-local-slot-runner.pl",

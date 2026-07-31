@@ -33,8 +33,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       OPENCLAW_PROFILE: "default",
     };
     spawnMock.mockImplementation((_file: string, args: string[]) => {
-      receiptDirs.push(args[5]);
-      fs.writeFileSync(`${args[5]}/ready`, "admitted\n");
+      receiptDirs.push(args[6]);
+      fs.writeFileSync(`${args[6]}/ready`, "admitted\n");
       return { pid: 4242, unref: unrefMock };
     });
 
@@ -47,19 +47,22 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(result).toEqual({ ok: true, pid: 4242 });
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const lifecycleCommand = fs.readFileSync(args[4], "utf8");
     expect(args[0]).toBe("-c");
     expect(args[2]).toBe("openclaw-launchd-restart-lease-owner");
-    expect(args[9]).toBe(String(process.pid));
-    expect(args[12]).toBeTruthy();
-    expect(args[13]).toMatch(/scripts\/lib\/heavy-local-slot\.sh$/);
-    expect(args[1]).toContain(
+    expect(args[7]).toBe("kickstart");
+    expect(args[11]).toBe(String(process.pid));
+    expect(args[14]).toBeTruthy();
+    expect(args[15]).toMatch(/scripts\/lib\/heavy-local-slot\.sh$/);
+    expect(lifecycleCommand).toContain(
       'openclaw_heavy_local_slot_owner_is_live "$wait_pid" "$wait_pid_start"',
     );
-    expect(args[1]).toContain('launchctl kickstart -k "$service_target" >/dev/null 2>&1');
+    expect(lifecycleCommand).toContain('launchctl kickstart -k "$service_target" >/dev/null 2>&1');
     expect(args[1]).toContain('"$wrapper" --policy gateway-lifecycle --label "$label"');
-    expect(args[1]).toContain('if [ "$ack_wait_count" -ge 800 ]; then');
+    expect(lifecycleCommand).toContain('[[ "$ack_wait_count" -lt 800 ]]');
     expect(args[3]).toMatch(/scripts\/with-heavy-local-slot\.sh$/);
-    expect(fs.readFileSync(`${args[5]}/ack`, "utf8")).toBe("observed\n");
+    expect(args[4]).toMatch(/scripts\/gateway-lifecycle-command\.sh$/);
+    expect(fs.readFileSync(`${args[6]}/ack`, "utf8")).toBe("observed\n");
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
@@ -70,8 +73,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
     };
     spawnMock.mockImplementation((_file: string, args: string[]) => {
-      receiptDirs.push(args[5]);
-      fs.writeFileSync(`${args[5]}/ready`, "admitted\n");
+      receiptDirs.push(args[6]);
+      fs.writeFileSync(`${args[6]}/ready`, "admitted\n");
       return { pid: 4243, unref: unrefMock };
     });
 
@@ -83,16 +86,17 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
 
     expect(result).toEqual({ ok: true, pid: 4243 });
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-    expect(args[9]).toBe("0");
-    expect(args[10]).toBe("2500");
-    expect(args[1]).toContain('delay_ms="$5"');
-    expect(args[1]).toContain('sleep "${delay_seconds}.$(printf');
+    const lifecycleCommand = fs.readFileSync(args[4], "utf8");
+    expect(args[11]).toBe("0");
+    expect(args[12]).toBe("2500");
+    expect(lifecycleCommand).toContain('local delay_ms="$6"');
+    expect(lifecycleCommand).toContain('sleep "${delay_seconds}.$(printf');
   });
 
   it("fails closed before reporting scheduled when the lease contender exits 75", () => {
     spawnMock.mockImplementation((_file: string, args: string[]) => {
-      receiptDirs.push(args[5]);
-      fs.writeFileSync(`${args[5]}/failed`, "75\n");
+      receiptDirs.push(args[6]);
+      fs.writeFileSync(`${args[6]}/failed`, "75\n");
       return { pid: 4244, unref: unrefMock };
     });
 

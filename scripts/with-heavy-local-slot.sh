@@ -251,8 +251,17 @@ validate_policy_for_command() {
       # managed Jarvis listener. It still needs the machine lease and all host
       # headroom checks, but requiring that same listener to answer /healthz
       # would deadlock an in-process detached handoff.
-      case "$label" in
-        gateway-restart:* | gateway-restart-handoff:*)
+      guarded_command="$(resolve_command_path "${1:-}" || true)"
+      allowed_command="$(resolve_command_path "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" || true)"
+      if [[ -z "$guarded_command" || "$guarded_command" != "$allowed_command" ]]; then
+        emit_refusal \
+          "guard_internal" \
+          "invalid_gateway_lifecycle_command" \
+          "gateway-lifecycle policy requires the canonical lifecycle command"
+        return 75
+      fi
+      case "$label:${2:-}" in
+        gateway-restart:*:cli | gateway-restart-handoff:*:handoff)
           return 0
           ;;
         *)
@@ -465,7 +474,7 @@ trap 'handle_interrupt INT 130' INT
 trap 'handle_interrupt TERM 143' TERM
 trap 'handle_interrupt HUP 129' HUP
 
-if validate_policy_for_command "${1:-}"; then
+if validate_policy_for_command "$@"; then
   :
 else
   policy_status=$?
@@ -645,7 +654,11 @@ while true; do
 done
 health_stop_file="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/health_stop_reason"
 
-printf 'Heavy-local slot granted to "%s".\n' "$display_label"
+if [[ "$policy" == "gateway-lifecycle" ]]; then
+  printf 'Heavy-local slot granted to "%s".\n' "$display_label" >&2
+else
+  printf 'Heavy-local slot granted to "%s".\n' "$display_label"
+fi
 if [ "$check_only" = true ]; then
   exit 0
 fi

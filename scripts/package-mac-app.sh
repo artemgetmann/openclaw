@@ -388,6 +388,7 @@ verify_required_gateway_lifecycle_tooling() {
   local missing=()
   local relative_path=""
   local required_paths=(
+    "scripts/gateway-lifecycle-command.sh"
     "scripts/with-heavy-local-slot.sh"
     "scripts/lib/heavy-local-slot.sh"
     "scripts/lib/heavy-local-slot-runner.pl"
@@ -1229,6 +1230,7 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "scripts/telegram-e2e/session_owner.py"
       hash_consumer_runtime_path "scripts/telegram-e2e/telethon_cli.py"
       hash_consumer_runtime_path "scripts/telegram-e2e/telethon_compat.py"
+      hash_consumer_runtime_path "scripts/gateway-lifecycle-command.sh"
       hash_consumer_runtime_path "scripts/with-heavy-local-slot.sh"
       hash_consumer_runtime_path "scripts/lib/heavy-local-slot.sh"
       hash_consumer_runtime_path "scripts/lib/heavy-local-slot-runner.pl"
@@ -1460,6 +1462,8 @@ prepare_bundled_consumer_runtime() {
   # Copy the canonical lease implementation explicitly so packaged gateway
   # restarts preserve the same cross-clone ownership contract as source.
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/lib"
+  cp "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+    "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/gateway-lifecycle-command.sh"
   cp "$ROOT_DIR/scripts/with-heavy-local-slot.sh" \
     "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/with-heavy-local-slot.sh"
   cp "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" \
