@@ -2150,6 +2150,12 @@ EOF
   grep -Fq "$ROOT_DIR/openclaw.mjs gateway restart --json" "$marker" ||
     fail "canonical lifecycle command did not preserve the restart argv"
 
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER="$marker" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+      cli -- "$fake_node" "$ROOT_DIR/openclaw.mjs" daemon restart --json
+  grep -Fq "$ROOT_DIR/openclaw.mjs daemon restart --json" "$marker" ||
+    fail "canonical lifecycle command rejected the daemon restart alias"
+
   : >"$marker"
   set +e
   OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER="$marker" \
@@ -2161,7 +2167,7 @@ EOF
 
   [[ "$status" -eq 75 ]] || fail "non-restart lifecycle command returned $status instead of 75"
   [[ ! -s "$marker" ]] || fail "non-restart lifecycle command reached the fake Node mutation"
-  grep -Fq "guarded CLI is not gateway restart" "$stderr_path" ||
+  grep -Fq "guarded CLI is not a gateway restart command" "$stderr_path" ||
     fail "non-restart lifecycle command omitted its fail-closed reason"
 
   : >"$marker"

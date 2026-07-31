@@ -57,13 +57,17 @@ validate_cli_restart() {
   local restart_pair_found=0
   local index=1
   while [[ "$index" -lt $((${#args[@]} - 1)) ]]; do
-    if [[ "${args[$index]}" == "gateway" && "${args[$((index + 1))]}" == "restart" ]]; then
-      restart_pair_found=1
-      break
-    fi
+    case "${args[$index]}:${args[$((index + 1))]}" in
+      gateway:restart | daemon:restart)
+        # `daemon restart` is the registered compatibility alias for the same
+        # gateway lifecycle action and must inherit the identical lock.
+        restart_pair_found=1
+        break
+        ;;
+    esac
     index=$((index + 1))
   done
-  [[ "$restart_pair_found" -eq 1 ]] || fail_closed "guarded CLI is not gateway restart"
+  [[ "$restart_pair_found" -eq 1 ]] || fail_closed "guarded CLI is not a gateway restart command"
 
   exec "$command_path" "${args[@]}"
 }
