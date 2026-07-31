@@ -326,7 +326,24 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   });
 
-  it("shows one explicit Stop control while the agent run is active", async () => {
+  it.each([
+    {
+      label: "preview streaming is disabled",
+      streamMode: "off" as const,
+      ctxPayload: {
+        SessionKey: "agent:main:telegram:direct:123",
+      } as TelegramMessageContext["ctxPayload"],
+    },
+    {
+      label: "a native quote disables progress streaming",
+      streamMode: "partial" as const,
+      ctxPayload: {
+        SessionKey: "agent:main:telegram:direct:123",
+        ReplyToId: "455",
+        ReplyToBody: "Quoted request",
+      } as TelegramMessageContext["ctxPayload"],
+    },
+  ])("shows one explicit Stop control while $label", async ({ streamMode, ctxPayload }) => {
     const progressStream = createDraftStream(701);
     createTelegramDraftStream.mockReturnValueOnce(progressStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
@@ -341,19 +358,20 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     await dispatchWithContext({
       context: createContext({
-        ctxPayload: {
-          SessionKey: "agent:main:telegram:direct:123",
-        } as TelegramMessageContext["ctxPayload"],
+        ctxPayload,
         msg: {
           from: { id: 9, is_bot: false, first_name: "Ada" },
         } as TelegramMessageContext["msg"],
       }),
       bot,
+      streamMode,
     });
 
     expect(progressStream.update).toHaveBeenCalledWith("Working…");
     expect(createTelegramDraftStream).toHaveBeenCalledWith(
       expect.objectContaining({
+        previewTransport: "message",
+        minInitialChars: 1,
         replyMarkup: {
           inline_keyboard: [
             [

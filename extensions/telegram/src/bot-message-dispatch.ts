@@ -1024,7 +1024,10 @@ export const dispatchTelegramMessage = async ({
     return { text: remaining.trim(), stripped };
   };
   const getProgressController = (adoptedStream?: TelegramDraftStream) => {
-    if (!canStreamProgressDraft) {
+    // The Stop affordance is a control-plane guarantee, not a streaming
+    // feature. Keep a minimal message-backed controller when inline controls
+    // are enabled even if previews are off or a native quote disables them.
+    if (!canStreamProgressDraft && !canShowRunStopButton) {
       return undefined;
     }
     const existingController = activeTelegramProgressControllers.get(progressControllerKey);
@@ -1050,10 +1053,15 @@ export const dispatchTelegramMessage = async ({
         maxChars: draftMaxChars,
         stream: adoptedStream,
         thread: threadSpec,
-        previewTransport: progressPreviewTransport,
+        // Native Telegram drafts cannot carry inline buttons. Force a real
+        // message while the active control is present, then reuse that message
+        // for commentary and Work log conversion.
+        previewTransport: runStopRegistration ? "message" : progressPreviewTransport,
         replyToMessageId: draftReplyToMessageId,
         ...(dmMessagePreviewThrottleMs != null ? { throttleMs: dmMessagePreviewThrottleMs } : {}),
-        minInitialChars: draftMinInitialChars,
+        // "Working…" is intentionally short. Do not let the normal preview
+        // debounce suppress the only visible Stop affordance.
+        minInitialChars: runStopRegistration ? 1 : draftMinInitialChars,
         activeReplyMarkup,
         onDispose: runStopRegistration?.release,
         deleteAudit: {
