@@ -103,10 +103,11 @@ OPENCLAW_CONFIG_PATH="$HOME/Library/Application Support/Jarvis/.jarvis/openclaw.
     without reaching those mutations.
   - Restart requests originating inside the managed launchd process use a
     detached handoff that acquires the same lease and confirms admission before
-    the caller reports that restart was scheduled. Admission does not probe the
-    gateway being replaced; every other host-health and ownership gate remains
-    active, and a missing caller acknowledgment is bounded so it cannot pin the
-    machine lease indefinitely.
+    the caller reports that restart was scheduled. When the validated target is
+    exactly `ai.jarvis.gateway`, admission does not probe that listener; other
+    gateway targets still require healthy Jarvis. Every other host-health and
+    ownership gate remains active, and a missing caller acknowledgment is
+    bounded so it cannot pin the machine lease indefinitely.
   - `openclaw gateway restart` keeps the fast `launchctl kickstart` path when the shared LaunchAgent is already healthy and pinned to the canonical `main` runtime.
   - If the shared LaunchAgent is unhealthy or the fast path fails with a loaded-but-bad service, restart escalates to `scripts/gateway-recover-main.sh`, which now rebuilds via `scripts/build-shared-runtime.sh` so the canonical runtime always uses validated Node `22.22.1`.
 - Startup guardrail:

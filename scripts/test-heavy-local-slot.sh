@@ -2029,7 +2029,7 @@ test_gateway_lifecycle_policy_skips_only_gateway_health() {
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
     "$FIXTURE_WRAPPER" \
       --policy gateway-lifecycle \
-      --label "gateway-restart:test-unhealthy-listener" \
+      --label "gateway-restart:ai.jarvis.gateway" \
       -- \
       "$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh" cli -- touch "$marker" \
       >"$stdout_path"
@@ -2039,6 +2039,34 @@ test_gateway_lifecycle_policy_skips_only_gateway_health() {
     fail "gateway lifecycle wrapper polluted structured command stdout"
   [[ ! -e "$lock_path" ]] || fail "gateway lifecycle policy leaked its lease"
   pass "gateway lifecycle policy preserves the lease while skipping gateway self-health"
+}
+
+test_gateway_lifecycle_policy_preserves_jarvis_health_for_other_targets() {
+  local lock_path="$TMP_DIR/gateway-lifecycle-other-target.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle-other-target.health"
+  local marker="$TMP_DIR/gateway-lifecycle-other-target.marker"
+  local stderr_path="$TMP_DIR/gateway-lifecycle-other-target.err"
+  local status=0
+
+  printf 'jarvis-unhealthy\n' >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy gateway-lifecycle \
+      --label "gateway-restart:ai.openclaw.test" \
+      -- \
+      "$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh" cli -- touch "$marker" \
+      2>"$stderr_path"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "unrelated gateway restart ignored unhealthy Jarvis"
+  [[ ! -e "$marker" ]] || fail "unrelated gateway restart mutated while Jarvis was unhealthy"
+  grep -Fq "code=jarvis_unhealthy" "$stderr_path" ||
+    fail "unrelated gateway restart omitted Jarvis health refusal"
+  [[ ! -e "$lock_path" ]] || fail "unrelated gateway restart leaked its lease"
+  pass "gateway lifecycle preserves Jarvis health for unrelated targets"
 }
 
 test_gateway_lifecycle_policy_rejects_unrelated_labels() {
@@ -2135,6 +2163,21 @@ EOF
   [[ ! -s "$marker" ]] || fail "non-restart lifecycle command reached the fake Node mutation"
   grep -Fq "guarded CLI is not gateway restart" "$stderr_path" ||
     fail "non-restart lifecycle command omitted its fail-closed reason"
+
+  : >"$marker"
+  set +e
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER="$marker" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+      cli -- "$(command -v node)" -e \
+      'require("node:fs").writeFileSync(process.env.OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER, "bypass")' \
+      "$ROOT_DIR/openclaw.mjs" gateway restart \
+      2>"$stderr_path"
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "Node eval lifecycle bypass returned $status instead of 75"
+  [[ ! -s "$marker" ]] || fail "Node eval executed before the decoy canonical entrypoint"
+  grep -Fq "guarded command is not this package's OpenClaw CLI" "$stderr_path" ||
+    fail "Node eval lifecycle bypass omitted its fail-closed reason"
   pass "canonical lifecycle command preserves restart argv and rejects other CLI shapes"
 }
 
@@ -2534,6 +2577,7 @@ if [[ "${1:-}" == "--gateway-lifecycle-only" ]]; then
   create_term_attribution_holder
   run_suite_test test_machine_wide_default_and_separate_clone_contention
   run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
+  run_suite_test test_gateway_lifecycle_policy_preserves_jarvis_health_for_other_targets
   run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
   run_suite_test test_gateway_lifecycle_policy_rejects_arbitrary_commands
   run_suite_test test_gateway_lifecycle_command_accepts_only_restart_shape
@@ -2578,6 +2622,7 @@ run_suite_test test_two_sample_health_stop_kills_tree
 run_suite_test test_signal_cleanup_kills_tree_and_releases
 run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient
 run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
+run_suite_test test_gateway_lifecycle_policy_preserves_jarvis_health_for_other_targets
 run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
 run_suite_test test_gateway_lifecycle_policy_rejects_arbitrary_commands
 run_suite_test test_gateway_lifecycle_command_accepts_only_restart_shape

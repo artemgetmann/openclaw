@@ -31,35 +31,31 @@ validate_cli_restart() {
   esac
   shift
 
-  local entrypoint_index=-1
   local allowed=""
-  local candidate=""
   local candidate_path=""
-  local index=0
   local args=("$@")
   local allowed_entrypoints=(
     "$ROOT_DIR/openclaw.mjs"
     "$ROOT_DIR/dist/index.js"
   )
 
-  # Node execution flags may precede the OpenClaw entrypoint. Resolve every
-  # candidate and accept only an entrypoint owned by this exact package root.
-  for candidate in "${args[@]}"; do
-    candidate_path="$(resolve_path "$candidate" || true)"
-    for allowed in "${allowed_entrypoints[@]}"; do
-      if [[ -n "$candidate_path" && "$candidate_path" == "$(resolve_path "$allowed" || true)" ]]; then
-        entrypoint_index=$index
-        break 2
-      fi
-    done
-    index=$((index + 1))
+  # The wrapper controls this argv and intentionally omits process.execArgv.
+  # Requiring the package entrypoint in argv[0] prevents `node -e`, `-p`, or a
+  # preload mode from executing before a later decoy entrypoint argument.
+  candidate_path="$(resolve_path "${args[0]}" || true)"
+  local entrypoint_allowed=0
+  for allowed in "${allowed_entrypoints[@]}"; do
+    if [[ -n "$candidate_path" && "$candidate_path" == "$(resolve_path "$allowed" || true)" ]]; then
+      entrypoint_allowed=1
+      break
+    fi
   done
-  [[ "$entrypoint_index" -ge 0 ]] || fail_closed "guarded command is not this package's OpenClaw CLI"
+  [[ "$entrypoint_allowed" -eq 1 ]] || fail_closed "guarded command is not this package's OpenClaw CLI"
 
   # Global CLI flags can appear before the subcommand. Require the exact
   # consecutive service mutation pair after the canonical entrypoint.
   local restart_pair_found=0
-  index=$((entrypoint_index + 1))
+  local index=1
   while [[ "$index" -lt $((${#args[@]} - 1)) ]]; do
     if [[ "${args[$index]}" == "gateway" && "${args[$((index + 1))]}" == "restart" ]]; then
       restart_pair_found=1

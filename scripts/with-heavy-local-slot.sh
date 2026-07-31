@@ -599,11 +599,18 @@ host_health_reason() {
 }
 
 require_jarvis_health=1
-if [ "$policy" = "jarvis-remediation" ] || [ "$policy" = "gateway-lifecycle" ]; then
-  # These policies intentionally replace ai.jarvis.gateway. Continue to enforce
-  # workstation and remote-access health, but do not make the operation depend
-  # on the listener it is repairing or stopping.
+if [ "$policy" = "jarvis-remediation" ]; then
+  # Remediation intentionally repairs ai.jarvis.gateway and cannot depend on
+  # that listener already being healthy.
   require_jarvis_health=0
+elif [ "$policy" = "gateway-lifecycle" ]; then
+  # Only the exact Jarvis restart target gets the same self-health exemption.
+  # Isolated/default OpenClaw profiles must still preserve healthy main Jarvis.
+  case "$label" in
+    gateway-restart:ai.jarvis.gateway | gateway-restart-handoff:ai.jarvis.gateway)
+      require_jarvis_health=0
+      ;;
+  esac
 fi
 
 while true; do

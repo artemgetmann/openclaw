@@ -31,6 +31,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     const env = {
       HOME: "/Users/test",
       OPENCLAW_PROFILE: "default",
+      OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN: "a".repeat(64),
     };
     spawnMock.mockImplementation((_file: string, args: string[]) => {
       receiptDirs.push(args[6]);
@@ -46,7 +47,11 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
 
     expect(result).toEqual({ ok: true, pid: 4242 });
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const [, args, options] = spawnMock.mock.calls[0] as [
+      string,
+      string[],
+      { env: NodeJS.ProcessEnv },
+    ];
     const lifecycleCommand = fs.readFileSync(args[4], "utf8");
     expect(args[0]).toBe("-c");
     expect(args[2]).toBe("openclaw-launchd-restart-lease-owner");
@@ -62,6 +67,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(lifecycleCommand).toContain('[[ "$ack_wait_count" -lt 800 ]]');
     expect(args[3]).toMatch(/scripts\/with-heavy-local-slot\.sh$/);
     expect(args[4]).toMatch(/scripts\/gateway-lifecycle-command\.sh$/);
+    expect(options.env.OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN).toBeUndefined();
     expect(fs.readFileSync(`${args[6]}/ack`, "utf8")).toBe("observed\n");
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);

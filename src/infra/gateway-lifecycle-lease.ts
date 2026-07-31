@@ -120,7 +120,9 @@ function waitForChildExit(child: ReturnType<typeof spawn>): Promise<number> {
  * The first process is only an admission shim. When it does not already belong
  * to the live lease owner, it re-runs the exact CLI argv through the canonical
  * wrapper and returns that child's status. The guarded child proves ancestry
- * and executes the real restart body exactly once.
+ * and executes the real restart body exactly once. Node execution flags are
+ * intentionally not replayed: the canonical helper requires the package
+ * entrypoint to be the first Node argument, excluding eval/preload bypasses.
  */
 export async function ensureGatewayLifecycleLease(
   overrides: Partial<GatewayLifecycleLeaseDeps> = {},
@@ -158,7 +160,6 @@ export async function ensureGatewayLifecycleLease(
         "cli",
         "--",
         deps.execPath,
-        ...deps.execArgv,
         ...deps.argv.slice(1),
       ],
       {

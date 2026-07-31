@@ -271,10 +271,12 @@ launchd handoff acquires that lease independently and publishes an admission
 receipt before restart is reported as scheduled. Missing packaged helpers fail
 closed with exit `75`; they never downgrade to raw signal, bootstrap, or
 kickstart.
-The narrow `gateway-lifecycle` admission policy skips only the managed
-gateway's own health probe, because an in-process handoff blocks or closes that
-listener while acquiring the lease. CPU, memory, remote-access, ownership,
-ancestry, stale recovery, and runtime monitoring remain enforced.
+The narrow `gateway-lifecycle` admission policy skips managed Jarvis health
+only when the validated target is exactly `ai.jarvis.gateway`, because that
+restart may block or close the listener while acquiring the lease. Restarts of
+default or isolated OpenClaw profiles still require healthy Jarvis. CPU,
+memory, remote-access, ownership, ancestry, stale recovery, and runtime
+monitoring remain enforced.
 
 This one lease is also the deterministic operational reservation for package,
 release, deploy, restart, and live-runtime campaigns. Public Jarvis release

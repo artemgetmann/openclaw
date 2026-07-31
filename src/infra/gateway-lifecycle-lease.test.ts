@@ -106,11 +106,11 @@ describe("gateway lifecycle lease", () => {
         "cli",
         "--",
         process.execPath,
-        "--no-warnings",
         ...argv.slice(1),
       ],
       expect.objectContaining({ cwd: process.cwd(), stdio: "inherit" }),
     );
+    expect(spawn.mock.calls[0]?.[1]).not.toContain("--no-warnings");
   });
 
   it("fails closed when a packaged runtime omits the lease helpers", async () => {

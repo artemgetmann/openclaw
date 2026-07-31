@@ -241,6 +241,11 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
     );
     receiptDir = createdReceiptDir;
     fssync.chmodSync(createdReceiptDir, 0o700);
+    const childEnv = { ...process.env, ...params.env };
+    // A detached owner must acquire its own lease. If it inherited the
+    // caller's capability, ancestry would validate temporarily but the caller
+    // could release that lease before the delayed launchctl mutation.
+    delete childEnv.OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN;
     const child = spawn(
       "/bin/sh",
       [
@@ -264,7 +269,7 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
       {
         detached: true,
         stdio: "ignore",
-        env: { ...process.env, ...params.env },
+        env: childEnv,
       },
     );
     const admission = waitForLeaseAdmission({
