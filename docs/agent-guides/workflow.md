@@ -74,23 +74,54 @@ specification. For PRs explicitly enrolled in the pilot, ownership flows:
 
 `builder -> independent tester when risk-triggered -> release owner -> authorized deployment and minimal smoke`
 
+For an enrolled PR, this section narrows the feature-owner-through-merge rule
+above: the builder stops at complete PR-ready handoff, and the release owner
+owns final review, merge, and any separately authorized delivery.
+
 The builder may open a draft PR early, but owns implementation and exact-head
 proof. Require a fresh independent tester when observable behavior is live,
 user-facing, stateful, destructive, timing-sensitive, or crosses an integration
 boundary. Examples include Telegram callbacks, retries, offsets, streaming,
 voice, auth, polling, and runtime state. Low-risk docs, mechanical refactors,
 and changes fully covered by deterministic tests may record why independent
-live testing was skipped.
+live testing was skipped. The release owner records the decision and rationale
+for borderline risk classifications or skips.
 
 The release owner or standard dispatcher assigns the tester from the PR's fixed
 observable claim and acceptance criteria. The tester tries the intended path
 and the smallest relevant edge path on the exact PR head, changes no
 implementation code, and reports the receipt or defect to both builder and
-release owner. The tester isolates bot identity, conversation/topic, config,
-state, and risky interaction state. That isolation does not prove or allocate
-the machine-wide heavy slot, CPU/disk/build capacity, ports, provider
+release owner. The tester must not merge, deploy, or relax the fixed acceptance
+criteria. The tester isolates bot identity, conversation/topic, config, state,
+and risky interaction state. These identities provide isolation and parallel
+light preparation, not concurrent local runtime capacity. They do not prove or
+allocate the machine-wide heavy slot, CPU/disk/build capacity, ports, provider
 determinism, package identity, installed/main-runtime behavior, macOS behavior,
 or real-user acceptance.
+
+Apply the heavy lease by lifecycle phase:
+
+1. Source edits, manual review, PR/CI work, acceptance criteria, and read-only
+   identity/config planning may overlap.
+2. Dependency bootstrap, build, and tester-runtime start plus ownership/health
+   verification remain machine-wide guarded. A healthy detached tester runtime
+   may continue after that lifecycle command returns and releases the lease.
+3. Passive Telegram/provider waiting and human observation should not
+   conceptually retain the heavy lease. Local CPU-heavy voice synthesis remains
+   serialized until measured. Tester stop and cleanup reacquire the lease.
+4. Packaging, deployment, restart, and main-Jarvis mutation remain strictly
+   exclusive.
+
+Concurrent detached-tester operation plus a focused source proof is
+experimental and is not currently authorized. Before changing that policy, run
+a bounded experiment: A) measure one healthy detached tester runtime alone; B)
+measure one representative focused source proof alone; C) overlap that same
+detached runtime with exactly one guarded focused proof. Sample the existing
+host-health signals plus swap, thermal pressure, disk, process/listener/port
+identity, tester health, shared-Jarvis health/latency, and remote-access health;
+stop on any threshold or identity degradation. Classify and repeat the actual
+voice phase separately when synthesis is local. Require two clean C repetitions
+before permitting this overlap or changing lease policy.
 
 Only the builder takes the PR out of draft, and only when the same exact head
 has complete scope, builder proof, all risk-triggered tester receipts, relevant
@@ -104,7 +135,8 @@ The PR contract must state the observable claim and acceptance criteria, exact
 head and completed builder proof, tester receipt or skip reason, cleanup,
 dependencies/overlap/merge order, rollback, known risks, and proof still
 required after merge. Keep source, tester-live, merged, packaged, deployed,
-healthy-runtime, GUI, and real-user proof as separate claims.
+provider/backend health, healthy-runtime, GUI, and real-user proof as separate
+claims.
 
 The release owner owns normal queueing. Use a temporary coordinator only for
 cross-PR merge order, contention for a shared heavy/runtime resource, or a user

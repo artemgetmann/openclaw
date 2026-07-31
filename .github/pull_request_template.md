@@ -37,7 +37,7 @@ Describe the problem and fix in 2–5 bullets:
 - Independent tester: (`Required` + status/receipt, or `Skipped` + risk reason)
 - Tester/runtime cleanup:
 - Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
-- Proof still required after merge: (`None — source-only` or exact package/deploy/runtime/GUI/real-user work)
+- Proof still required after merge: (`None — source-only` or exact package/deploy/provider/backend/runtime/GUI/real-user work)
 
 ## User-visible / Behavior Changes
 

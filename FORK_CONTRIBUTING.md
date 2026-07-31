@@ -43,7 +43,7 @@ Every fork PR should start with this section:
 Write this in plain language. Keep it tight. No filler. Use
 `None — standalone` only when there are no dependencies or overlapping PRs.
 Use `None — source-only` only when no package, deployment, runtime, GUI,
-real-user, or cleanup proof remains.
+provider/backend, real-user, or cleanup proof remains.
 
 Examples:
 
@@ -83,7 +83,8 @@ Do not blindly paste the full upstream PR template into fork PRs unless the targ
 Fork PRs should include exact proof, not vague confidence language.
 `Proof` contains only checks completed on the stated head. Keep pending CI,
 package, deployment, runtime, GUI, and real-user work in the remaining-proof
-field; never present it as proof.
+field; keep provider/backend health there too, and never present pending work as
+proof.
 
 For CI and merge eligibility, use `docs/ci.md` as the source of truth. In
 short: GitHub owns waiting and auto-merge; agents own diagnosis, review-bot
