@@ -92,7 +92,7 @@ openclaw_github_pr_snapshot() {
 
   "${gh_bin}" pr view "${pr}" \
     --json state,headRefOid,mergeCommit,autoMergeRequest \
-    --jq '[.state, .headRefOid, (.mergeCommit.oid // ""), (if .autoMergeRequest == null then "false" else "true" end)] | @tsv'
+    --jq '[.state, .headRefOid, (.mergeCommit.oid // "none"), (if .autoMergeRequest == null then "false" else "true" end)] | @tsv'
 }
 
 openclaw_github_pr_mutation_once() {
@@ -130,7 +130,7 @@ openclaw_github_pr_mutation_once() {
 
   if snapshot="$(openclaw_github_pr_snapshot "${pr}" 2>/dev/null)"; then
     IFS=$'\t' read -r state head merge_commit auto_merge <<<"${snapshot}"
-    echo "GITHUB_MUTATION status=indeterminate reason=mutation-command-failed state=${state} head=${head} merge_commit=${merge_commit:-none} auto_merge=${auto_merge}"
+    echo "GITHUB_MUTATION status=indeterminate reason=mutation-command-failed state=${state} head=${head} merge_commit=${merge_commit} auto_merge=${auto_merge}"
   else
     echo "GITHUB_MUTATION status=indeterminate reason=mutation-and-reconciliation-read-failed"
   fi

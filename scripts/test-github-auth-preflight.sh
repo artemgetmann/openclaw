@@ -33,7 +33,7 @@ if [[ "${1:-}" == "pr" && "${2:-}" == "view" ]]; then
   printf '%s\t%s\t%s\t%s\n' \
     "${TEST_PR_STATE:-OPEN}" \
     "${TEST_PR_HEAD:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" \
-    "${TEST_MERGE_COMMIT:-}" \
+    "${TEST_MERGE_COMMIT:-none}" \
     "${TEST_AUTO_MERGE:-false}"
   exit "${TEST_PR_VIEW_EXIT:-0}"
 fi
@@ -96,8 +96,20 @@ mutation_output="$(openclaw_github_pr_mutation_once 42 "${TEST_PR_HEAD}" \
 [[ "${mutation_status}" -eq 75 ]] || fail "ambiguous mutation returned ${mutation_status}"
 [[ "$(wc -l <"${TEST_MUTATIONS}" | tr -d ' ')" -eq 1 ]] || fail "ambiguous mutation was retried"
 [[ "${mutation_output}" == *"status=indeterminate"* ]] || fail "ambiguous mutation lacked receipt"
+[[ "${mutation_output}" == *"merge_commit=none auto_merge=false"* ]] || fail "ambiguous mutation receipt shifted empty fields"
 [[ "${mutation_output}" != *"fixture_secret"* ]] || fail "ambiguous mutation leaked a secret"
 pass "ambiguous mutation reconciles read-only and stops after one attempt"
+
+: >"${TEST_MUTATIONS}"
+export TEST_AUTO_MERGE=true
+auto_merge_output=""
+auto_merge_status=0
+auto_merge_output="$(openclaw_github_pr_mutation_once 42 "${TEST_PR_HEAD}" \
+  "${GH_STUB}" pr merge 42 2>&1)" || auto_merge_status=$?
+[[ "${auto_merge_status}" -eq 75 ]] || fail "auto-merge reconciliation returned ${auto_merge_status}"
+[[ "${auto_merge_output}" == *"merge_commit=none auto_merge=true"* ]] || fail "auto-merge reconciliation shifted empty fields"
+[[ "$(wc -l <"${TEST_MUTATIONS}" | tr -d ' ')" -eq 1 ]] || fail "auto-merge ambiguity was retried"
+pass "ambiguous auto-merge receipt preserves the empty merge commit field"
 
 unset OPENCLAW_GITHUB_SELECTED_TRANSPORT
 connector_status=0
