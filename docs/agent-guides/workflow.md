@@ -11,47 +11,168 @@
 - Do not recreate `consumer` for new work.
 - If the user says "consumer branch", clarify whether they mean the legacy fallback before doing work there.
 - Never run `git merge upstream/main` on this fork. Port upstream changes selectively via `main`.
-- Normal scoped implementation defaults to a merged PR. Follow the autonomous
-  merge policy in [docs/ci](/ci): the agent owns investigation, implementation,
-  actionable review handling, required CI, and merge. Deployment, restart, and
-  release still require explicit permission.
+- Normal scoped implementation defaults to a merged PR completed through the
+  canonical worker lifecycle below. Follow [docs/ci](/ci) for required checks
+  and merge mechanics. Package, deployment, restart, and product release remain
+  separate actions that require their own authority.
 
-## “Ship end-to-end” ownership contract
+## Canonical PR worker lifecycle
 
 Apply the Work Scope Contract in `CONSUMER.md` before entering this lifecycle.
 Source merge is not runtime or product-release proof.
 
-When the owner says `ship this end-to-end`, the feature-owning agent keeps
-responsibility for one scoped change from source through merge. It does not
-hand routine coordination back to the founder and it does not create a second
-Control Tower or permanent merge agent.
+Every implementation PR uses this ownership flow:
 
-The feature owner must continue through:
+`builder -> independent tester -> release worker`
 
-1. implementation in its isolated worktree;
-2. the smallest focused local proof that establishes the changed behavior;
-3. an early draft PR, followed by exact-head review and actionable finding
-   fixes;
-4. ready state only after the owned proof and relevant CI are green;
-5. refresh or rebase when `main` advances, with affected proof repeated;
-6. merge when the exact reviewed head is current and required CI is green; and
-7. proportionate post-merge repository verification, with merged-code truth
-   reported separately from any package, installed-runtime, provider, GUI, or
-   end-user proof.
+This guide is the policy source. The PR template is its durable receipt surface.
+The workers coordinate directly; routine PRs do not need a permanent
+dispatcher, coordinator, queue service, or Control Tower.
 
-Routine review, ordinary `main` drift, a safe rebase, pending CI, or a PR being
-draft are continuation states—not reasons to return the task to the founder.
-The feature owner waits, diagnoses, updates, and continues. Independent review
-may be delegated as a bounded read-only check, but ownership and the merge
-decision stay with the feature agent.
+Worker transport is part of the ownership contract:
 
-`Ship end-to-end` authorizes the normal source/PR/merge lifecycle above. It does
-not by itself authorize genuinely new scope, destructive cleanup, credentials,
-irreversible or external actions, security-owned changes, or task-specific
-protected live actions. Package, release, deploy, restart, install, shared
-runtime mutation, and live acceptance require explicit authority in the task
-or a later approval. There is no blanket rule requiring user approval for every
-normal merge.
+- The builder is always a user-visible, project-scoped Codex task.
+- A fresh nested read-only sub-agent may test only when every condition is true:
+  the validation is short-lived and deterministic; the head is immutable; no
+  protected resource, external side effect, durable ownership, cleanup duty,
+  long wait, or user decision is possible; and an independently addressable
+  transcript is unnecessary. Record its exact agent identity and terminal
+  receipt, then resolve it before creating another owner. Nested agents do not
+  expose a separate user-visible thread to archive; their terminal exact-identity
+  receipt is the lifecycle closure and must not be described as thread archival.
+- Use one fresh user-visible project-scoped tester task whenever testing performs
+  or may perform end-to-end or live acceptance, Telegram sends or creation of a
+  topic, message, or session, runtime/provider/backend ownership or mutation,
+  GUI or Computer Use, credential access, external-service access, protected
+  machine-resource use, cleanup, a long-running wait, a direct user decision or
+  approval, or any result needing a durable independently addressable transcript.
+  Record its exact task and host identity, then archive that exact task only
+  after its terminal receipt is recorded.
+- The release worker is always one fresh user-visible project-scoped Codex task,
+  never a nested sub-agent. A default-branch write and any just-in-time approval
+  must remain visible in that worker's own transcript. The worker must also be
+  independently addressable so it can archive or, for a concrete repair, revive
+  the exact builder task.
+
+### 1. Builder owns the candidate
+
+The builder owns implementation in its isolated worktree, focused local proof,
+PR creation and updates, review-fix iterations, and required CI readiness. The
+builder keeps going through ordinary review findings, CI failures, and safe base
+refreshes. It never merges its own PR and never deploys.
+
+When the candidate is ready, the builder records the immutable PR number and
+URL, head SHA, base branch and SHA, diff identity and changed paths, observable
+claim and fixed acceptance criteria, completed proof, relevant checks, known
+risks, and remaining proof. It confirms that no tester already owns that
+candidate, then creates exactly one fresh independent tester.
+
+### 2. One independent tester validates one immutable head
+
+The tester checks out and verifies the assigned head before testing. It tries to
+falsify the fixed acceptance criteria on that exact head, including the smallest
+relevant edge path. It does not change implementation code, relax criteria,
+expand scope, merge, deploy, or claim proof for another head. It reports one
+terminal `PASS` or `FAIL` receipt with its exact worker identity, tested head and
+diff identity, evidence, cleanup state, and unresolved limitations.
+
+A user-visible live tester additionally proves exact immutable source and
+runtime provenance, uses stable isolated identities, and runs exactly one bounded
+scenario when the acceptance contract says one. Its handoff must grant the exact
+external actions before they occur. It returns exact cleanup receipts and direct
+material callbacks; it does not retry after ambiguity, failure, refusal, or an
+uncertain side effect unless fresh authority explicitly permits a new attempt.
+Keep source, merged, package, installed, runtime/provider, GUI, and live-behavior
+proof as separate claims.
+
+The builder records the terminal receipt before resolving the exact tester. For
+a user-visible tester it then archives that exact task; for a nested tester it
+records the exact terminal agent closure. It archives nothing if the tester
+identity is ambiguous or the receipt is incomplete. A `FAIL` returns source
+ownership to the builder. Any behavior-bearing repair, conflict resolution,
+rebase, or other head change makes prior tester proof stale; the builder repeats
+affected proof and creates exactly one fresh tester for the new immutable head.
+There is never more than one active tester owner for a PR candidate.
+
+### 3. One release worker owns merge
+
+Only after a terminal tester `PASS` is recorded and the exact tester lifecycle
+is closed does the builder confirm that no release worker already owns the PR.
+The builder then creates exactly one fresh user-visible project-scoped release
+worker and supplies the immutable PR, head, base, diff, builder proof, tester
+receipt, cleanup receipt, review/check state, dependencies and overlap, risks,
+rollback, remaining proof, and explicit normal-merge authority. Builders and
+testers never merge or deploy.
+
+The release worker independently refreshes and verifies the PR head, current
+base, effective diff, required checks, review conversations, approvals,
+dependencies, and overlap. It may perform only a normal non-admin merge: no
+bypass, admin override, force, or weakened branch protection. If the reviewed
+head or diff changed, proof is stale, approval is missing, checks are not green,
+or the PR cannot merge normally, it does not merge.
+
+Behavior-bearing repair belongs to the builder. When a concrete release
+discrepancy requires source repair, the release worker may unarchive and steer
+only the exact builder thread, then waits for a new builder packet and fresh
+tester validation for the changed head. It must not create a duplicate builder,
+tester, or release owner.
+
+After a successful merge, the release worker records and sends the merge receipt
+before archiving the exact builder thread. The receipt proves the reviewed head
+tree equals the landed merge tree and that the merge commit is an ancestor of
+the refreshed target branch. It reports merged-source truth separately from any
+package, installed runtime, provider/backend, GUI, or real-user proof.
+
+### 4. Identity and lifecycle failures fail closed
+
+Thread creation, exact identity resolution, approval, handoff, archival, and
+unarchival are lifecycle gates. If a gate fails, preserve the one known owner,
+archive nothing adjacent, report the exact missing capability or receipt, and
+stop at that boundary. Never infer ownership from a title, nearby thread,
+parent relay, or stale receipt. Do not create a replacement while an existing
+owner may still be live.
+
+This lifecycle does not alter the machine-wide heavy-capacity contract. Tester
+identity isolates state; it does not allocate CPU, memory, disk, ports, provider
+determinism, packaging, or runtime capacity. All guarded work still follows
+`docs/agent-guides/fleet-resource-control.md`.
+
+### Reusable handoff and receipt contract
+
+Use these fields in the PR contract and worker prompts. Values are immutable for
+one candidate; a changed head requires a new packet and fresh tester receipt.
+
+```text
+PR: <number + URL>
+Head: <full SHA>
+Base: <branch + full SHA>
+Diff: <fingerprint + changed paths>
+Owner: <role + exact thread ID + host ID when required>
+Claim / acceptance: <fixed observable claim + criteria>
+Proof: <commands, checks, review state, evidence links>
+Tester: <transport + PASS|FAIL + exact head/diff + receipt + lifecycle closure>
+Dependencies / overlap: <none or exact refs + merge order>
+Risk / rollback / remaining proof: <explicit source and post-merge boundaries>
+Authority: <allowed actions; release packet must explicitly allow normal merge>
+```
+
+The release receipt adds the refreshed base, effective diff, final checks and
+reviews, merge method and commit, reviewed-head-tree/landed-tree equality,
+target-branch ancestry proof, builder handback, and exact builder archival
+receipt.
+
+### “Ship end-to-end” authority
+
+When the owner says `ship this end-to-end`, the builder and release worker keep
+the scoped source change moving through this complete lifecycle without handing
+routine coordination back to the founder. Routine review, ordinary `main`
+drift, a safe rebase, pending CI, or a draft PR are continuation states.
+
+`Ship end-to-end` authorizes the normal source/PR/merge lifecycle. It does not by
+itself authorize new scope, destructive cleanup, credentials, irreversible or
+external actions, security-owned changes, or protected live actions. Package,
+product release, deploy, restart, install, shared-runtime mutation, and live
+acceptance require explicit task authority or later approval.
 
 Worktrees isolate branch and filesystem state; they do not prevent two branches
 from changing the same contract incompatibly. Before starting or resuming work
@@ -66,92 +187,6 @@ real conflict, resolve only in-scope conflicts and repeat affected proof. Stop
 only when resolution changes intended behavior or ownership, another live
 owner overlaps the same source/state, a protected action lacks authority, or a
 claimed guarantee cannot be proven mechanically.
-
-## Provisional tester-first PR pilot
-
-This is written pilot policy, not yet a mandatory default or an automation
-specification. For PRs explicitly enrolled in the pilot, ownership flows:
-
-`builder -> independent tester when risk-triggered -> release owner -> authorized deployment and minimal smoke`
-
-For an enrolled PR, this section narrows the feature-owner-through-merge rule
-above: the builder stops at complete PR-ready handoff, and the release owner
-owns final review, merge, and any separately authorized delivery.
-
-The builder may open a draft PR early, but owns implementation and exact-head
-proof. Require a fresh independent tester when observable behavior is live,
-user-facing, stateful, destructive, timing-sensitive, or crosses an integration
-boundary. Examples include Telegram callbacks, retries, offsets, streaming,
-voice, auth, polling, and runtime state. Low-risk docs, mechanical refactors,
-and changes fully covered by deterministic tests may record why independent
-live testing was skipped. The release owner records the decision and rationale
-for borderline risk classifications or skips.
-
-The release owner or standard dispatcher assigns the tester from the PR's fixed
-observable claim and acceptance criteria. The tester tries the intended path
-and the smallest relevant edge path on the exact PR head, changes no
-implementation code, and reports the receipt or defect to both builder and
-release owner. The tester must not merge, deploy, or relax the fixed acceptance
-criteria. The tester isolates bot identity, conversation/topic, config, state,
-and risky interaction state. These identities provide isolation and parallel
-light preparation, not concurrent local runtime capacity. They do not prove or
-allocate the machine-wide heavy slot, CPU/disk/build capacity, ports, provider
-determinism, package identity, installed/main-runtime behavior, macOS behavior,
-or real-user acceptance.
-
-Apply the heavy lease by lifecycle phase:
-
-1. Source edits, manual review, PR/CI work, acceptance criteria, and read-only
-   identity/config planning may overlap.
-2. Dependency bootstrap, build, and tester-runtime start plus ownership/health
-   verification remain machine-wide guarded. A healthy detached tester runtime
-   may continue after that lifecycle command returns and releases the lease.
-3. Passive Telegram/provider waiting and human observation should not
-   conceptually retain the heavy lease. Local CPU-heavy voice synthesis remains
-   serialized until measured. Tester stop and cleanup reacquire the lease.
-4. Packaging, deployment, restart, and main-Jarvis mutation remain strictly
-   exclusive.
-
-Concurrent detached-tester operation plus a focused source proof is
-experimental and is not currently authorized. Before changing that policy, run
-a bounded experiment: A) measure one healthy detached tester runtime alone; B)
-measure one representative focused source proof alone; C) overlap that same
-detached runtime with exactly one guarded focused proof. Sample the existing
-host-health signals plus swap, thermal pressure, disk, process/listener/port
-identity, tester health, shared-Jarvis health/latency, and remote-access health;
-stop on any threshold or identity degradation. Classify and repeat the actual
-voice phase separately when synthesis is local. Require two clean C repetitions
-before permitting this overlap or changing lease policy.
-
-Only the builder takes the PR out of draft, and only when the same exact head
-has complete scope, builder proof, all risk-triggered tester receipts, relevant
-green CI, tester/runtime cleanup, a complete PR contract, and no uncommitted or
-unpushed fix. A behavior-bearing source change makes the tester receipt stale.
-If the release owner makes such a change, return ownership to the builder for
-repeated proof and tester recheck. Mechanical rebases, merges, metadata, and
-administrative changes may remain with release, with fresh exact-head CI.
-
-The PR contract must state the observable claim and acceptance criteria, exact
-head and completed builder proof, tester receipt or skip reason, cleanup,
-dependencies/overlap/merge order, rollback, known risks, and proof still
-required after merge. Keep source, tester-live, merged, packaged, deployed,
-provider/backend health, healthy-runtime, GUI, and real-user proof as separate
-claims.
-
-The release owner owns normal queueing. Use a temporary coordinator only for
-cross-PR merge order, contention for a shared heavy/runtime resource, or a user
-decision spanning lanes. Do not add a permanent per-PR coordinator, dispatcher,
-wrapper, queue service, automated ready gate, multi-slot scheduler, or runtime
-automation during this pilot.
-
-Do not promote or automate this policy until evidence includes:
-
-1. one net-new risky Telegram PR completing the full pre-merge lifecycle;
-2. one low-risk PR where the rubric correctly skips independent live testing;
-3. at least one risky defect return or behavior-changed-head tester recheck.
-
-The current voice-ordering acceptance debt and PR #1316 are historical or
-partial evidence, not clean pilots.
 
 ## Two-clone default
 
@@ -234,8 +269,9 @@ partial evidence, not clean pilots.
 9. Keep ownership while the PR is draft, waiting for review, waiting for CI, or
    refreshing after ordinary base drift. Give a next-step handoff only at a
    genuine stop boundary or final closeout.
-10. Merge if the task and [the autonomous PR merge policy](/ci) allow it;
-    otherwise stop and report the blocker.
+10. Complete the independent tester gate, then hand the immutable receipt to one
+    fresh user-visible release worker. Only that worker may merge under
+    [the PR merge policy](/ci); otherwise it stops and reports the blocker.
 11. If the merged change needs live runtime behavior, choose the lane explicitly:
     keep daily Jarvis on the managed package/app-support runtime; use sacred
     `main` for the shared developer service or an approved break-glass hotfix

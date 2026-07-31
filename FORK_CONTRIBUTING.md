@@ -17,8 +17,8 @@ The reviewer should be able to answer:
 
 1. What observable claim and acceptance criteria does this PR own?
 2. What exact current-head proof shows it worked?
-3. Did risk require an independent tester, and what was the receipt or skip
-   reason?
+3. Did the exact-head independent tester pass, and is its lifecycle closure
+   recorded?
 4. What must merge before or after it, and what overlaps?
 5. What proof, cleanup, or rollback remains?
 6. What still hurts?
@@ -34,7 +34,8 @@ Every fork PR should start with this section:
 
 - Observable claim + acceptance criteria:
 - Exact head + builder proof:
-- Independent tester: (`Required` + status/receipt, or `Skipped` + risk reason)
+- Independent tester: (`PASS` + exact identity/head/diff/receipt + lifecycle closure)
+- Release worker: (fresh user-visible project task + explicit normal-merge authority)
 - Dependencies / merge order / overlap:
 - Remaining proof / cleanup / rollback:
 - Still hurts:
@@ -86,10 +87,11 @@ package, deployment, runtime, GUI, and real-user work in the remaining-proof
 field; keep provider/backend health there too, and never present pending work as
 proof.
 
-For CI and merge eligibility, use `docs/ci.md` as the source of truth. In
-short: GitHub owns waiting and auto-merge; agents own diagnosis, review-bot
-handling, failed-CI fixes, and runtime shipping only after merge when explicitly
-requested.
+For lifecycle ownership, use `docs/agent-guides/workflow.md` as the source of
+truth. For CI and merge mechanics, use `docs/ci.md`. In short: the builder owns
+diagnosis, review-bot handling, failed-CI fixes, and exact-head readiness; the
+fresh user-visible release worker owns the normal non-admin merge. Runtime
+shipping remains separate and happens only when explicitly requested.
 
 Good proof:
 
