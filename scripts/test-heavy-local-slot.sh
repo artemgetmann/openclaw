@@ -2138,6 +2138,88 @@ EOF
   pass "canonical lifecycle command preserves restart argv and rejects other CLI shapes"
 }
 
+test_gateway_lifecycle_handoff_accepts_only_active_custom_label() {
+  local fake_bin="$TMP_DIR/gateway-lifecycle-handoff-bin"
+  local fake_launchctl="$fake_bin/launchctl"
+  local custom_home="$TMP_DIR/gateway-lifecycle-custom-home"
+  local custom_label="com.custom.openclaw"
+  local other_label="com.other.openclaw"
+  local domain="gui/$(id -u)"
+  local receipt_dir="$TMP_DIR/openclaw-gateway-lifecycle-$(id -u)-custom"
+  local launchctl_log="$TMP_DIR/gateway-lifecycle-handoff.log"
+  local watcher_pid=0 watcher_status=0 status=0
+
+  mkdir -p "$fake_bin" "$custom_home/Library/LaunchAgents" "$receipt_dir"
+  cat >"$fake_launchctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_LAUNCHCTL_LOG"
+EOF
+  chmod +x "$fake_launchctl"
+
+  # Admission remains two-phase even in this fixture: acknowledge only after
+  # the helper publishes ready, so the launchctl mutation cannot race ahead of
+  # its caller's receipt.
+  (
+    local attempt=0
+    while [[ ! -f "$receipt_dir/ready" && "$attempt" -lt 200 ]]; do
+      sleep 0.025
+      attempt=$((attempt + 1))
+    done
+    [[ -f "$receipt_dir/ready" ]] || exit 1
+    : >"$receipt_dir/ack"
+  ) &
+  watcher_pid=$!
+
+  HOME="$custom_home" \
+  TMPDIR="$TMP_DIR" \
+  PATH="$fake_bin:$PATH" \
+  OPENCLAW_LAUNCHD_LABEL="$custom_label" \
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_LAUNCHCTL_LOG="$launchctl_log" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" handoff \
+      kickstart \
+      "$domain/$custom_label" \
+      "$domain" \
+      "$custom_home/Library/LaunchAgents/$custom_label.plist" \
+      0 \
+      0 \
+      "$receipt_dir" \
+      - \
+      "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+  set +e
+  wait "$watcher_pid"
+  watcher_status=$?
+  set -e
+  [[ "$watcher_status" -eq 0 ]] || fail "custom-label handoff watcher failed"
+  grep -Fq "kickstart -k $domain/$custom_label" "$launchctl_log" ||
+    fail "active custom launchd label did not reach the guarded kickstart"
+  [[ ! -e "$receipt_dir" ]] || fail "custom-label handoff leaked its receipt directory"
+
+  mkdir -p "$receipt_dir"
+  set +e
+  HOME="$custom_home" \
+  TMPDIR="$TMP_DIR" \
+  PATH="$fake_bin:$PATH" \
+  OPENCLAW_LAUNCHD_LABEL="$custom_label" \
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_LAUNCHCTL_LOG="$launchctl_log" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" handoff \
+      kickstart \
+      "$domain/$other_label" \
+      "$domain" \
+      "$custom_home/Library/LaunchAgents/$other_label.plist" \
+      0 \
+      0 \
+      "$receipt_dir" \
+      - \
+      "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" \
+      >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "mismatched custom launchd label returned $status instead of 75"
+  [[ ! -f "$receipt_dir/ready" ]] || fail "mismatched custom label reached handoff admission"
+  pass "gateway lifecycle handoff accepts only the active configured custom label"
+}
+
 create_lock_order_fixture() {
   local fixture="$TMP_DIR/lock-order-fixture.sh"
 
@@ -2455,6 +2537,7 @@ if [[ "${1:-}" == "--gateway-lifecycle-only" ]]; then
   run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
   run_suite_test test_gateway_lifecycle_policy_rejects_arbitrary_commands
   run_suite_test test_gateway_lifecycle_command_accepts_only_restart_shape
+  run_suite_test test_gateway_lifecycle_handoff_accepts_only_active_custom_label
   SUITE_PHASE="complete"
   echo "Gateway lifecycle contention tests passed."
   exit 0
@@ -2498,6 +2581,7 @@ run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
 run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
 run_suite_test test_gateway_lifecycle_policy_rejects_arbitrary_commands
 run_suite_test test_gateway_lifecycle_command_accepts_only_restart_shape
+run_suite_test test_gateway_lifecycle_handoff_accepts_only_active_custom_label
 run_suite_test test_fleet_and_release_lock_coexistence_and_wiring
 
 SUITE_PHASE="complete"

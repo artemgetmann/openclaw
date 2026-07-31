@@ -527,11 +527,12 @@ openclaw_heavy_local_slot_inherited_lease_is_valid() {
   owner_policy="$(openclaw_heavy_local_slot_value "$owner_path" policy)"
   [[ "$owner_token" == "$inherited_token" ]] || return 1
 
-  # Standard nested work can safely run inside the stricter remediation
-  # transaction. The reverse is false: a standard outer monitor would kill an
-  # authorized hotfix during the Jarvis restart window it exists to repair.
-  if [[ "$required_policy" == "jarvis-remediation" &&
-    "$owner_policy" != "jarvis-remediation" ]]; then
+  # Standard nested work can safely run inside either stricter transaction.
+  # Lifecycle and remediation work cannot inherit a standard lease: its health
+  # monitor is allowed to kill the tree while the protected listener is being
+  # replaced. They also cannot inherit one another because each policy admits
+  # a different, narrowly validated mutation command.
+  if [[ "$required_policy" != "standard" && "$owner_policy" != "$required_policy" ]]; then
     return 1
   fi
   openclaw_heavy_local_slot_process_descends_from_owner "$$" "$owner_pid" "$owner_start"

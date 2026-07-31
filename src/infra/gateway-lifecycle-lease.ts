@@ -87,7 +87,7 @@ function inheritedMachineLeaseIsValid(
     "/bin/bash",
     [
       "-c",
-      'source "$1"; openclaw_heavy_local_slot_inherited_lease_is_valid standard',
+      'source "$1"; openclaw_heavy_local_slot_inherited_lease_is_valid gateway-lifecycle',
       "openclaw-gateway-lifecycle-lease-check",
       paths.helper,
     ],

@@ -82,9 +82,18 @@ validate_handoff_target() {
   [[ "$domain" == "gui/$(id -u)" ]] || fail_closed "launchd handoff domain does not match this UID"
   [[ "$service_target" == "$domain/$label" && -n "$label" ]] ||
     fail_closed "launchd handoff target is malformed"
+  local configured_label="${OPENCLAW_LAUNCHD_LABEL:-}"
+  configured_label="${configured_label#"${configured_label%%[![:space:]]*}"}"
+  configured_label="${configured_label%"${configured_label##*[![:space:]]}"}"
   case "$label" in
     ai.openclaw.gateway | ai.jarvis.gateway | ai.openclaw.*) ;;
-    *) fail_closed "launchd handoff label is not an OpenClaw gateway" ;;
+    *)
+      # Explicit custom labels are a supported gateway identity. Accept one
+      # only when the guarded target exactly matches the active runtime
+      # configuration; an arbitrary handoff argument remains fail-closed.
+      [[ -n "$configured_label" && "$label" == "$configured_label" ]] ||
+        fail_closed "launchd handoff label does not match the active OpenClaw gateway"
+      ;;
   esac
   [[ "$plist_path" == "$expected_plist" ]] ||
     fail_closed "launchd handoff plist does not match its gateway label"
@@ -168,6 +177,10 @@ run_handoff() {
         launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
       fi
     fi
+    # EXIT still protects every early failure above. On the normal path clean
+    # while the function-local receipt paths remain in scope, then disarm it.
+    cleanup_receipt
+    trap - EXIT
     return
   fi
 
@@ -181,6 +194,8 @@ run_handoff() {
       launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
     fi
   fi
+  cleanup_receipt
+  trap - EXIT
 }
 
 case "${1:-}" in

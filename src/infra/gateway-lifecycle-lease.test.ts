@@ -14,7 +14,7 @@ function createSpawnedChild(exitCode: number) {
 }
 
 describe("gateway lifecycle lease", () => {
-  it("runs in the current process only when ancestry proves the inherited lease", async () => {
+  it("runs in the current process only when ancestry proves the inherited lifecycle lease", async () => {
     const spawnSync = vi.fn(() => ({ status: 0 }));
     const spawn = vi.fn();
 
@@ -35,7 +35,39 @@ describe("gateway lifecycle lease", () => {
 
     expect(result).toEqual({ outcome: "held" });
     expect(spawnSync).toHaveBeenCalledTimes(1);
+    expect(spawnSync).toHaveBeenCalledWith(
+      "/bin/bash",
+      expect.arrayContaining([
+        expect.stringContaining(
+          "openclaw_heavy_local_slot_inherited_lease_is_valid gateway-lifecycle",
+        ),
+      ]),
+      expect.any(Object),
+    );
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("does not treat an inherited standard lease as lifecycle admission", async () => {
+    const spawnSync = vi.fn(() => ({ status: 1 }));
+    const spawn = vi.fn(() => createSpawnedChild(75));
+
+    const result = await ensureGatewayLifecycleLease({
+      platform: "darwin",
+      cwd: process.cwd(),
+      argv: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway", "restart"],
+      execArgv: [],
+      execPath: process.execPath,
+      env: {
+        ...process.env,
+        OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN: "b".repeat(64),
+      },
+      fileExists: () => true,
+      spawnSync: spawnSync as never,
+      spawn: spawn as never,
+    });
+
+    expect(result).toEqual({ outcome: "reexecuted", exitCode: 75 });
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("reexecutes the exact gateway restart argv and preserves contention exit 75", async () => {
