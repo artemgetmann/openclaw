@@ -37,6 +37,11 @@ enum ConsumerBundledRuntime {
         "scripts/telegram-e2e/telethon_cli.py",
         "scripts/telegram-e2e/telethon_compat.py",
     ]
+    private static let requiredGatewayLifecycleToolingFiles = [
+        "scripts/with-heavy-local-slot.sh",
+        "scripts/lib/heavy-local-slot.sh",
+        "scripts/lib/heavy-local-slot-runner.pl",
+    ]
 
     struct Manifest: Codable, Equatable {
         let format: Int
@@ -286,6 +291,15 @@ enum ConsumerBundledRuntime {
             return fileManager.isReadableFile(
                 atPath: fileURL.path)
         }
+        let gatewayLifecycleToolingReady = self.requiredGatewayLifecycleToolingFiles.allSatisfy {
+            relativePath in
+            let fileURL = relativePath
+                .split(separator: "/")
+                .reduce(installedPayloadRootURL) { partialURL, component in
+                    partialURL.appendingPathComponent(String(component))
+                }
+            return fileManager.isReadableFile(atPath: fileURL.path)
+        }
 
         let wrapperInspection = CLIShimOwnership.inspect(
             at: wrapperURL,
@@ -301,6 +315,7 @@ enum ConsumerBundledRuntime {
             && self.installedRuntimeCodeIsValid(installPrefixURL: installPrefixURL, fileManager: fileManager)
             && templatesReady
             && telegramUserToolingReady
+            && gatewayLifecycleToolingReady
     }
 
     private static func loadManifest(from resourceURL: URL) throws -> Manifest {

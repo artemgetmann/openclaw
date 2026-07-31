@@ -25,6 +25,7 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const ensureGatewayLifecycleLease = vi.fn(async () => ({ outcome: "held" as const }));
 const buildGatewayInstallPlan = vi.fn(
   async (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) => ({
     programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
@@ -88,6 +89,10 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 
+vi.mock("../infra/gateway-lifecycle-lease.js", () => ({
+  ensureGatewayLifecycleLease: () => ensureGatewayLifecycleLease(),
+}));
+
 vi.mock("../commands/daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) =>
     buildGatewayInstallPlan(params),
@@ -147,6 +152,8 @@ describe("daemon-cli coverage", () => {
     serviceIsLoaded.mockResolvedValue(true);
     resolveGatewayProbeAuthWithSecretInputs.mockClear();
     buildGatewayInstallPlan.mockClear();
+    ensureGatewayLifecycleLease.mockReset();
+    ensureGatewayLifecycleLease.mockResolvedValue({ outcome: "held" });
   });
 
   afterEach(() => {
@@ -257,5 +264,17 @@ describe("daemon-cli coverage", () => {
     const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
     expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
     expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
+  });
+
+  it("exits 75 without restarting when the machine lifecycle lease is unavailable", async () => {
+    serviceRestart.mockClear();
+    ensureGatewayLifecycleLease.mockResolvedValueOnce({
+      outcome: "reexecuted",
+      exitCode: 75,
+    });
+
+    await expect(runDaemonCommand(["daemon", "restart"])).rejects.toThrow("__exit__:75");
+
+    expect(serviceRestart).not.toHaveBeenCalled();
   });
 });

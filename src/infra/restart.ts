@@ -405,7 +405,10 @@ function triggerDetachedLaunchdRestartHandoff(label: string): {
   const handoff = scheduleDetachedLaunchdRestartHandoff({
     env: process.env,
     mode: "kickstart",
-    waitForPid: process.pid,
+    // This path can be called by a chat command that keeps the gateway alive
+    // until launchctl replaces it. Waiting for our own PID would therefore pin
+    // the machine lease forever; a bounded delay lets the receipt flush first.
+    delayMs: 2000,
   });
   if (!handoff.ok) {
     return {
@@ -427,10 +430,9 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
 
-  cleanStaleGatewayProcessesSync();
-
   const tried: string[] = [];
   if (process.platform === "linux") {
+    cleanStaleGatewayProcessesSync();
     const unit = normalizeSystemdUnit(daemonEnv.OPENCLAW_SYSTEMD_UNIT, daemonEnv.OPENCLAW_PROFILE);
     const userArgs = ["--user", "restart", unit];
     tried.push(`systemctl ${userArgs.join(" ")}`);
@@ -458,6 +460,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   }
 
   if (process.platform === "win32") {
+    cleanStaleGatewayProcessesSync();
     return relaunchGatewayScheduledTask(daemonEnv as NodeJS.ProcessEnv);
   }
 
@@ -475,40 +478,42 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
   const target = `${domain}/${label}`;
   const shouldPreferLocalScript = opts?.preferLocalScript === true;
+  const isSharedManagedRuntime = isCanonicalSharedMainLaunchdRuntime(
+    daemonEnv as NodeJS.ProcessEnv,
+  );
   let localScriptFailure: string | undefined;
-  if (shouldPreferLocalScript) {
-    const isSharedManagedRuntime = isCanonicalSharedMainLaunchdRuntime(
-      daemonEnv as NodeJS.ProcessEnv,
-    );
-    // Shared managed labels always belong to their external supervisor. The
-    // label check remains decisive even if launchd's process markers are absent
-    // or incomplete; isolated lane labels retain marker-based handoff behavior.
-    if (isSharedManagedRuntime || isCurrentProcessLaunchdServiceLabel(label)) {
-      const handoffRestart = triggerDetachedLaunchdRestartHandoff(label);
-      tried.push(handoffRestart.command);
-      if (handoffRestart.ok) {
-        return {
-          ok: true,
-          method: "launchctl",
-          detail: handoffRestart.detail,
-          tried,
-        };
-      }
-      if (isSharedManagedRuntime) {
-        // Do not downgrade a supervisor-owned service to a direct kickstart or
-        // checkout-local helper when scheduling its safe handoff fails.
-        return {
-          ok: false,
-          method: "launchctl",
-          detail: handoffRestart.detail,
-          tried,
-        };
-      }
-      localScriptFailure = handoffRestart.detail;
+  let staleCleanupDone = false;
+  // Shared managed labels always belong to their external supervisor. The
+  // label check remains decisive even if launchd's process markers are absent
+  // or incomplete. This admission must happen before stale cleanup because
+  // cleanup itself sends signals.
+  if (isSharedManagedRuntime || isCurrentProcessLaunchdServiceLabel(label)) {
+    const handoffRestart = triggerDetachedLaunchdRestartHandoff(label);
+    tried.push(handoffRestart.command);
+    if (handoffRestart.ok) {
+      return {
+        ok: true,
+        method: "launchctl",
+        detail: handoffRestart.detail,
+        tried,
+      };
     }
+    // Once this process identifies itself as the service being replaced, every
+    // fallback would mutate outside the refused machine lease. Fail closed
+    // before stale cleanup, local scripts, or direct kickstart.
+    return {
+      ok: false,
+      method: "launchctl",
+      detail: handoffRestart.detail,
+      tried,
+    };
+  }
 
-    const localRestartScriptPath = isSharedManagedRuntime ? null : resolveLocalRestartScriptPath();
+  if (shouldPreferLocalScript) {
+    const localRestartScriptPath = resolveLocalRestartScriptPath();
     if (localRestartScriptPath) {
+      cleanStaleGatewayProcessesSync();
+      staleCleanupDone = true;
       const scriptRestart = triggerDetachedLocalRestartScript(localRestartScriptPath);
       tried.push(`local-restart-script ${scriptRestart.command}`);
       if (scriptRestart.ok) {
@@ -521,6 +526,10 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
       }
       localScriptFailure = scriptRestart.detail;
     }
+  }
+
+  if (!staleCleanupDone) {
+    cleanStaleGatewayProcessesSync();
   }
 
   const args = ["kickstart", "-k", target];

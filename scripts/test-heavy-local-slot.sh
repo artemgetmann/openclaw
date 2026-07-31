@@ -847,6 +847,7 @@ test_machine_wide_default_and_separate_clone_contention() {
   local holder_out="$TMP_DIR/cross-clone-holder.out"
   local holder_err="$TMP_DIR/cross-clone-holder.err"
   local contender_err="$TMP_DIR/cross-clone-contender.err"
+  local loser_mutations="$TMP_DIR/cross-clone-loser-mutations.log"
   local path_a="" path_b=""
   local guarded_pid="" holder_pid=0 holder_status=0 ready_attempt=0 status=0
 
@@ -925,11 +926,16 @@ test_machine_wide_default_and_separate_clone_contention() {
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$contender_health" \
     "$clone_b/scripts/with-heavy-local-slot.sh" \
       --label "clone-b-contender" \
-      -- true \
+      -- bash -c \
+        'printf "signal\nbootstrap\nkickstart\n" >>"$1"' \
+        openclaw-gateway-restart-contender \
+        "$loser_mutations" \
       >/dev/null 2>"$contender_err"
   status=$?
   set -e
   [[ "$status" -eq 75 ]] || fail "separate-clone contender returned $status instead of 75"
+  [[ ! -e "$loser_mutations" ]] ||
+    fail "losing gateway restart contender reached signal/bootstrap/kickstart mutations"
   grep -Fq 'clone-a-holder' "$contender_err" || fail "contention omitted live cross-clone owner"
   if ! kill -0 "$holder_pid" 2>/dev/null; then
     set +e
@@ -958,7 +964,7 @@ test_machine_wide_default_and_separate_clone_contention() {
     fail "clone-a-holder did not exit cleanly"
   fi
   wait_for_absence "$lock_path"
-  pass "machine-wide path and separate-clone contention"
+  pass "machine-wide path and separate-clone gateway restart contention"
 }
 
 create_nested_fixture() {
@@ -1986,6 +1992,31 @@ test_jarvis_remediation_policy_is_narrow_and_non_ambient() {
   pass "Jarvis remediation is canonical-entrypoint-only and skips only Jarvis health"
 }
 
+test_gateway_lifecycle_policy_skips_only_gateway_health() {
+  local lock_path="$TMP_DIR/gateway-lifecycle.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle.health"
+  local marker="$TMP_DIR/gateway-lifecycle.marker"
+  local sample=0
+
+  : >"$health_path"
+  while [[ "$sample" -lt 20 ]]; do
+    printf 'jarvis-unhealthy\n' >>"$health_path"
+    sample=$((sample + 1))
+  done
+
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy gateway-lifecycle \
+      --label "gateway-restart:test-unhealthy-listener" \
+      -- \
+      touch "$marker"
+
+  [[ -f "$marker" ]] || fail "gateway lifecycle policy deadlocked on the listener it must restart"
+  [[ ! -e "$lock_path" ]] || fail "gateway lifecycle policy leaked its lease"
+  pass "gateway lifecycle policy preserves the lease while skipping gateway self-health"
+}
+
 create_lock_order_fixture() {
   local fixture="$TMP_DIR/lock-order-fixture.sh"
 
@@ -2325,6 +2356,7 @@ run_suite_test test_wrapper_sigkill_retains_lease_until_orphan_group_dies
 run_suite_test test_two_sample_health_stop_kills_tree
 run_suite_test test_signal_cleanup_kills_tree_and_releases
 run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient
+run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
 run_suite_test test_fleet_and_release_lock_coexistence_and_wiring
 
 SUITE_PHASE="complete"

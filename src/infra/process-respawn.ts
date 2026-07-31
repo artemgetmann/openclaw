@@ -41,8 +41,8 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
       });
       if (!handoff.ok) {
         return {
-          mode: "supervised",
-          detail: `launchd exit fallback (${handoff.detail ?? "restart handoff failed"})`,
+          mode: "failed",
+          detail: `launchd restart refused (${handoff.detail ?? "restart handoff failed"})`,
         };
       }
       return {

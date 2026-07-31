@@ -24,12 +24,10 @@ If you need tighter coupling to the UI, run the Gateway manually in a terminal.
   starts the Gateway if needed.
 - Logs are written to the launchd gateway log path (visible in Debug Settings).
 
-Common commands:
-
-```bash
-launchctl kickstart -k gui/$UID/ai.openclaw.gateway
-launchctl bootout gui/$UID/ai.openclaw.gateway
-```
+For routine service replacement, use `openclaw gateway restart`; it serializes
+cleanup, bootstrap, and kickstart under the machine-wide lifecycle lease.
+Direct `launchctl kickstart -k` or `bootout` is break-glass only and requires an
+explicit machine-wide slot reservation.
 
 Replace the label with `ai.openclaw.<profile>` when running a named profile.
 

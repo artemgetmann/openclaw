@@ -112,7 +112,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to plain supervised exit when launchd handoff scheduling fails", () => {
+  it("fails closed without exiting when launchd handoff scheduling fails", () => {
     clearSupervisorHints();
     setPlatform("darwin");
     process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
@@ -124,8 +124,8 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const result = restartGatewayProcessWithFreshPid();
 
     expect(result).toEqual({
-      mode: "supervised",
-      detail: "launchd exit fallback (spawn failed)",
+      mode: "failed",
+      detail: "launchd restart refused (spawn failed)",
     });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();

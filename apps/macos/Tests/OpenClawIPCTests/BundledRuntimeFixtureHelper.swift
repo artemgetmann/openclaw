@@ -79,6 +79,21 @@ enum BundledRuntimeFixtureHelper {
             to: bundledRoot.appendingPathComponent("openclaw/scripts/telegram-e2e/telethon_compat.py"),
             atomically: true,
             encoding: .utf8)
+        try "#!/usr/bin/env bash\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/with-heavy-local-slot.sh"),
+            atomically: true,
+            encoding: .utf8)
+        try fileManager.createDirectory(
+            at: bundledRoot.appendingPathComponent("openclaw/scripts/lib", isDirectory: true),
+            withIntermediateDirectories: true)
+        try "#!/usr/bin/env bash\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/lib/heavy-local-slot.sh"),
+            atomically: true,
+            encoding: .utf8)
+        try "#!/usr/bin/env perl\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/lib/heavy-local-slot-runner.pl"),
+            atomically: true,
+            encoding: .utf8)
 
         for arch in ["darwin-arm64", "darwin-x64"] {
             try self.writeSignedNodeBinary(

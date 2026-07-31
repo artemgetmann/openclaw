@@ -114,8 +114,8 @@ describe("triggerOpenClawRestart local script mode", () => {
         expect(result.tried).toContain(`launchd-handoff kickstart ${expectedLabel}`);
         expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
           env: process.env,
+          delayMs: 2000,
           mode: "kickstart",
-          waitForPid: process.pid,
         });
         expect(spawnMock).not.toHaveBeenCalled();
         expect(spawnSyncMock).not.toHaveBeenCalled();
@@ -343,8 +343,8 @@ describe("triggerOpenClawRestart local script mode", () => {
         expect(result.tried).toContain(`launchd-handoff kickstart ${launchdLabel}`);
         expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
           env: process.env,
+          delayMs: 2000,
           mode: "kickstart",
-          waitForPid: process.pid,
         });
         expect(spawnMock).not.toHaveBeenCalled();
         expect(spawnSyncMock).not.toHaveBeenCalled();
@@ -353,6 +353,24 @@ describe("triggerOpenClawRestart local script mode", () => {
       }
     },
   );
+
+  it("guards a shared managed restart even when no local-script preference was requested", () => {
+    setPlatform("darwin");
+    delete process.env.VITEST;
+    delete process.env.NODE_ENV;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.jarvis.gateway";
+
+    const result = triggerOpenClawRestart();
+
+    expect(result).toMatchObject({ ok: true, method: "launchctl" });
+    expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
+      env: process.env,
+      delayMs: 2000,
+      mode: "kickstart",
+    });
+    expect(cleanStaleGatewayProcessesSyncMock).not.toHaveBeenCalled();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
 
   it.each(["ai.openclaw.gateway", "ai.jarvis.gateway"])(
     "does not downgrade shared managed label %s when detached handoff fails",
@@ -379,6 +397,7 @@ describe("triggerOpenClawRestart local script mode", () => {
           detail: "handoff unavailable",
           tried: [`launchd-handoff kickstart ${launchdLabel}`],
         });
+        expect(cleanStaleGatewayProcessesSyncMock).not.toHaveBeenCalled();
         expect(spawnMock).not.toHaveBeenCalled();
         expect(spawnSyncMock).not.toHaveBeenCalled();
       } finally {

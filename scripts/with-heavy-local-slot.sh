@@ -246,6 +246,21 @@ validate_policy_for_command() {
     standard)
       return 0
       ;;
+    gateway-lifecycle)
+      # Gateway restart is itself the operation that may repair or replace the
+      # managed Jarvis listener. It still needs the machine lease and all host
+      # headroom checks, but requiring that same listener to answer /healthz
+      # would deadlock an in-process detached handoff.
+      case "$label" in
+        gateway-restart:* | gateway-restart-handoff:*)
+          return 0
+          ;;
+        *)
+          echo "Refusing heavy work: gateway-lifecycle policy requires a gateway restart label." >&2
+          return 75
+          ;;
+      esac
+      ;;
     jarvis-remediation)
       [ "$check_only" = false ] || {
         emit_refusal \
@@ -572,10 +587,10 @@ host_health_reason() {
 }
 
 require_jarvis_health=1
-if [ "$policy" = "jarvis-remediation" ]; then
-  # The canonical hotfix intentionally replaces ai.jarvis.gateway. Continue to
-  # enforce workstation and remote-access health, but do not let the broken
-  # service or its planned restart kill the repair transaction.
+if [ "$policy" = "jarvis-remediation" ] || [ "$policy" = "gateway-lifecycle" ]; then
+  # These policies intentionally replace ai.jarvis.gateway. Continue to enforce
+  # workstation and remote-access health, but do not make the operation depend
+  # on the listener it is repairing or stopping.
   require_jarvis_health=0
 fi
 

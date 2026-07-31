@@ -545,7 +545,7 @@ openclaw_heavy_local_slot_require_or_reexec_with_policy() {
   shift 4
 
   case "$policy" in
-    standard | jarvis-remediation)
+    standard | gateway-lifecycle | jarvis-remediation)
       ;;
     *)
       printf 'HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=unknown_policy\n' >&2

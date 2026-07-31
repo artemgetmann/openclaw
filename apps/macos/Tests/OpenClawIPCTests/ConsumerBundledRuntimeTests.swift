@@ -22,6 +22,11 @@ struct ConsumerBundledRuntimeTests {
         "scripts/telegram-e2e/telethon_cli.py",
         "scripts/telegram-e2e/telethon_compat.py",
     ]
+    private static let requiredGatewayLifecycleToolingPaths = [
+        "scripts/with-heavy-local-slot.sh",
+        "scripts/lib/heavy-local-slot.sh",
+        "scripts/lib/heavy-local-slot-runner.pl",
+    ]
 
     @Test func `seeding writes bundled runtime into app prefix and is idempotent`() throws {
         let resourceRoot = try makeTempDirForTests()
@@ -58,6 +63,7 @@ struct ConsumerBundledRuntimeTests {
                 .appendingPathComponent("lib/openclaw-bundled/node_modules/chalk/package.json").path))
         self.assertInstalledWorkspaceTemplates(at: installPrefix, fileManager: fm)
         self.assertInstalledTelegramUserTooling(at: installPrefix, fileManager: fm)
+        self.assertInstalledGatewayLifecycleTooling(at: installPrefix, fileManager: fm)
 
         let ready = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
         #expect(ready == .ready)
@@ -72,6 +78,16 @@ struct ConsumerBundledRuntimeTests {
         let repaired = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
         #expect(repaired == .seeded)
         self.assertInstalledTelegramUserTooling(at: installPrefix, fileManager: fm)
+
+        try fm.removeItem(
+            at: installPrefix
+                .appendingPathComponent("lib/openclaw-bundled/scripts/lib/heavy-local-slot.sh"))
+        let lifecycleRepaired = try ConsumerBundledRuntime.seedIfNeeded(
+            from: bundledRoot,
+            into: installPrefix,
+            fileManager: fm)
+        #expect(lifecycleRepaired == .seeded)
+        self.assertInstalledGatewayLifecycleTooling(at: installPrefix, fileManager: fm)
     }
 
     @Test func `seeding refuses to overwrite unknown CLI shim`() throws {
@@ -368,6 +384,25 @@ struct ConsumerBundledRuntimeTests {
             .appendingPathComponent("openclaw-bundled", isDirectory: true)
 
         for relativePath in Self.requiredTelegramUserToolingPaths {
+            let fileURL = relativePath
+                .split(separator: "/")
+                .reduce(payloadRoot) { partialURL, component in
+                    partialURL.appendingPathComponent(String(component))
+                }
+            #expect(fileManager.fileExists(atPath: fileURL.path))
+            #expect(fileManager.isReadableFile(atPath: fileURL.path))
+        }
+    }
+
+    private func assertInstalledGatewayLifecycleTooling(
+        at installPrefix: URL,
+        fileManager: FileManager)
+    {
+        let payloadRoot = installPrefix
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent("openclaw-bundled", isDirectory: true)
+
+        for relativePath in Self.requiredGatewayLifecycleToolingPaths {
             let fileURL = relativePath
                 .split(separator: "/")
                 .reduce(payloadRoot) { partialURL, component in
