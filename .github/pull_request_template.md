@@ -87,6 +87,15 @@ What you personally verified (not just CI), and how:
 - Edge cases checked:
 - What you did **not** verify:
 
+## Tester-First Pilot Handoff (pilot PRs only)
+
+- Exact head SHA:
+- Observable claim + acceptance criteria:
+- Independent tester: (`Required/Skipped`) — why:
+- Tester receipt: exact SHA, intended + edge scenario result, cleanup (`N/A` if skipped):
+- Dependencies / overlap / merge order:
+- Proof still outstanding: package, deployment, main runtime, provider/backend, GUI, or real-user:
+
 ## Review Conversations
 
 - [ ] I replied to or resolved every bot review conversation I addressed in this PR.

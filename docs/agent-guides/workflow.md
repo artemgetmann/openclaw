@@ -67,6 +67,76 @@ only when resolution changes intended behavior or ownership, another live
 owner overlaps the same source/state, a protected action lacks authority, or a
 claimed guarantee cannot be proven mechanically.
 
+## Tester-first PR workflow pilot (provisional)
+
+This is written policy for explicitly selected pilot PRs, not yet a mandatory
+default and not authority to add automation. For a selected pilot, this section
+overrides the feature-owner-through-merge role split above. The intended default
+ownership is:
+
+`builder -> risk-triggered independent tester -> release owner -> controlled deployment/minimal smoke`
+
+The builder may open a draft PR early, but owns implementation and exact-head
+self-proof. The release owner, or the standard dispatcher acting for release,
+assigns a fresh independent tester from immutable acceptance criteria recorded
+before the test. The tester tries to falsify the observable claim and reports
+the receipt to both builder and release owner; the tester does not edit the
+implementation, merge, deploy, or relax the criteria. Defects return to the
+builder. The release owner owns final review, normal queueing, merge, and
+separately authorized deployment.
+
+Use independent testing when a change has meaningful live, user-facing,
+stateful, destructive, timing-sensitive, failure-recovery, or integration risk
+that deterministic tests do not fully cover. This includes Telegram callbacks,
+retries, offsets, streaming, voice, polling, auth, and shared-state transitions.
+Skip it for docs-only changes, mechanical refactors, and behavior fully covered
+by deterministic tests. The release owner records the decision when the rubric
+is borderline.
+
+Only the builder takes the PR out of draft, and only when the same exact head
+has all of the following:
+
+- complete scope plus passing builder-owned proof;
+- a passing independent tester receipt when the risk rubric requires one;
+- required CI green;
+- tester/runtime cleanup complete; and
+- the PR handoff records the exact SHA, observable claim and acceptance
+  criteria, proof receipts, dependencies and merge order, rollback and known
+  risks, and every proof layer still outstanding; and
+- the clean builder worktree and remote PR head both point to that SHA.
+
+A tester receipt becomes stale after any behavior-bearing source change.
+Builder changes require repeated builder proof and any required tester recheck.
+If release changes behavior-bearing source, the PR returns to draft and
+ownership returns to the builder. Mechanical rebases, merge/admin changes, and
+other non-behavioral release work may remain with release after fresh exact-head
+CI.
+
+Keep proof layers explicit: branch tests, independent tester behavior, merged
+source, packaged or deployed runtime, provider/backend health, macOS/GUI
+behavior, and real-user acceptance are separate claims. Tester bots can isolate
+bot identity, conversation/topic, config/state, and risky callbacks, retries,
+offsets, streaming, and voice. They do not isolate the machine-wide heavy slot,
+CPU/disk/build capacity, provider nondeterminism, ports without allocation,
+packaged/main-runtime identity, macOS behavior, or real-user acceptance.
+
+Do not keep a permanent per-PR workflow coordinator. Use a temporary
+coordinator only for cross-PR merge order, shared heavy/runtime contention, or
+a user decision spanning lanes; otherwise the release owner owns normal
+queueing.
+
+Before making this workflow mandatory or automating any part of it, record:
+
+1. one net-new risky Telegram PR through the full pre-merge lifecycle;
+2. one low-risk PR where the rubric correctly skips independent live testing;
+   and
+3. at least one risky defect return or changed-head tester recheck.
+
+Current voice-ordering acceptance debt and PR #1316 are historical/partial
+evidence, not clean pilots. Until the evidence above exists, do not add a
+dispatcher, wrapper, queue service, automated ready gate, multi-slot scheduler,
+permanent coordinator, or other runtime automation.
+
 ## Two-clone default
 
 - Default model:
