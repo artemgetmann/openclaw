@@ -67,6 +67,60 @@ only when resolution changes intended behavior or ownership, another live
 owner overlaps the same source/state, a protected action lacks authority, or a
 claimed guarantee cannot be proven mechanically.
 
+## Provisional tester-first PR pilot
+
+This is written pilot policy, not yet a mandatory default or an automation
+specification. For PRs explicitly enrolled in the pilot, ownership flows:
+
+`builder -> independent tester when risk-triggered -> release owner -> authorized deployment and minimal smoke`
+
+The builder may open a draft PR early, but owns implementation and exact-head
+proof. Require a fresh independent tester when observable behavior is live,
+user-facing, stateful, destructive, timing-sensitive, or crosses an integration
+boundary. Examples include Telegram callbacks, retries, offsets, streaming,
+voice, auth, polling, and runtime state. Low-risk docs, mechanical refactors,
+and changes fully covered by deterministic tests may record why independent
+live testing was skipped.
+
+The release owner or standard dispatcher assigns the tester from the PR's fixed
+observable claim and acceptance criteria. The tester tries the intended path
+and the smallest relevant edge path on the exact PR head, changes no
+implementation code, and reports the receipt or defect to both builder and
+release owner. The tester isolates bot identity, conversation/topic, config,
+state, and risky interaction state. That isolation does not prove or allocate
+the machine-wide heavy slot, CPU/disk/build capacity, ports, provider
+determinism, package identity, installed/main-runtime behavior, macOS behavior,
+or real-user acceptance.
+
+Only the builder takes the PR out of draft, and only when the same exact head
+has complete scope, builder proof, all risk-triggered tester receipts, relevant
+green CI, tester/runtime cleanup, a complete PR contract, and no uncommitted or
+unpushed fix. A behavior-bearing source change makes the tester receipt stale.
+If the release owner makes such a change, return ownership to the builder for
+repeated proof and tester recheck. Mechanical rebases, merges, metadata, and
+administrative changes may remain with release, with fresh exact-head CI.
+
+The PR contract must state the observable claim and acceptance criteria, exact
+head and completed builder proof, tester receipt or skip reason, cleanup,
+dependencies/overlap/merge order, rollback, known risks, and proof still
+required after merge. Keep source, tester-live, merged, packaged, deployed,
+healthy-runtime, GUI, and real-user proof as separate claims.
+
+The release owner owns normal queueing. Use a temporary coordinator only for
+cross-PR merge order, contention for a shared heavy/runtime resource, or a user
+decision spanning lanes. Do not add a permanent per-PR coordinator, dispatcher,
+wrapper, queue service, automated ready gate, multi-slot scheduler, or runtime
+automation during this pilot.
+
+Do not promote or automate this policy until evidence includes:
+
+1. one net-new risky Telegram PR completing the full pre-merge lifecycle;
+2. one low-risk PR where the rubric correctly skips independent live testing;
+3. at least one risky defect return or behavior-changed-head tester recheck.
+
+The current voice-ordering acceptance debt and PR #1316 are historical or
+partial evidence, not clean pilots.
+
 ## Two-clone default
 
 - Default model:
