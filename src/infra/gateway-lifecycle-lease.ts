@@ -83,13 +83,16 @@ function inheritedMachineLeaseIsValid(
   // metadata and proves this process tree descends from that exact PID/start
   // identity. Checking only an environment flag would let a sibling Codex
   // process forge admission.
+  const allowStandardOwner =
+    deps.env.OPENCLAW_LAUNCHD_LABEL?.trim() === "ai.jarvis.gateway" ? "0" : "1";
   const result = deps.spawnSync(
     "/bin/bash",
     [
       "-c",
-      'source "$1"; openclaw_heavy_local_slot_inherited_lease_is_valid gateway-lifecycle',
+      'source "$1"; openclaw_heavy_local_slot_inherited_lease_is_valid gateway-lifecycle "$2"',
       "openclaw-gateway-lifecycle-lease-check",
       paths.helper,
+      allowStandardOwner,
     ],
     {
       env: deps.env,

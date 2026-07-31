@@ -512,6 +512,7 @@ openclaw_heavy_local_slot_acquire() {
 
 openclaw_heavy_local_slot_inherited_lease_is_valid() {
   local required_policy="${1:-standard}"
+  local allow_standard_gateway_owner="${2:-0}"
   local inherited_token="${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-}"
   local lock_path="" owner_path=""
   local owner_pid="" owner_token="" owner_start="" owner_policy=""
@@ -528,12 +529,15 @@ openclaw_heavy_local_slot_inherited_lease_is_valid() {
   [[ "$owner_token" == "$inherited_token" ]] || return 1
 
   # Standard nested work can safely run inside either stricter transaction.
-  # Lifecycle and remediation work cannot inherit a standard lease: its health
-  # monitor is allowed to kill the tree while the protected listener is being
-  # replaced. They also cannot inherit one another because each policy admits
-  # a different, narrowly validated mutation command.
+  # Gateway lifecycle work may explicitly admit the canonical standard owner:
+  # both are the same machine-wide exclusion lease, and restart-mac already
+  # owns the standard transaction before its final OpenClaw gateway restart.
+  # Jarvis replacement and remediation remain exact-policy-only because their
+  # owner must exempt the listener being replaced from health monitoring.
   if [[ "$required_policy" != "standard" && "$owner_policy" != "$required_policy" ]]; then
-    return 1
+    [[ "$required_policy" == "gateway-lifecycle" &&
+      "$owner_policy" == "standard" &&
+      "$allow_standard_gateway_owner" == "1" ]] || return 1
   fi
   openclaw_heavy_local_slot_process_descends_from_owner "$$" "$owner_pid" "$owner_start"
 }

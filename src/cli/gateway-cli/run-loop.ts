@@ -6,13 +6,17 @@ import {
 import { formatGatewayStartupPreflightFailure } from "../../gateway/server-startup-preflight.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
-import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
+import {
+  restartGatewayProcessWithFreshPid,
+  type GatewayRespawnResult,
+} from "../../infra/process-respawn.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
+import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   cancelGatewayDraining,
@@ -100,10 +104,12 @@ export async function runGatewayLoop<TPrepared = never>(params: {
       return false;
     }
   };
-  const handleRestartAfterServerClose = async () => {
+  const handleRestartAfterServerClose = async (preparedRespawn?: GatewayRespawnResult) => {
     const hadLock = await releaseLockIfHeld();
-    // Release the lock BEFORE spawning so the child can acquire it immediately.
-    const respawn = restartGatewayProcessWithFreshPid();
+    // Unsupervised children still need the port lock released before spawn.
+    // A launchd child was already admitted while the listener was healthy and
+    // is holding the lifecycle lease until this exact process exits.
+    const respawn = preparedRespawn ?? restartGatewayProcessWithFreshPid();
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
       const modeLabel =
         respawn.mode === "spawned"
@@ -176,6 +182,7 @@ export async function runGatewayLoop<TPrepared = never>(params: {
     // Allow extra time for draining active turns on restart.
     void (async () => {
       let restartPreparation: GatewayRestartPreparation<TPrepared> | undefined;
+      let preparedRespawn: GatewayRespawnResult | undefined;
       if (isRestart && params.prepareRestart) {
         const preparationGeneration = ++restartPreparationGeneration;
         activeRestartPreparationGeneration = preparationGeneration;
@@ -321,6 +328,25 @@ export async function runGatewayLoop<TPrepared = never>(params: {
           armForceExit(SHUTDOWN_TIMEOUT_MS);
         }
 
+        if (isRestart && detectRespawnSupervisor(process.env) === "launchd") {
+          // Admit the detached launchd owner while the old listener is still
+          // serving. If the machine-wide lease refuses this restart, reopen
+          // ingress and leave the current process untouched instead of closing
+          // first and falling back to an unguarded in-process restart.
+          const respawn = restartGatewayProcessWithFreshPid();
+          if (respawn.mode === "failed") {
+            cancelGatewayDraining();
+            gatewayLog.error(
+              `gateway restart admission failed: ${respawn.detail ?? "launchd handoff refused"}. Restart cancelled; current gateway remains running.`,
+            );
+            shuttingDown = false;
+            return;
+          }
+          if (respawn.mode === "supervised") {
+            preparedRespawn = respawn;
+          }
+        }
+
         if (drainTimedOut) {
           // Only terminate surviving work after the final freshness check has
           // committed this restart to cutover. A cancelled restart must leave
@@ -341,7 +367,7 @@ export async function runGatewayLoop<TPrepared = never>(params: {
         if (shuttingDown) {
           server = null;
           if (isRestart && !pendingStopSignal) {
-            await handleRestartAfterServerClose();
+            await handleRestartAfterServerClose(preparedRespawn);
           } else {
             pendingStopSignal = null;
             await handleStopAfterServerClose();

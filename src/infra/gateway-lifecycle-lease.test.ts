@@ -48,9 +48,9 @@ describe("gateway lifecycle lease", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("does not treat an inherited standard lease as lifecycle admission", async () => {
-    const spawnSync = vi.fn(() => ({ status: 1 }));
-    const spawn = vi.fn(() => createSpawnedChild(75));
+  it("accepts verified ancestry beneath the canonical standard machine lease", async () => {
+    const spawnSync = vi.fn(() => ({ status: 0 }));
+    const spawn = vi.fn();
 
     const result = await ensureGatewayLifecycleLease({
       platform: "darwin",
@@ -60,6 +60,7 @@ describe("gateway lifecycle lease", () => {
       execPath: process.execPath,
       env: {
         ...process.env,
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
         OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN: "b".repeat(64),
       },
       fileExists: () => true,
@@ -67,7 +68,40 @@ describe("gateway lifecycle lease", () => {
       spawn: spawn as never,
     });
 
+    expect(result).toEqual({ outcome: "held" });
+    expect(spawnSync).toHaveBeenCalledWith(
+      "/bin/bash",
+      expect.arrayContaining(["1"]),
+      expect.any(Object),
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("requires the Jarvis-aware lifecycle owner for main Jarvis replacement", async () => {
+    const spawnSync = vi.fn(() => ({ status: 1 }));
+    const spawn = vi.fn(() => createSpawnedChild(75));
+
+    const result = await ensureGatewayLifecycleLease({
+      platform: "darwin",
+      cwd: process.cwd(),
+      argv: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway", "restart"],
+      execPath: process.execPath,
+      env: {
+        ...process.env,
+        OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway",
+        OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN: "c".repeat(64),
+      },
+      fileExists: () => true,
+      spawnSync: spawnSync as never,
+      spawn: spawn as never,
+    });
+
     expect(result).toEqual({ outcome: "reexecuted", exitCode: 75 });
+    expect(spawnSync).toHaveBeenCalledWith(
+      "/bin/bash",
+      expect.arrayContaining(["0"]),
+      expect.any(Object),
+    );
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 

@@ -25,6 +25,9 @@ const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
 >(() => ({ mode: "disabled" }));
+const detectRespawnSupervisor = vi.fn<() => "launchd" | "systemd" | "schtasks" | undefined>(
+  () => undefined,
+);
 const abortEmbeddedPiRun = vi.fn(
   (_sessionId?: string, _opts?: { mode?: "all" | "compacting" }) => false,
 );
@@ -51,6 +54,10 @@ vi.mock("../../infra/restart.js", () => ({
 
 vi.mock("../../infra/process-respawn.js", () => ({
   restartGatewayProcessWithFreshPid: () => restartGatewayProcessWithFreshPid(),
+}));
+
+vi.mock("../../infra/supervisor-markers.js", () => ({
+  detectRespawnSupervisor: () => detectRespawnSupervisor(),
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
@@ -599,6 +606,36 @@ describe("runGatewayLoop", () => {
       expect(lockRelease).toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
+    });
+  });
+
+  it("keeps the launchd gateway serving when lifecycle admission is refused", async () => {
+    vi.clearAllMocks();
+    detectRespawnSupervisor.mockReturnValueOnce("launchd");
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+      mode: "failed",
+      detail: "machine-wide lifecycle lease unavailable",
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(restartGatewayProcessWithFreshPid).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(cancelGatewayDraining).toHaveBeenCalled();
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("Restart cancelled; current gateway remains running"),
+      );
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

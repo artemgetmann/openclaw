@@ -2041,6 +2041,28 @@ test_gateway_lifecycle_policy_skips_only_gateway_health() {
   pass "gateway lifecycle policy preserves the lease while skipping gateway self-health"
 }
 
+test_gateway_lifecycle_inherits_verified_standard_owner() {
+  local lock_path="$TMP_DIR/gateway-lifecycle-standard-owner.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle-standard-owner.health"
+  local marker="$TMP_DIR/gateway-lifecycle-standard-owner.marker"
+
+  write_healthy_samples "$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --label "restart-mac:unsigned-fixture" \
+      -- \
+      /bin/bash -c \
+        'source "$1"; openclaw_heavy_local_slot_inherited_lease_is_valid gateway-lifecycle 1; touch "$2"' \
+        openclaw-gateway-lifecycle-standard-owner \
+        "$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh" \
+        "$marker"
+
+  [[ -f "$marker" ]] || fail "gateway lifecycle rejected verified standard-owner ancestry"
+  [[ ! -e "$lock_path" ]] || fail "standard owner leaked its machine-wide lease"
+  pass "gateway lifecycle reuses a verified canonical standard owner"
+}
+
 test_gateway_lifecycle_policy_preserves_jarvis_health_for_other_targets() {
   local lock_path="$TMP_DIR/gateway-lifecycle-other-target.lock"
   local health_path="$TMP_DIR/gateway-lifecycle-other-target.health"
@@ -2582,6 +2604,7 @@ if [[ "${1:-}" == "--gateway-lifecycle-only" ]]; then
   SUITE_PHASE="create_term_attribution_holder"
   create_term_attribution_holder
   run_suite_test test_machine_wide_default_and_separate_clone_contention
+  run_suite_test test_gateway_lifecycle_inherits_verified_standard_owner
   run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
   run_suite_test test_gateway_lifecycle_policy_preserves_jarvis_health_for_other_targets
   run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
@@ -2627,6 +2650,7 @@ run_suite_test test_wrapper_sigkill_retains_lease_until_orphan_group_dies
 run_suite_test test_two_sample_health_stop_kills_tree
 run_suite_test test_signal_cleanup_kills_tree_and_releases
 run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient
+run_suite_test test_gateway_lifecycle_inherits_verified_standard_owner
 run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
 run_suite_test test_gateway_lifecycle_policy_preserves_jarvis_health_for_other_targets
 run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
