@@ -522,11 +522,13 @@ test_owner_publish_failure_is_actionable() {
 test_large_generated_state_emits_owner_receipt() {
   local lock_path="$TMP_DIR/task-disk-receipt.lock"
   local health_path="$TMP_DIR/task-disk-receipt.health"
-  local repo_path="$TMP_DIR/task-disk-receipt-repo"
+  local repo_path="$TMP_DIR/task disk receipt repo"
+  local telemetry_repo_path=""
   local output="$TMP_DIR/task-disk-receipt.out"
 
   mkdir -p "$repo_path"
   repo_path="$(cd "$repo_path" && pwd -P)"
+  telemetry_repo_path="$(printf '%s' "$repo_path" | /usr/bin/sed 's/ /%20/g')"
   git -C "$repo_path" init -q
   write_healthy_samples "$health_path"
   (
@@ -540,7 +542,7 @@ test_large_generated_state_emits_owner_receipt() {
   ) >"$output" 2>&1
 
   if ! grep -Fq \
-    "HEAVY_LOCAL_DISK_RECEIPT status=owner_cleanup_required worktree=${repo_path}" \
+    "HEAVY_LOCAL_DISK_RECEIPT status=owner_cleanup_required worktree=${telemetry_repo_path}" \
     "$output"; then
     cat "$output" >&2
     fail "large generated task state omitted its owner receipt"

@@ -45,6 +45,7 @@ check_only=false
 policy='standard'
 wait_seconds=0
 display_label=''
+telemetry_label=''
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -80,6 +81,7 @@ done
 [ -n "$label" ] || usage
 display_label="$(openclaw_heavy_local_slot_safe_text "$label")"
 [ -n "$display_label" ] || usage
+telemetry_label="$(printf '%s' "$display_label" | /usr/bin/tr ' ' '_')"
 [[ "$wait_seconds" =~ ^(0|[1-9][0-9]*)$ ]] || usage
 [ "${#wait_seconds}" -le "${#MAX_WAIT_SECONDS}" ] || usage
 [ "$wait_seconds" -le "$MAX_WAIT_SECONDS" ] || usage
@@ -138,6 +140,38 @@ emit_wait_timeout() {
     "wait_timeout" \
     "timed out after ${wait_seconds}s; last reason: $last_refusal_message" \
     "last_code=$last_refusal_code${last_refusal_data:+ $last_refusal_data}"
+}
+
+measure_task_generated_kib() {
+  local worktree_root="$1"
+  local generated_path=""
+  local size_kib=""
+  local total_kib=0
+
+  # Keep ownership attribution narrow and identical before/after the guarded
+  # command. An unreadable generated tree is indeterminate, never zero.
+  for generated_path in \
+    node_modules \
+    dist \
+    .build \
+    .build-ui-smoke \
+    dist-ui-smoke \
+    DerivedData \
+    .swiftpm \
+    .turbo \
+    coverage; do
+    [ -e "$worktree_root/$generated_path" ] || continue
+    size_kib="$(du -sk "$worktree_root/$generated_path" 2>/dev/null | awk '{ print $1; exit }')" ||
+      return 1
+    [[ "$size_kib" =~ ^[0-9]+$ ]] || return 1
+    total_kib=$((total_kib + size_kib))
+  done
+  printf '%s\n' "$total_kib"
+}
+
+disk_available_kib_for_path() {
+  df -Pk "$1" 2>/dev/null |
+    awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print $4; exit }'
 }
 
 queue_or_refuse() {
@@ -512,7 +546,7 @@ host_health_reason() {
       "$disk_free" \
       "$DISK_REPORT_BELOW_KIB" \
       "$MIN_DISK_FREE_KIB" \
-      "$display_label" >&2
+      "$telemetry_label" >&2
   fi
 
   # If Tailscale is configured on this Mac, disconnected means the remote
@@ -600,26 +634,8 @@ fi
 
 task_worktree="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -n "$task_worktree" ] && [ -d "$task_worktree" ]; then
-  task_generated_before_kib="$(
-    for generated_path in \
-      node_modules \
-      dist \
-      .build \
-      .build-ui-smoke \
-      dist-ui-smoke \
-      DerivedData \
-      .swiftpm \
-      .turbo \
-      coverage; do
-      if [ -e "$task_worktree/$generated_path" ]; then
-        du -sk "$task_worktree/$generated_path" 2>/dev/null || true
-      fi
-    done | awk '{ total += $1 } END { print total + 0 }'
-  )"
-  task_disk_before_kib="$(
-    df -Pk "$task_worktree" 2>/dev/null |
-      awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print $4; exit }'
-  )"
+  task_generated_before_kib="$(measure_task_generated_kib "$task_worktree" || true)"
+  task_disk_before_kib="$(disk_available_kib_for_path "$task_worktree")"
 fi
 
 # Publish a pending handshake before spawn. The runner atomically renames this
@@ -734,46 +750,49 @@ stop_guarded_child || true
 # state, or another lane. It is advisory because successful task output can be
 # intentionally needed until the PR or release handoff is complete.
 if [ -n "$task_worktree" ] && [ -n "$task_generated_before_kib" ]; then
-  task_generated_after_kib="$(
-    for generated_path in \
-      node_modules \
-      dist \
-      .build \
-      .build-ui-smoke \
-      dist-ui-smoke \
-      DerivedData \
-      .swiftpm \
-      .turbo \
-      coverage; do
-      if [ -e "$task_worktree/$generated_path" ]; then
-        du -sk "$task_worktree/$generated_path" 2>/dev/null || true
-      fi
-    done | awk '{ total += $1 } END { print total + 0 }'
+  task_generated_after_kib="$(measure_task_generated_kib "$task_worktree" || true)"
+  task_disk_after_kib="$(disk_available_kib_for_path "$task_worktree")"
+  task_worktree_telemetry="$(
+    openclaw_heavy_local_slot_safe_text "$task_worktree" |
+      /usr/bin/sed 's/ /%20/g'
   )"
-  task_disk_after_kib="$(
-    df -Pk "$task_worktree" 2>/dev/null |
-      awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print $4; exit }'
-  )"
-  task_generated_created_kib=$((task_generated_after_kib - task_generated_before_kib))
-  task_disk_consumed_kib=0
-  if [[ "${task_disk_before_kib:-}" =~ ^[0-9]+$ ]] &&
-    [[ "${task_disk_after_kib:-}" =~ ^[0-9]+$ ]] &&
-    [ "$task_disk_before_kib" -gt "$task_disk_after_kib" ]; then
-    task_disk_consumed_kib=$((task_disk_before_kib - task_disk_after_kib))
-  fi
-  if [ "$task_generated_created_kib" -ge "$TASK_DISK_RECEIPT_THRESHOLD_KIB" ] ||
-    [ "$task_disk_consumed_kib" -ge "$TASK_DISK_RECEIPT_THRESHOLD_KIB" ]; then
-    printf 'HEAVY_LOCAL_DISK_RECEIPT status=owner_cleanup_required worktree=%s generated_before_kib=%s generated_after_kib=%s created_kib=%s disk_before_kib=%s disk_after_kib=%s disk_consumed_kib=%s threshold_kib=%s\n' \
-      "$(openclaw_heavy_local_slot_safe_text "$task_worktree")" \
-      "$task_generated_before_kib" \
-      "$task_generated_after_kib" \
-      "$task_generated_created_kib" \
+  if [ -z "$task_generated_after_kib" ]; then
+    printf 'HEAVY_LOCAL_DISK_RECEIPT status=measurement_unavailable worktree=%s disk_before_kib=%s disk_after_kib=%s threshold_kib=%s\n' \
+      "$task_worktree_telemetry" \
       "${task_disk_before_kib:-unknown}" \
       "${task_disk_after_kib:-unknown}" \
-      "$task_disk_consumed_kib" \
       "$TASK_DISK_RECEIPT_THRESHOLD_KIB" >&2
-    printf 'Owner action: preserve needed outputs; otherwise report this exact worktree with cleanup-build-artifacts.sh and retire it with gc-worktrees.sh only after its branch is recoverable.\n' >&2
+  else
+    task_generated_created_kib=$((task_generated_after_kib - task_generated_before_kib))
+    task_disk_consumed_kib=0
+    if [[ "${task_disk_before_kib:-}" =~ ^[0-9]+$ ]] &&
+      [[ "${task_disk_after_kib:-}" =~ ^[0-9]+$ ]] &&
+      [ "$task_disk_before_kib" -gt "$task_disk_after_kib" ]; then
+      task_disk_consumed_kib=$((task_disk_before_kib - task_disk_after_kib))
+    fi
+    if [ "$task_generated_created_kib" -ge "$TASK_DISK_RECEIPT_THRESHOLD_KIB" ] ||
+      [ "$task_disk_consumed_kib" -ge "$TASK_DISK_RECEIPT_THRESHOLD_KIB" ]; then
+      printf 'HEAVY_LOCAL_DISK_RECEIPT status=owner_cleanup_required worktree=%s generated_before_kib=%s generated_after_kib=%s created_kib=%s disk_before_kib=%s disk_after_kib=%s disk_consumed_kib=%s threshold_kib=%s\n' \
+        "$task_worktree_telemetry" \
+        "$task_generated_before_kib" \
+        "$task_generated_after_kib" \
+        "$task_generated_created_kib" \
+        "${task_disk_before_kib:-unknown}" \
+        "${task_disk_after_kib:-unknown}" \
+        "$task_disk_consumed_kib" \
+        "$TASK_DISK_RECEIPT_THRESHOLD_KIB" >&2
+      printf 'Owner action: preserve needed outputs; otherwise report this exact worktree with cleanup-build-artifacts.sh and retire it with gc-worktrees.sh only after its branch is recoverable.\n' >&2
+    fi
   fi
+elif [ -n "$task_worktree" ]; then
+  task_worktree_telemetry="$(
+    openclaw_heavy_local_slot_safe_text "$task_worktree" |
+      /usr/bin/sed 's/ /%20/g'
+  )"
+  printf 'HEAVY_LOCAL_DISK_RECEIPT status=measurement_unavailable worktree=%s disk_before_kib=%s disk_after_kib=unknown threshold_kib=%s\n' \
+    "$task_worktree_telemetry" \
+    "${task_disk_before_kib:-unknown}" \
+    "$TASK_DISK_RECEIPT_THRESHOLD_KIB" >&2
 fi
 
 if [ -s "$health_stop_file" ]; then
