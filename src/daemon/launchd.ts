@@ -1194,7 +1194,7 @@ export async function restartLaunchAgent({
   // detached handoff. A direct `kickstart -k` would terminate the caller before
   // it can finish the restart command.
   if (isCurrentProcessLaunchdServiceLabel(label)) {
-    const handoff = scheduleDetachedLaunchdRestartHandoff({
+    const handoff = await scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
       mode: "kickstart",
       waitForPid: process.pid,

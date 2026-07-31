@@ -765,7 +765,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   // canonical shared main LaunchAgent is excluded because the helper reinstalls
   // a lane-local service and must never take over ai.openclaw.gateway.
   if (preferLocalScriptRestart) {
-    const restartMethod = triggerOpenClawRestart({ preferLocalScript: true });
+    const restartMethod = await triggerOpenClawRestart({ preferLocalScript: true });
     if (!restartMethod.ok) {
       // The trigger failed synchronously, so this command still owns the
       // sentinel it just wrote. Remove it to prevent a later unrelated restart
@@ -803,7 +803,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  const restartMethod = triggerOpenClawRestart();
+  const restartMethod = await triggerOpenClawRestart();
   if (!restartMethod.ok) {
     await consumeRestartSentinel().catch(() => undefined);
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";

@@ -396,13 +396,13 @@ function triggerDetachedLocalRestartScript(scriptPath: string): {
   }
 }
 
-function triggerDetachedLaunchdRestartHandoff(label: string): {
+async function triggerDetachedLaunchdRestartHandoff(label: string): Promise<{
   ok: boolean;
   command: string;
   detail?: string;
-} {
+}> {
   const command = `launchd-handoff kickstart ${label}`;
-  const handoff = scheduleDetachedLaunchdRestartHandoff({
+  const handoff = await scheduleDetachedLaunchdRestartHandoff({
     env: process.env,
     mode: "kickstart",
     // This path can be called by a chat command that keeps the gateway alive
@@ -424,7 +424,9 @@ function triggerDetachedLaunchdRestartHandoff(label: string): {
   };
 }
 
-export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): RestartAttempt {
+export async function triggerOpenClawRestart(opts?: {
+  preferLocalScript?: boolean;
+}): Promise<RestartAttempt> {
   const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
@@ -488,7 +490,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   // or incomplete. This admission must happen before stale cleanup because
   // cleanup itself sends signals.
   if (isSharedManagedRuntime || isCurrentProcessLaunchdServiceLabel(label)) {
-    const handoffRestart = triggerDetachedLaunchdRestartHandoff(label);
+    const handoffRestart = await triggerDetachedLaunchdRestartHandoff(label);
     tried.push(handoffRestart.command);
     if (handoffRestart.ok) {
       return {
@@ -628,14 +630,14 @@ function normalizeRestartReason(reasonRaw: string | undefined): string | undefin
  * guard prevents. Tester/worktree runtimes keep the existing SIGUSR1 path so
  * lane-local behavior remains unchanged.
  */
-export function requestGatewayToolRestart(opts?: {
+export async function requestGatewayToolRestart(opts?: {
   delayMs?: number;
   reason?: string;
-}): GatewayToolRestartRequest {
+}): Promise<GatewayToolRestartRequest> {
   const delayMs = normalizeRestartDelayMs(opts?.delayMs);
   const reason = normalizeRestartReason(opts?.reason);
   if (process.platform === "darwin" && isCanonicalSharedMainLaunchdRuntime()) {
-    const handoff = scheduleDetachedLaunchdRestartHandoff({
+    const handoff = await scheduleDetachedLaunchdRestartHandoff({
       env: process.env,
       mode: "kickstart",
       delayMs,

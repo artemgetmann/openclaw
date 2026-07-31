@@ -109,7 +109,7 @@ export async function runGatewayLoop<TPrepared = never>(params: {
     // Unsupervised children still need the port lock released before spawn.
     // A launchd child was already admitted while the listener was healthy and
     // is holding the lifecycle lease until this exact process exits.
-    const respawn = preparedRespawn ?? restartGatewayProcessWithFreshPid();
+    const respawn = preparedRespawn ?? (await restartGatewayProcessWithFreshPid());
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
       const modeLabel =
         respawn.mode === "spawned"
@@ -227,8 +227,8 @@ export async function runGatewayLoop<TPrepared = never>(params: {
       // A staged restart keeps the serving listener open through its bounded
       // drain and final credential refresh. Arm the destructive shutdown timer
       // only after those safe-to-cancel phases have committed to cutover.
-      if (!restartPreparation) {
-        armForceExit(isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS);
+      if (!isRestart) {
+        armForceExit(SHUTDOWN_TIMEOUT_MS);
       }
       const continueWithPendingStop = (): boolean => {
         if (!pendingStopSignal) {
@@ -245,6 +245,45 @@ export async function runGatewayLoop<TPrepared = never>(params: {
 
       try {
         let drainTimedOut = false;
+        if (isRestart && detectRespawnSupervisor(process.env) === "launchd") {
+          // Acquire the lifecycle lease before rejecting new ingress. A losing
+          // contender must leave the serving gateway completely untouched,
+          // including its queue admission state.
+          const respawn = await restartGatewayProcessWithFreshPid();
+          if (respawn.mode === "failed") {
+            if (continueWithPendingStop()) {
+              return;
+            }
+            gatewayLog.error(
+              `gateway restart admission failed: ${respawn.detail ?? "launchd handoff refused"}. Restart cancelled; current gateway remains running.`,
+            );
+            shuttingDown = false;
+            return;
+          }
+          if (respawn.mode === "supervised") {
+            preparedRespawn = respawn;
+          }
+        }
+
+        if (pendingStopSignal) {
+          if (preparedRespawn?.cancel && !preparedRespawn.cancel()) {
+            gatewayLog.error(
+              "could not cancel admitted launchd restart; preserving the current gateway instead of stopping",
+            );
+            pendingStopSignal = null;
+            shuttingDown = false;
+            return;
+          }
+          continueWithPendingStop();
+          return;
+        }
+
+        if (!restartPreparation) {
+          // Admission is complete and the restart is now committed to its
+          // bounded drain/cutover path.
+          armForceExit(DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS);
+        }
+
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
@@ -325,25 +364,6 @@ export async function runGatewayLoop<TPrepared = never>(params: {
             return;
           }
           pendingPreparedRestart = restartPreparation.prepared;
-        }
-
-        if (isRestart && detectRespawnSupervisor(process.env) === "launchd") {
-          // Admit the detached launchd owner while the old listener is still
-          // serving. If the machine-wide lease refuses this restart, reopen
-          // ingress and leave the current process untouched instead of closing
-          // first and falling back to an unguarded in-process restart.
-          const respawn = restartGatewayProcessWithFreshPid();
-          if (respawn.mode === "failed") {
-            cancelGatewayDraining();
-            gatewayLog.error(
-              `gateway restart admission failed: ${respawn.detail ?? "launchd handoff refused"}. Restart cancelled; current gateway remains running.`,
-            );
-            shuttingDown = false;
-            return;
-          }
-          if (respawn.mode === "supervised") {
-            preparedRespawn = respawn;
-          }
         }
 
         if (restartPreparation) {

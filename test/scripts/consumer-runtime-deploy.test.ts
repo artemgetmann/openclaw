@@ -36,6 +36,7 @@ describe("consumer runtime dependency deployment", () => {
       expect(packageScript).toContain(`"$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/${relativePath}"`);
     }
     expect(packageScript).toContain("verify_required_gateway_lifecycle_tooling");
+    expect(packageScript).toContain('[[ ! -x "$runtime_root/$relative_path" ]]');
     expect(
       packageScript.match(/verify_required_gateway_lifecycle_tooling "\$[A-Z_a-z0-9/]+"/g)?.length,
     ).toBeGreaterThanOrEqual(2);

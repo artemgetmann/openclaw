@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe("scheduleDetachedLaunchdRestartHandoff", () => {
-  it("waits for the caller pid before kickstarting launchd", () => {
+  it("waits for the caller pid before kickstarting launchd", async () => {
     const env = {
       HOME: "/Users/test",
       OPENCLAW_PROFILE: "default",
@@ -39,7 +39,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       return { pid: 4242, unref: unrefMock };
     });
 
-    const result = scheduleDetachedLaunchdRestartHandoff({
+    const result = await scheduleDetachedLaunchdRestartHandoff({
       env,
       mode: "kickstart",
       waitForPid: process.pid,
@@ -75,7 +75,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
 
-  it("passes an optional delay before launchd handoff work", () => {
+  it("passes an optional delay before launchd handoff work", async () => {
     const env = {
       HOME: "/Users/test",
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
@@ -86,7 +86,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       return { pid: 4243, unref: unrefMock };
     });
 
-    const result = scheduleDetachedLaunchdRestartHandoff({
+    const result = await scheduleDetachedLaunchdRestartHandoff({
       env,
       mode: "kickstart",
       delayMs: 2500,
@@ -102,14 +102,34 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(lifecycleCommand).toContain('[[ ! -f "$cancel_path" ]]');
   });
 
-  it("fails closed before reporting scheduled when the lease contender exits 75", () => {
+  it("keeps the event loop responsive while lifecycle admission is pending", async () => {
+    let timerRan = false;
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      receiptDirs.push(args[6]);
+      setTimeout(() => fs.writeFileSync(`${args[6]}/ready`, "admitted\n"), 50);
+      return { pid: 4244, unref: unrefMock };
+    });
+    setTimeout(() => {
+      timerRan = true;
+    }, 0);
+
+    const result = await scheduleDetachedLaunchdRestartHandoff({
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      mode: "kickstart",
+    });
+
+    expect(timerRan).toBe(true);
+    expect(result).toEqual({ ok: true, pid: 4244, cancel: expect.any(Function) });
+  });
+
+  it("fails closed before reporting scheduled when the lease contender exits 75", async () => {
     spawnMock.mockImplementation((_file: string, args: string[]) => {
       receiptDirs.push(args[6]);
       fs.writeFileSync(`${args[6]}/failed`, "75\n");
       return { pid: 4244, unref: unrefMock };
     });
 
-    const result = scheduleDetachedLaunchdRestartHandoff({
+    const result = await scheduleDetachedLaunchdRestartHandoff({
       env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
       mode: "kickstart",
     });
@@ -121,8 +141,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(unrefMock).not.toHaveBeenCalled();
   });
 
-  it("fails closed when the caller PID/start identity cannot be proven", () => {
-    const result = scheduleDetachedLaunchdRestartHandoff({
+  it("fails closed when the caller PID/start identity cannot be proven", async () => {
+    const result = await scheduleDetachedLaunchdRestartHandoff({
       env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
       mode: "start-after-exit",
       waitForPid: 2_147_483_647,
@@ -137,7 +157,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
 });
 
 describe("isCurrentProcessLaunchdServiceLabel", () => {
-  it("rejects a launchd-labeled subprocess when launchd owns a different pid", () => {
+  it("rejects a launchd-labeled subprocess when launchd owns a different pid", async () => {
     expect(
       isCurrentProcessLaunchdServiceLabel(
         "ai.jarvis.gateway",
@@ -147,7 +167,7 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
     ).toBe(false);
   });
 
-  it("accepts only the exact launchd-owned gateway pid", () => {
+  it("accepts only the exact launchd-owned gateway pid", async () => {
     expect(
       isCurrentProcessLaunchdServiceLabel(
         "ai.jarvis.gateway",
@@ -157,7 +177,7 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
     ).toBe(true);
   });
 
-  it("stays conservative when matching launchd ownership is unreadable", () => {
+  it("stays conservative when matching launchd ownership is unreadable", async () => {
     expect(
       isCurrentProcessLaunchdServiceLabel(
         "ai.jarvis.gateway",

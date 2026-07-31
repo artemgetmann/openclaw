@@ -129,20 +129,19 @@ function terminateUnadmittedLeaseOwner(childPid: number | undefined): void {
   }
 }
 
-function waitForLeaseAdmission(params: {
+async function waitForLeaseAdmission(params: {
   receiptDir: string;
   childPid: number | undefined;
   timeoutMs?: number;
-}): { ok: true } | { ok: false; detail: string } {
+}): Promise<{ ok: true } | { ok: false; detail: string }> {
   const readyPath = path.join(params.receiptDir, "ready");
   const failedPath = path.join(params.receiptDir, "failed");
   const deadline = Date.now() + (params.timeoutMs ?? 15_000);
-  const sleeper = new Int32Array(new SharedArrayBuffer(4));
 
-  // This function is intentionally synchronous: callers must not report a
-  // scheduled restart until the detached owner has atomically acquired the
-  // machine lease. The child does all expensive waiting outside this process;
-  // polling only observes its private admission receipt.
+  // Callers must not report a scheduled restart until the detached owner has
+  // atomically acquired the machine lease. Yield between receipt probes so a
+  // running gateway keeps serving timers, connections, and stop signals while
+  // another owner is being inspected.
   while (Date.now() < deadline) {
     if (fssync.existsSync(readyPath)) {
       try {
@@ -163,7 +162,7 @@ function waitForLeaseAdmission(params: {
         detail: `machine-wide gateway lifecycle lease unavailable (exit ${status || GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE})`,
       };
     }
-    Atomics.wait(sleeper, 0, 0, 25);
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
   }
 
   terminateUnadmittedLeaseOwner(params.childPid);
@@ -221,12 +220,12 @@ function cancelAdmittedHandoff(receiptDir: string): boolean {
   }
 }
 
-export function scheduleDetachedLaunchdRestartHandoff(params: {
+export async function scheduleDetachedLaunchdRestartHandoff(params: {
   env?: Record<string, string | undefined>;
   mode: LaunchdRestartHandoffMode;
   delayMs?: number;
   waitForPid?: number;
-}): LaunchdRestartHandoffResult {
+}): Promise<LaunchdRestartHandoffResult> {
   const target = resolveLaunchdRestartTarget(params.env);
   const leasePaths = resolveGatewayLifecycleLeasePaths();
   if (!leasePaths) {
@@ -293,7 +292,7 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         env: childEnv,
       },
     );
-    const admission = waitForLeaseAdmission({
+    const admission = await waitForLeaseAdmission({
       receiptDir: createdReceiptDir,
       childPid: child.pid,
     });

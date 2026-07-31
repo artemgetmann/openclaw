@@ -393,6 +393,10 @@ verify_required_gateway_lifecycle_tooling() {
     "scripts/lib/heavy-local-slot.sh"
     "scripts/lib/heavy-local-slot-runner.pl"
   )
+  local required_executable_paths=(
+    "scripts/gateway-lifecycle-command.sh"
+    "scripts/with-heavy-local-slot.sh"
+  )
 
   # A bundled runtime must be able to acquire the same UID-stable lease as a
   # source checkout. Treat a partial cache/stage as unusable instead of making
@@ -400,6 +404,11 @@ verify_required_gateway_lifecycle_tooling() {
   for relative_path in "${required_paths[@]}"; do
     if [[ ! -f "$runtime_root/$relative_path" ]]; then
       missing+=("$relative_path")
+    fi
+  done
+  for relative_path in "${required_executable_paths[@]}"; do
+    if [[ ! -x "$runtime_root/$relative_path" ]]; then
+      missing+=("$relative_path (not executable)")
     fi
   done
   if [[ "${#missing[@]}" -gt 0 ]]; then

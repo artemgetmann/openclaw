@@ -103,7 +103,7 @@ describe("triggerOpenClawRestart local script mode", () => {
       isCurrentProcessLaunchdServiceLabelMock.mockReturnValue(true);
 
       try {
-        const result = triggerOpenClawRestart({ preferLocalScript: true });
+        const result = await triggerOpenClawRestart({ preferLocalScript: true });
         expect(result).toMatchObject({
           ok: true,
           method: "launchctl",
@@ -140,7 +140,7 @@ describe("triggerOpenClawRestart local script mode", () => {
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 
     try {
-      const result = triggerOpenClawRestart({ preferLocalScript: true });
+      const result = await triggerOpenClawRestart({ preferLocalScript: true });
       expect(result).toMatchObject({
         ok: true,
         method: "launchctl",
@@ -168,7 +168,7 @@ describe("triggerOpenClawRestart local script mode", () => {
     }
   });
 
-  it("falls back to launchctl when local script path is missing", () => {
+  it("falls back to launchctl when local script path is missing", async () => {
     setPlatform("darwin");
     delete process.env.VITEST;
     delete process.env.NODE_ENV;
@@ -182,7 +182,7 @@ describe("triggerOpenClawRestart local script mode", () => {
       stderr: "",
     });
 
-    const result = triggerOpenClawRestart({ preferLocalScript: true });
+    const result = await triggerOpenClawRestart({ preferLocalScript: true });
     expect(result).toMatchObject({
       ok: true,
       method: "launchctl",
@@ -221,7 +221,7 @@ describe("triggerOpenClawRestart local script mode", () => {
     spawnMock.mockReturnValue({ pid: 4243, unref: unrefMock });
 
     try {
-      const result = triggerOpenClawRestart({ preferLocalScript: true });
+      const result = await triggerOpenClawRestart({ preferLocalScript: true });
       expect(result).toMatchObject({
         ok: true,
         method: "launchctl",
@@ -270,7 +270,7 @@ describe("triggerOpenClawRestart local script mode", () => {
         stderr: "",
       });
 
-      const result = triggerOpenClawRestart({ preferLocalScript: false });
+      const result = await triggerOpenClawRestart({ preferLocalScript: false });
       expect(result).toMatchObject({
         ok: true,
         method: "launchctl",
@@ -332,7 +332,7 @@ describe("triggerOpenClawRestart local script mode", () => {
       process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
 
       try {
-        const result = triggerOpenClawRestart({ preferLocalScript: true });
+        const result = await triggerOpenClawRestart({ preferLocalScript: true });
         expect(result).toMatchObject({
           ok: true,
           method: "launchctl",
@@ -354,13 +354,13 @@ describe("triggerOpenClawRestart local script mode", () => {
     },
   );
 
-  it("guards a shared managed restart even when no local-script preference was requested", () => {
+  it("guards a shared managed restart even when no local-script preference was requested", async () => {
     setPlatform("darwin");
     delete process.env.VITEST;
     delete process.env.NODE_ENV;
     process.env.OPENCLAW_LAUNCHD_LABEL = "ai.jarvis.gateway";
 
-    const result = triggerOpenClawRestart();
+    const result = await triggerOpenClawRestart();
 
     expect(result).toMatchObject({ ok: true, method: "launchctl" });
     expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
@@ -390,7 +390,7 @@ describe("triggerOpenClawRestart local script mode", () => {
       process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
 
       try {
-        const result = triggerOpenClawRestart({ preferLocalScript: true });
+        const result = await triggerOpenClawRestart({ preferLocalScript: true });
         expect(result).toEqual({
           ok: false,
           method: "launchctl",
@@ -408,13 +408,13 @@ describe("triggerOpenClawRestart local script mode", () => {
 
   it.each(["ai.openclaw.gateway", "ai.jarvis.gateway"])(
     "routes live-tool shared managed restart for %s through external launchd handoff",
-    (launchdLabel) => {
+    async (launchdLabel) => {
       setPlatform("darwin");
       delete process.env.VITEST;
       delete process.env.NODE_ENV;
       process.env.OPENCLAW_LAUNCHD_LABEL = launchdLabel;
 
-      const result = requestGatewayToolRestart({
+      const result = await requestGatewayToolRestart({
         delayMs: 25,
         reason: "live chat restart",
       });

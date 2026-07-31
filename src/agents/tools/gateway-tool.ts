@@ -197,7 +197,7 @@ export function createGatewayTool(opts?: {
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
-        const scheduled = requestGatewayToolRestart({
+        const scheduled = await requestGatewayToolRestart({
           delayMs,
           reason,
         });

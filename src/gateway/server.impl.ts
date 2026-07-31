@@ -949,8 +949,8 @@ export async function startGatewayServer(
     : startChannelHealthMonitor({
         channelManager,
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
-        requestGatewayRestart: (reason) =>
-          requestGatewayToolRestart({
+        requestGatewayRestart: async (reason) =>
+          await requestGatewayToolRestart({
             reason,
           }),
         ...(staleEventThresholdMinutes != null && {
@@ -1202,8 +1202,8 @@ export async function startGatewayServer(
             startChannelHealthMonitor({
               channelManager,
               checkIntervalMs: opts.checkIntervalMs,
-              requestGatewayRestart: (reason) =>
-                requestGatewayToolRestart({
+              requestGatewayRestart: async (reason) =>
+                await requestGatewayToolRestart({
                   reason,
                 }),
               ...(opts.staleEventThresholdMs != null && {

@@ -23,13 +23,13 @@ const cancelGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
-  () => {
+  () => Promise<{
     mode: "spawned" | "supervised" | "disabled" | "failed";
     pid?: number;
     detail?: string;
     cancel?: () => boolean;
-  }
->(() => ({ mode: "disabled" }));
+  }>
+>(async () => ({ mode: "disabled" }));
 const detectRespawnSupervisor = vi.fn<() => "launchd" | "systemd" | "schtasks" | undefined>(
   () => undefined,
 );
@@ -228,7 +228,7 @@ describe("runGatewayLoop", () => {
 
   it("keeps the old server open until restart preflight and freshness validation finish", async () => {
     vi.clearAllMocks();
-    restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
+    restartGatewayProcessWithFreshPid.mockResolvedValue({ mode: "disabled" });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const order: string[] = [];
@@ -292,7 +292,7 @@ describe("runGatewayLoop", () => {
 
   it("lets SIGTERM preempt a blocked restart preflight and prevents the later restart", async () => {
     vi.clearAllMocks();
-    restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
+    restartGatewayProcessWithFreshPid.mockResolvedValue({ mode: "disabled" });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       let resolvePreflight!: () => void;
@@ -339,7 +339,7 @@ describe("runGatewayLoop", () => {
 
   it("preserves SIGTERM during blocked final validation and stops the serving gateway", async () => {
     vi.clearAllMocks();
-    restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
+    restartGatewayProcessWithFreshPid.mockResolvedValue({ mode: "disabled" });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       let resolveValidation!: () => void;
@@ -593,7 +593,7 @@ describe("runGatewayLoop", () => {
       });
 
       // Override process-respawn to return "spawned" mode
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+      restartGatewayProcessWithFreshPid.mockResolvedValueOnce({
         mode: "spawned",
         pid: 9999,
       });
@@ -617,10 +617,16 @@ describe("runGatewayLoop", () => {
   it("keeps the launchd gateway serving when lifecycle admission is refused", async () => {
     vi.clearAllMocks();
     detectRespawnSupervisor.mockReturnValueOnce("launchd");
-    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-      mode: "failed",
-      detail: "machine-wide lifecycle lease unavailable",
-    });
+    let refuseAdmission!: () => void;
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce(
+      new Promise((resolve) => {
+        refuseAdmission = () =>
+          resolve({
+            mode: "failed",
+            detail: "machine-wide lifecycle lease unavailable",
+          });
+      }),
+    );
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, exited } = await createSignaledLoopHarness();
@@ -628,16 +634,24 @@ describe("runGatewayLoop", () => {
       const sigterm = captureSignal("SIGTERM");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await vi.waitFor(() => expect(restartGatewayProcessWithFreshPid).toHaveBeenCalledTimes(1));
 
-      expect(restartGatewayProcessWithFreshPid).toHaveBeenCalledTimes(1);
+      // Admission is still pending. The current gateway must remain fully open,
+      // not merely keep its listener while rejecting new queue entries.
+      expect(markGatewayDraining).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+
+      refuseAdmission();
+      await vi.waitFor(() =>
+        expect(gatewayLog.error).toHaveBeenCalledWith(
+          expect.stringContaining("Restart cancelled; current gateway remains running"),
+        ),
+      );
+
+      expect(markGatewayDraining).not.toHaveBeenCalled();
+      expect(cancelGatewayDraining).not.toHaveBeenCalled();
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
-      expect(cancelGatewayDraining).toHaveBeenCalled();
-      expect(gatewayLog.error).toHaveBeenCalledWith(
-        expect.stringContaining("Restart cancelled; current gateway remains running"),
-      );
 
       sigterm();
       await expect(exited).resolves.toBe(0);
@@ -648,7 +662,7 @@ describe("runGatewayLoop", () => {
     vi.clearAllMocks();
     detectRespawnSupervisor.mockReturnValueOnce("launchd");
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    restartGatewayProcessWithFreshPid.mockImplementationOnce(() => {
+    restartGatewayProcessWithFreshPid.mockImplementationOnce(async () => {
       // Final restart validation has its own timeout. The 5-second shutdown
       // deadline must not exist until the machine-wide lifecycle admission has
       // completed, because admission may legitimately wait longer than that.
@@ -690,7 +704,7 @@ describe("runGatewayLoop", () => {
     vi.clearAllMocks();
     detectRespawnSupervisor.mockReturnValueOnce("launchd");
     const cancel = vi.fn(() => true);
-    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+    restartGatewayProcessWithFreshPid.mockResolvedValueOnce({
       mode: "supervised",
       pid: 4242,
       cancel,
@@ -769,7 +783,7 @@ describe("runGatewayLoop", () => {
         })
         .mockRejectedValueOnce(new Error("lock timeout"));
 
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+      restartGatewayProcessWithFreshPid.mockResolvedValueOnce({
         mode: "disabled",
       });
 
