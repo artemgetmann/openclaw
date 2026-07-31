@@ -33,9 +33,15 @@ Describe the problem and fix in 2–5 bullets:
 - Related #
 - Observable claim + acceptance criteria:
 - Exact head SHA:
+- Base branch + exact SHA:
+- Diff fingerprint + changed paths:
 - Builder proof completed on that head:
-- Independent tester: (`Required` + status/receipt, or `Skipped` + risk reason)
+- Builder owner: (exact thread ID + host ID when required)
+- Tester transport: (`nested-read-only` for short deterministic proof, otherwise `user-visible-task`)
+- Independent tester: (`PASS`/`FAIL` + exact thread/head/diff + receipt)
 - Tester/runtime cleanup:
+- Tester lifecycle closure: (exact task archive, or exact nested-agent terminal receipt)
+- Release worker: (fresh user-visible project task ID + host ID + explicit normal-merge authority; fill after tester `PASS`)
 - Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
 - Proof still required after merge: (`None — source-only` or exact package/deploy/provider/backend/runtime/GUI/real-user work)
 

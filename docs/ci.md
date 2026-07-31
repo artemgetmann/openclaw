@@ -11,19 +11,21 @@ read_when:
 
 The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed.
 
-## Autonomous PR Merge Policy
+## Autonomous PR Lifecycle and Merge Policy
 
 For a normal, scoped implementation, the default outcome is a merged PR. The
-agent owns the full path: investigate the issue, implement the fix, handle
-actionable review findings, satisfy required CI, and merge the PR. Use the
-current branch rules and repository helpers; do not bypass required checks,
-merge a draft, use an admin override, or treat queued or pending checks as
-passed.
+worker lifecycle collectively owns the full path. Under the canonical contract
+in `docs/agent-guides/workflow.md`, the builder investigates, implements,
+handles actionable review findings, and satisfies required CI, but never merges.
+After exact-head tester `PASS`, one fresh user-visible release worker owns the
+normal merge. It must not bypass required checks, merge a draft, use an admin
+override, or treat queued or pending checks as passed.
 
 Routine review, pending CI, and ordinary base drift are continuation states.
-The feature owner waits or diagnoses, refreshes/rebases when needed, repeats
-affected proof, and continues on the same task. Merge only the exact reviewed
-head; if a new commit is required, review and CI must apply to that new head.
+The builder waits or diagnoses, refreshes/rebases when needed, repeats affected
+proof, and continues on the same task. The release worker merges only the exact
+reviewed and tested head; if a new commit is required, ownership returns to the
+builder and review, CI, and fresh tester validation must apply to that new head.
 
 Stop before merge when any of these are true:
 
@@ -42,9 +44,10 @@ change, and a revert cannot necessarily undo external or already-live effects.
 
 ## PR Merge Policy
 
-GitHub provides the CI and merge mechanisms. Agents own diagnosis, review-bot
-handling, failed-CI fixes, and the merge decision; runtime shipping remains a
-separate explicit permission after the merge.
+GitHub provides the CI and merge mechanisms. Builders own diagnosis, review-bot
+handling, and failed-CI fixes. The one release worker defined by the canonical
+lifecycle owns the merge decision; runtime shipping remains a separate explicit
+permission after the merge.
 
 This boundary matters: an agent saying "CI is queued" or "CI is pending" is not
 proof. A PR is merge-ready only when the relevant checks have completed
@@ -123,7 +126,7 @@ sandbox jobs that did not run because they were irrelevant.
 
 ### Agent Duties
 
-Agents should:
+Builders should:
 
 - Diagnose failed or missing relevant checks.
 - Handle actionable review-bot comments.
@@ -131,7 +134,10 @@ Agents should:
   disabled.
 - Push narrowly scoped fixes for failed CI.
 - Report exact check names and statuses, not vibes.
-- Ship runtime changes only after merge and only when explicitly requested.
+
+The release worker should use the helpers below only after the canonical tester
+and handoff gates pass. Runtime changes ship only after merge and only when
+explicitly requested.
 
 Agents should not:
 
