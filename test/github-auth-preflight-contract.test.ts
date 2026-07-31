@@ -8,12 +8,16 @@ function readRepoFile(file: string): string {
 
 const fastPath = readRepoFile("scripts/pr-merge-fastpath.sh");
 const canonicalPr = readRepoFile("scripts/pr");
+const ciGuide = readRepoFile("docs/ci.md");
 
 describe("GitHub PR transport contract", () => {
   it("stops for builder refresh instead of mutating a stale branch", () => {
     expect(fastPath).toContain('"${merge_state}" == "BEHIND" || "${merge_state}" == "DIRTY"');
     expect(fastPath).toContain("result=blocked-builder-refresh-required");
     expect(fastPath).not.toContain('gh pr update-branch "${PR_NUMBER}"');
+    expect(ciGuide).toContain("The helper does not update a stale branch");
+    expect(ciGuide).toContain("builder-refresh-needed");
+    expect(ciGuide).not.toContain("safe `BEHIND` or `DIRTY` branch update");
   });
 
   it("binds merge mutations to the immutable head and preserves read failures", () => {
