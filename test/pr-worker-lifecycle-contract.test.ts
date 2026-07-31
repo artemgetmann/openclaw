@@ -72,6 +72,8 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(prTemplate).toContain("Base branch + exact SHA");
     expect(prTemplate).toContain("Diff fingerprint + changed paths");
     expect(prTemplate).toContain("Tester transport");
+    expect(prTemplate).toContain("exact worker identity/head/diff");
+    expect(prTemplate).not.toContain("exact thread/head/diff");
     expect(prTemplate).toContain("Tester lifecycle closure");
     expect(prTemplate).toContain("fresh user-visible project task ID");
   });

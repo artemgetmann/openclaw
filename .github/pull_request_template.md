@@ -38,7 +38,7 @@ Describe the problem and fix in 2–5 bullets:
 - Builder proof completed on that head:
 - Builder owner: (exact thread ID + host ID when required)
 - Tester transport: (`nested-read-only` for short deterministic proof, otherwise `user-visible-task`)
-- Independent tester: (`PASS`/`FAIL` + exact thread/head/diff + receipt)
+- Independent tester: (`PASS`/`FAIL` + exact worker identity/head/diff + receipt)
 - Tester/runtime cleanup:
 - Tester lifecycle closure: (exact task archive, or exact nested-agent terminal receipt)
 - Release worker: (fresh user-visible project task ID + host ID + explicit normal-merge authority; fill after tester `PASS`)
