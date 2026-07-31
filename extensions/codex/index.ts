@@ -36,6 +36,7 @@ import {
   type CodexRelayDispatchOutcome,
 } from "./src/relay-reconciliation.js";
 import {
+  codexWorkerExecutionPolicy,
   CodexTurnStartAcceptanceAmbiguousError,
   CodexThreadService,
   CodexTurnTerminalError,
@@ -830,6 +831,60 @@ async function startAsyncRelay(params: {
     delegationId,
     threadId: started.threadId,
     turnId: started.turnId,
+    ...buildCodexLaunchReceipt(started.threadId, params.execution),
+  };
+}
+
+export function buildCodexLaunchReceipt(
+  threadId: string,
+  execution: PreparedCodexWorkspace | string | undefined,
+): {
+  launchSummary: string;
+  launch: Record<string, unknown>;
+} {
+  if (!execution || typeof execution === "string") {
+    return {
+      launchSummary: `Continued existing native Codex thread ${threadId}. Its saved project and permission policy remain in effect.`,
+      launch: {
+        launchMode: "resumed-existing-thread",
+        nativeThreadId: threadId,
+        policySource: "saved-thread",
+      },
+    };
+  }
+
+  const policy = codexWorkerExecutionPolicy(execution);
+  const projectName = path.basename(execution.projectDir);
+  const networkLabel = policy.networkAccess ? "on" : "off";
+  const autoReviewLabel = policy.autoReview
+    ? `${policy.approvalPolicy} via ${policy.approvalsReviewer}`
+    : "off";
+  const workspaceLabel =
+    execution.workspaceMode === "isolated" ? "Assigned isolated worktree" : "Assigned workspace";
+  return {
+    launchSummary: [
+      `Started native Codex thread ${threadId} for project ${projectName}.`,
+      `Source project: ${execution.projectDir}.`,
+      `${workspaceLabel}: ${execution.workspaceDir}.`,
+      `Access: ${policy.readWriteMode}; network: ${networkLabel}; Auto-Review: ${autoReviewLabel}.`,
+    ].join(" "),
+    launch: {
+      launchMode: "new-delegation",
+      nativeThreadId: threadId,
+      projectName,
+      sourceProjectDir: execution.projectDir,
+      assignedWorkspaceDir: execution.workspaceDir,
+      ...(execution.workspaceMode === "isolated"
+        ? { assignedWorktreeDir: execution.workspaceDir }
+        : {}),
+      workspaceMode: execution.workspaceMode,
+      taskMode: execution.taskMode,
+      readWriteMode: policy.readWriteMode,
+      networkAccess: policy.networkAccess,
+      approvalPolicy: policy.approvalPolicy,
+      approvalsReviewer: policy.approvalsReviewer,
+      autoReview: policy.autoReview,
+    },
   };
 }
 
@@ -1079,12 +1134,20 @@ function buildAsyncWorkerPrompt(params: {
     `- Native Codex thread ID: ${params.threadId}`,
     ...(params.execution?.taskMode === "implementation"
       ? [
+          `- Selected project: ${path.basename(params.execution.projectDir)}`,
           `- Assigned isolated worktree: ${params.execution.workspaceDir}`,
           `- Source project: ${params.execution.projectDir}`,
           `- Branch: ${params.execution.branch ?? "unknown"}`,
+          "- Permissions: workspace-write inside the assigned worktree; network enabled; approvals use on-request Auto-Review.",
           "- Read and follow repository policy before implementation; all writes stay in the assigned worktree.",
         ]
-      : []),
+      : params.execution
+        ? [
+            `- Selected project: ${path.basename(params.execution.projectDir)}`,
+            `- Source project: ${params.execution.projectDir}`,
+            "- Permissions: read-only; network disabled; approval prompts disabled.",
+          ]
+        : []),
     "- When the jarvis_callback tool is available, use it for meaningful progress, blocker, decision-needed, or completion messages to the originating Jarvis coordinator.",
     "- A resumed pre-existing thread may not expose jarvis_callback. If it is unavailable, continue the task and use the terminal handback below; the launcher-owned relay remains the guaranteed return path.",
     "- Start callback sequence at 1 and increment it by exactly one. Give every logical callback a stable unique callback_id; reuse both id and sequence only when retrying the exact same callback.",
@@ -1427,7 +1490,7 @@ const CODEX_DELEGATION_GUIDANCE = [
   "- The async launcher wraps that task in a return contract containing the delegation and native thread identities. The scoped `jarvis_callback` tool lets that exact turn send natural progress, blocker, decision-needed, or completion messages; the terminal listener remains fallback.",
   "- Do not ask Codex to call `send_message_to_thread` or Telegram back to Jarvis. A Jarvis session is not a Codex thread address; the scoped callback and launcher-owned listener are the return transports.",
   "- Do not tell the user to run `/codex bind` and do not create a Telegram topic. Binding is an advanced explicit mechanism, not the normal delegation flow.",
-  "- `delegate_async` returns after Codex accepts the turn. Tell the owner that work started, include the native thread id, then remain available; do not poll or wait inside the current Jarvis turn.",
+  "- `delegate_async` returns after Codex accepts the turn. For a new delegation, relay its `launchSummary` so the owner sees the selected project, source directory, assigned workspace/worktree, read/write mode, network state, Auto-Review mode, and native thread id. For a resumed thread, say that its saved project and permission policy remain in effect. Then remain available; do not poll or wait inside the current Jarvis turn.",
   "- A valid callback or terminal relay wakes this exact Jarvis session with trusted source thread and turn ids. Continue the owner's task from the natural message and deliver only what is useful.",
   "- If Codex explicitly needs a response, use action `message_async` with that exact source `thread_id`. Jarvis steers the exact active turn when possible and otherwise starts the normal same-thread follow-up. Do not create a new thread, send receipt-only acknowledgements, or recursively delegate merely because a callback arrived.",
   "- Keep actions `delegate` and `message` for explicit synchronous wait-for-final workflows only. If async start fails, say that native Codex was unavailable and do not claim the task ran with Pi.",

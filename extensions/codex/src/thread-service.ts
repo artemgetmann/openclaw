@@ -38,6 +38,14 @@ export type CodexThreadStarted = {
   completion: Promise<CodexThreadRunResult>;
 };
 
+export type CodexWorkerExecutionPolicy = {
+  readWriteMode: "read-only" | "workspace-write";
+  networkAccess: boolean;
+  approvalPolicy: "never" | "on-request";
+  approvalsReviewer: "user" | "auto_review";
+  autoReview: boolean;
+};
+
 export class CodexTurnStartAcceptanceAmbiguousError extends Error {
   constructor(cause: unknown) {
     super("Codex turn acceptance became ambiguous while starting the native turn", { cause });
@@ -175,7 +183,7 @@ export class CodexThreadService {
       threadCatalogReachable: Array.isArray(threads.data),
       activeContinuations: this.activeThreadIds.size,
       executionPolicy:
-        "analysis=read-only; implementation=isolated-worktree/workspace-write; no-network/no-approval",
+        "analysis=read-only/network-off/approval-never; implementation=isolated-worktree/workspace-write/network-on/approval-on-request/auto-review",
     };
   }
 
@@ -519,8 +527,6 @@ export class CodexThreadService {
           // the durable thread policy. A prepared first turn supplies the exact
           // isolated write boundary.
           ...buildTurnExecutionOverrides(execution),
-          approvalPolicy: "never",
-          approvalsReviewer: "user",
           personality: "none",
         });
       } catch (error) {
@@ -600,22 +606,24 @@ export class CodexThreadService {
   }
 
   private async createForExecution(execution: PreparedCodexWorkspace): Promise<JsonObject> {
-    const implementation = execution.taskMode === "implementation";
+    const policy = codexWorkerExecutionPolicy(execution);
     const response = await (
       await this.client()
     ).request<JsonObject>("thread/start", {
       cwd: execution.workspaceDir,
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: implementation ? "workspace-write" : "read-only",
+      approvalPolicy: policy.approvalPolicy,
+      approvalsReviewer: policy.approvalsReviewer,
+      sandbox: policy.readWriteMode,
       personality: "none",
       serviceName: "OpenClaw",
-      developerInstructions: implementation
-        ? IMPLEMENTATION_DEVELOPER_INSTRUCTIONS
-        : ANALYSIS_DEVELOPER_INSTRUCTIONS,
+      developerInstructions:
+        execution.taskMode === "implementation"
+          ? IMPLEMENTATION_DEVELOPER_INSTRUCTIONS
+          : ANALYSIS_DEVELOPER_INSTRUCTIONS,
       experimentalRawEvents: true,
       ...(this.options.dynamicTools?.length ? { dynamicTools: this.options.dynamicTools } : {}),
     });
+    assertExecutionPolicyApplied(response, execution, policy);
     this.loadedThreadIds.add(requireThreadId(response));
     return response;
   }
@@ -694,7 +702,7 @@ const ANALYSIS_DEVELOPER_INSTRUCTIONS = [
 
 const IMPLEMENTATION_DEVELOPER_INSTRUCTIONS = [
   "You are a native Codex implementation worker for Jarvis.",
-  "You were launched in an isolated worktree with workspace-write access only to that worktree.",
+  "You were launched in an isolated worktree with workspace-write access only to that worktree, network access enabled, and Auto-Review handling approval decisions under the on-request policy.",
   "Before editing, read the repository-local policy and adopt its required setup/workflow when safe within your sandbox.",
   "Never edit the source checkout, shared runtime, or any path outside the assigned worktree.",
 ].join(" ");
@@ -706,6 +714,7 @@ function buildImplementationPrompt(text: string, execution: PreparedCodexWorkspa
     `- Source project: ${execution.projectDir}`,
     `- Base commit: ${execution.baseSha ?? "unknown"}`,
     `- Branch: ${execution.branch ?? "unknown"}`,
+    "- Permissions: workspace-write inside the assigned worktree; network enabled; approvals use on-request Auto-Review.",
     "- Read repository policy and adopt its setup before implementation.",
     "- Keep all writes inside the assigned worktree and report any policy/setup blocker.",
     "",
@@ -724,24 +733,76 @@ function buildTurnExecutionOverrides(
     return {
       cwd: execution,
       sandboxPolicy: { type: "readOnly", networkAccess: false },
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
     };
   }
+  const policy = codexWorkerExecutionPolicy(execution);
   if (execution.taskMode === "implementation") {
     return {
       cwd: execution.workspaceDir,
       sandboxPolicy: {
         type: "workspaceWrite",
         writableRoots: [execution.workspaceDir],
-        networkAccess: false,
+        networkAccess: policy.networkAccess,
         excludeSlashTmp: true,
         excludeTmpdirEnvVar: true,
       },
+      approvalPolicy: policy.approvalPolicy,
+      approvalsReviewer: policy.approvalsReviewer,
     };
   }
   return {
     cwd: execution.workspaceDir,
     sandboxPolicy: { type: "readOnly", networkAccess: false },
+    approvalPolicy: policy.approvalPolicy,
+    approvalsReviewer: policy.approvalsReviewer,
   };
+}
+
+/**
+ * Keep the visible launch contract and both App Server request layers on one
+ * policy source. Auto-Review is deliberately paired with `on-request`: it is a
+ * reviewer for boundary decisions, not a substitute for the workspace sandbox.
+ */
+export function codexWorkerExecutionPolicy(
+  execution: Pick<PreparedCodexWorkspace, "taskMode">,
+): CodexWorkerExecutionPolicy {
+  if (execution.taskMode === "implementation") {
+    return {
+      readWriteMode: "workspace-write",
+      networkAccess: true,
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+      autoReview: true,
+    };
+  }
+  return {
+    readWriteMode: "read-only",
+    networkAccess: false,
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    autoReview: false,
+  };
+}
+
+function assertExecutionPolicyApplied(
+  response: JsonObject,
+  execution: PreparedCodexWorkspace,
+  expected: CodexWorkerExecutionPolicy,
+): void {
+  // ThreadStartResponse reports the effective durable policy. Reject a missing
+  // or silently downgraded response before Jarvis starts a task under a false
+  // permissions claim.
+  if (response.cwd !== execution.workspaceDir) {
+    throw new Error("Codex App Server did not apply the assigned worker directory");
+  }
+  if (response.approvalPolicy !== expected.approvalPolicy) {
+    throw new Error("Codex App Server did not apply the requested approval policy");
+  }
+  if (response.approvalsReviewer !== expected.approvalsReviewer) {
+    throw new Error("Codex App Server did not apply the requested approval reviewer");
+  }
 }
 
 function createTurnCollector(threadId: string) {
