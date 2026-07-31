@@ -13,6 +13,7 @@ class FakeCodexClient implements CodexRpcClient {
   closed = false;
   holdTurn = false;
   persistedThreadResponse: Record<string, unknown> | undefined;
+  threadStartResponseOverrides: Record<string, unknown> | undefined;
   archivedThreadIds = new Set<string>();
   listedThreads: Array<Record<string, unknown>> = [];
   listedThreadPages = new Map<
@@ -38,7 +39,14 @@ class FakeCodexClient implements CodexRpcClient {
       return { data: this.listedThreads } as T;
     }
     if (method === "thread/start") {
-      return { thread: { id: "thread-new", status: { type: "idle" } } } as T;
+      return {
+        thread: { id: "thread-new", status: { type: "idle" } },
+        cwd: record.cwd,
+        approvalPolicy: record.approvalPolicy,
+        approvalsReviewer: record.approvalsReviewer,
+        sandbox: record.sandbox,
+        ...this.threadStartResponseOverrides,
+      } as T;
     }
     if (method === "thread/read") {
       return (this.persistedThreadResponse ?? {
@@ -167,6 +175,9 @@ describe("CodexThreadService", () => {
     expect(client.requests[0]).toMatchObject({
       method: "thread/start",
       params: {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandbox: "read-only",
         dynamicTools: [
           expect.objectContaining({
             name: "jarvis_callback",
@@ -455,6 +466,13 @@ describe("CodexThreadService", () => {
       "thread/start",
       "turn/start",
     ]);
+    expect(client.requests[1]).toEqual({
+      method: "turn/start",
+      params: expect.not.objectContaining({
+        approvalPolicy: expect.anything(),
+        approvalsReviewer: expect.anything(),
+      }),
+    });
   });
 
   it("keeps callbacks while isolating an implementation delegate", async () => {
@@ -488,6 +506,8 @@ describe("CodexThreadService", () => {
       params: expect.objectContaining({
         cwd: "/worktrees/browser-fix",
         sandbox: "workspace-write",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
         dynamicTools: [expect.objectContaining({ name: "jarvis_callback" })],
       }),
     });
@@ -503,12 +523,42 @@ describe("CodexThreadService", () => {
         sandboxPolicy: {
           type: "workspaceWrite",
           writableRoots: ["/worktrees/browser-fix"],
-          networkAccess: false,
+          networkAccess: true,
           excludeSlashTmp: true,
           excludeTmpdirEnvVar: true,
         },
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
       }),
     });
+  });
+
+  it("fails closed when App Server silently downgrades an implementation worker", async () => {
+    const client = new FakeCodexClient();
+    client.threadStartResponseOverrides = { approvalsReviewer: "user" };
+    const service = new CodexThreadService({
+      client: async () => client,
+      turnTimeoutMs: 5_000,
+      defaultWorkspaceDir: "/repo/openclaw",
+      workspaceManager: {
+        prepare: async () => ({
+          taskMode: "implementation",
+          workspaceMode: "isolated",
+          projectDir: "/repo/openclaw",
+          workspaceDir: "/worktrees/policy-check",
+          worktreeCreated: true,
+        }),
+        discard: async () => undefined,
+      },
+    });
+
+    await expect(
+      service.createDelegateThread({
+        taskMode: "implementation",
+        projectDir: "/repo/openclaw",
+      }),
+    ).rejects.toThrow("did not apply the requested approval reviewer");
+    expect(client.requests).toHaveLength(1);
   });
 
   it("allows only one active continuation per native thread", async () => {

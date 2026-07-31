@@ -10,9 +10,15 @@ default runtime.
   message, resume, and fork controls through `/codex` and the `codex_threads`
   agent tool.
 - Natural-language delegation has two execution modes:
-  - analysis stays in the selected project with a read-only sandbox
+  - analysis stays in the selected project with a read-only sandbox, network
+    disabled, and no approval prompts
   - implementation creates a generic fresh-branch Git worktree, then gives Codex
-    write access only inside that lane
+    write access only inside that lane, network access, and deterministic
+    `on-request` Auto-Review
+- A new async launch returns a consumer-readable receipt containing the selected
+  project name, source project directory, assigned workspace/worktree directory,
+  read/write mode, network state, Auto-Review policy, and native Codex thread id.
+  Resumed existing threads are labeled honestly as using their saved policy.
 - Implementation workers read repository policy and use any repo-owned
   worktree adoption/bootstrap path before editing. The owner does not need to
   know the repository's worktree mechanics.
@@ -158,13 +164,19 @@ The default transport starts the locally installed Codex App Server over stdio:
 ```
 
 Analysis turns use a read-only sandbox. Implementation turns use
-workspace-write with the prepared worktree as the only writable root. Both
-disable tool network access and decline App Server approval requests that
-cannot be safely projected.
+workspace-write with the prepared worktree as the only writable root and enable
+tool network access. Implementation threads request the canonical App Server
+pair `approvalPolicy: "on-request"` and `approvalsReviewer: "auto_review"`;
+thread creation fails closed if the server reports a different effective
+directory or approval policy. Auto-Review decides supported approval requests
+inside Codex. Any residual approval request that reaches this stdio client is
+declined because the pilot does not expose a second user-facing approval bridge.
+Follow-up turns omit policy overrides so the exact native thread keeps its saved
+policy instead of being silently reset.
 
 ## Deliberate next slice
 
 The older consumer fork does not yet contain upstream's complete AgentHarness
-runtime, native approval bridge, media projection, compaction, or supervised
-session catalog. Those remain a selective follow-up port. This pilot keeps its
-contract narrow instead of recreating those systems speculatively.
+runtime, a separate projected user-approval UI, media projection, compaction, or
+supervised session catalog. Those remain a selective follow-up port. This pilot
+keeps its contract narrow instead of recreating those systems speculatively.
