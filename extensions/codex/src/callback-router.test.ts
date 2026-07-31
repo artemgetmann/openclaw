@@ -231,4 +231,59 @@ describe("Codex App Server callback requests", () => {
       await client.close();
     }
   });
+
+  it("declines an approval that escapes the configured Auto-Review path", async () => {
+    const script = String.raw`
+      const readline = require("node:readline");
+      const lines = readline.createInterface({ input: process.stdin });
+      lines.on("line", (line) => {
+        const message = JSON.parse(line);
+        if (message.method === "initialize") {
+          process.stdout.write(JSON.stringify({
+            id: message.id,
+            result: { serverInfo: { version: "test" } }
+          }) + "\n");
+          process.stdout.write(JSON.stringify({
+            id: 92,
+            method: "item/commandExecution/requestApproval",
+            params: { command: "dangerous-command" }
+          }) + "\n");
+          return;
+        }
+        if (message.id === 92) {
+          process.stdout.write(JSON.stringify({
+            method: "test/approval-response",
+            params: { response: message }
+          }) + "\n");
+        }
+      });
+    `;
+    const client = new CodexAppServerClient({
+      command: process.execPath,
+      args: ["-e", script],
+      requestTimeoutMs: 2_000,
+    });
+    const response = new Promise<Record<string, unknown>>((resolve) => {
+      client.onNotification((notification) => {
+        if (notification.method === "test/approval-response") {
+          resolve(notification.params ?? {});
+        }
+      });
+    });
+
+    try {
+      await client.initialize();
+      await expect(response).resolves.toMatchObject({
+        response: {
+          id: 92,
+          result: {
+            decision: "decline",
+            reason: expect.stringContaining("not resolved by the configured Codex Auto-Review"),
+          },
+        },
+      });
+    } finally {
+      await client.close();
+    }
+  });
 });

@@ -76,7 +76,19 @@ vi.mock("./src/app-server-client.js", () => ({
     async request(method: string, params?: unknown) {
       appServer.requests.push({ method, params });
       if (method === "thread/start") {
-        return { thread: { id: "thread-natural" } };
+        const request = params as {
+          cwd?: string;
+          approvalPolicy?: string;
+          approvalsReviewer?: string;
+          sandbox?: string;
+        };
+        return {
+          thread: { id: "thread-natural" },
+          cwd: request.cwd,
+          approvalPolicy: request.approvalPolicy,
+          approvalsReviewer: request.approvalsReviewer,
+          sandbox: request.sandbox,
+        };
       }
       if (method === "thread/resume") {
         return { thread: { id: "thread-natural", status: { type: "idle" } } };
@@ -176,7 +188,7 @@ async function createRelayState() {
   return { resolveStateDir: () => stateDir };
 }
 
-const { default: registerCodex } = await import("./index.js");
+const { buildCodexLaunchReceipt, default: registerCodex } = await import("./index.js");
 
 async function createDurableAuthorityFixture(label: string) {
   appServer.requests.splice(0);
@@ -295,6 +307,39 @@ async function createDurableAuthorityFixture(label: string) {
   }) as AnyAgentTool;
   return { dir, idempotencyKey, monitorStorePath, relayRegistry, text, tool };
 }
+
+describe("Codex worker launch receipts", () => {
+  it("shows the resolved project, isolated worktree, permissions, and native thread", () => {
+    expect(
+      buildCodexLaunchReceipt("thread-implementation", {
+        taskMode: "implementation",
+        workspaceMode: "isolated",
+        projectDir: "/Users/artem/Programming_Projects/openclaw",
+        workspaceDir: "/Users/artem/.codex/worktrees/task/openclaw",
+        worktreeCreated: true,
+        branch: "codex/task",
+      }),
+    ).toEqual({
+      launchSummary:
+        "Started native Codex thread thread-implementation for project openclaw. Source project: /Users/artem/Programming_Projects/openclaw. Assigned isolated worktree: /Users/artem/.codex/worktrees/task/openclaw. Access: workspace-write; network: on; Auto-Review: on-request via auto_review.",
+      launch: {
+        launchMode: "new-delegation",
+        nativeThreadId: "thread-implementation",
+        projectName: "openclaw",
+        sourceProjectDir: "/Users/artem/Programming_Projects/openclaw",
+        assignedWorkspaceDir: "/Users/artem/.codex/worktrees/task/openclaw",
+        assignedWorktreeDir: "/Users/artem/.codex/worktrees/task/openclaw",
+        workspaceMode: "isolated",
+        taskMode: "implementation",
+        readWriteMode: "workspace-write",
+        networkAccess: true,
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
+        autoReview: true,
+      },
+    });
+  });
+});
 
 describe("Codex natural-language delegation", () => {
   it("guides Jarvis to delegate without a conversation binding and runs one native task", async () => {
@@ -417,6 +462,21 @@ describe("Codex natural-language delegation", () => {
         status: "accepted",
         threadId: "thread-natural",
         turnId: "turn-natural",
+        launchSummary: expect.stringContaining(`for project ${path.basename(process.cwd())}`),
+        launch: {
+          launchMode: "new-delegation",
+          nativeThreadId: "thread-natural",
+          projectName: path.basename(process.cwd()),
+          sourceProjectDir: process.cwd(),
+          assignedWorkspaceDir: process.cwd(),
+          workspaceMode: "direct",
+          taskMode: "analysis",
+          readWriteMode: "read-only",
+          networkAccess: false,
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
+          autoReview: false,
+        },
       },
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -434,6 +494,9 @@ describe("Codex natural-language delegation", () => {
       "When the jarvis_callback tool is available, use it for meaningful progress, blocker, decision-needed, or completion messages",
     );
     expect(delegatedPrompt).toContain("Never call jarvis_callback merely to acknowledge receipt");
+    expect(delegatedPrompt).toContain(
+      "- Permissions: read-only; network disabled; approval prompts disabled.",
+    );
     expect(delegatedPrompt).toContain(
       "- Start the terminal handback with exactly one of: STATUS: complete, STATUS: blocked, or STATUS: decision-needed.",
     );
@@ -940,6 +1003,14 @@ describe("Codex natural-language delegation", () => {
         mode: "native-codex-async-relay",
         status: "accepted",
         threadId: "thread-natural",
+        launch: {
+          launchMode: "resumed-existing-thread",
+          nativeThreadId: "thread-natural",
+          policySource: "saved-thread",
+        },
+        launchSummary: expect.stringContaining(
+          "saved project and permission policy remain in effect",
+        ),
       },
     });
     expect(appServer.requests.slice(0, 2)).toEqual([
@@ -962,6 +1033,8 @@ describe("Codex natural-language delegation", () => {
       },
     ]);
     expect(appServer.requests[0]).not.toHaveProperty("params.dynamicTools");
+    expect(appServer.requests[1]).not.toHaveProperty("params.approvalPolicy");
+    expect(appServer.requests[1]).not.toHaveProperty("params.approvalsReviewer");
     const followupPrompt = (
       appServer.requests[1]?.params as {
         input?: Array<{ text?: string }>;

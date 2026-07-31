@@ -54,9 +54,10 @@ export class CodexRpcResponseError extends Error {
  *
  * The upstream client has managed binaries, alternate transports, auth bridges,
  * and richer server-request routing. This port intentionally keeps only the
- * same-Mac stdio contract needed by the isolated pilot. Every server approval
- * request is declined because this layer cannot safely project native Codex
- * approval UX yet.
+ * same-Mac stdio contract needed by the isolated pilot. Supported implementation
+ * approvals are handled inside Codex by the thread's `auto_review` reviewer.
+ * Any approval request that still reaches this client is declined because no
+ * separate user-facing approval bridge exists here.
  */
 export class CodexAppServerClient implements CodexRpcClient {
   private readonly child: ChildProcessWithoutNullStreams;
@@ -245,13 +246,15 @@ export class CodexAppServerClient implements CodexRpcClient {
     const id = message.id;
     const method = typeof message.method === "string" ? message.method : "";
     if (method.includes("requestApproval")) {
-      // Starting a Codex turn without a projected approval bridge must never
-      // turn an unavailable approval into implicit authorization.
+      // Auto-Review resolves the supported approval lifecycle inside Codex.
+      // A residual request has escaped that reviewed path, so fail closed rather
+      // than silently granting an arbitrary command, write, or external action.
       this.write({
         id,
         result: {
           decision: "decline",
-          reason: "The OpenClaw Codex pilot does not project native approvals yet.",
+          reason:
+            "This approval was not resolved by the configured Codex Auto-Review policy, and OpenClaw has no separate approval bridge for it.",
         },
       });
       return;
