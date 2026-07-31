@@ -31,16 +31,21 @@ evidence cannot be overwritten:
 scripts/run-focused-vitest-pair.sh \
   --label "<thread-id>:focused-pair" \
   --job-a-root "/absolute/path/to/monitor-worktree" \
+  --job-a-head "<40-character-commit>" \
   --job-b-root "/absolute/path/to/channels-worktree" \
+  --job-b-head "<40-character-commit>" \
   --receipt-dir "/absolute/path/to/new-receipt-directory"
 ```
 
 The public entrypoint validates its closed argument surface, then re-executes
 under one canonical `with-heavy-local-slot` transaction. The guarded pass
 revalidates both clean worktrees, test files, and pinned Vitest executables
-before starting either child. Existing admission floors, Jarvis/Tailscale
-health checks, runtime sampling, process-session identity, and whole-group
-TERM/KILL cleanup remain owned by the canonical wrapper.
+before starting either child. It accepts an inherited lease only when this
+entrypoint is the canonical wrapper's committed root child, so unrelated
+guarded work cannot nest the pair beside sibling workloads. Existing admission
+floors, Jarvis/Tailscale health checks, runtime sampling, process-session
+identity, and whole-group TERM/KILL cleanup remain owned by the canonical
+wrapper.
 
 The receipt directory contains `receipt.env`, `job-a.log`, and `job-b.log`.
 The structured receipt binds both Git heads, direct child PIDs and exit codes,

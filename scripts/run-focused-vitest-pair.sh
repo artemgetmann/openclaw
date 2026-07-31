@@ -28,7 +28,9 @@ Usage:
   scripts/run-focused-vitest-pair.sh \
     --label <owner> \
     --job-a-root <absolute-clean-worktree> \
+    --job-a-head <40-character-commit> \
     --job-b-root <absolute-clean-worktree> \
+    --job-b-head <40-character-commit> \
     --receipt-dir <new-absolute-directory>
 
 Runs only the repository's named measured Vitest pair. Arbitrary commands,
@@ -40,7 +42,9 @@ EOF
 
 LABEL=""
 JOB_A_ROOT=""
+EXPECTED_JOB_A_HEAD=""
 JOB_B_ROOT=""
+EXPECTED_JOB_B_HEAD=""
 RECEIPT_DIR=""
 ORIGINAL_ARGS=("$@")
 
@@ -56,9 +60,19 @@ while [[ "$#" -gt 0 ]]; do
       JOB_A_ROOT="$2"
       shift 2
       ;;
+    --job-a-head)
+      [[ "$#" -ge 2 ]] || usage
+      EXPECTED_JOB_A_HEAD="$2"
+      shift 2
+      ;;
     --job-b-root)
       [[ "$#" -ge 2 ]] || usage
       JOB_B_ROOT="$2"
+      shift 2
+      ;;
+    --job-b-head)
+      [[ "$#" -ge 2 ]] || usage
+      EXPECTED_JOB_B_HEAD="$2"
       shift 2
       ;;
     --receipt-dir)
@@ -72,8 +86,11 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
-[[ -n "$LABEL" && -n "$JOB_A_ROOT" && -n "$JOB_B_ROOT" && -n "$RECEIPT_DIR" ]] || usage
+[[ -n "$LABEL" && -n "$JOB_A_ROOT" && -n "$EXPECTED_JOB_A_HEAD" &&
+  -n "$JOB_B_ROOT" && -n "$EXPECTED_JOB_B_HEAD" && -n "$RECEIPT_DIR" ]] || usage
 [[ "$JOB_A_ROOT" == /* && "$JOB_B_ROOT" == /* && "$RECEIPT_DIR" == /* ]] || usage
+[[ "$EXPECTED_JOB_A_HEAD" =~ ^[0-9a-f]{40}$ &&
+  "$EXPECTED_JOB_B_HEAD" =~ ^[0-9a-f]{40}$ ]] || usage
 [[ "$JOB_A_ROOT" != "$JOB_B_ROOT" ]] || {
   echo "Refusing focused pair: job roots must be distinct." >&2
   exit 2
@@ -107,20 +124,47 @@ JOB_B_ROOT="$(canonical_worktree "$JOB_B_ROOT")" || {
   exit 2
 }
 
-# The public entrypoint validates all caller-controlled input before admission,
-# then re-executes beneath the canonical wrapper. On the guarded pass, the live
-# lease token and real ancestor chain must both match; a forged environment is
-# therefore useless and there is no ambient capacity/profile selector.
-openclaw_heavy_local_slot_require_or_reexec \
-  "focused-vitest-pair:${LABEL}" \
-  "$ROOT_DIR" \
-  "$ROOT_DIR/scripts/run-focused-vitest-pair.sh" \
-  "${ORIGINAL_ARGS[@]}"
+require_exclusive_pair_root_or_reexec() {
+  local expected_label=""
+  local lock_path=""
+  local owner_label=""
+  local guarded_root_pid=""
+
+  expected_label="$(openclaw_heavy_local_slot_safe_text "focused-vitest-pair:${LABEL}")"
+
+  if openclaw_heavy_local_slot_inherited_lease_is_valid "standard"; then
+    lock_path="$(openclaw_heavy_local_slot_resolve_path)" || return 75
+    owner_label="$(openclaw_heavy_local_slot_value "$lock_path/owner" label)"
+    guarded_root_pid="$(openclaw_heavy_local_slot_value "$lock_path/child_pid" pid)"
+
+    # A generic inherited lease proves ancestry, but not exclusivity. Require
+    # this script to be the wrapper's committed workload root so an unrelated
+    # guarded shell cannot add the pair beside already-running sibling work.
+    if [[ "$owner_label" != "$expected_label" || "$guarded_root_pid" != "$$" ]]; then
+      printf 'HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=focused_pair_not_guarded_root\n' >&2
+      echo "Refusing focused pair: entrypoint is nested beneath another guarded workload." >&2
+      return 75
+    fi
+    return 0
+  fi
+
+  # With no valid inherited capability, the canonical helper replaces any
+  # forged ambient token and re-executes this exact entrypoint as the guarded
+  # process root. The guarded pass above then verifies root identity.
+  openclaw_heavy_local_slot_require_or_reexec \
+    "focused-vitest-pair:${LABEL}" \
+    "$ROOT_DIR" \
+    "$ROOT_DIR/scripts/run-focused-vitest-pair.sh" \
+    "${ORIGINAL_ARGS[@]}"
+}
+
+require_exclusive_pair_root_or_reexec
 
 validate_job_root() {
   local job_name="$1"
   local job_root="$2"
-  shift 2
+  local expected_head="$3"
+  shift 3
   local test_path=""
 
   [[ -z "$(git -C "$job_root" status --porcelain)" ]] || {
@@ -129,6 +173,10 @@ validate_job_root() {
   }
   [[ -x "$job_root/node_modules/.bin/vitest" ]] || {
     echo "Refusing focused pair: $job_name lacks its pinned Vitest executable." >&2
+    return 2
+  }
+  [[ "$(git -C "$job_root" rev-parse HEAD)" == "$expected_head" ]] || {
+    echo "Refusing focused pair: $job_name moved from expected head $expected_head." >&2
     return 2
   }
   for test_path in "$@"; do
@@ -142,13 +190,16 @@ validate_job_root() {
 # Recheck every immutable input only after canonical admission. A checkout that
 # drifts while queued must fail before either child starts, never run a partly
 # validated pair.
-validate_job_root "job A" "$JOB_A_ROOT" "${JOB_A_TESTS[@]}"
-validate_job_root "job B" "$JOB_B_ROOT" "${JOB_B_TESTS[@]}"
-JOB_A_HEAD="$(git -C "$JOB_A_ROOT" rev-parse HEAD)"
-JOB_B_HEAD="$(git -C "$JOB_B_ROOT" rev-parse HEAD)"
+validate_job_root "job A" "$JOB_A_ROOT" "$EXPECTED_JOB_A_HEAD" "${JOB_A_TESTS[@]}"
+validate_job_root "job B" "$JOB_B_ROOT" "$EXPECTED_JOB_B_HEAD" "${JOB_B_TESTS[@]}"
+JOB_A_HEAD="$EXPECTED_JOB_A_HEAD"
+JOB_B_HEAD="$EXPECTED_JOB_B_HEAD"
 
 umask 077
-mkdir -p "$RECEIPT_DIR"
+mkdir "$RECEIPT_DIR" || {
+  echo "Refusing focused pair: receipt directory was created before guarded execution: $RECEIPT_DIR" >&2
+  exit 2
+}
 JOB_A_LOG="$RECEIPT_DIR/job-a.log"
 JOB_B_LOG="$RECEIPT_DIR/job-b.log"
 RECEIPT="$RECEIPT_DIR/receipt.env"

@@ -53,12 +53,40 @@ chmod +x "$SCRIPT_DIR/run-focused-vitest-pair.sh"
 # mode proves the public entrypoint requests one wrapper transaction; admitted
 # mode exercises the same production script after a simulated valid lease.
 cat >"$SCRIPT_DIR/lib/heavy-local-slot.sh" <<'EOF'
-openclaw_heavy_local_slot_require_or_reexec() {
-  printf '%s\n' "$*" >>"$PAIR_TEST_GUARD_CALLS"
-  if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "delegate" ]]; then
-    exit 42
+openclaw_heavy_local_slot_safe_text() {
+  printf '%s' "$1"
+}
+
+openclaw_heavy_local_slot_resolve_path() {
+  printf '%s\n' "$PAIR_TEST_GUARD_PATH"
+}
+
+openclaw_heavy_local_slot_value() {
+  awk -F= -v key="$2" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$1"
+}
+
+openclaw_heavy_local_slot_inherited_lease_is_valid() {
+  [[ "${PAIR_TEST_GUARD_MODE:-admitted}" != "delegate" ]] || return 1
+  mkdir -p "$PAIR_TEST_GUARD_PATH"
+  if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "wrong_label" ]]; then
+    printf 'label=unrelated-guarded-work\n' >"$PAIR_TEST_GUARD_PATH/owner"
+  else
+    printf 'label=%s\n' "$PAIR_TEST_EXPECTED_LABEL" >"$PAIR_TEST_GUARD_PATH/owner"
+  fi
+  if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "nested" ]]; then
+    printf 'pid=1\n' >"$PAIR_TEST_GUARD_PATH/child_pid"
+  else
+    printf 'pid=%s\n' "$$" >"$PAIR_TEST_GUARD_PATH/child_pid"
+  fi
+  if [[ -n "${PAIR_TEST_RACE_RECEIPT:-}" ]]; then
+    mkdir -p "$PAIR_TEST_RACE_RECEIPT"
   fi
   return 0
+}
+
+openclaw_heavy_local_slot_require_or_reexec() {
+  printf '%s\n' "$*" >>"$PAIR_TEST_GUARD_CALLS"
+  exit 42
 }
 EOF
 
@@ -74,6 +102,8 @@ JOB_A_TESTS=(
 JOB_B_TESTS=(src/commands/channels.status.command-flow.test.ts)
 make_job_root "$JOB_A_ROOT" "${JOB_A_TESTS[@]}"
 make_job_root "$JOB_B_ROOT" "${JOB_B_TESTS[@]}"
+JOB_A_HEAD="$(git -C "$JOB_A_ROOT" rev-parse HEAD)"
+JOB_B_HEAD="$(git -C "$JOB_B_ROOT" rev-parse HEAD)"
 
 BIN_DIR="$TMP_DIR/bin"
 mkdir -p "$BIN_DIR"
@@ -109,7 +139,9 @@ chmod +x "$BIN_DIR/pnpm"
 run_pair() {
   local receipt_dir="$1"
   PAIR_TEST_GUARD_MODE=admitted \
+    PAIR_TEST_GUARD_PATH="$TMP_DIR/guard" \
     PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
+    PAIR_TEST_EXPECTED_LABEL="focused-vitest-pair:shell-test" \
     PAIR_TEST_CALLS="$TMP_DIR/pnpm.calls" \
     PAIR_TEST_STATE="$TMP_DIR/state" \
     PAIR_TEST_JOB_A_ROOT="$(cd "$JOB_A_ROOT" && pwd -P)" \
@@ -117,7 +149,9 @@ run_pair() {
     "$SCRIPT_DIR/run-focused-vitest-pair.sh" \
       --label shell-test \
       --job-a-root "$JOB_A_ROOT" \
+      --job-a-head "$JOB_A_HEAD" \
       --job-b-root "$JOB_B_ROOT" \
+      --job-b-head "$JOB_B_HEAD" \
       --receipt-dir "$receipt_dir"
 }
 
@@ -137,7 +171,9 @@ test_argument_validation_precedes_guard() {
     "$SCRIPT_DIR/run-focused-vitest-pair.sh" \
       --label invalid \
       --job-a-root relative \
+      --job-a-head "$JOB_A_HEAD" \
       --job-b-root "$JOB_B_ROOT" \
+      --job-b-head "$JOB_B_HEAD" \
       --receipt-dir "$TMP_DIR/invalid-receipt" >/dev/null 2>>"$err"
   status=$?
   set -e
@@ -150,7 +186,9 @@ test_argument_validation_precedes_guard() {
     "$SCRIPT_DIR/run-focused-vitest-pair.sh" \
       --label invalid \
       --job-a-root "$JOB_A_ROOT" \
+      --job-a-head "$JOB_A_HEAD" \
       --job-b-root "$TMP_DIR/job-a-alias" \
+      --job-b-head "$JOB_A_HEAD" \
       --receipt-dir "$TMP_DIR/alias-receipt" >/dev/null 2>>"$err"
   status=$?
   set -e
@@ -166,7 +204,9 @@ test_exactly_one_canonical_supervisor_request() {
     "$SCRIPT_DIR/run-focused-vitest-pair.sh" \
       --label delegation \
       --job-a-root "$JOB_A_ROOT" \
+      --job-a-head "$JOB_A_HEAD" \
       --job-b-root "$JOB_B_ROOT" \
+      --job-b-head "$JOB_B_HEAD" \
       --receipt-dir "$TMP_DIR/delegation-receipt" >/dev/null 2>&1
   local status=$?
   set -e
@@ -175,6 +215,90 @@ test_exactly_one_canonical_supervisor_request() {
     fail "entrypoint requested more than one canonical supervisor"
   assert_contains "$TMP_DIR/guard.calls" "focused-vitest-pair:delegation"
   pass "one canonical supervisor is requested"
+}
+
+test_unrelated_inherited_lease_is_refused() {
+  local mode=""
+  local receipt_dir=""
+  local status=0
+  for mode in nested wrong_label; do
+    receipt_dir="$TMP_DIR/${mode}-receipt"
+    rm -rf "$TMP_DIR/guard" "$receipt_dir" "$TMP_DIR/state"
+    mkdir -p "$TMP_DIR/state"
+    : >"$TMP_DIR/pnpm.calls"
+    set +e
+    PAIR_TEST_GUARD_MODE="$mode" \
+      PAIR_TEST_GUARD_PATH="$TMP_DIR/guard" \
+      PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
+      PAIR_TEST_EXPECTED_LABEL="focused-vitest-pair:shell-test" \
+      PAIR_TEST_CALLS="$TMP_DIR/pnpm.calls" \
+      "$SCRIPT_DIR/run-focused-vitest-pair.sh" \
+        --label shell-test \
+        --job-a-root "$JOB_A_ROOT" \
+        --job-a-head "$JOB_A_HEAD" \
+        --job-b-root "$JOB_B_ROOT" \
+        --job-b-head "$JOB_B_HEAD" \
+        --receipt-dir "$receipt_dir" >/dev/null 2>&1
+    status=$?
+    set -e
+    [[ "$status" -eq 75 ]] || fail "$mode inherited lease returned $status"
+    [[ ! -s "$TMP_DIR/pnpm.calls" ]] || fail "$mode inherited lease launched work"
+    [[ ! -e "$receipt_dir" ]] || fail "$mode inherited lease created receipts"
+  done
+  pass "nested or mislabeled inherited lease fails before workload launch"
+}
+
+test_expected_head_drift_is_refused() {
+  rm -rf "$TMP_DIR/guard" "$TMP_DIR/head-drift-receipt" "$TMP_DIR/state"
+  mkdir -p "$TMP_DIR/state"
+  : >"$TMP_DIR/pnpm.calls"
+  set +e
+  PAIR_TEST_GUARD_MODE=admitted \
+    PAIR_TEST_GUARD_PATH="$TMP_DIR/guard" \
+    PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
+    PAIR_TEST_EXPECTED_LABEL="focused-vitest-pair:shell-test" \
+    PAIR_TEST_CALLS="$TMP_DIR/pnpm.calls" \
+    "$SCRIPT_DIR/run-focused-vitest-pair.sh" \
+      --label shell-test \
+      --job-a-root "$JOB_A_ROOT" \
+      --job-a-head "0000000000000000000000000000000000000000" \
+      --job-b-root "$JOB_B_ROOT" \
+      --job-b-head "$JOB_B_HEAD" \
+      --receipt-dir "$TMP_DIR/head-drift-receipt" >/dev/null 2>&1
+  local status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || fail "expected-head drift returned $status"
+  [[ ! -s "$TMP_DIR/pnpm.calls" ]] || fail "expected-head drift launched work"
+  [[ ! -e "$TMP_DIR/head-drift-receipt" ]] || fail "expected-head drift created receipts"
+  pass "expected-head drift fails before workload launch"
+}
+
+test_receipt_creation_race_is_refused() {
+  rm -rf "$TMP_DIR/guard" "$TMP_DIR/race-receipt" "$TMP_DIR/state"
+  mkdir -p "$TMP_DIR/state"
+  : >"$TMP_DIR/pnpm.calls"
+  set +e
+  PAIR_TEST_GUARD_MODE=admitted \
+    PAIR_TEST_GUARD_PATH="$TMP_DIR/guard" \
+    PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
+    PAIR_TEST_EXPECTED_LABEL="focused-vitest-pair:shell-test" \
+    PAIR_TEST_RACE_RECEIPT="$TMP_DIR/race-receipt" \
+    PAIR_TEST_CALLS="$TMP_DIR/pnpm.calls" \
+    "$SCRIPT_DIR/run-focused-vitest-pair.sh" \
+      --label shell-test \
+      --job-a-root "$JOB_A_ROOT" \
+      --job-a-head "$JOB_A_HEAD" \
+      --job-b-root "$JOB_B_ROOT" \
+      --job-b-head "$JOB_B_HEAD" \
+      --receipt-dir "$TMP_DIR/race-receipt" >/dev/null 2>&1
+  local status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || fail "receipt creation race returned $status"
+  [[ ! -s "$TMP_DIR/pnpm.calls" ]] || fail "receipt creation race launched work"
+  [[ -d "$TMP_DIR/race-receipt" ]] || fail "race fixture did not create receipt directory"
+  [[ -z "$(find "$TMP_DIR/race-receipt" -mindepth 1 -print -quit)" ]] ||
+    fail "receipt creation race overwrote evidence"
+  pass "receipt directory creation race fails without overwrite"
 }
 
 test_two_children_have_fixed_allowlists_and_caps() {
@@ -250,6 +374,9 @@ test_signal_stops_both_children_and_records_interrupt() {
 
 test_argument_validation_precedes_guard
 test_exactly_one_canonical_supervisor_request
+test_unrelated_inherited_lease_is_refused
+test_expected_head_drift_is_refused
+test_receipt_creation_race_is_refused
 test_two_children_have_fixed_allowlists_and_caps
 test_failure_propagates_after_complete_receipt
 test_signal_stops_both_children_and_records_interrupt
