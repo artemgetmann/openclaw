@@ -25,7 +25,11 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
-const ensureGatewayLifecycleLease = vi.fn(async () => ({ outcome: "held" as const }));
+const ensureGatewayLifecycleLease = vi.fn(
+  async (): Promise<{ outcome: "held" } | { outcome: "reexecuted"; exitCode: number }> => ({
+    outcome: "held",
+  }),
+);
 const buildGatewayInstallPlan = vi.fn(
   async (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) => ({
     programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],

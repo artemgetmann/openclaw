@@ -213,7 +213,7 @@ export default myHandler;
 Test your hooks by:
 
 1. Place hook in workspace hooks directory
-2. Restart gateway: `pkill -9 -f 'openclaw.*gateway' && pnpm openclaw gateway`
+2. Restart the service safely: `openclaw gateway restart`
 3. Enable the hook: `openclaw hooks enable my-hook`
 4. Trigger the event (e.g., send `/new` command)
 5. Check gateway logs for hook execution

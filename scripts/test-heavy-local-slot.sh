@@ -925,7 +925,8 @@ test_machine_wide_default_and_separate_clone_contention() {
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$contender_health" \
     "$clone_b/scripts/with-heavy-local-slot.sh" \
-      --label "clone-b-contender" \
+      --policy gateway-lifecycle \
+      --label "gateway-restart:clone-b-contender" \
       -- bash -c \
         'printf "signal\nbootstrap\nkickstart\n" >>"$1"' \
         openclaw-gateway-restart-contender \
@@ -2017,6 +2018,36 @@ test_gateway_lifecycle_policy_skips_only_gateway_health() {
   pass "gateway lifecycle policy preserves the lease while skipping gateway self-health"
 }
 
+test_gateway_lifecycle_policy_rejects_unrelated_labels() {
+  local lock_path="$TMP_DIR/gateway-lifecycle-invalid-label.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle-invalid-label.health"
+  local marker="$TMP_DIR/gateway-lifecycle-invalid-label.marker"
+  local stderr_path="$TMP_DIR/gateway-lifecycle-invalid-label.err"
+  local status=0
+
+  : >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy gateway-lifecycle \
+      --label "not-a-gateway-restart" \
+      -- \
+      touch "$marker" \
+      2>"$stderr_path"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "invalid gateway lifecycle label returned $status instead of 75"
+  [[ ! -e "$marker" ]] || fail "invalid gateway lifecycle label reached guarded mutation"
+  grep -Fq \
+    "HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=invalid_gateway_lifecycle_label" \
+    "$stderr_path" ||
+    fail "invalid gateway lifecycle label omitted structured refusal"
+  [[ ! -e "$lock_path" ]] || fail "invalid gateway lifecycle label created a lease"
+  pass "gateway lifecycle policy rejects unrelated labels before mutation"
+}
+
 create_lock_order_fixture() {
   local fixture="$TMP_DIR/lock-order-fixture.sh"
 
@@ -2322,6 +2353,21 @@ if [[ "${1:-}" == "--cleanup-only" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "--gateway-lifecycle-only" ]]; then
+  SUITE_PHASE="create_instrumented_runtime"
+  create_instrumented_runtime
+  SUITE_PHASE="create_sigint_reset_launcher"
+  create_sigint_reset_launcher
+  SUITE_PHASE="create_term_attribution_holder"
+  create_term_attribution_holder
+  run_suite_test test_machine_wide_default_and_separate_clone_contention
+  run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
+  run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
+  SUITE_PHASE="complete"
+  echo "Gateway lifecycle contention tests passed."
+  exit 0
+fi
+
 SUITE_PHASE="create_instrumented_runtime"
 create_instrumented_runtime
 SUITE_PHASE="create_sigint_reset_launcher"
@@ -2357,6 +2403,7 @@ run_suite_test test_two_sample_health_stop_kills_tree
 run_suite_test test_signal_cleanup_kills_tree_and_releases
 run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient
 run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
+run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
 run_suite_test test_fleet_and_release_lock_coexistence_and_wiring
 
 SUITE_PHASE="complete"

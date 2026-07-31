@@ -311,18 +311,25 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
     typeof params.waitForPid === "number" && Number.isFinite(params.waitForPid)
       ? Math.floor(params.waitForPid)
       : 0;
-  const waitForPidStart = waitForPid > 1 ? resolveProcessStartIdentity(waitForPid) : "";
-  if (waitForPid > 1 && !waitForPidStart) {
-    return {
-      ok: false,
-      detail: "could not prove restart caller PID/start identity",
-    };
+  let waitForPidStart = "";
+  if (waitForPid > 1) {
+    const resolvedStart = resolveProcessStartIdentity(waitForPid);
+    if (!resolvedStart) {
+      return {
+        ok: false,
+        detail: "could not prove restart caller PID/start identity",
+      };
+    }
+    waitForPidStart = resolvedStart;
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : 501;
   let receiptDir: string | undefined;
   try {
-    receiptDir = fssync.mkdtempSync(path.join(os.tmpdir(), `openclaw-gateway-lifecycle-${uid}-`));
-    fssync.chmodSync(receiptDir, 0o700);
+    const createdReceiptDir = fssync.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-gateway-lifecycle-${uid}-`),
+    );
+    receiptDir = createdReceiptDir;
+    fssync.chmodSync(createdReceiptDir, 0o700);
     const handoffScript = buildLaunchdRestartScript(params.mode);
     const child = spawn(
       "/bin/sh",
@@ -332,13 +339,13 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         "openclaw-launchd-restart-lease-owner",
         leasePaths.wrapper,
         `gateway-restart-handoff:${target.label}`,
-        receiptDir,
+        createdReceiptDir,
         target.serviceTarget,
         target.domain,
         target.plistPath,
         String(waitForPid),
         String(delayMs),
-        receiptDir,
+        createdReceiptDir,
         waitForPidStart,
         leasePaths.helper,
       ],
@@ -348,9 +355,12 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         env: { ...process.env, ...params.env },
       },
     );
-    const admission = waitForLeaseAdmission({ receiptDir, childPid: child.pid });
+    const admission = waitForLeaseAdmission({
+      receiptDir: createdReceiptDir,
+      childPid: child.pid,
+    });
     if (!admission.ok) {
-      cleanupFailedReceipt(receiptDir);
+      cleanupFailedReceipt(createdReceiptDir);
       return { ok: false, detail: admission.detail };
     }
     child.unref();

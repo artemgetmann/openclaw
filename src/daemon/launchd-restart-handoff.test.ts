@@ -50,7 +50,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[0]).toBe("-c");
     expect(args[2]).toBe("openclaw-launchd-restart-lease-owner");
     expect(args[9]).toBe(String(process.pid));
-    expect(args[12]).toMatch(/scripts\/lib\/heavy-local-slot\.sh$/);
+    expect(args[12]).toBeTruthy();
+    expect(args[13]).toMatch(/scripts\/lib\/heavy-local-slot\.sh$/);
     expect(args[1]).toContain(
       'openclaw_heavy_local_slot_owner_is_live "$wait_pid" "$wait_pid_start"',
     );

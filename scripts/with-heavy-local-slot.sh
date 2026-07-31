@@ -256,7 +256,10 @@ validate_policy_for_command() {
           return 0
           ;;
         *)
-          echo "Refusing heavy work: gateway-lifecycle policy requires a gateway restart label." >&2
+          emit_refusal \
+            "guard_internal" \
+            "invalid_gateway_lifecycle_label" \
+            "gateway-lifecycle policy requires a gateway restart label"
           return 75
           ;;
       esac
