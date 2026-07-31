@@ -113,6 +113,40 @@ describe("Telegram active run Stop control", () => {
     expect(nextRegistration.buttons[0]?.[0]?.callback_data).not.toBe(callbackData);
   });
 
+  it("does not restore a claim after its controller releases the registration", () => {
+    const registration = registerTelegramRunStop({
+      accountId: "default",
+      chatId: 123,
+      requesterId: 9,
+    });
+    const callbackData = registration.buttons[0]?.[0]?.callback_data ?? "";
+    const claim = claimTelegramRunStop({
+      data: callbackData,
+      accountId: "default",
+      chatId: 123,
+      requesterId: 9,
+    });
+    expect(claim?.status).toBe("claimed");
+    if (claim?.status !== "claimed") {
+      throw new Error("expected claimed Stop control");
+    }
+
+    // The token is absent while claimed. Releasing during that window must
+    // still permanently retire the authorization before a failed abort can
+    // attempt to restore it.
+    registration.release();
+    claim.restore();
+
+    expect(
+      claimTelegramRunStop({
+        data: callbackData,
+        accountId: "default",
+        chatId: 123,
+        requesterId: 9,
+      }),
+    ).toEqual({ status: "stale" });
+  });
+
   it("releases controls idempotently and rejects malformed callback data", () => {
     const registration = registerTelegramRunStop({
       accountId: "default",

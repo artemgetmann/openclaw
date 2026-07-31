@@ -162,7 +162,7 @@ describe("getTelegramBusyAwareSequentialKey", () => {
       update: {
         callback_query: {
           id: "callback-stop-9",
-          data: "ors:1",
+          data: `ors:${"a".repeat(24)}`,
           message: mockMessage({ chat: mockChat({ id: 123, type: "private" }) }),
         },
       },
