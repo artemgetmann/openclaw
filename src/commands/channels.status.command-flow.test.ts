@@ -100,12 +100,13 @@ function createTokenOnlyPlugin() {
 function createRuntimeCapture() {
   const logs: string[] = [];
   const errors: string[] = [];
+  const exits: number[] = [];
   const runtime = {
     log: (message: unknown) => logs.push(String(message)),
     error: (message: unknown) => errors.push(String(message)),
-    exit: (_code?: number) => undefined,
+    exit: (code: number) => exits.push(code),
   };
-  return { runtime, logs, errors };
+  return { runtime, logs, errors, exits };
 }
 
 describe("channelsStatusCommand SecretRef fallback flow", () => {
@@ -168,6 +169,24 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(joined).toContain("token:config");
     expect(joined).not.toContain("secret unavailable in this command path");
     expect(joined).not.toContain("token:config (unavailable)");
+  });
+
+  it("emits one JSON failure object and exits nonzero when the gateway is unreachable", async () => {
+    callGateway.mockRejectedValue(new Error("gateway closed"));
+    const { runtime, logs, errors, exits } = createRuntimeCapture();
+
+    await channelsStatusCommand({ probe: true, json: true }, runtime as never);
+
+    expect(errors).toEqual(["Gateway not reachable: Error: gateway closed"]);
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0] ?? "")).toEqual({
+      ok: false,
+      gatewayReachable: false,
+      error: "Error: gateway closed",
+    });
+    expect(exits).toEqual([1]);
+    expect(requireValidConfigSnapshot).not.toHaveBeenCalled();
+    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
   it("uses a larger default timeout for probe mode", async () => {
