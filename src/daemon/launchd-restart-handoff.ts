@@ -14,6 +14,7 @@ export type LaunchdRestartHandoffResult = {
   ok: boolean;
   pid?: number;
   detail?: string;
+  cancel?: () => boolean;
 };
 
 export type LaunchdRestartTarget = {
@@ -200,6 +201,26 @@ function cleanupFailedReceipt(receiptDir: string): void {
   }
 }
 
+function cancelAdmittedHandoff(receiptDir: string): boolean {
+  const cancelPath = path.join(receiptDir, "cancel");
+  const cancelTmp = `${cancelPath}.tmp.${process.pid}`;
+  try {
+    // The UID-private receipt directory is shared only with the exact detached
+    // owner. Atomic publication avoids a PID signal/reuse race while giving the
+    // waiting helper a durable superseding-stop instruction.
+    fssync.writeFileSync(cancelTmp, "stop superseded restart\n", { mode: 0o600 });
+    fssync.renameSync(cancelTmp, cancelPath);
+    return true;
+  } catch {
+    try {
+      fssync.rmSync(cancelTmp);
+    } catch {
+      // Preserve the original failure result.
+    }
+    return false;
+  }
+}
+
 export function scheduleDetachedLaunchdRestartHandoff(params: {
   env?: Record<string, string | undefined>;
   mode: LaunchdRestartHandoffMode;
@@ -281,7 +302,11 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
       return { ok: false, detail: admission.detail };
     }
     child.unref();
-    return { ok: true, pid: child.pid ?? undefined };
+    return {
+      ok: true,
+      pid: child.pid ?? undefined,
+      cancel: () => cancelAdmittedHandoff(createdReceiptDir),
+    };
   } catch (err) {
     if (receiptDir) {
       cleanupFailedReceipt(receiptDir);

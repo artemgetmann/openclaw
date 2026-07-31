@@ -23,7 +23,12 @@ const cancelGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
-  () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
+  () => {
+    mode: "spawned" | "supervised" | "disabled" | "failed";
+    pid?: number;
+    detail?: string;
+    cancel?: () => boolean;
+  }
 >(() => ({ mode: "disabled" }));
 const detectRespawnSupervisor = vi.fn<() => "launchd" | "systemd" | "schtasks" | undefined>(
   () => undefined,
@@ -636,6 +641,40 @@ describe("runGatewayLoop", () => {
 
       sigterm();
       await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("cancels an admitted launchd handoff when stop supersedes restart during close", async () => {
+    vi.clearAllMocks();
+    detectRespawnSupervisor.mockReturnValueOnce("launchd");
+    const cancel = vi.fn(() => true);
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+      mode: "supervised",
+      pid: 4242,
+      cancel,
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      let finishClose!: () => void;
+      const closeBlocked = new Promise<void>((resolve) => {
+        finishClose = resolve;
+      });
+      const close = vi.fn(async () => await closeBlocked);
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+      await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+      sigterm();
+      finishClose();
+
+      await expect(exited).resolves.toBe(0);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(runtime.exit).toHaveBeenCalledWith(0);
     });
   });
 

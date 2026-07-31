@@ -9,6 +9,7 @@ export type GatewayRespawnResult = {
   mode: RespawnMode;
   pid?: number;
   detail?: string;
+  cancel?: () => boolean;
 };
 
 function isTruthy(value: string | undefined): boolean {
@@ -48,6 +49,7 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
       return {
         mode: "supervised",
         detail: `launchd restart handoff pid ${handoff.pid ?? "unknown"}`,
+        ...(handoff.cancel ? { cancel: handoff.cancel } : {}),
       };
     }
     if (supervisor === "schtasks") {

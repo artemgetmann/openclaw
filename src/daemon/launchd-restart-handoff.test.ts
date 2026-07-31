@@ -45,7 +45,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       waitForPid: process.pid,
     });
 
-    expect(result).toEqual({ ok: true, pid: 4242 });
+    expect(result).toEqual({ ok: true, pid: 4242, cancel: expect.any(Function) });
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [, args, options] = spawnMock.mock.calls[0] as [
       string,
@@ -69,6 +69,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[4]).toMatch(/scripts\/gateway-lifecycle-command\.sh$/);
     expect(options.env.OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN).toBeUndefined();
     expect(fs.readFileSync(`${args[6]}/ack`, "utf8")).toBe("observed\n");
+    expect(result.cancel?.()).toBe(true);
+    expect(fs.readFileSync(`${args[6]}/cancel`, "utf8")).toBe("stop superseded restart\n");
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
@@ -90,13 +92,14 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       delayMs: 2500,
     });
 
-    expect(result).toEqual({ ok: true, pid: 4243 });
+    expect(result).toEqual({ ok: true, pid: 4243, cancel: expect.any(Function) });
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
     const lifecycleCommand = fs.readFileSync(args[4], "utf8");
     expect(args[11]).toBe("0");
     expect(args[12]).toBe("2500");
     expect(lifecycleCommand).toContain('local delay_ms="$6"');
     expect(lifecycleCommand).toContain('sleep "${delay_seconds}.$(printf');
+    expect(lifecycleCommand).toContain('[[ ! -f "$cancel_path" ]]');
   });
 
   it("fails closed before reporting scheduled when the lease contender exits 75", () => {

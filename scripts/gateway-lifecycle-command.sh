@@ -125,12 +125,13 @@ run_handoff() {
 
   local ready_path="$receipt_dir/ready"
   local ack_path="$receipt_dir/ack"
+  local cancel_path="$receipt_dir/cancel"
   local ready_tmp="$receipt_dir/ready.tmp.$$"
   umask 077
   printf 'admitted\n' >"$ready_tmp"
   /bin/mv "$ready_tmp" "$ready_path"
   cleanup_receipt() {
-    /bin/rm -f "$ready_path" "$ready_tmp" "$ack_path"
+    /bin/rm -f "$ready_path" "$ready_tmp" "$ack_path" "$cancel_path" "$cancel_path.tmp."*
     /bin/rmdir "$receipt_dir" 2>/dev/null || true
   }
   trap cleanup_receipt EXIT
@@ -139,6 +140,7 @@ run_handoff() {
   # cannot pin the machine lifecycle lease indefinitely.
   local ack_wait_count=0
   while [[ ! -f "$ack_path" ]]; do
+    [[ ! -f "$cancel_path" ]] || exit "$TEMPORARY_UNAVAILABLE_EXIT_CODE"
     ack_wait_count=$((ack_wait_count + 1))
     [[ "$ack_wait_count" -lt 800 ]] || exit "$TEMPORARY_UNAVAILABLE_EXIT_CODE"
     sleep 0.025
@@ -149,6 +151,7 @@ run_handoff() {
     local delay_millis=$((delay_ms % 1000))
     sleep "${delay_seconds}.$(printf '%03d' "$delay_millis")"
   fi
+  [[ ! -f "$cancel_path" ]] || exit "$TEMPORARY_UNAVAILABLE_EXIT_CODE"
 
   if [[ "$wait_pid" =~ ^[1-9][0-9]*$ && "$wait_pid" -gt 1 ]]; then
     [[ -n "$wait_pid_start" ]] || fail_closed "launchd caller start identity is missing"
@@ -157,6 +160,7 @@ run_handoff() {
     local wait_pid_count=0
     local wait_status=0
     while true; do
+      [[ ! -f "$cancel_path" ]] || exit "$TEMPORARY_UNAVAILABLE_EXIT_CODE"
       if openclaw_heavy_local_slot_owner_is_live "$wait_pid" "$wait_pid_start"; then
         wait_pid_count=$((wait_pid_count + 1))
         [[ "$wait_pid_count" -lt 300 ]] || exit "$TEMPORARY_UNAVAILABLE_EXIT_CODE"
@@ -169,6 +173,10 @@ run_handoff() {
       exit "$TEMPORARY_UNAVAILABLE_EXIT_CODE"
     done
   fi
+
+  # The caller may convert an admitted restart into an explicit stop while its
+  # listener is closing. Honor that newer intent before any launchctl mutation.
+  [[ ! -f "$cancel_path" ]] || exit "$TEMPORARY_UNAVAILABLE_EXIT_CODE"
 
   if [[ "$mode" == "kickstart" ]]; then
     if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then

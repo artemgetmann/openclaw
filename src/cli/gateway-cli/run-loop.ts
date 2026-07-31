@@ -369,8 +369,20 @@ export async function runGatewayLoop<TPrepared = never>(params: {
           if (isRestart && !pendingStopSignal) {
             await handleRestartAfterServerClose(preparedRespawn);
           } else {
-            pendingStopSignal = null;
-            await handleStopAfterServerClose();
+            if (preparedRespawn?.cancel && !preparedRespawn.cancel()) {
+              // Losing the cancellation receipt would make exit ambiguous: the
+              // detached helper could relaunch after an explicit stop. Keep the
+              // current process alive and reopen the listener fail-closed.
+              gatewayLog.error(
+                "could not cancel admitted launchd restart; preserving the current gateway instead of exiting",
+              );
+              pendingStopSignal = null;
+              shuttingDown = false;
+              restartResolver?.();
+            } else {
+              pendingStopSignal = null;
+              await handleStopAfterServerClose();
+            }
           }
         }
       }
