@@ -5,6 +5,7 @@ import {
   findActiveMonitorByIdentity,
 } from "./store.js";
 import type { MonitorRecord, MonitorStoreFile } from "./types.js";
+import { CODEX_THREAD_UNARCHIVE_RESUME_ACTION } from "./types.js";
 
 function monitorRecord(overrides: Partial<MonitorRecord> = {}): MonitorRecord {
   return {
@@ -129,6 +130,59 @@ describe("monitor store identity", () => {
     });
 
     expect(secondKey).toBe(firstKey);
+  });
+
+  it("dedupes durable authority by stable purpose and exact action scope, not display name", () => {
+    const grant = {
+      schemaVersion: 1 as const,
+      grantId: "grant-1",
+      goalId: "goal-1",
+      purposeKey: "mac-release:verify-login-item-fix",
+      action: {
+        kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+        threadId: "thread-1",
+        prompt: "Run the deferred proof.",
+      },
+      idempotencyKey: "release-1",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      stopCondition: "Resume once.",
+      maxExecutions: 1 as const,
+      grantedAtMs: 1,
+      execution: { status: "available" as const, executions: 0 },
+      audit: [{ event: "granted" as const, atMs: 1 }],
+    };
+    const first = createMonitorIdentityKey({
+      agentId: "main",
+      sourceType: "github-release",
+      sourceTarget: { repo: "artemgetmann/openclaw", version: "next" },
+      actionPolicy: "notify_only",
+      purposeLabel: "Old display name",
+      authority: grant,
+    });
+    const renamed = createMonitorIdentityKey({
+      agentId: "main",
+      sourceType: "rss",
+      sourceTarget: { feed: "releases" },
+      actionPolicy: "notify_draft",
+      purposeLabel: "New display name",
+      authority: {
+        ...grant,
+        grantId: "retry-created-grant",
+        idempotencyKey: "caller-generated-retry-key",
+      },
+    });
+    const otherThread = createMonitorIdentityKey({
+      agentId: "main",
+      sourceType: "github-release",
+      sourceTarget: { repo: "artemgetmann/openclaw", version: "next" },
+      authority: {
+        ...grant,
+        action: { ...grant.action, threadId: "thread-2" },
+      },
+    });
+
+    expect(renamed).toBe(first);
+    expect(otherThread).not.toBe(first);
   });
 
   it("does not match stopped monitor history as an active duplicate", () => {

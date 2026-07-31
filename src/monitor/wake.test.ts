@@ -1,8 +1,53 @@
 import { describe, expect, it } from "vitest";
 import { detectImageReferences } from "../agents/pi-embedded-runner/run/images.js";
+import { CODEX_THREAD_UNARCHIVE_RESUME_ACTION } from "./types.js";
 import { buildMonitorWakeMessage } from "./wake.js";
 
 describe("buildMonitorWakeMessage", () => {
+  it("replays the exact approved continuation prompt on every wake", () => {
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-07-29T08:00:00.000Z",
+      wakeReason: "cron:release-check",
+      monitor: {
+        monitorId: "monitor-release-authority",
+        agentId: "main",
+        instructions: "Watch for the release.",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:monitor-release-authority",
+        sourceType: "github-release",
+        sourceTarget: { repo: "artemgetmann/openclaw" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "notify_only",
+        authority: {
+          schemaVersion: 1,
+          grantId: "grant-1",
+          goalId: "goal-1",
+          purposeKey: "release-proof",
+          action: {
+            kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+            threadId: "thread-release-proof",
+            prompt: "Run the deferred release proof exactly once.",
+          },
+          idempotencyKey: "release-proof-1",
+          expiresAt: "2026-08-31T00:00:00.000Z",
+          stopCondition: "Stop after one accepted continuation.",
+          maxExecutions: 1,
+          grantedAtMs: 1,
+          execution: { status: "available", executions: 0 },
+          audit: [{ event: "granted", atMs: 1 }],
+        },
+        status: "active",
+        cronJobId: "cron-release",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).toContain(
+      'Authorized continuation prompt (use exactly): "Run the deferred release proof exactly once."',
+    );
+  });
+
   it("replays the persisted original task contract while keeping inbound evidence non-authoritative", () => {
     const instructions =
       "When the WhatsApp reply arrives, quote it and draft a concise confirmation for my approval. Do not send it.";

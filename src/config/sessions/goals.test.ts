@@ -11,6 +11,7 @@ import {
   updateSessionGoalStatus,
 } from "./goals.js";
 import { loadSessionStore, updateSessionStore } from "./store.js";
+import { SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION } from "./types.js";
 
 describe("session goals", () => {
   let tempDir = "";
@@ -67,6 +68,18 @@ describe("session goals", () => {
   });
 
   it("persists only explicitly supplied bounded autonomy and defaults legacy goals to observe-only", async () => {
+    const authorityGrant = {
+      purposeKey: "mac-release:verify-login-item",
+      action: {
+        kind: SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+        threadId: "thread-release-proof",
+        prompt: "Run the deferred release proof.",
+      },
+      idempotencyKey: "release-proof-1",
+      expiresAt: "2026-08-31T00:00:00.000Z",
+      stopCondition: "Stop after one accepted continuation.",
+      maxExecutions: 1 as const,
+    };
     const goal = await createSessionGoal({
       sessionKey,
       storePath,
@@ -75,12 +88,14 @@ describe("session goals", () => {
         level: "act_within_scope",
         allowedActions: ["  follow up with the vendor  ", "follow up with the vendor"],
         approvalRequired: ["accept a higher price"],
+        authorityGrants: [authorityGrant, authorityGrant],
       },
     });
     expect(goal.autonomy).toEqual({
       level: "act_within_scope",
       allowedActions: ["follow up with the vendor"],
       approvalRequired: ["accept a higher price"],
+      authorityGrants: [authorityGrant],
     });
 
     await clearSessionGoal({ sessionKey, storePath });

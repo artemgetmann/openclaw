@@ -1,4 +1,8 @@
-import type { CodexNotification, CodexRpcClient } from "./app-server-client.js";
+import {
+  type CodexNotification,
+  type CodexRpcClient,
+  CodexRpcResponseError,
+} from "./app-server-client.js";
 import {
   type CodexTaskMode,
   type CodexWorkspaceMode,
@@ -33,6 +37,13 @@ export type CodexThreadStarted = {
   turnId: string;
   completion: Promise<CodexThreadRunResult>;
 };
+
+export class CodexTurnStartAcceptanceAmbiguousError extends Error {
+  constructor(cause: unknown) {
+    super("Codex turn acceptance became ambiguous while starting the native turn", { cause });
+    this.name = "CodexTurnStartAcceptanceAmbiguousError";
+  }
+}
 
 export type CodexDelegateRequest = {
   text: string;
@@ -499,20 +510,33 @@ export class CodexThreadService {
       }
       const collector = createTurnCollector(normalizedThreadId);
       stopNotifications = client.onNotification(collector.handleNotification);
-      const response = await client.request<JsonObject>("turn/start", {
-        threadId: normalizedThreadId,
-        input: [{ type: "text", text: prompt, text_elements: [] }],
-        // Continuations intentionally omit cwd/sandbox so App Server preserves
-        // the durable thread policy. A prepared first turn supplies the exact
-        // isolated write boundary.
-        ...buildTurnExecutionOverrides(execution),
-        approvalPolicy: "never",
-        approvalsReviewer: "user",
-        personality: "none",
-      });
+      let response: JsonObject;
+      try {
+        response = await client.request<JsonObject>("turn/start", {
+          threadId: normalizedThreadId,
+          input: [{ type: "text", text: prompt, text_elements: [] }],
+          // Continuations intentionally omit cwd/sandbox so App Server preserves
+          // the durable thread policy. A prepared first turn supplies the exact
+          // isolated write boundary.
+          ...buildTurnExecutionOverrides(execution),
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
+          personality: "none",
+        });
+      } catch (error) {
+        // A JSON-RPC application error proves the server rejected the request.
+        // Timeout, transport loss, or malformed transport after write cannot
+        // prove non-acceptance and therefore must never be made retryable.
+        if (error instanceof CodexRpcResponseError && error.method === "turn/start") {
+          throw error;
+        }
+        throw new CodexTurnStartAcceptanceAmbiguousError(error);
+      }
       const turnId = readNestedString(response, ["turn", "id"]);
       if (!turnId) {
-        throw new Error("Codex App Server turn/start response did not include a turn id");
+        throw new CodexTurnStartAcceptanceAmbiguousError(
+          new Error("Codex App Server turn/start response did not include a turn id"),
+        );
       }
       collector.setTurnId(turnId);
 
@@ -616,6 +640,25 @@ export class CodexThreadService {
     ).request("thread/unarchive", {
       threadId: normalizedThreadId,
     });
+  }
+
+  async unarchiveIfNeeded(threadId: string): Promise<{ changed: boolean }> {
+    const normalizedThreadId = requireId(threadId);
+    const response = asRecord(await this.read(normalizedThreadId, false));
+    const returnedId = readNestedString(response, ["thread", "id"]);
+    if (returnedId !== normalizedThreadId) {
+      throw new Error("Codex App Server returned a different thread while checking unarchive");
+    }
+    const thread = asRecord(response.thread);
+    if (thread.archived !== true) {
+      return { changed: false };
+    }
+    await (
+      await this.client()
+    ).request("thread/unarchive", {
+      threadId: normalizedThreadId,
+    });
+    return { changed: true };
   }
 
   private async assertIdle(threadId: string, action: string): Promise<void> {

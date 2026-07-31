@@ -1,5 +1,15 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { loadConfig } from "../../src/config/config.js";
+import { resolveStorePath as resolveSessionStorePath } from "../../src/config/sessions/paths.js";
+import { loadSessionStore } from "../../src/config/sessions/store.js";
+import { disableActiveCronJob } from "../../src/cron/active-runtime.js";
+import { resolveCronStorePath } from "../../src/cron/store.js";
+import {
+  claimMonitorAuthorityAction,
+  finalizeMonitorAuthorityAction,
+} from "../../src/monitor/authority.js";
+import { resolveMonitorStorePath } from "../../src/monitor/store.js";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -8,6 +18,7 @@ import type {
   PluginCommandContext,
   PluginCommandResult,
 } from "../../src/plugins/types.js";
+import { parseAgentSessionKey } from "../../src/sessions/session-key-utils.js";
 import { CodexAppServerClient, type CodexRpcClient } from "./src/app-server-client.js";
 import { CodexApprovalStore, type CodexApprovalAction } from "./src/approval-store.js";
 import {
@@ -25,6 +36,7 @@ import {
   type CodexRelayDispatchOutcome,
 } from "./src/relay-reconciliation.js";
 import {
+  CodexTurnStartAcceptanceAmbiguousError,
   CodexThreadService,
   CodexTurnTerminalError,
   requireThreadId,
@@ -59,11 +71,19 @@ type ToolParams = {
   archived?: boolean;
   include_turns?: boolean;
   limit?: number;
+  idempotency_key?: string;
 };
 
 const APPROVAL_NAMESPACE = "codexpilot";
 const BINDING_KIND = "codex-app-server-pilot";
 const JARVIS_RELAY_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
+const MONITOR_READ_ONLY_ACTIONS = new Set(["status", "fleet", "list", "search", "read"]);
+
+type CodexMonitorScope =
+  | "direct-monitor"
+  | "monitor-descendant"
+  | "unrestricted"
+  | "ambiguous-descendant";
 
 // Keep this bundled extension dependency-free. The plugin API accepts standard
 // JSON Schema, so pulling TypeBox into a new workspace package would add no
@@ -86,6 +106,7 @@ const ToolSchema = {
         "delegate_async",
         "resume",
         "fork",
+        "unarchive_resume_authorized_once",
       ],
     },
     thread_id: { type: "string" },
@@ -99,6 +120,7 @@ const ToolSchema = {
     archived: { type: "boolean" },
     include_turns: { type: "boolean" },
     limit: { type: "integer", minimum: 1, maximum: 100 },
+    idempotency_key: { type: "string" },
   },
   required: ["action"],
   additionalProperties: false,
@@ -391,6 +413,27 @@ function createCodexTool(
     parameters: ToolSchema,
     execute: async (_toolCallId: string, raw: ToolParams) => {
       const action = raw.action ?? "";
+      const monitorScope = resolveCodexMonitorScope(ctx);
+      if (
+        monitorScope === "direct-monitor" &&
+        !MONITOR_READ_ONLY_ACTIONS.has(action) &&
+        action !== "unarchive_resume_authorized_once"
+      ) {
+        throw new Error(
+          `monitor sessions must use a durable authority grant for mutating Codex action ${action}`,
+        );
+      }
+      if (
+        (monitorScope === "monitor-descendant" || monitorScope === "ambiguous-descendant") &&
+        !MONITOR_READ_ONLY_ACTIONS.has(action)
+      ) {
+        // A spawned child gets a fresh subagent/acp session key, so the key
+        // prefix alone cannot prove it is outside a monitor's authority scope.
+        // Descendants stay read-only; ambiguous lineage also fails closed.
+        throw new Error(
+          `sessions descended from a durable monitor cannot use mutating Codex action ${action}`,
+        );
+      }
       let result: unknown;
       if (action === "status") {
         result = await service.status();
@@ -474,12 +517,172 @@ function createCodexTool(
         result = await service.resume(required(raw.thread_id, "thread_id"));
       } else if (action === "fork") {
         result = await service.fork(required(raw.thread_id, "thread_id"));
+      } else if (action === "unarchive_resume_authorized_once") {
+        const sessionKey = required(ctx.sessionKey?.trim(), "monitor session");
+        const threadId = required(raw.thread_id, "thread_id");
+        const text = requiredPayload(raw.text, "text");
+        const idempotencyKey = required(raw.idempotency_key, "idempotency_key");
+        const cfg = ctx.config ?? loadConfig();
+        const storePath = resolveMonitorStorePath({
+          cronStorePath: resolveCronStorePath(cfg.cron?.store),
+        });
+        const claim = await claimMonitorAuthorityAction({
+          storePath,
+          sessionStorePath: resolveSessionStorePath(cfg.session?.store, {
+            agentId: ctx.agentId,
+          }),
+          monitorSessionKey: sessionKey,
+          threadId,
+          prompt: text,
+          idempotencyKey,
+        });
+        // Claiming authority makes the monitor terminal before any Codex
+        // mutation. Disable its exact scheduler job through the live
+        // CronService as part of that same fail-closed boundary. Exact retries
+        // repeat this safe repair step without repeating the continuation.
+        await disableActiveCronJob(claim.cronJobId);
+        if (!claim.execute) {
+          result = {
+            mode: "durable-monitor-authority",
+            status: claim.status,
+            monitorId: claim.monitorId,
+            grantId: claim.grantId,
+            executed: false,
+          };
+        } else {
+          try {
+            const unarchive = await service.unarchiveIfNeeded(threadId);
+            const resumedThreadId = requireThreadId(await service.resume(threadId));
+            if (resumedThreadId !== threadId) {
+              throw new Error("Codex App Server resumed a different thread than authorized");
+            }
+            const started = await startAsyncRelay({
+              service,
+              callbacks,
+              getRegistry,
+              api,
+              // Terminal results belong in the owner session that created the
+              // goal, not in the now-stopped monitor continuation session.
+              ctx: { ...ctx, sessionKey: claim.originSessionKey },
+              threadId,
+              text: claim.prompt,
+            });
+            try {
+              await finalizeMonitorAuthorityAction({
+                storePath,
+                monitorSessionKey: sessionKey,
+                grantId: claim.grantId,
+                outcome: "completed",
+                externalRef: started.turnId,
+              });
+            } catch (error) {
+              // The native turn is already durably accepted. If recording the
+              // terminal monitor receipt fails, the safe truth is "consumed
+              // with an ambiguous receipt"—never "failed and retryable."
+              throw new CodexAuthorityReceiptAmbiguousError(error);
+            }
+            result = {
+              ...started,
+              mode: "durable-monitor-authority",
+              monitorId: claim.monitorId,
+              grantId: claim.grantId,
+              unarchived: unarchive.changed,
+            };
+          } catch (error) {
+            if (
+              !(error instanceof CodexRelayAcceptanceAmbiguousError) &&
+              !(error instanceof CodexAuthorityReceiptAmbiguousError) &&
+              !(error instanceof CodexTurnStartAcceptanceAmbiguousError)
+            ) {
+              await finalizeMonitorAuthorityAction({
+                storePath,
+                monitorSessionKey: sessionKey,
+                grantId: claim.grantId,
+                outcome: "failed",
+                error: formatError(error),
+              });
+            }
+            // Acceptance ambiguity must remain consumed: the App Server may
+            // already be running the turn, so neither "failed" nor replay is
+            // truthful or safe.
+            throw error;
+          }
+        }
       } else {
         throw new Error(`unsupported codex_threads action: ${action || "missing"}`);
       }
       return jsonToolResult(result);
     },
   };
+}
+
+function resolveCodexMonitorScope(ctx: OpenClawPluginToolContext): CodexMonitorScope {
+  const initialSessionKey = ctx.sessionKey?.trim();
+  if (!initialSessionKey) {
+    return "unrestricted";
+  }
+  const initialParsed = parseAgentSessionKey(initialSessionKey);
+  if (!initialParsed) {
+    return "unrestricted";
+  }
+  if (initialParsed.rest.startsWith("monitor:")) {
+    return "direct-monitor";
+  }
+  if (!initialParsed.rest.startsWith("subagent:") && !initialParsed.rest.startsWith("acp:")) {
+    return "unrestricted";
+  }
+
+  const cfg = ctx.config ?? loadConfig();
+  const visited = new Set<string>();
+  let sessionKey = initialSessionKey;
+
+  // Spawn depth is bounded elsewhere, but keep this walk independently
+  // bounded and cycle-safe because it is part of a permission decision.
+  for (let hop = 0; hop < 32; hop += 1) {
+    if (visited.has(sessionKey)) {
+      return "ambiguous-descendant";
+    }
+    visited.add(sessionKey);
+
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (!parsed) {
+      return "ambiguous-descendant";
+    }
+    if (parsed.rest.startsWith("monitor:")) {
+      return "monitor-descendant";
+    }
+    if (!parsed.rest.startsWith("subagent:") && !parsed.rest.startsWith("acp:")) {
+      return "unrestricted";
+    }
+
+    // Skip the shared cache so a child cannot race the durable spawnedBy write
+    // that established its authority ancestry.
+    const store = loadSessionStore(
+      resolveSessionStorePath(cfg.session?.store, { agentId: parsed.agentId }),
+      { skipCache: true },
+    );
+    const spawnedBy = store[sessionKey]?.spawnedBy?.trim();
+    if (!spawnedBy) {
+      return "ambiguous-descendant";
+    }
+    sessionKey = spawnedBy;
+  }
+
+  return "ambiguous-descendant";
+}
+
+class CodexRelayAcceptanceAmbiguousError extends Error {
+  constructor(cause: unknown) {
+    super("Codex relay acceptance became ambiguous after the native turn started", { cause });
+    this.name = "CodexRelayAcceptanceAmbiguousError";
+  }
+}
+
+class CodexAuthorityReceiptAmbiguousError extends Error {
+  constructor(cause: unknown) {
+    super("Codex authority receipt became ambiguous after the native turn was accepted", { cause });
+    this.name = "CodexAuthorityReceiptAmbiguousError";
+  }
 }
 
 async function startAsyncRelay(params: {
@@ -528,7 +731,7 @@ async function startAsyncRelay(params: {
         `Untracked Codex relay ${delegationId} terminated after acceptance persistence failed: ${formatError(completionError)}`,
       );
     });
-    throw error;
+    throw new CodexRelayAcceptanceAmbiguousError(error);
   }
   params.callbacks.register({
     delegationId,

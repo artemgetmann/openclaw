@@ -17,11 +17,33 @@ const MonitorActionPolicySchema = Type.Union([
   Type.Literal("auto_send"),
 ]);
 
+const MonitorAuthorityActionSchema = Type.Object(
+  {
+    kind: Type.Literal("codex.thread.unarchive_resume"),
+    threadId: NonEmptyString,
+    prompt: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+const MonitorGoalAuthorityGrantSchema = Type.Object(
+  {
+    purposeKey: NonEmptyString,
+    action: MonitorAuthorityActionSchema,
+    idempotencyKey: NonEmptyString,
+    expiresAt: NonEmptyString,
+    stopCondition: NonEmptyString,
+    maxExecutions: Type.Literal(1),
+  },
+  { additionalProperties: false },
+);
+
 const MonitorAutonomySchema = Type.Object(
   {
     level: Type.Union([Type.Literal("observe_only"), Type.Literal("act_within_scope")]),
     allowedActions: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
     approvalRequired: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+    authorityGrants: Type.Optional(Type.Array(MonitorGoalAuthorityGrantSchema, { maxItems: 4 })),
   },
   { additionalProperties: false },
 );
@@ -152,6 +174,70 @@ const MonitorGoalSnapshotSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const MonitorAuthorityAuditEventSchema = Type.Object(
+  {
+    event: Type.Union([
+      Type.Literal("granted"),
+      Type.Literal("revoked"),
+      Type.Literal("consumed"),
+      Type.Literal("completed"),
+      Type.Literal("failed"),
+      Type.Literal("denied"),
+    ]),
+    atMs: Type.Integer({ minimum: 0 }),
+    reason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const MonitorAuthorityExecutionSchema = Type.Object(
+  {
+    status: Type.Union([
+      Type.Literal("available"),
+      Type.Literal("consumed"),
+      Type.Literal("completed"),
+      Type.Literal("failed"),
+    ]),
+    executions: Type.Integer({ minimum: 0, maximum: 1 }),
+    consumedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    completedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    failedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    externalRef: Type.Optional(Type.String()),
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const MonitorAuthorityGrantInputSchema = Type.Object(
+  {
+    purposeKey: NonEmptyString,
+    action: MonitorAuthorityActionSchema,
+    idempotencyKey: NonEmptyString,
+    expiresAt: NonEmptyString,
+    stopCondition: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+const MonitorAuthorityGrantSchema = Type.Object(
+  {
+    schemaVersion: Type.Literal(1),
+    grantId: NonEmptyString,
+    goalId: NonEmptyString,
+    purposeKey: NonEmptyString,
+    action: MonitorAuthorityActionSchema,
+    idempotencyKey: NonEmptyString,
+    expiresAt: NonEmptyString,
+    stopCondition: NonEmptyString,
+    maxExecutions: Type.Literal(1),
+    grantedAtMs: Type.Integer({ minimum: 0 }),
+    revokedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    execution: MonitorAuthorityExecutionSchema,
+    audit: Type.Array(MonitorAuthorityAuditEventSchema, { maxItems: 24 }),
+  },
+  { additionalProperties: false },
+);
+
 export const MonitorRecordSchema = Type.Object(
   {
     monitorId: NonEmptyString,
@@ -171,6 +257,7 @@ export const MonitorRecordSchema = Type.Object(
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: MonitorActionPolicySchema,
     goal: Type.Optional(MonitorGoalSnapshotSchema),
+    authority: Type.Optional(MonitorAuthorityGrantSchema),
     notificationPolicy: Type.Optional(MonitorNotificationPolicySchema),
     notificationState: Type.Optional(MonitorNotificationStateSchema),
     listenerEvidence: Type.Optional(MonitorListenerEvidenceSchema),
@@ -232,6 +319,7 @@ export const MonitorCreateParamsSchema = Type.Object(
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: Type.Optional(MonitorActionPolicySchema),
     goal: Type.Optional(MonitorGoalSnapshotSchema),
+    authority: Type.Optional(MonitorAuthorityGrantInputSchema),
     notificationPolicy: Type.Optional(MonitorNotificationPolicySchema),
     lastCheckpoint: Type.Optional(LooseObjectSchema),
   },

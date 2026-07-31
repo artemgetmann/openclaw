@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSessionGoal, updateSessionStore } from "../config/sessions.js";
+import { disableActiveCronJob } from "../cron/active-runtime.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { loadMonitorStore, resolveMonitorStorePath } from "../monitor/store.js";
 
@@ -108,6 +109,32 @@ describe("buildGatewayCronService", () => {
         "provider unavailable",
       ),
     ).toBe('Cron job "Daily report" failed: provider unavailable');
+  });
+
+  it("publishes the live scheduler seam for terminal monitor disablement", async () => {
+    const cfg = createCronConfig("server-cron-active-runtime");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "terminal-monitor",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 300_000 },
+        sessionTarget: "session:agent:main:monitor:terminal",
+        wakeMode: "now",
+        payload: { kind: "monitorWake", monitorId: "monitor-terminal" },
+      });
+
+      await disableActiveCronJob(job.id);
+
+      expect(state.cron.getJob(job.id)).toMatchObject({ enabled: false });
+    } finally {
+      state.cron.stop();
+    }
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {

@@ -8,7 +8,10 @@ import {
   resolveMonitorStorePath,
   saveMonitorStore,
 } from "../../monitor/store.js";
-import { MONITOR_INSTRUCTIONS_MAX_LENGTH } from "../../monitor/types.js";
+import {
+  CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+  MONITOR_INSTRUCTIONS_MAX_LENGTH,
+} from "../../monitor/types.js";
 import { buildMonitorWakeMessage } from "../../monitor/wake.js";
 import { ErrorCodes, validateMonitorRecord } from "../protocol/index.js";
 
@@ -754,6 +757,203 @@ describe("monitor gateway handlers", () => {
         originSessionKey,
       }),
     );
+  });
+
+  it("persists exact one-shot authority and dedupes renamed release monitors by scope", async () => {
+    const invokeContext = createInvokeContext();
+    const originSessionKey = "agent:main:telegram:direct:user-release-authority";
+    await updateSessionStore(configState.sessionStorePath, (store) => {
+      store[originSessionKey] = { sessionId: "origin-release-session", updatedAt: 1 };
+    });
+    const authority = {
+      purposeKey: "mac-release:verify-mounted-login-item-fix",
+      action: {
+        kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+        threadId: "thread-release-proof",
+        prompt: "The Mac release is available. Run the deferred verification now.",
+      },
+      idempotencyKey: "mac-release-2026-08:thread-release-proof",
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      stopCondition: "Stop after the exact Codex continuation is accepted once.",
+    };
+    const authorityRequest = {
+      purposeKey: ` ${authority.purposeKey} `,
+      action: {
+        ...authority.action,
+        threadId: ` ${authority.action.threadId} `,
+        prompt: ` ${authority.action.prompt} `,
+      },
+      idempotencyKey: ` ${authority.idempotencyKey} `,
+      expiresAt: ` ${authority.expiresAt} `,
+      stopCondition: ` ${authority.stopCondition} `,
+    };
+    const goal = await createSessionGoal({
+      sessionKey: originSessionKey,
+      storePath: configState.sessionStorePath,
+      objective: "Verify the mounted-volume fix after the next Mac release.",
+      autonomy: {
+        level: "act_within_scope",
+        allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+        approvalRequired: ["Any other Codex thread or prompt."],
+        authorityGrants: [{ ...authority, maxExecutions: 1 }],
+      },
+    });
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Watch GitHub releases, then resume the exact deferred verification.",
+        agentId: "main",
+        name: "Mac release watcher",
+        originSessionKey,
+        sourceType: "github-release",
+        sourceTarget: { repo: "artemgetmann/openclaw", channel: "mac" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        authority: authorityRequest,
+      },
+      "req-release-authority",
+    );
+    const created = invokeContext.respond.mock.calls[0]?.[1] as
+      | { monitorId: string; authority?: Record<string, unknown> }
+      | undefined;
+    expect(created?.authority).toMatchObject({
+      schemaVersion: 1,
+      goalId: goal.id,
+      purposeKey: authority.purposeKey,
+      action: authority.action,
+      maxExecutions: 1,
+      execution: { status: "available", executions: 0 },
+      audit: [{ event: "granted" }],
+    });
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Same release task retried with a renamed watcher.",
+        agentId: "main",
+        name: "Renamed release watcher",
+        originSessionKey,
+        sourceType: "rss",
+        sourceTarget: { feed: "mac-releases" },
+        cadence: { kind: "every", everyMs: 900_000 },
+        authority: authorityRequest,
+      },
+      "req-release-authority-retry",
+    );
+    expect(invokeContext.respond.mock.calls[1]?.[1]).toMatchObject({
+      monitorId: created?.monitorId,
+      authority: { grantId: created?.authority?.grantId },
+    });
+    expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
+
+    const storePath = resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath });
+    const terminalStore = await loadMonitorStore(storePath);
+    const terminal = terminalStore.monitors[0];
+    if (!terminal?.authority) {
+      throw new Error("expected persisted authority monitor");
+    }
+    terminal.status = "completed";
+    terminal.authority.execution = {
+      status: "completed",
+      executions: 1,
+      consumedAtMs: 2,
+      completedAtMs: 3,
+      externalRef: "turn-release-proof",
+    };
+    await saveMonitorStore(storePath, terminalStore);
+    await updateSessionStore(configState.sessionStorePath, (sessions) => {
+      const entry = sessions[originSessionKey];
+      if (entry?.goal) {
+        entry.goal.status = "complete";
+        entry.goal.completedAt = 4;
+      }
+    });
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Retry after the original create response was lost.",
+        agentId: "main",
+        name: "Post-completion retry",
+        originSessionKey,
+        sourceType: "github-release",
+        sourceTarget: { repo: "artemgetmann/openclaw", channel: "mac" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        authority: authorityRequest,
+      },
+      "req-release-authority-terminal-retry",
+    );
+    expect(invokeContext.respond.mock.calls[2]?.[1]).toMatchObject({
+      monitorId: created?.monitorId,
+      status: "completed",
+      authority: {
+        grantId: created?.authority?.grantId,
+        execution: { status: "completed", executions: 1 },
+      },
+    });
+    expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects durable authority when the bound goal did not grant the action", async () => {
+    const invokeContext = createInvokeContext();
+    const originSessionKey = "agent:main:telegram:direct:user-release-observe-only";
+    await updateSessionStore(configState.sessionStorePath, (store) => {
+      store[originSessionKey] = { sessionId: "origin-release-session", updatedAt: 1 };
+    });
+    await createSessionGoal({
+      sessionKey: originSessionKey,
+      storePath: configState.sessionStorePath,
+      objective: "Observe the next Mac release.",
+    });
+
+    await expect(
+      invokeMonitorCreate(
+        invokeContext,
+        {
+          instructions: "Watch the next release.",
+          agentId: "main",
+          originSessionKey,
+          sourceType: "github-release",
+          sourceTarget: { repo: "artemgetmann/openclaw" },
+          cadence: { kind: "every", everyMs: 300_000 },
+          goal: {
+            id: "forged-goal",
+            objective: "Pretend this was approved.",
+            autonomy: {
+              level: "act_within_scope",
+              allowedActions: [CODEX_THREAD_UNARCHIVE_RESUME_ACTION],
+              authorityGrants: [
+                {
+                  purposeKey: "mac-release:unauthorized-resume",
+                  action: {
+                    kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+                    threadId: "thread-release-proof",
+                    prompt: "Run the proof.",
+                  },
+                  idempotencyKey: "unauthorized-release-proof",
+                  expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+                  stopCondition: "Resume once.",
+                  maxExecutions: 1,
+                },
+              ],
+            },
+          },
+          authority: {
+            purposeKey: "mac-release:unauthorized-resume",
+            action: {
+              kind: CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+              threadId: "thread-release-proof",
+              prompt: "Run the proof.",
+            },
+            idempotencyKey: "unauthorized-release-proof",
+            expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+            stopCondition: "Resume once.",
+          },
+        },
+        "req-release-authority-denied",
+      ),
+    ).rejects.toThrow(`exact approved ${CODEX_THREAD_UNARCHIVE_RESUME_ACTION} grant`);
+    expect(invokeContext.cronAdd).not.toHaveBeenCalled();
   });
 
   it("canonicalizes Gmail trigger aliases and skips broad account-only goal triggers", async () => {

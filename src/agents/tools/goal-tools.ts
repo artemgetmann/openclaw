@@ -9,7 +9,11 @@ import {
   updateSessionGoalStatus,
 } from "../../config/sessions/goals.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import type { SessionGoalAutonomy } from "../../config/sessions/types.js";
+import {
+  SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION,
+  type SessionGoalAuthorityGrant,
+  type SessionGoalAutonomy,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronStorePath } from "../../cron/store.js";
 import { loadMonitorStore, resolveMonitorStorePath } from "../../monitor/store.js";
@@ -72,6 +76,29 @@ const CreateGoalToolSchema = Type.Object({
         }),
         allowedActions: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
         approvalRequired: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+        authorityGrants: Type.Optional(
+          Type.Array(
+            Type.Object(
+              {
+                purposeKey: Type.String({ minLength: 1, maxLength: 240 }),
+                action: Type.Object(
+                  {
+                    kind: Type.Literal(SESSION_GOAL_CODEX_THREAD_UNARCHIVE_RESUME_ACTION),
+                    threadId: Type.String({ minLength: 1, maxLength: 256 }),
+                    prompt: Type.String({ minLength: 1, maxLength: 8_000 }),
+                  },
+                  { additionalProperties: false },
+                ),
+                idempotencyKey: Type.String({ minLength: 1, maxLength: 256 }),
+                expiresAt: Type.String({ minLength: 1, maxLength: 80 }),
+                stopCondition: Type.String({ minLength: 1, maxLength: 1_000 }),
+                maxExecutions: Type.Literal(1),
+              },
+              { additionalProperties: false },
+            ),
+            { maxItems: 4 },
+          ),
+        ),
       },
       { additionalProperties: false },
     ),
@@ -194,13 +221,22 @@ function readExplicitAutonomy(params: Record<string, unknown>): SessionGoalAuton
   }
   const allowedActions = readStringArrayParam(autonomy, "allowedActions");
   const approvalRequired = readStringArrayParam(autonomy, "approvalRequired");
+  const rawAuthorityGrants = autonomy.authorityGrants;
+  const authorityGrants = Array.isArray(rawAuthorityGrants)
+    ? rawAuthorityGrants.map((value) => value as SessionGoalAuthorityGrant)
+    : undefined;
   if (level === "act_within_scope" && !allowedActions?.some((value) => value.trim())) {
-    throw new ToolInputError("act_within_scope requires at least one concise allowed action");
+    if (!authorityGrants?.length) {
+      throw new ToolInputError(
+        "act_within_scope requires at least one concise allowed action or exact authority grant",
+      );
+    }
   }
   return {
     level,
     ...(allowedActions ? { allowedActions } : {}),
     ...(approvalRequired ? { approvalRequired } : {}),
+    ...(authorityGrants ? { authorityGrants } : {}),
   };
 }
 
@@ -255,7 +291,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
     label: "Create Goal",
     name: "create_goal",
     description:
-      "Create a goal only when explicitly requested by the user or system instructions. Autonomy defaults to observe-only and must be omitted unless the user explicitly grants it. Use act_within_scope only with concise allowed actions and approval-required boundaries. Fails if a goal already exists; do not silently replace an existing goal.",
+      "Create a goal only when explicitly requested by the user or system instructions. Autonomy defaults to observe-only and must be omitted unless the user explicitly grants it. Use act_within_scope only with concise allowed actions and approval-required boundaries. Consequential durable actions require an exact authorityGrants entry containing the approved target, prompt, expiry, stop condition, and maxExecutions=1. Fails if a goal already exists; do not silently replace an existing goal.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const current = resolveCurrentGoalSessionScope(options);

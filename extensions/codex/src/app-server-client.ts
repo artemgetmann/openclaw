@@ -39,6 +39,16 @@ export type CodexAppServerClientOptions = {
   requestTimeoutMs: number;
 };
 
+export class CodexRpcResponseError extends Error {
+  readonly method: string;
+
+  constructor(method: string, message: string) {
+    super(`Codex App Server ${method} failed: ${message}`);
+    this.name = "CodexRpcResponseError";
+    this.method = method;
+  }
+}
+
 /**
  * Small App Server JSON-RPC client for the compatibility pilot.
  *
@@ -221,10 +231,9 @@ export class CodexAppServerClient implements CodexRpcClient {
     clearTimeout(pending.timer);
     if (isRecord(message.error)) {
       pending.reject(
-        new Error(
-          `Codex App Server ${pending.method} failed: ${
-            typeof message.error.message === "string" ? message.error.message : "unknown error"
-          }`,
+        new CodexRpcResponseError(
+          pending.method,
+          typeof message.error.message === "string" ? message.error.message : "unknown error",
         ),
       );
       return;
