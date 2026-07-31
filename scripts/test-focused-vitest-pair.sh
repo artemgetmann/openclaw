@@ -62,16 +62,16 @@ openclaw_heavy_local_slot_resolve_path() {
 }
 
 openclaw_heavy_local_slot_value() {
-  awk -F= -v key="$2" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$1"
+  awk -F= -v key="$2" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$1" 2>/dev/null || true
 }
 
 openclaw_heavy_local_slot_inherited_lease_is_valid() {
-  [[ "${PAIR_TEST_GUARD_MODE:-admitted}" != "delegate" ]] || return 1
+  [[ "${PAIR_TEST_IN_WRAPPER:-0}" == "1" ]] || return 1
   mkdir -p "$PAIR_TEST_GUARD_PATH"
   if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "wrong_label" ]]; then
-    printf 'label=unrelated-guarded-work\n' >"$PAIR_TEST_GUARD_PATH/owner"
+    printf 'pid=%s\ntoken=test-token\nlabel=unrelated-guarded-work\n' "$PPID" >"$PAIR_TEST_GUARD_PATH/owner"
   else
-    printf 'label=%s\n' "$PAIR_TEST_EXPECTED_LABEL" >"$PAIR_TEST_GUARD_PATH/owner"
+    printf 'pid=%s\ntoken=test-token\nlabel=%s\n' "$PPID" "$PAIR_TEST_EXPECTED_LABEL" >"$PAIR_TEST_GUARD_PATH/owner"
   fi
   if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "nested" ]]; then
     printf 'pid=1\n' >"$PAIR_TEST_GUARD_PATH/child_pid"
@@ -83,12 +83,43 @@ openclaw_heavy_local_slot_inherited_lease_is_valid() {
   fi
   return 0
 }
-
-openclaw_heavy_local_slot_require_or_reexec() {
-  printf '%s\n' "$*" >>"$PAIR_TEST_GUARD_CALLS"
-  exit 42
-}
 EOF
+
+cat >"$SCRIPT_DIR/with-heavy-local-slot.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >>"$PAIR_TEST_GUARD_CALLS"
+[[ "${PAIR_TEST_GUARD_MODE:-admitted}" != "delegate" ]] || exit 42
+while [[ "$1" != "--" ]]; do shift; done
+shift
+
+PAIR_TEST_IN_WRAPPER=1 "$@" &
+guarded_pid=$!
+forward() {
+  kill -"$1" "$guarded_pid" 2>/dev/null || true
+}
+trap 'forward TERM' TERM
+trap 'forward INT' INT
+trap 'forward HUP' HUP
+set +e
+wait "$guarded_pid"
+status=$?
+if kill -0 "$guarded_pid" 2>/dev/null; then
+  wait "$guarded_pid"
+  status=$?
+fi
+set -e
+trap - TERM INT HUP
+if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "health_stop" && "$status" -eq 0 ]]; then
+  status=75
+fi
+if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" != "retain_cleanup" ]]; then
+  rm -rf "$PAIR_TEST_GUARD_PATH"
+fi
+exit "$status"
+EOF
+chmod +x "$SCRIPT_DIR/with-heavy-local-slot.sh"
 
 JOB_A_ROOT="$TMP_DIR/job-a"
 JOB_B_ROOT="$TMP_DIR/job-b"
@@ -138,7 +169,8 @@ chmod +x "$BIN_DIR/pnpm"
 
 run_pair() {
   local receipt_dir="$1"
-  PAIR_TEST_GUARD_MODE=admitted \
+  local guard_mode="${2:-admitted}"
+  PAIR_TEST_GUARD_MODE="$guard_mode" \
     PAIR_TEST_GUARD_PATH="$TMP_DIR/guard" \
     PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
     PAIR_TEST_EXPECTED_LABEL="focused-vitest-pair:shell-test" \
@@ -153,6 +185,32 @@ run_pair() {
       --job-b-root "$JOB_B_ROOT" \
       --job-b-head "$JOB_B_HEAD" \
       --receipt-dir "$receipt_dir"
+}
+
+test_shared_health_or_cleanup_failure_fails_closed() {
+  local mode=""
+  local receipt_dir=""
+  local status=0
+  for mode in health_stop retain_cleanup; do
+    receipt_dir="$TMP_DIR/${mode}-receipt"
+    rm -rf "$TMP_DIR/guard" "$receipt_dir" "$TMP_DIR/state"
+    mkdir -p "$TMP_DIR/state"
+    : >"$TMP_DIR/pnpm.calls"
+    set +e
+    run_pair "$receipt_dir" "$mode" >/dev/null 2>&1
+    status=$?
+    set -e
+    [[ "$status" -eq 75 ]] || fail "$mode returned $status"
+    assert_contains "$receipt_dir/shared-health-cleanup.env" "status=failed"
+    if [[ "$mode" == "health_stop" ]]; then
+      assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_health=failed"
+      assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_cleanup=owner_token_released"
+    else
+      assert_contains "$receipt_dir/shared-health-cleanup.env" "shared_cleanup=owner_token_retained"
+    fi
+  done
+  rm -rf "$TMP_DIR/guard"
+  pass "shared health or cleanup failure returns nonzero durable receipt"
 }
 
 test_argument_validation_precedes_guard() {
@@ -200,7 +258,10 @@ test_argument_validation_precedes_guard() {
 test_exactly_one_canonical_supervisor_request() {
   : >"$TMP_DIR/guard.calls"
   set +e
-  PAIR_TEST_GUARD_MODE=delegate PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
+  PAIR_TEST_GUARD_MODE=delegate \
+    PAIR_TEST_GUARD_PATH="$TMP_DIR/guard" \
+    PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
+    PAIR_TEST_EXPECTED_LABEL="focused-vitest-pair:delegation" \
     "$SCRIPT_DIR/run-focused-vitest-pair.sh" \
       --label delegation \
       --job-a-root "$JOB_A_ROOT" \
@@ -228,6 +289,7 @@ test_unrelated_inherited_lease_is_refused() {
     : >"$TMP_DIR/pnpm.calls"
     set +e
     PAIR_TEST_GUARD_MODE="$mode" \
+      PAIR_TEST_IN_WRAPPER=1 \
       PAIR_TEST_GUARD_PATH="$TMP_DIR/guard" \
       PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
       PAIR_TEST_EXPECTED_LABEL="focused-vitest-pair:shell-test" \
@@ -254,6 +316,7 @@ test_expected_head_drift_is_refused() {
   : >"$TMP_DIR/pnpm.calls"
   set +e
   PAIR_TEST_GUARD_MODE=admitted \
+    PAIR_TEST_IN_WRAPPER=1 \
     PAIR_TEST_GUARD_PATH="$TMP_DIR/guard" \
     PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
     PAIR_TEST_EXPECTED_LABEL="focused-vitest-pair:shell-test" \
@@ -279,6 +342,7 @@ test_receipt_creation_race_is_refused() {
   : >"$TMP_DIR/pnpm.calls"
   set +e
   PAIR_TEST_GUARD_MODE=admitted \
+    PAIR_TEST_IN_WRAPPER=1 \
     PAIR_TEST_GUARD_PATH="$TMP_DIR/guard" \
     PAIR_TEST_GUARD_CALLS="$TMP_DIR/guard.calls" \
     PAIR_TEST_EXPECTED_LABEL="focused-vitest-pair:shell-test" \
@@ -327,6 +391,11 @@ test_two_children_have_fixed_allowlists_and_caps() {
   assert_contains "$receipt" "status=passed"
   assert_contains "$receipt" "max_workers_per_job=1"
   assert_contains "$receipt" "file_parallelism=false"
+  assert_contains "$TMP_DIR/success-receipt/job-a.receipt.env" "exit=0"
+  assert_contains "$TMP_DIR/success-receipt/job-b.receipt.env" "exit=0"
+  assert_contains "$TMP_DIR/success-receipt/shared-health-cleanup.env" "status=passed"
+  assert_contains "$TMP_DIR/success-receipt/shared-health-cleanup.env" "shared_health=passed"
+  assert_contains "$TMP_DIR/success-receipt/shared-health-cleanup.env" "shared_cleanup=owner_token_released"
   pass "two direct children use fixed allowlists and worker caps"
 }
 
@@ -343,6 +412,10 @@ test_failure_propagates_after_complete_receipt() {
   assert_contains "$TMP_DIR/failure-receipt/receipt.env" "reason=job_a_nonzero"
   assert_contains "$TMP_DIR/failure-receipt/receipt.env" "job_a_exit=7"
   assert_contains "$TMP_DIR/failure-receipt/receipt.env" "job_b_exit=0"
+  assert_contains "$TMP_DIR/failure-receipt/job-a.receipt.env" "exit=7"
+  assert_contains "$TMP_DIR/failure-receipt/job-b.receipt.env" "exit=0"
+  assert_contains "$TMP_DIR/failure-receipt/shared-health-cleanup.env" "status=failed"
+  assert_contains "$TMP_DIR/failure-receipt/shared-health-cleanup.env" "shared_cleanup=owner_token_released"
   pass "child failure propagates with both exits recorded"
 }
 
@@ -369,6 +442,9 @@ test_signal_stops_both_children_and_records_interrupt() {
     fail "TERM did not reach both direct workload roots"
   assert_contains "$TMP_DIR/signal-receipt/receipt.env" "status=interrupted"
   assert_contains "$TMP_DIR/signal-receipt/receipt.env" "reason=signal_TERM"
+  assert_contains "$TMP_DIR/signal-receipt/shared-health-cleanup.env" "status=interrupted"
+  assert_contains "$TMP_DIR/signal-receipt/shared-health-cleanup.env" "canonical_wrapper_exit=143"
+  assert_contains "$TMP_DIR/signal-receipt/shared-health-cleanup.env" "shared_cleanup=owner_token_released"
   pass "signal cleanup stops both children and records interruption"
 }
 
@@ -377,6 +453,7 @@ test_exactly_one_canonical_supervisor_request
 test_unrelated_inherited_lease_is_refused
 test_expected_head_drift_is_refused
 test_receipt_creation_race_is_refused
+test_shared_health_or_cleanup_failure_fails_closed
 test_two_children_have_fixed_allowlists_and_caps
 test_failure_propagates_after_complete_receipt
 test_signal_stops_both_children_and_records_interrupt

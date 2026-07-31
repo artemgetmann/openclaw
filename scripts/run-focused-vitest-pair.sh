@@ -91,6 +91,9 @@ done
 [[ "$JOB_A_ROOT" == /* && "$JOB_B_ROOT" == /* && "$RECEIPT_DIR" == /* ]] || usage
 [[ "$EXPECTED_JOB_A_HEAD" =~ ^[0-9a-f]{40}$ &&
   "$EXPECTED_JOB_B_HEAD" =~ ^[0-9a-f]{40}$ ]] || usage
+[[ "$JOB_A_ROOT" != *$'\n'* && "$JOB_A_ROOT" != *$'\r'* &&
+  "$JOB_B_ROOT" != *$'\n'* && "$JOB_B_ROOT" != *$'\r'* &&
+  "$RECEIPT_DIR" != *$'\n'* && "$RECEIPT_DIR" != *$'\r'* ]] || usage
 [[ "$JOB_A_ROOT" != "$JOB_B_ROOT" ]] || {
   echo "Refusing focused pair: job roots must be distinct." >&2
   exit 2
@@ -124,7 +127,7 @@ JOB_B_ROOT="$(canonical_worktree "$JOB_B_ROOT")" || {
   exit 2
 }
 
-require_exclusive_pair_root_or_reexec() {
+guarded_pair_root_is_valid() {
   local expected_label=""
   local lock_path=""
   local owner_label=""
@@ -132,33 +135,132 @@ require_exclusive_pair_root_or_reexec() {
 
   expected_label="$(openclaw_heavy_local_slot_safe_text "focused-vitest-pair:${LABEL}")"
 
-  if openclaw_heavy_local_slot_inherited_lease_is_valid "standard"; then
-    lock_path="$(openclaw_heavy_local_slot_resolve_path)" || return 75
-    owner_label="$(openclaw_heavy_local_slot_value "$lock_path/owner" label)"
-    guarded_root_pid="$(openclaw_heavy_local_slot_value "$lock_path/child_pid" pid)"
+  openclaw_heavy_local_slot_inherited_lease_is_valid "standard" || return 1
+  lock_path="$(openclaw_heavy_local_slot_resolve_path)" || return 2
+  owner_label="$(openclaw_heavy_local_slot_value "$lock_path/owner" label)"
+  guarded_root_pid="$(openclaw_heavy_local_slot_value "$lock_path/child_pid" pid)"
 
-    # A generic inherited lease proves ancestry, but not exclusivity. Require
-    # this script to be the wrapper's committed workload root so an unrelated
-    # guarded shell cannot add the pair beside already-running sibling work.
-    if [[ "$owner_label" != "$expected_label" || "$guarded_root_pid" != "$$" ]]; then
-      printf 'HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=focused_pair_not_guarded_root\n' >&2
-      echo "Refusing focused pair: entrypoint is nested beneath another guarded workload." >&2
-      return 75
-    fi
-    return 0
-  fi
-
-  # With no valid inherited capability, the canonical helper replaces any
-  # forged ambient token and re-executes this exact entrypoint as the guarded
-  # process root. The guarded pass above then verifies root identity.
-  openclaw_heavy_local_slot_require_or_reexec \
-    "focused-vitest-pair:${LABEL}" \
-    "$ROOT_DIR" \
-    "$ROOT_DIR/scripts/run-focused-vitest-pair.sh" \
-    "${ORIGINAL_ARGS[@]}"
+  # A generic inherited lease proves ancestry, but not exclusivity. Require
+  # this script to be the wrapper's committed workload root so an unrelated
+  # guarded shell cannot add the pair beside already-running sibling work.
+  [[ "$owner_label" == "$expected_label" && "$guarded_root_pid" == "$$" ]] || return 2
+  return 0
 }
 
-require_exclusive_pair_root_or_reexec
+write_shared_wrapper_receipt() {
+  local wrapper_exit="$1"
+  local cleanup_status="$2"
+  local receipt_status="failed"
+  local health_status="failed"
+  local workload_status="missing"
+  local shared_receipt="$RECEIPT_DIR/shared-health-cleanup.env"
+  local shared_tmp="$shared_receipt.tmp.$$"
+
+  [[ -d "$RECEIPT_DIR" ]] || return 0
+  if [[ -f "$RECEIPT_DIR/receipt.env" ]]; then
+    workload_status="$(awk -F= '$1 == "status" { print $2; exit }' "$RECEIPT_DIR/receipt.env")"
+  fi
+  if [[ "$wrapper_exit" -eq 0 && "$cleanup_status" == "owner_token_released" &&
+    "$workload_status" == "passed" ]]; then
+    receipt_status="passed"
+    health_status="passed"
+  elif [[ "$workload_status" == "interrupted" || "$wrapper_exit" =~ ^(129|130|143)$ ]]; then
+    receipt_status="interrupted"
+  fi
+
+  {
+    printf 'version=1\n'
+    printf 'profile=%s\n' "$PROFILE"
+    printf 'status=%s\n' "$receipt_status"
+    printf 'canonical_wrapper_exit=%s\n' "$wrapper_exit"
+    printf 'workload_status=%s\n' "$workload_status"
+    printf 'shared_health=%s\n' "$health_status"
+    printf 'shared_cleanup=%s\n' "$cleanup_status"
+    printf 'generic_machine_capacity=1_unchanged\n'
+  } >"$shared_tmp"
+  mv "$shared_tmp" "$shared_receipt"
+}
+
+run_canonical_wrapper_and_finalize() {
+  local lock_path=""
+  local wrapper_pid=""
+  local wrapper_exit=75
+  local wrapper_owner_token=""
+  local current_owner_token=""
+  local cleanup_status="owner_identity_not_observed"
+  local signal_exit=0
+  local attempt=0
+
+  lock_path="$(openclaw_heavy_local_slot_resolve_path)" || return 75
+
+  # The public launcher stays outside the heavy process group so it can persist
+  # the wrapper's terminal health/cleanup outcome only after wrapper EXIT traps
+  # have finished. The wrapper remains the sole canonical heavy owner.
+  "$ROOT_DIR/scripts/with-heavy-local-slot.sh" \
+    --label "focused-vitest-pair:${LABEL}" \
+    -- \
+    "$ROOT_DIR/scripts/run-focused-vitest-pair.sh" "${ORIGINAL_ARGS[@]}" &
+  wrapper_pid="$!"
+
+  forward_wrapper_signal() {
+    local signal_name="$1"
+    local requested_exit="$2"
+    signal_exit="$requested_exit"
+    kill -"$signal_name" "$wrapper_pid" 2>/dev/null || true
+  }
+  trap 'forward_wrapper_signal TERM 143' TERM
+  trap 'forward_wrapper_signal INT 130' INT
+  trap 'forward_wrapper_signal HUP 129' HUP
+
+  # Observe this exact wrapper's opaque owner token while it is live. The token
+  # is never persisted; after wait it distinguishes retained ownership from a
+  # later legitimate owner that may acquire the shared path immediately.
+  while kill -0 "$wrapper_pid" 2>/dev/null && [[ "$attempt" -lt 200 ]]; do
+    if [[ "$(openclaw_heavy_local_slot_value "$lock_path/owner" pid)" == "$wrapper_pid" ]]; then
+      wrapper_owner_token="$(openclaw_heavy_local_slot_value "$lock_path/owner" token)"
+      [[ -n "$wrapper_owner_token" ]] && break
+    fi
+    sleep 0.01
+    attempt=$((attempt + 1))
+  done
+
+  set +e
+  wait "$wrapper_pid"
+  wrapper_exit="$?"
+  if [[ "$signal_exit" -ne 0 ]] && kill -0 "$wrapper_pid" 2>/dev/null; then
+    wait "$wrapper_pid"
+    wrapper_exit="$?"
+  fi
+  set -e
+  trap - TERM INT HUP
+
+  current_owner_token="$(openclaw_heavy_local_slot_value "$lock_path/owner" token)"
+  if [[ -n "$wrapper_owner_token" && "$current_owner_token" != "$wrapper_owner_token" ]]; then
+    cleanup_status="owner_token_released"
+  elif [[ -n "$wrapper_owner_token" ]]; then
+    cleanup_status="owner_token_retained"
+  fi
+
+  [[ "$signal_exit" -eq 0 ]] || wrapper_exit="$signal_exit"
+  write_shared_wrapper_receipt "$wrapper_exit" "$cleanup_status"
+  if [[ "$wrapper_exit" -eq 0 && "$cleanup_status" != "owner_token_released" ]]; then
+    return 75
+  fi
+  return "$wrapper_exit"
+}
+
+if guarded_pair_root_is_valid; then
+  :
+else
+  guarded_status="$?"
+  if [[ "$guarded_status" -eq 2 ]]; then
+    printf 'HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=focused_pair_not_guarded_root\n' >&2
+    echo "Refusing focused pair: entrypoint is nested beneath another guarded workload." >&2
+    exit 75
+  fi
+  run_canonical_wrapper_and_finalize
+  exit "$?"
+fi
 
 validate_job_root() {
   local job_name="$1"
@@ -203,6 +305,8 @@ mkdir "$RECEIPT_DIR" || {
 JOB_A_LOG="$RECEIPT_DIR/job-a.log"
 JOB_B_LOG="$RECEIPT_DIR/job-b.log"
 RECEIPT="$RECEIPT_DIR/receipt.env"
+JOB_A_RECEIPT="$RECEIPT_DIR/job-a.receipt.env"
+JOB_B_RECEIPT="$RECEIPT_DIR/job-b.receipt.env"
 JOB_A_PID=""
 JOB_B_PID=""
 JOB_A_EXIT="not_started"
@@ -242,6 +346,34 @@ write_receipt() {
     printf 'file_parallelism=false\n'
   } >"$receipt_tmp"
   mv "$receipt_tmp" "$RECEIPT"
+
+  # Per-job receipts let reviewers inspect each allowlisted outcome without
+  # parsing logs. The outer launcher separately records wrapper health and
+  # whole-group cleanup after this guarded process has exited.
+  {
+    printf 'version=1\n'
+    printf 'job=a\n'
+    printf 'root=%s\n' "$JOB_A_ROOT"
+    printf 'head=%s\n' "$JOB_A_HEAD"
+    printf 'pid=%s\n' "${JOB_A_PID:-none}"
+    printf 'exit=%s\n' "$JOB_A_EXIT"
+    printf 'test_count=%s\n' "${#JOB_A_TESTS[@]}"
+    printf 'max_workers=1\n'
+    printf 'file_parallelism=false\n'
+  } >"$JOB_A_RECEIPT.tmp.$$"
+  mv "$JOB_A_RECEIPT.tmp.$$" "$JOB_A_RECEIPT"
+  {
+    printf 'version=1\n'
+    printf 'job=b\n'
+    printf 'root=%s\n' "$JOB_B_ROOT"
+    printf 'head=%s\n' "$JOB_B_HEAD"
+    printf 'pid=%s\n' "${JOB_B_PID:-none}"
+    printf 'exit=%s\n' "$JOB_B_EXIT"
+    printf 'test_count=%s\n' "${#JOB_B_TESTS[@]}"
+    printf 'max_workers=1\n'
+    printf 'file_parallelism=false\n'
+  } >"$JOB_B_RECEIPT.tmp.$$"
+  mv "$JOB_B_RECEIPT.tmp.$$" "$JOB_B_RECEIPT"
 }
 
 stop_children() {

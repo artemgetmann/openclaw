@@ -47,11 +47,13 @@ floors, Jarvis/Tailscale health checks, runtime sampling, process-session
 identity, and whole-group TERM/KILL cleanup remain owned by the canonical
 wrapper.
 
-The receipt directory contains `receipt.env`, `job-a.log`, and `job-b.log`.
-The structured receipt binds both Git heads, direct child PIDs and exit codes,
-the fixed worker/file-parallelism limits, and the unchanged generic-capacity
-statement. A nonzero child or signal produces a non-passing receipt and a
-nonzero entrypoint exit.
+The receipt directory contains `job-a.log`, `job-b.log`, per-job
+`job-{a,b}.receipt.env` files, the inner workload `receipt.env`, and the outer
+`shared-health-cleanup.env`. The outer receipt is written only after the
+canonical wrapper exits and its exact opaque owner token is no longer present;
+it records wrapper exit, shared health, whole-group/lease cleanup, and the
+unchanged generic-capacity statement. A child failure, signal, health stop, or
+unproven cleanup produces a non-passing receipt and nonzero entrypoint exit.
 
 Do not reproduce this shape with two separate wrapper calls: that would create
 two owners, lose the measured one-supervisor contract, and race machine-wide
