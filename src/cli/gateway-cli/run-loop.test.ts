@@ -339,7 +339,13 @@ describe("runGatewayLoop", () => {
 
   it("preserves SIGTERM during blocked final validation and stops the serving gateway", async () => {
     vi.clearAllMocks();
-    restartGatewayProcessWithFreshPid.mockResolvedValue({ mode: "disabled" });
+    detectRespawnSupervisor.mockReturnValueOnce("launchd");
+    const cancel = vi.fn(() => true);
+    restartGatewayProcessWithFreshPid.mockResolvedValueOnce({
+      mode: "supervised",
+      pid: 4242,
+      cancel,
+    });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       let resolveValidation!: () => void;
@@ -377,7 +383,8 @@ describe("runGatewayLoop", () => {
         restartExpectedMs: null,
       });
       expect(start).toHaveBeenCalledTimes(1);
-      expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+      expect(restartGatewayProcessWithFreshPid).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
 
       // A late provider result must not resurrect the cancelled restart.
       resolveValidation();
@@ -425,6 +432,13 @@ describe("runGatewayLoop", () => {
 
   it("reopens ingress without resetting active lanes when restart freshness validation fails", async () => {
     vi.clearAllMocks();
+    detectRespawnSupervisor.mockReturnValueOnce("launchd");
+    const cancel = vi.fn(() => true);
+    restartGatewayProcessWithFreshPid.mockResolvedValueOnce({
+      mode: "supervised",
+      pid: 4242,
+      cancel,
+    });
     getActiveEmbeddedRunCount.mockReturnValueOnce(1);
     waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: false });
 
@@ -456,6 +470,7 @@ describe("runGatewayLoop", () => {
       expect(abortEmbeddedPiRun).not.toHaveBeenCalled();
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
 
       sigterm();
       await expect(exited).resolves.toBe(0);

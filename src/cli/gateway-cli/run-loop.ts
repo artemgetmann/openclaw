@@ -242,6 +242,27 @@ export async function runGatewayLoop<TPrepared = never>(params: {
         queueMicrotask(() => request("stop", stopSignal));
         return true;
       };
+      const cancelPreparedRespawn = (): boolean => {
+        if (!preparedRespawn) {
+          return true;
+        }
+        // A launchd admission without a cancellation receipt is ambiguous: the
+        // detached owner may still restart this PID after a later explicit
+        // stop. Keep the gateway alive fail-closed unless cancellation is both
+        // available and durably published.
+        if (!preparedRespawn.cancel || !preparedRespawn.cancel()) {
+          return false;
+        }
+        preparedRespawn = undefined;
+        return true;
+      };
+      const preserveGatewayAfterCancellationFailure = () => {
+        gatewayLog.error(
+          "could not cancel admitted launchd restart; preserving the current gateway instead of stopping",
+        );
+        pendingStopSignal = null;
+        shuttingDown = false;
+      };
 
       try {
         let drainTimedOut = false;
@@ -266,12 +287,8 @@ export async function runGatewayLoop<TPrepared = never>(params: {
         }
 
         if (pendingStopSignal) {
-          if (preparedRespawn?.cancel && !preparedRespawn.cancel()) {
-            gatewayLog.error(
-              "could not cancel admitted launchd restart; preserving the current gateway instead of stopping",
-            );
-            pendingStopSignal = null;
-            shuttingDown = false;
+          if (!cancelPreparedRespawn()) {
+            preserveGatewayAfterCancellationFailure();
             return;
           }
           continueWithPendingStop();
@@ -322,6 +339,10 @@ export async function runGatewayLoop<TPrepared = never>(params: {
 
         if (restartPreparation && pendingStopSignal) {
           cancelGatewayDraining();
+          if (!cancelPreparedRespawn()) {
+            preserveGatewayAfterCancellationFailure();
+            return;
+          }
           continueWithPendingStop();
           return;
         }
@@ -351,6 +372,10 @@ export async function runGatewayLoop<TPrepared = never>(params: {
             // The old listener and any timed-out active tasks are still alive.
             // Re-open ingress without clearing their lane bookkeeping.
             cancelGatewayDraining();
+            if (!cancelPreparedRespawn()) {
+              preserveGatewayAfterCancellationFailure();
+              return;
+            }
             if (continueWithPendingStop()) {
               return;
             }
@@ -396,15 +421,11 @@ export async function runGatewayLoop<TPrepared = never>(params: {
           if (isRestart && !pendingStopSignal) {
             await handleRestartAfterServerClose(preparedRespawn);
           } else {
-            if (preparedRespawn?.cancel && !preparedRespawn.cancel()) {
+            if (!cancelPreparedRespawn()) {
               // Losing the cancellation receipt would make exit ambiguous: the
               // detached helper could relaunch after an explicit stop. Keep the
               // current process alive and reopen the listener fail-closed.
-              gatewayLog.error(
-                "could not cancel admitted launchd restart; preserving the current gateway instead of exiting",
-              );
-              pendingStopSignal = null;
-              shuttingDown = false;
+              preserveGatewayAfterCancellationFailure();
               restartResolver?.();
             } else {
               pendingStopSignal = null;
