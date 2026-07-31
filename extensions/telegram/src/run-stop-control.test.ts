@@ -147,6 +147,47 @@ describe("Telegram active run Stop control", () => {
     ).toEqual({ status: "stale" });
   });
 
+  it("keeps released run A stale while same-route run B remains claimable", () => {
+    const route = {
+      accountId: "default",
+      chatId: 123,
+      requesterId: 9,
+      threadId: 77,
+    };
+    const runA = registerTelegramRunStop(route);
+    const runAToken = runA.buttons[0]?.[0]?.callback_data ?? "";
+    const runAClaim = claimTelegramRunStop({
+      data: runAToken,
+      ...route,
+    });
+    expect(runAClaim?.status).toBe("claimed");
+    if (runAClaim?.status !== "claimed") {
+      throw new Error("expected run A Stop control to be claimed");
+    }
+
+    // Closing run A while its claim is in flight permanently tombstones that
+    // authorization. A failed-abort restore must not compete with the distinct
+    // token allocated for the next run on the exact same route.
+    runA.release();
+    runAClaim.restore();
+    const runB = registerTelegramRunStop(route);
+    const runBToken = runB.buttons[0]?.[0]?.callback_data ?? "";
+
+    expect(runBToken).not.toBe(runAToken);
+    expect(
+      claimTelegramRunStop({
+        data: runAToken,
+        ...route,
+      }),
+    ).toEqual({ status: "stale" });
+    expect(
+      claimTelegramRunStop({
+        data: runBToken,
+        ...route,
+      })?.status,
+    ).toBe("claimed");
+  });
+
   it("releases controls idempotently and rejects malformed callback data", () => {
     const registration = registerTelegramRunStop({
       accountId: "default",
