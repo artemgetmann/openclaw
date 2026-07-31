@@ -10,6 +10,7 @@ type TelegramRunStopEntry = {
   chatId: string;
   requesterId: string;
   threadId?: string;
+  released: boolean;
 };
 
 type TelegramRunStopState = {
@@ -69,9 +70,9 @@ export function registerTelegramRunStop(params: {
     chatId: String(params.chatId),
     requesterId: String(params.requesterId),
     threadId: normalizeThreadId(params.threadId),
+    released: false,
   };
   runStopState.entries.set(token, entry);
-  let released = false;
   return {
     buttons: [
       [
@@ -83,10 +84,13 @@ export function registerTelegramRunStop(params: {
       ],
     ],
     release: () => {
-      if (released) {
+      if (entry.released) {
         return;
       }
-      released = true;
+      // Mark the shared entry even while a claim has temporarily removed it
+      // from the map. A later failed-abort restore must see that the owning
+      // controller has already disposed this authorization.
+      entry.released = true;
       if (runStopState.entries.get(token) === entry) {
         runStopState.entries.delete(token);
       }
@@ -124,7 +128,7 @@ export function claimTelegramRunStop(params: {
   return {
     status: "claimed",
     restore: () => {
-      if (restored || runStopState.entries.has(token)) {
+      if (restored || entry.released || runStopState.entries.has(token)) {
         return;
       }
       restored = true;
