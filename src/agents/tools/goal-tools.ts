@@ -4,9 +4,9 @@ import { loadConfig } from "../../config/config.js";
 import {
   createSessionGoal,
   getSessionGoal,
+  requestSessionGoalEvaluation,
   resolveSessionGoalAutonomy,
   type SessionGoalSnapshot,
-  updateSessionGoalStatus,
 } from "../../config/sessions/goals.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
@@ -110,6 +110,12 @@ const UpdateGoalToolSchema = Type.Object({
     description: "complete | blocked.",
   }),
   note: Type.Optional(Type.String({ description: "Short status note." })),
+  blocker_key: Type.Optional(
+    Type.String({
+      description:
+        "Stable dependency key required for blocked claims, such as awaiting_user_destination.",
+    }),
+  ),
 });
 
 function resolveConfig(options: GoalToolOptions): OpenClawConfig {
@@ -321,15 +327,14 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
     label: "Update Goal",
     name: "update_goal",
     description:
-      "Mark the current goal complete only when achieved, or blocked only when progress needs user input or an external-state change. Do not use blocked for ordinary difficulty.",
+      "Request independent evaluation of a completion or blocked claim. This tool never completes or blocks the goal directly. Include a concrete note; blocked claims also require blocker_key for the exact user-input or external-state dependency.",
     parameters: UpdateGoalToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const status = readStringParam(params, "status", { required: true });
       if (!GOAL_TOOL_STATUSES.includes(status as (typeof GOAL_TOOL_STATUSES)[number])) {
         throw new ToolInputError(`status must be one of ${GOAL_TOOL_STATUSES.join(", ")}`);
       }
-      const note = readStringParam(params, "note");
       const current = resolveCurrentGoalSessionScope(options);
       const monitor = await resolveCurrentSessionMonitor(options, current);
       if (monitor && !monitor.goal) {
@@ -339,6 +344,8 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
           monitorId: monitor.monitorId,
         });
       }
+      const note = readStringParam(params, "note", { required: true });
+      const blockerKey = readStringParam(params, "blocker_key");
       const scope = monitor?.goal
         ? {
             sessionKey: monitor.originSessionKey,
@@ -348,13 +355,19 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
             expectedGoalId: monitor.goal.id,
           }
         : current;
-      const goal = await updateSessionGoalStatus({
+      const goal = await requestSessionGoalEvaluation({
         ...scope,
-        status: status as (typeof GOAL_TOOL_STATUSES)[number],
-        ...(note ? { note } : {}),
+        requestId: toolCallId,
+        proposedStatus: status as (typeof GOAL_TOOL_STATUSES)[number],
+        reason: note,
+        ...(blockerKey ? { blockerKey } : {}),
         ...(scope.expectedGoalId ? { expectedGoalId: scope.expectedGoalId } : {}),
       });
-      return jsonResult({ status: "updated", goal });
+      return jsonResult({
+        status: "evaluation_requested",
+        goal,
+        message: "The goal remains active until the independent evaluator returns satisfied.",
+      });
     },
   };
 }

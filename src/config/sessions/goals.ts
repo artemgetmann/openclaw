@@ -17,6 +17,7 @@ import {
   type SessionGoalAutonomy,
   type SessionGoalEvaluationAttempt,
   type SessionGoalEvaluationState,
+  type SessionGoalEvaluationRequest,
   type SessionGoalEvaluatorVerdict,
   type SessionGoalStatus,
 } from "./types.js";
@@ -48,6 +49,14 @@ type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
   status: Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">;
   note?: string;
   expectedGoalId?: string;
+};
+
+type RequestSessionGoalEvaluationOptions = SessionGoalStoreOptions & {
+  expectedGoalId?: string;
+  requestId: string;
+  proposedStatus: SessionGoalEvaluationRequest["proposedStatus"];
+  reason: string;
+  blockerKey?: string;
 };
 
 export type RecordSessionGoalEvaluationOptions = SessionGoalStoreOptions & {
@@ -523,6 +532,7 @@ export async function recordSessionGoalEvaluation(
       const next: SessionGoal = {
         ...accounted,
         evaluation: nextEvaluation,
+        pendingEvaluation: undefined,
         updatedAt: now,
         lastStatusNote: reason,
         ...(resolvedVerdict === "satisfied"
@@ -546,6 +556,64 @@ export async function recordSessionGoalEvaluation(
     goal: cloneGoal(decision.goal),
     attempt: structuredClone(decision.attempt),
   };
+}
+
+export async function requestSessionGoalEvaluation(
+  options: RequestSessionGoalEvaluationOptions,
+): Promise<SessionGoal> {
+  const now = nowMs(options.now);
+  const requestId = normalizeEvaluationText(options.requestId, "evaluation request id");
+  const reason = normalizeEvaluationText(options.reason, "evaluation request reason");
+  const blockerKey = options.blockerKey?.trim().slice(0, MAX_EVALUATION_TEXT_CHARS) || undefined;
+  if (options.proposedStatus === "blocked" && !blockerKey) {
+    throw new Error("blocked evaluation request requires a blocker key");
+  }
+
+  let updated: SessionGoal | undefined;
+  let foundSession = false;
+  const result = await updateSessionStoreEntry({
+    sessionKey: options.sessionKey,
+    storePath: options.storePath,
+    update: async (entry) => {
+      foundSession = true;
+      const accounted = accountGoalUsage(entry, now);
+      if (!accounted) {
+        throw new Error("goal not found");
+      }
+      if (options.expectedGoalId && accounted.id !== options.expectedGoalId) {
+        throw new Error("goal mismatch");
+      }
+      if (accounted.status !== "active") {
+        throw new Error(`goal is ${accounted.status}`);
+      }
+
+      // A retried tool result must not replace its original durable claim with
+      // different prose. The evaluator attempt uses this same stable identity.
+      if (accounted.pendingEvaluation?.requestId === requestId) {
+        updated = accounted;
+        return null;
+      }
+      updated = {
+        ...accounted,
+        updatedAt: now,
+        pendingEvaluation: {
+          requestId,
+          proposedStatus: options.proposedStatus,
+          reason,
+          ...(blockerKey ? { blockerKey } : {}),
+          createdAt: now,
+        },
+      };
+      return { goal: updated };
+    },
+  });
+  if (!result && !updated) {
+    throw new Error(foundSession ? "goal not found" : "session not found");
+  }
+  if (!updated) {
+    throw new Error("goal evaluation request not recorded");
+  }
+  return cloneGoal(updated);
 }
 
 function buildEvaluationDecision(

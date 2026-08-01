@@ -204,6 +204,16 @@ export type SessionGoalEvaluationState = {
   history: SessionGoalEvaluationAttempt[];
 };
 
+export type SessionGoalEvaluationRequest = {
+  /** Tool-call id makes a completion claim safe to retry across process restarts. */
+  requestId: string;
+  proposedStatus: "complete" | "blocked";
+  reason: string;
+  /** A blocked claim must identify the exact dependency that prevented progress. */
+  blockerKey?: string;
+  createdAt: number;
+};
+
 export type SessionGoal = {
   schemaVersion: 1;
   id: string;
@@ -218,6 +228,8 @@ export type SessionGoal = {
   continuationTurns: number;
   autonomy?: SessionGoalAutonomy;
   evaluation?: SessionGoalEvaluationState;
+  /** Model-authored claim awaiting an independent, tool-disabled post-turn evaluation. */
+  pendingEvaluation?: SessionGoalEvaluationRequest;
   lastStatusNote?: string;
   pausedAt?: number;
   blockedAt?: number;

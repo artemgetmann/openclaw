@@ -344,7 +344,7 @@ export function buildAgentSystemPrompt(params: {
     message: "Send messages and channel actions",
     get_goal: "Read the current session goal",
     create_goal: "Create the current session goal when explicitly approved/requested",
-    update_goal: "Mark the current session goal complete or blocked",
+    update_goal: "Request independent evaluation of a completion or blocked claim",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
       ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'

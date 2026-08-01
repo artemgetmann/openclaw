@@ -45,6 +45,8 @@ export type EmbeddedRunAttemptResult = {
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
+  /** Messages appended by this turn only, retained for evidence-aware orchestration. */
+  turnMessages?: AgentMessage[];
   assistantTexts: string[];
   /**
    * Provider-authored phase for each assistantTexts entry. Undefined preserves

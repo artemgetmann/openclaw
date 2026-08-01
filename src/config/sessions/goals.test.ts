@@ -8,6 +8,7 @@ import {
   getSessionGoal,
   recordSessionGoalEvaluation,
   recordSessionGoalContinuation,
+  requestSessionGoalEvaluation,
   resolveSessionGoalAutonomy,
   updateSessionGoalStatus,
 } from "./goals.js";
@@ -208,6 +209,36 @@ describe("session goals", () => {
     expect(satisfied.goal.autonomy?.authorityGrants).toEqual([authorityGrant]);
     expect(satisfied.goal.completedAt).toBe(4_000);
     expect(satisfied.stopReason).toBe("satisfied");
+  });
+
+  it("persists an idempotent model claim without granting completion authority", async () => {
+    const goal = await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Prove the release is healthy.",
+    });
+    const first = await requestSessionGoalEvaluation({
+      sessionKey,
+      storePath,
+      expectedGoalId: goal.id,
+      requestId: "tool-call-1",
+      proposedStatus: "complete",
+      reason: "All focused checks passed.",
+      now: 2_000,
+    });
+    const duplicate = await requestSessionGoalEvaluation({
+      sessionKey,
+      storePath,
+      expectedGoalId: goal.id,
+      requestId: "tool-call-1",
+      proposedStatus: "complete",
+      reason: "This conflicting retry must not replace the original claim.",
+      now: 3_000,
+    });
+
+    expect(first.status).toBe("active");
+    expect(duplicate.pendingEvaluation).toEqual(first.pendingEvaluation);
+    expect(duplicate.pendingEvaluation?.reason).toBe("All focused checks passed.");
   });
 
   it("blocks only after three evidenced no-progress attempts against the same blocker", async () => {
