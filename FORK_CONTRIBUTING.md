@@ -35,7 +35,7 @@ Every fork PR should start with this section:
 - Observable claim + acceptance criteria:
 - Exact head + builder proof:
 - Independent tester: (`PASS` + exact identity/head/diff/receipt + lifecycle closure)
-- Release worker: (fresh user-visible project task + explicit normal-merge authority)
+- Release worker: (fresh user-visible project task + typed task-authority packet + accepted-handoff builder archive receipt)
 - Dependencies / merge order / overlap:
 - Remaining proof / cleanup / rollback:
 - Still hurts:

@@ -151,7 +151,11 @@ Before using any merge helper, the builder must have produced and consumed the
 release contract with `scripts/pr-lifecycle handoff-release`; that command
 fails closed unless the immutable tester `PASS` and exact task closure are
 recorded. The shell emits the contract, while the native agent creates the
-fresh user-visible task and records its exact identity.
+fresh user-visible task and records its exact identity. Before review or merge,
+that release task archives the exact builder, verifies `archived=true`, and
+records `release-handoff-accepted`. A source finding returns and unarchives that
+same builder; repaired proof resumes the same release task and requires a fresh
+builder-archive acceptance receipt.
 
 Agents should not:
 

@@ -8,6 +8,7 @@ import process from "node:process";
 
 const SCHEMA_VERSION = 1;
 const GH_BIN = process.env.OPENCLAW_PR_LIFECYCLE_GH ?? "gh";
+const RELEASE_ACTIONS = new Set(["normal-merge", "deploy"]);
 
 class LifecycleError extends Error {
   constructor(message, exitCode = 1) {
@@ -28,8 +29,10 @@ function usage() {
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
-  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID>
+  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>]
   scripts/pr-lifecycle accept-release-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
+  scripts/pr-lifecycle accept-release-handoff <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-archived true
+  scripts/pr-lifecycle return-source <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-unarchived true --finding <TEXT>
   scripts/pr-lifecycle cancel-pending <PR> --role <tester|release> --contract-id <ID> --confirm-no-thread-created
 
 The handoff commands emit JSON. A native agent must consume action=create_thread
@@ -253,6 +256,7 @@ function testerRouting(testKind, transport, builder) {
 function ownerPrompt(role, state) {
   const { candidate, builder } = state;
   const testerReceipt = role === "release" ? state.tester?.receipt : null;
+  const releaseAuthority = role === "release" ? state.release?.taskAuthority : null;
   return [
     `Task: ${role === "tester" ? "Independently test" : "Release"} OpenClaw PR #${candidate.number} on the immutable candidate below.`,
     `Owner/cwd: fresh user-visible project-scoped Codex task in the OpenClaw project.`,
@@ -271,12 +275,20 @@ function ownerPrompt(role, state) {
       : `Tester: ${testerReceipt.status}; thread=${testerReceipt.owner.threadId} host=${testerReceipt.owner.hostId}; evidence=${testerReceipt.evidence.join(" | ")}`,
     role === "tester"
       ? `Constraints: return one terminal receipt; preserve source/runtime/live proof boundaries; perform external or live actions only when explicitly granted in this task.`
-      : `Authority: normal non-admin merge only. No bypass, admin override, deploy, restart, package, install, shared-runtime mutation, or product release.`,
+      : `Authority packet: ${JSON.stringify(releaseAuthority)}. Treat only allowedActions as durable authority. Never infer credentials, OTP, admin/bypass, irreversible/public-release, or new-scope authority.`,
     role === "tester"
       ? `Handback: send the builder a JSON receipt matching scripts/pr-lifecycle record-test-receipt, including the emitted routing object, exact task identity, head, diff, PASS|FAIL, evidence, cleanup, and limitations.`
-      : `Handback: verify current head/diff/checks/reviews, merge only if every gate passes, send the merge receipt, then archive the exact builder thread above.`,
+      : `Acceptance gate: before review, merge, or deploy work, archive the exact builder thread above, verify archived=true, then run scripts/pr-lifecycle accept-release-handoff with both exact identities and --builder-archived true. Stop if that receipt is not release-handoff-accepted.`,
+    role === "release"
+      ? `Source return: if review finds concrete source work, unarchive only that exact builder, verify archived=false, run scripts/pr-lifecycle return-source with the exact finding, send the finding to that same builder, and pause. Never create a replacement builder. After repaired proof resumes this task, repeat the acceptance gate and re-archive the builder before continuing.`
+      : null,
+    role === "release"
+      ? `Handback: independently verify current head/diff/checks/reviews; merge only if every gate passes; send the merge receipt. Builder archival belongs to acceptance, not post-merge cleanup.`
+      : null,
     `Read AGENTS.md, CONSUMER.md, docs/agent-guides/workflow.md, and docs/agent-guides/fleet-resource-control.md before acting. Never route live/external testing or release through a nested sub-agent.`,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function handoffTest(pr, options) {
@@ -316,7 +328,7 @@ function handoffTest(pr, options) {
     }
     if (state && !sameCandidate(state.candidate, candidate)) {
       const returningFromRelease =
-        state.release?.phase === "active" &&
+        state.release?.phase === "awaiting-source" &&
         state.release.contractId === returningReleaseContract &&
         state.tester?.phase === "closed";
       if (!returningFromRelease && hasUnclosedOwner(state)) {
@@ -423,7 +435,8 @@ function acceptOwner(pr, options, role) {
       fail(`no matching ${role} handoff contract`);
     }
     const record = state[role];
-    if (record.phase === "active") {
+    const acceptedPhase = role === "release" ? "owner-recorded" : "active";
+    if (record.phase === acceptedPhase || (role === "release" && record.phase === "active")) {
       if (record.owner.threadId !== owner.threadId || record.owner.hostId !== owner.hostId) {
         fail(`a different ${role} owner is already active`);
       }
@@ -433,10 +446,141 @@ function acceptOwner(pr, options, role) {
       fail(`${role} handoff is ${record.phase}, not handoff-pending`);
     }
     record.owner = owner;
-    record.phase = "active";
+    record.phase = acceptedPhase;
     record.acceptedAt = new Date().toISOString();
     state.updatedAt = new Date().toISOString();
     return { state, output: { action: "owner-recorded", role, contractId, owner } };
+  });
+}
+
+function exactReleaseAndBuilder(state, options) {
+  const contractId = requireOption(options, "contractId");
+  const releaseOwner = {
+    threadId: requireOption(options, "threadId"),
+    hostId: requireOption(options, "hostId"),
+  };
+  const builder = {
+    threadId: requireOption(options, "builderThread"),
+    hostId: requireOption(options, "builderHost"),
+  };
+  if (!state?.release || state.release.contractId !== contractId) {
+    fail("no matching release handoff contract");
+  }
+  if (
+    state.release.owner?.threadId !== releaseOwner.threadId ||
+    state.release.owner?.hostId !== releaseOwner.hostId
+  ) {
+    fail("release transition identity does not match the exact recorded owner");
+  }
+  if (state.builder.threadId !== builder.threadId || state.builder.hostId !== builder.hostId) {
+    fail("release transition builder identity does not match the exact recorded builder");
+  }
+  return { contractId, releaseOwner, builder };
+}
+
+function acceptReleaseHandoff(pr, options) {
+  return withStateLock(pr, (state) => {
+    const { contractId, releaseOwner, builder } = exactReleaseAndBuilder(state, options);
+    const release = state.release;
+    if (release.phase === "active" && release.builderArchiveReceipt?.archived === true) {
+      return {
+        state,
+        output: {
+          action: "release-handoff-already-accepted",
+          contractId,
+          owner: releaseOwner,
+          builderArchiveReceipt: release.builderArchiveReceipt,
+        },
+      };
+    }
+    // States written by the first deterministic lifecycle revision marked the
+    // release active immediately after owner recording. Treat only that
+    // receipt-less legacy shape as awaiting acceptance; never grandfather it
+    // into release authority.
+    const legacyAwaitingAcceptance =
+      release.phase === "active" && release.builderArchiveReceipt == null;
+    if (release.phase !== "owner-recorded" && !legacyAwaitingAcceptance) {
+      fail(`release handoff is ${release.phase}, not owner-recorded`);
+    }
+    if (requireOption(options, "builderArchived") !== "true") {
+      fail("release acceptance requires --builder-archived true after exact native verification");
+    }
+
+    // This is the release work gate. Recording the exact native result here
+    // makes acceptance retry-safe and prevents review or merge while the
+    // builder still appears in the active task list.
+    release.builderArchiveReceipt = {
+      archived: true,
+      builder,
+      verifiedBy: releaseOwner,
+      recordedAt: new Date().toISOString(),
+    };
+    release.phase = "active";
+    release.handoffAcceptedAt = new Date().toISOString();
+    state.updatedAt = new Date().toISOString();
+    return {
+      state,
+      output: {
+        action: "release-handoff-accepted",
+        contractId,
+        owner: releaseOwner,
+        builderArchiveReceipt: release.builderArchiveReceipt,
+        authority: release.taskAuthority,
+      },
+    };
+  });
+}
+
+function returnSource(pr, options) {
+  return withStateLock(pr, (state) => {
+    const { contractId, releaseOwner, builder } = exactReleaseAndBuilder(state, options);
+    const release = state.release;
+    const finding = requireOption(options, "finding");
+    if (release.phase === "awaiting-source") {
+      if (release.sourceReturn?.finding !== finding) {
+        fail("source was already returned with a different exact finding");
+      }
+      return {
+        state,
+        output: {
+          action: "source-already-returned",
+          contractId,
+          owner: releaseOwner,
+          builder,
+          finding,
+        },
+      };
+    }
+    if (release.phase !== "active" || release.builderArchiveReceipt?.archived !== true) {
+      fail(
+        `source return requires an active accepted release handoff with builder archive proof, not ${release.phase}`,
+      );
+    }
+    if (requireOption(options, "builderUnarchived") !== "true") {
+      fail("source return requires --builder-unarchived true after exact native verification");
+    }
+
+    release.sourceReturn = {
+      finding,
+      builder,
+      unarchived: true,
+      verifiedBy: releaseOwner,
+      recordedAt: new Date().toISOString(),
+    };
+    release.phase = "awaiting-source";
+    state.updatedAt = new Date().toISOString();
+    return {
+      state,
+      output: {
+        action: "source-returned",
+        contractId,
+        owner: releaseOwner,
+        builder,
+        finding,
+        nativeTool: { sequence: ["send_message_to_thread"] },
+        warning: "Steer only the exact revived builder and pause this release task.",
+      },
+    };
   });
 }
 
@@ -448,6 +592,52 @@ function readReceipt(receiptPath) {
     fail(`cannot read tester receipt: ${error.message}`);
   }
   return receipt;
+}
+
+function readTaskAuthority(authorityPath, pr) {
+  if (!authorityPath) {
+    // Normal merge is the narrow default explicitly requested by the existing
+    // --authority flag. Protected runtime work never appears by implication.
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      source: "builder-handoff",
+      scope: `PR #${pr} source merge only`,
+      allowedActions: ["normal-merge"],
+      constraints: [
+        "no admin or bypass",
+        "no credentials or OTP",
+        "no irreversible or public release",
+        "no new scope",
+      ],
+    };
+  }
+
+  let authority;
+  try {
+    authority = JSON.parse(fs.readFileSync(path.resolve(authorityPath), "utf8"));
+  } catch (error) {
+    fail(`cannot read task authority: ${error.message}`);
+  }
+  const allowedActions = authority?.allowedActions;
+  const validActions =
+    Array.isArray(allowedActions) &&
+    allowedActions.length > 0 &&
+    allowedActions.every((action) => RELEASE_ACTIONS.has(action));
+  if (
+    authority?.schemaVersion !== SCHEMA_VERSION ||
+    authority?.source !== "direct-user-task" ||
+    typeof authority?.scope !== "string" ||
+    authority.scope.trim() === "" ||
+    !validActions ||
+    !allowedActions.includes("normal-merge") ||
+    !Array.isArray(authority.constraints) ||
+    authority.constraints.some((constraint) => typeof constraint !== "string")
+  ) {
+    fail(
+      "task authority must be a direct-user-task packet granting only normal-merge and optional deploy with explicit scope and constraints",
+    );
+  }
+  return authority;
 }
 
 function recordTestReceipt(pr, options) {
@@ -547,6 +737,7 @@ function handoffRelease(pr, options) {
       "release handoff requires explicit authority=normal-merge and cannot invent broader authority",
     );
   }
+  const taskAuthority = readTaskAuthority(options.taskAuthority, pr);
   const candidate = fetchCandidate(pr);
   if (candidate.isDraft) {
     fail("release handoff requires a ready-for-review PR, not a draft");
@@ -573,7 +764,10 @@ function handoffRelease(pr, options) {
       );
     }
     if (state.release?.phase === "awaiting-retest") {
-      state.release.phase = "active";
+      // The same release owner resumes, but it cannot resume release work until
+      // it re-archives the repaired builder and records acceptance again.
+      state.release.phase = "owner-recorded";
+      state.release.builderArchiveReceipt = null;
       state.release.resumedAt = new Date().toISOString();
       state.updatedAt = new Date().toISOString();
       return {
@@ -584,10 +778,13 @@ function handoffRelease(pr, options) {
           contractId: state.release.contractId,
           transport: state.release.transport,
           authority: state.release.authority,
+          taskAuthority: state.release.taskAuthority,
           owner: state.release.owner,
           candidate,
           testerReceipt: state.tester.receipt,
-          nativeTool: { sequence: ["send_message_to_thread"] },
+          nativeTool: {
+            sequence: ["send_message_to_thread", "set_thread_archived", "accept-release-handoff"],
+          },
           prompt: ownerPrompt("release", state),
           warning: "Resume only the exact recorded release task; never create a replacement owner.",
         },
@@ -612,6 +809,7 @@ function handoffRelease(pr, options) {
       contractId,
       transport,
       authority,
+      taskAuthority,
       owner: null,
       createdAt: new Date().toISOString(),
     };
@@ -624,10 +822,17 @@ function handoffRelease(pr, options) {
         contractId,
         transport,
         authority,
+        taskAuthority,
         candidate,
         testerReceipt: state.tester.receipt,
         nativeTool: {
-          sequence: ["list_projects", "create_thread", "accept-release-owner"],
+          sequence: [
+            "list_projects",
+            "create_thread",
+            "accept-release-owner",
+            "set_thread_archived",
+            "accept-release-handoff",
+          ],
           target: { type: "project", environment: { type: "worktree" } },
         },
         prompt: ownerPrompt("release", state),
@@ -680,6 +885,12 @@ try {
       break;
     case "accept-release-owner":
       output = acceptOwner(pr, options, "release");
+      break;
+    case "accept-release-handoff":
+      output = acceptReleaseHandoff(pr, options);
+      break;
+    case "return-source":
+      output = returnSource(pr, options);
       break;
     case "cancel-pending":
       output = cancelPending(pr, options);

@@ -70,6 +70,12 @@ the transition a mandatory two-step gate:
    returned thread and host with `accept-test-owner` or
    `accept-release-owner`.
 
+Recording a release owner is not permission to begin release work. The fresh
+release task first archives the exact builder, verifies `archived=true`, and
+records that receipt with `accept-release-handoff`. Only the resulting
+`release-handoff-accepted` transition opens review, merge, or already-authorized
+deployment work.
+
 Re-running a pending or active handoff returns `action=do-not-create`; it never
 authorizes a replacement owner. If native task creation definitely failed, use
 `cancel-pending --confirm-no-thread-created` only after proving no task was
@@ -142,8 +148,8 @@ The builder invokes `scripts/pr-lifecycle handoff-release`; only its first
 project-scoped release worker. The contract supplies the immutable PR, head,
 base, diff, builder identity, tester
 receipt, cleanup receipt, review/check state, dependencies and overlap, risks,
-rollback, remaining proof, and explicit normal-merge authority. Builders and
-testers never merge or deploy.
+rollback, remaining proof, and the validated task-authority packet. Builders
+and testers never merge or deploy.
 
 The release worker independently refreshes and verifies the PR head, current
 base, effective diff, required checks, review conversations, approvals,
@@ -152,23 +158,39 @@ bypass, admin override, force, or weakened branch protection. If the reviewed
 head or diff changed, proof is stale, approval is missing, checks are not green,
 or the PR cannot merge normally, it does not merge.
 
+Before that review begins, the release worker proves its recorded thread and
+host identity, archives the exact builder task, verifies `archived=true`, and
+runs `accept-release-handoff` with both exact identities. The transition is
+idempotent [safe to retry] for the same receipt and fails closed for adjacent
+tasks or incomplete archival. The builder therefore leaves the active Codex
+task list at accepted handoff, not after merge.
+
 Behavior-bearing repair belongs to the builder. When a concrete release
 discrepancy requires source repair, the release worker may unarchive and steer
 only the exact builder thread, then waits for a new builder packet and fresh
 tester validation for the changed head. It must not create a duplicate builder,
 tester, or release owner.
 
+Mechanically, the release worker verifies `archived=false`, records the exact
+finding and identities with `return-source`, sends that finding to the same
+builder, and pauses. The transition is idempotent for the same finding. A
+different finding or identity fails closed instead of silently widening the
+repair. `handoff-test --returning-release-contract` is legal only after this
+source-return receipt.
+
 For that repair loop, the builder passes the exact active release contract to
 `handoff-test --returning-release-contract`. After the repaired head receives a
 fresh tester receipt and closure, `handoff-release` emits
 `action=resume-thread` for the already-recorded release task; it never emits a
-second `create_thread` action.
+second `create_thread` action. The resumed release owner re-archives the same
+builder and records a fresh `accept-release-handoff` receipt before continuing.
 
-After a successful merge, the release worker records and sends the merge receipt
-before archiving the exact builder thread. The receipt proves the reviewed head
-tree equals the landed merge tree and that the merge commit is an ancestor of
-the refreshed target branch. It reports merged-source truth separately from any
-package, installed runtime, provider/backend, GUI, or real-user proof.
+After a successful merge, the release worker records and sends the merge receipt.
+The builder was already archived at accepted handoff. The receipt proves the
+reviewed head tree equals the landed merge tree and that the merge commit is an
+ancestor of the refreshed target branch. It reports merged-source truth
+separately from any package, installed runtime, provider/backend, GUI, or
+real-user proof.
 
 ### 4. Identity and lifecycle failures fail closed
 
@@ -232,13 +254,14 @@ Proof: <commands, checks, review state, evidence links>
 Tester: <transport + PASS|FAIL + exact head/diff + receipt + lifecycle closure>
 Dependencies / overlap: <none or exact refs + merge order>
 Risk / rollback / remaining proof: <explicit source and post-merge boundaries>
-Authority: <allowed actions; release packet must explicitly allow normal merge>
+Authority: <typed direct-user-task packet; exact allowed actions, scope, and constraints>
 ```
 
-The release receipt adds the refreshed base, effective diff, final checks and
-reviews, merge method and commit, reviewed-head-tree/landed-tree equality,
-target-branch ancestry proof, builder handback, and exact builder archival
-receipt.
+The release-acceptance receipt adds the exact release identity and builder
+`archived=true` proof. The release receipt adds the refreshed base, effective
+diff, final checks and reviews, merge method and commit,
+reviewed-head-tree/landed-tree equality, target-branch ancestry proof, and any
+source-return/re-acceptance receipts.
 
 ### “Ship end-to-end” authority
 
@@ -252,6 +275,14 @@ itself authorize new scope, destructive cleanup, credentials, irreversible or
 external actions, security-owned changes, or protected live actions. Package,
 product release, deploy, restart, install, shared-runtime mutation, and live
 acceptance require explicit task authority or later approval.
+
+When a direct user task explicitly grants normal merge or deployment authority,
+the builder preserves it in the typed release packet with source, exact scope,
+allowed actions, and constraints. Routine CI, review, safe rebase, and capacity
+continuation do not ask the user to repeat that authority. The packet may carry
+only `normal-merge` and an explicitly granted `deploy`; it never invents
+credentials, OTP, admin/bypass, irreversible or public-release actions, or new
+scope. A later direct hold or narrower instruction still wins.
 
 Worktrees isolate branch and filesystem state; they do not prevent two branches
 from changing the same contract incompatibly. Before starting or resuming work

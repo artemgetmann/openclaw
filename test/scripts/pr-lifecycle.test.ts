@@ -10,6 +10,7 @@ const SCRIPT = path.join(ROOT, "scripts", "pr-lifecycle.mjs");
 type LifecycleOutput = {
   action: string;
   authority?: string;
+  taskAuthority?: { allowedActions: string[]; source: string };
   candidate?: {
     headSha: string;
     diffFingerprint: string;
@@ -98,6 +99,90 @@ function beginLiveTester(fixture: ReturnType<typeof makeFixture>) {
     "builder-thread",
     "--owner-host",
     "builder-host",
+  ]);
+}
+
+function acceptReleaseHandoff(fixture: ReturnType<typeof makeFixture>, contractId: string) {
+  return run(fixture, [
+    "accept-release-handoff",
+    "42",
+    "--contract-id",
+    contractId,
+    "--thread-id",
+    "release-thread",
+    "--host-id",
+    "release-host",
+    "--builder-thread",
+    "builder-thread",
+    "--builder-host",
+    "builder-host",
+    "--builder-archived",
+    "true",
+  ]);
+}
+
+function returnSource(fixture: ReturnType<typeof makeFixture>, contractId: string) {
+  return run(fixture, [
+    "return-source",
+    "42",
+    "--contract-id",
+    contractId,
+    "--thread-id",
+    "release-thread",
+    "--host-id",
+    "release-host",
+    "--builder-thread",
+    "builder-thread",
+    "--builder-host",
+    "builder-host",
+    "--builder-unarchived",
+    "true",
+    "--finding",
+    "archive receipt must gate review",
+  ]);
+}
+
+function completeTesterPass(fixture: ReturnType<typeof makeFixture>) {
+  const tester = beginLiveTester(fixture);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "tester-thread",
+    "--host-id",
+    "tester-host",
+  ]);
+  const receiptPath = path.join(fixture.root, "tester-pass.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "PASS",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "tester-thread", hostId: "tester-host" },
+      evidence: ["exact-head lifecycle proof passed"],
+      cleanup: { status: "complete" },
+      limitations: [],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "tester-thread",
+    "--host-id",
+    "tester-host",
+    "--closure",
+    "archived",
   ]);
 }
 
@@ -259,7 +344,16 @@ describe("scripts/pr-lifecycle", () => {
     ]);
     expect(release.action).toBe("create_thread");
     expect(release.authority).toBe("normal-merge");
-    expect(release.prompt).toContain("No bypass, admin override, deploy, restart");
+    expect(release.taskAuthority?.allowedActions).toEqual(["normal-merge"]);
+    expect(release.nativeTool?.sequence).toEqual([
+      "list_projects",
+      "create_thread",
+      "accept-release-owner",
+      "set_thread_archived",
+      "accept-release-handoff",
+    ]);
+    expect(release.prompt).toContain("archive the exact builder thread");
+    expect(release.prompt).toContain("Builder archival belongs to acceptance");
 
     const repeated = run(fixture, [
       "handoff-release",
@@ -437,6 +531,71 @@ describe("scripts/pr-lifecycle", () => {
     expect(result.stderr).toContain("dispatcher routing");
   });
 
+  it("carries direct normal-merge and deploy authority but rejects protected actions", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const authorityPath = path.join(fixture.root, "task-authority.json");
+    fs.writeFileSync(
+      authorityPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        source: "direct-user-task",
+        scope: "merge PR #42 and deploy it to the already-authorized staging target",
+        allowedActions: ["normal-merge", "deploy"],
+        constraints: ["no credentials", "no admin or bypass", "no public release"],
+      }),
+    );
+    const release = run(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--task-authority",
+      authorityPath,
+    ]);
+    expect(release.taskAuthority).toMatchObject({
+      source: "direct-user-task",
+      allowedActions: ["normal-merge", "deploy"],
+    });
+    expect(release.prompt).toContain('"allowedActions":["normal-merge","deploy"]');
+
+    const protectedFixture = makeFixture();
+    completeTesterPass(protectedFixture);
+    const protectedPath = path.join(protectedFixture.root, "bad-authority.json");
+    fs.writeFileSync(
+      protectedPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        source: "direct-user-task",
+        scope: "PR #42",
+        allowedActions: ["normal-merge", "credentials"],
+        constraints: [],
+      }),
+    );
+    const rejected = runFailure(protectedFixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--task-authority",
+      protectedPath,
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("granting only normal-merge and optional deploy");
+  });
+
   it("keeps one release owner across a repaired head and resumes it after fresh proof", () => {
     const fixture = makeFixture();
     const firstTester = beginLiveTester(fixture);
@@ -502,6 +661,32 @@ describe("scripts/pr-lifecycle", () => {
       "--host-id",
       "release-host",
     ]);
+    const prematureReturn = runFailure(fixture, [
+      "return-source",
+      "42",
+      "--contract-id",
+      release.contractId,
+      "--thread-id",
+      "release-thread",
+      "--host-id",
+      "release-host",
+      "--builder-thread",
+      "builder-thread",
+      "--builder-host",
+      "builder-host",
+      "--builder-unarchived",
+      "true",
+      "--finding",
+      "must not skip acceptance",
+    ]);
+    expect(prematureReturn.status).toBe(1);
+    expect(prematureReturn.stderr).toContain("active accepted release handoff");
+    expect(acceptReleaseHandoff(fixture, release.contractId).action).toBe(
+      "release-handoff-accepted",
+    );
+    expect(acceptReleaseHandoff(fixture, release.contractId).action).toBe(
+      "release-handoff-already-accepted",
+    );
 
     fixture.metadata.headRefOid = "c".repeat(40);
     fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
@@ -536,6 +721,9 @@ describe("scripts/pr-lifecycle", () => {
     ]);
     expect(stolen.status).toBe(1);
     expect(stolen.stderr).toContain("builder identity differs from the recorded candidate owner");
+
+    expect(returnSource(fixture, release.contractId).action).toBe("source-returned");
+    expect(returnSource(fixture, release.contractId).action).toBe("source-already-returned");
 
     const repairedTester = run(fixture, [
       "handoff-test",
@@ -610,6 +798,11 @@ describe("scripts/pr-lifecycle", () => {
       contractId: release.contractId,
       owner: { threadId: "release-thread", hostId: "release-host" },
     });
-    expect(resumed.nativeTool?.sequence).toEqual(["send_message_to_thread"]);
+    expect(resumed.nativeTool?.sequence).toEqual([
+      "send_message_to_thread",
+      "set_thread_archived",
+      "accept-release-handoff",
+    ]);
+    expect(resumed.prompt).toContain("repeat the acceptance gate and re-archive the builder");
   });
 });
