@@ -10,6 +10,7 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -49,6 +50,7 @@ import {
 } from "./restart-recovery.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { buildFinalTtsCaptionPreview, buildFinalTtsSpokenPreview } from "./tts-caption-preview.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { createTypingController, type TypingController } from "./typing.js";
 
@@ -56,6 +58,99 @@ type LiveReplyRoute = Pick<
   FollowupRun,
   "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
 >;
+
+function hasPayloadMedia(payload: ReplyPayload): boolean {
+  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+}
+
+function markQueuedFinalPayload(
+  payload: ReplyPayload,
+  options?: { ttsSupplement?: boolean },
+): ReplyPayload {
+  const channelData =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData
+      : {};
+  const openclaw =
+    channelData.openclaw &&
+    typeof channelData.openclaw === "object" &&
+    !Array.isArray(channelData.openclaw)
+      ? channelData.openclaw
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...channelData,
+      openclaw: {
+        ...openclaw,
+        assistantPhase: "final_answer",
+        ...(options?.ttsSupplement ? { finalTtsSupplement: true } : {}),
+      },
+    },
+  };
+}
+
+async function expandQueuedTelegramFinalTts(params: {
+  payloads: ReplyPayload[];
+  queued: FollowupRun;
+}): Promise<ReplyPayload[]> {
+  if (params.queued.run.ttsChannel?.trim().toLowerCase() !== "telegram") {
+    return params.payloads;
+  }
+
+  // A model turn may produce tool media plus one final text payload. Voice the
+  // last plain-text final only, matching the normal Telegram dispatcher and
+  // avoiding accidental narration of progress/tool artifacts.
+  const finalTextIndex = params.payloads.findLastIndex(
+    (payload) =>
+      typeof payload.text === "string" &&
+      payload.text.trim().length > 0 &&
+      !hasPayloadMedia(payload) &&
+      !payload.interactive &&
+      !payload.btw &&
+      payload.restartRecovery !== true,
+  );
+  if (finalTextIndex < 0) {
+    return params.payloads;
+  }
+
+  const originalFinal = params.payloads[finalTextIndex];
+  if (!originalFinal?.text) {
+    return params.payloads;
+  }
+  const visibleText = originalFinal.text.trim();
+  const spokenText = buildFinalTtsSpokenPreview(visibleText) ?? visibleText;
+  const ttsPayload = await maybeApplyTtsToPayload({
+    payload: { text: spokenText },
+    cfg: params.queued.run.config,
+    channel: params.queued.run.ttsChannel,
+    kind: "final",
+    inboundAudio: params.queued.run.inboundAudio,
+    ttsAuto: params.queued.run.resolvedTtsAuto,
+  });
+  if (!hasPayloadMedia(ttsPayload) || ttsPayload.audioAsVoice !== true) {
+    return params.payloads;
+  }
+
+  const textFinal = markQueuedFinalPayload(originalFinal);
+  const voiceSupplement = markQueuedFinalPayload(
+    {
+      ...ttsPayload,
+      // The bubble caption describes the exact visible answer. The synthesized
+      // speech preview may be shorter when the final contains tables or code.
+      text: buildFinalTtsCaptionPreview(visibleText),
+    },
+    { ttsSupplement: true },
+  );
+  return [
+    ...params.payloads.slice(0, finalTextIndex),
+    textFinal,
+    voiceSupplement,
+    ...params.payloads.slice(finalTextIndex + 1),
+  ];
+}
 
 /**
  * Build the process-start callback used for disk-backed followups.
@@ -570,7 +665,7 @@ export function createFollowupRunner(params: {
           accountId: queued.run.agentAccountId,
         }),
       });
-      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
+      let finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (autoCompactionCount > 0) {
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
@@ -588,6 +683,15 @@ export function createFollowupRunner(params: {
           });
         }
       }
+
+      // Durable followups bypass dispatch-from-config after the inbound request
+      // returns. Expand Telegram's additive voice note here, before persisting
+      // the delivery stage, so retries restore the exact text-then-voice suffix
+      // without rerunning the model or external tools.
+      finalPayloads = await expandQueuedTelegramFinalTts({
+        payloads: finalPayloads,
+        queued,
+      });
 
       if (durableIds.length > 0) {
         // Commit the exact model-complete output before session usage,

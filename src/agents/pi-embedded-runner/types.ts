@@ -35,6 +35,14 @@ export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
+  /**
+   * The provider completed with the intentional silent-reply token.
+   *
+   * Payload normalization removes that control token before transport code can
+   * see it. Preserve the semantic result separately so callers do not mistake
+   * an intentional no-op for a missing model answer.
+   */
+  silentReply?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   error?: {
     kind:

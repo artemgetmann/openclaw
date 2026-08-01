@@ -75,6 +75,7 @@ import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import {
   buildEmbeddedRunPayloads,
+  isTerminalSilentAssistantReply,
   resolveEmbeddedRunPayloadErrorAssistant,
 } from "./run/payloads.js";
 import {
@@ -1807,6 +1808,7 @@ export async function runEmbeddedPiAgent(
               durationMs: Date.now() - started,
               agentMeta,
               aborted,
+              silentReply: isTerminalSilentAssistantReply(attempt.lastAssistant) || undefined,
               systemPromptReport: attempt.systemPromptReport,
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
