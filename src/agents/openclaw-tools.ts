@@ -108,6 +108,8 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
+    /** Stable run id binds completion claims to evidence from this exact turn. */
+    runId?: string;
     /**
      * Workspace directory to pass to spawned subagents for inheritance.
      * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
@@ -197,6 +199,7 @@ export function createOpenClawTools(
         createUpdateGoalTool({
           agentSessionKey: options?.agentSessionKey,
           config: options?.config,
+          runId: options?.runId,
         }),
       ];
   const tools: AnyAgentTool[] = [

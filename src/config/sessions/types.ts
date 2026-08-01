@@ -207,6 +207,8 @@ export type SessionGoalEvaluationState = {
 export type SessionGoalEvaluationRequest = {
   /** Tool-call id makes a completion claim safe to retry across process restarts. */
   requestId: string;
+  /** Exact working run whose evidence may be used to grade this claim. */
+  runId: string;
   proposedStatus: "complete" | "blocked";
   reason: string;
   /** A blocked claim must identify the exact dependency that prevented progress. */

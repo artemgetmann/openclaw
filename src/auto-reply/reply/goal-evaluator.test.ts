@@ -27,6 +27,7 @@ const goal: SessionGoal = {
   continuationTurns: 0,
   pendingEvaluation: {
     requestId: "claim-1",
+    runId: "working-run-1",
     proposedStatus: "complete",
     reason: "The focused health check passed.",
     createdAt: 2,

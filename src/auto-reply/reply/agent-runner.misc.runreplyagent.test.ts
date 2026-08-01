@@ -1912,74 +1912,78 @@ describe("runReplyAgent independent goal evaluation", () => {
         objective: "Prove the release is healthy.",
       });
       let callCount = 0;
-      runEmbeddedPiAgentMock.mockImplementation(async (params: { disableTools?: boolean }) => {
-        callCount += 1;
-        if (callCount === 1) {
-          await requestSessionGoalEvaluation({
-            sessionKey,
-            storePath,
-            expectedGoalId: goal.id,
-            requestId: "claim-1",
-            proposedStatus: "complete",
-            reason: "The first check looked healthy.",
-          });
-          return { payloads: [{ text: "First result." }], meta: {} };
-        }
-        if (callCount === 2) {
+      runEmbeddedPiAgentMock.mockImplementation(
+        async (params: { disableTools?: boolean; runId: string }) => {
+          callCount += 1;
+          if (callCount === 1) {
+            await requestSessionGoalEvaluation({
+              sessionKey,
+              storePath,
+              expectedGoalId: goal.id,
+              requestId: "claim-1",
+              runId: params.runId,
+              proposedStatus: "complete",
+              reason: "The first check looked healthy.",
+            });
+            return { payloads: [{ text: "First result." }], meta: {} };
+          }
+          if (callCount === 2) {
+            expect(params.disableTools).toBe(true);
+            return {
+              payloads: [
+                {
+                  text: JSON.stringify({
+                    verdict: "needs_revision",
+                    reason: "A fresh health result is missing.",
+                    evidence: ["assistant_final: First result."],
+                    material_progress: true,
+                  }),
+                },
+              ],
+              meta: {},
+            };
+          }
+          if (callCount === 3) {
+            await requestSessionGoalEvaluation({
+              sessionKey,
+              storePath,
+              expectedGoalId: goal.id,
+              requestId: "claim-2",
+              runId: params.runId,
+              proposedStatus: "complete",
+              reason: "The fresh health check passed.",
+            });
+            return {
+              payloads: [{ text: "Fresh health check passed." }],
+              transcriptMessages: [
+                {
+                  role: "toolResult",
+                  toolCallId: "health-1",
+                  toolName: "exec",
+                  content: [{ type: "text", text: "health check: ok" }],
+                  isError: false,
+                  timestamp: Date.now(),
+                },
+              ],
+              meta: {},
+            };
+          }
           expect(params.disableTools).toBe(true);
           return {
             payloads: [
               {
                 text: JSON.stringify({
-                  verdict: "needs_revision",
-                  reason: "A fresh health result is missing.",
-                  evidence: ["assistant_final: First result."],
+                  verdict: "satisfied",
+                  reason: "The fresh health result proves the objective.",
+                  evidence: ["tool_result:exec: health check: ok"],
                   material_progress: true,
                 }),
               },
             ],
             meta: {},
           };
-        }
-        if (callCount === 3) {
-          await requestSessionGoalEvaluation({
-            sessionKey,
-            storePath,
-            expectedGoalId: goal.id,
-            requestId: "claim-2",
-            proposedStatus: "complete",
-            reason: "The fresh health check passed.",
-          });
-          return {
-            payloads: [{ text: "Fresh health check passed." }],
-            transcriptMessages: [
-              {
-                role: "toolResult",
-                toolCallId: "health-1",
-                toolName: "exec",
-                content: [{ type: "text", text: "health check: ok" }],
-                isError: false,
-                timestamp: Date.now(),
-              },
-            ],
-            meta: {},
-          };
-        }
-        expect(params.disableTools).toBe(true);
-        return {
-          payloads: [
-            {
-              text: JSON.stringify({
-                verdict: "satisfied",
-                reason: "The fresh health result proves the objective.",
-                evidence: ["tool_result:exec: health check: ok"],
-                material_progress: true,
-              }),
-            },
-          ],
-          meta: {},
-        };
-      });
+        },
+      );
 
       const typing = createMockTypingController();
       const sessionCtx = {

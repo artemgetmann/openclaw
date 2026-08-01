@@ -31,6 +31,7 @@ describe("goal tools", () => {
   it("creates and reads a goal, then records completion as an evaluation request", async () => {
     const options = {
       agentSessionKey: sessionKey,
+      runId: "working-run-1",
       config: { session: { store: storePath }, cron: { store: cronStorePath } },
     };
     const create = createCreateGoalTool(options);
@@ -61,6 +62,7 @@ describe("goal tools", () => {
         status: "active",
         pendingEvaluation: {
           requestId: "call-3",
+          runId: "working-run-1",
           proposedStatus: "complete",
           reason: "Time and place agreed.",
         },

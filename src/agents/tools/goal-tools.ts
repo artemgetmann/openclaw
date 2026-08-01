@@ -32,6 +32,7 @@ type GoalToolOptions = {
   agentSessionKey?: string;
   sessionAgentId?: string;
   config?: OpenClawConfig;
+  runId?: string;
 };
 
 type GoalSessionScope = {
@@ -358,6 +359,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
       const goal = await requestSessionGoalEvaluation({
         ...scope,
         requestId: toolCallId,
+        runId: options.runId ?? toolCallId,
         proposedStatus: status as (typeof GOAL_TOOL_STATUSES)[number],
         reason: note,
         ...(blockerKey ? { blockerKey } : {}),

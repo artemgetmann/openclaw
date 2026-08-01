@@ -834,7 +834,7 @@ async function runReplyAgentWithFinalizationOwnership(
       if (goal?.status !== "active" || !goal.pendingEvaluation) {
         break;
       }
-      if (goal.pendingEvaluation.createdAt < runStartedAt) {
+      if (goal.pendingEvaluation.runId !== candidate.runId) {
         const reason =
           "The prior completion claim survived an interrupted turn, so its original evidence is no longer available for independent verification.";
         await recordSessionGoalEvaluation({

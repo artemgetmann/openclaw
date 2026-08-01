@@ -54,6 +54,7 @@ type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
 type RequestSessionGoalEvaluationOptions = SessionGoalStoreOptions & {
   expectedGoalId?: string;
   requestId: string;
+  runId: string;
   proposedStatus: SessionGoalEvaluationRequest["proposedStatus"];
   reason: string;
   blockerKey?: string;
@@ -563,6 +564,7 @@ export async function requestSessionGoalEvaluation(
 ): Promise<SessionGoal> {
   const now = nowMs(options.now);
   const requestId = normalizeEvaluationText(options.requestId, "evaluation request id");
+  const runId = normalizeEvaluationText(options.runId, "evaluation run id");
   const reason = normalizeEvaluationText(options.reason, "evaluation request reason");
   const blockerKey = options.blockerKey?.trim().slice(0, MAX_EVALUATION_TEXT_CHARS) || undefined;
   if (options.proposedStatus === "blocked" && !blockerKey) {
@@ -598,6 +600,7 @@ export async function requestSessionGoalEvaluation(
         updatedAt: now,
         pendingEvaluation: {
           requestId,
+          runId,
           proposedStatus: options.proposedStatus,
           reason,
           ...(blockerKey ? { blockerKey } : {}),
