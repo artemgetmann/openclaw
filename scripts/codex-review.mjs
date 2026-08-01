@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const DEFAULT_BASE = "origin/main";
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const FORCE_KILL_GRACE_MS = 5_000;
+const HOST_CONTEXT_REQUIRED_EXIT_CODE = 75;
 
 function usage(message, exitCode = 2) {
   if (message) {
@@ -44,7 +48,53 @@ function parseArgs(argv) {
   return options;
 }
 
+function resolveCodexHome() {
+  const configuredHome = String(process.env.CODEX_HOME ?? "").trim();
+  return configuredHome || path.join(os.homedir(), ".codex");
+}
+
+function requireWritableCodexState() {
+  const codexHome = resolveCodexHome();
+  let probeDirectory;
+  let failure;
+
+  try {
+    // SQLite needs both a writable database and a writable parent directory for
+    // its journal/WAL sidecars. A disposable directory proves the latter
+    // without writing to Codex credentials, configuration, or state records.
+    probeDirectory = fs.mkdtempSync(path.join(codexHome, ".codex-review-preflight-"));
+  } catch (error) {
+    failure = error;
+  } finally {
+    if (probeDirectory) {
+      try {
+        fs.rmSync(probeDirectory, { recursive: true, force: true });
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  }
+
+  if (!failure) {
+    return true;
+  }
+
+  const reason = String(
+    failure && typeof failure === "object" && "code" in failure ? failure.code : "unknown",
+  );
+  process.stderr.write(
+    `CODEX_REVIEW_PREFLIGHT status=host_context_required code=codex_state_unwritable reason=${reason}\n`,
+  );
+  process.stderr.write(
+    `Codex review requires writable Codex host state at ${codexHome}. Re-run this exact command once outside the restricted sandbox; if that host-context attempt fails, stop and report it.\n`,
+  );
+  return false;
+}
+
 const options = parseArgs(process.argv.slice(2));
+if (!requireWritableCodexState()) {
+  process.exit(HOST_CONTEXT_REQUIRED_EXIT_CODE);
+}
 const command = ["codex", "review", "--base", options.base];
 process.stderr.write(
   `Starting one Codex review attempt with a ${options.timeoutSeconds}s deadline: ${command.join(" ")}\n`,

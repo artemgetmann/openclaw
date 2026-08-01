@@ -145,6 +145,12 @@ retry automatically or keep the shipping lane blocked. Record that no verdict
 was produced, then finish a direct diff review and the relevant executable
 proof. A timeout is not a clean Codex review.
 
+Codex review also requires writable host Codex state. When the helper exits `75`
+with `CODEX_REVIEW_PREFLIGHT status=host_context_required`, rerun the exact
+command once outside the restricted sandbox. Do not retry any other failure, and
+if that one host-context attempt fails, stop and report the failure instead of
+looping or weakening the sandbox.
+
 Run it before or during merge flow when a PR touches:
 
 - release or launch tooling
