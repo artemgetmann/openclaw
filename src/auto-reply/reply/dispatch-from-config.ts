@@ -971,6 +971,7 @@ export async function dispatchReplyFromConfig(params: {
     // and return no final payload. Track those visible blocks so final-mode TTS
     // still gets one additive supplement; sourcePreview blocks stay progress-only.
     let durableBlockFinalText = "";
+    let lastPhaseLessDurableBlockText: string | undefined;
     const deferredTelegramBlockMedia: Array<{
       payload: ReplyPayload;
       abortSignal?: AbortSignal;
@@ -1013,15 +1014,34 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldSuppressReasoningPayload(payload)) {
               return;
             }
+            const assistantPhase = resolveOpenClawAssistantPhase(payload);
+            if (assistantPhase === "commentary" && payload.text?.trim()) {
+              // Tool-boundary flushing can emit a completed assistant block
+              // before the provider's signed copy of that same block arrives.
+              // The phase-less copy is provisional for legacy compatibility;
+              // once the signed copy identifies it as commentary, retract only
+              // the exact trailing duplicate so it cannot later own final/TTS.
+              const provisionalText = lastPhaseLessDurableBlockText;
+              if (provisionalText?.trim() === payload.text.trim()) {
+                durableBlockFinalText = durableBlockFinalText.endsWith(provisionalText)
+                  ? durableBlockFinalText.slice(0, -provisionalText.length)
+                  : durableBlockFinalText;
+              }
+              lastPhaseLessDurableBlockText = undefined;
+            }
             const shouldTrackBlockAsDurableFinal =
               !isSourcePreviewToolPayload(payload) &&
               // A provider failure can end a run after signed commentary was
               // already streamed. Commentary remains progress; only an actual
               // final or a legacy phase-less block may own final/TTS delivery.
-              resolveOpenClawAssistantPhase(payload) !== "commentary" &&
+              assistantPhase !== "commentary" &&
               !sourceReplyPolicy.suppressAutomaticSourceDelivery;
             if (shouldTrackBlockAsDurableFinal && payload.text?.trim()) {
               durableBlockFinalText += payload.text;
+              // Only the immediately preceding legacy block can be the
+              // provider's provisional copy of a later signed commentary block.
+              lastPhaseLessDurableBlockText =
+                assistantPhase === undefined ? payload.text : undefined;
             }
             const shouldDeferTelegramBlockMedia =
               isTelegramProvider &&

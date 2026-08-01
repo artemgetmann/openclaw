@@ -1895,6 +1895,89 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("retracts a phase-less duplicate once structured commentary identifies it as progress", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const commentary =
+      "I’ll pull the grocery list first, then inspect the matching order and send screenshots.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      // Tool-boundary flushing can expose the completed text once before the
+      // provider's signed block arrives. The first copy is provisional: the
+      // later structural phase is the authority for final/TTS ownership.
+      await opts?.onBlockReply?.({ text: commentary });
+      await opts?.onBlockReply?.({
+        text: commentary,
+        channelData: { openclaw: { assistantPhase: "commentary" } },
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: commentary },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("preserves earlier phase-less final text when retracting duplicate commentary", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const commentary = "I’ll inspect the matching order now.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: "Keep this final. " });
+      await opts?.onBlockReply?.({ text: commentary });
+      await opts?.onBlockReply?.({
+        text: commentary,
+        channelData: { openclaw: { assistantPhase: "commentary" } },
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "Keep this final." },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Keep this final." }),
+    );
+  });
+
   it("synthesizes final TTS once from durable block-streamed final text", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
