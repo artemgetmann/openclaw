@@ -239,12 +239,16 @@ export async function runIndependentGoalEvaluator(params: {
   }
 
   const judgeId = crypto.randomUUID();
-  const sessionFile = path.join(os.tmpdir(), `openclaw-goal-judge-${judgeId}.jsonl`);
+  // Use a private OS-created directory rather than interpolating identifiers
+  // into the shared temp root. The judge remains isolated even if another
+  // local process can observe or race entries in that root.
+  const judgeDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-goal-judge-"));
+  const sessionFile = path.join(judgeDir, "session.jsonl");
   try {
     const result = await runEmbeddedPiAgent({
       sessionId: judgeId,
       sessionFile,
-      workspaceDir: os.tmpdir(),
+      workspaceDir: judgeDir,
       agentDir: params.run.agentDir,
       config: params.run.config,
       prompt: buildJudgePrompt({ goal: params.goal, evidence: params.evidence }),
@@ -277,7 +281,7 @@ export async function runIndependentGoalEvaluator(params: {
   } finally {
     // The judge is deliberately stateless. Removing its isolated transcript
     // prevents a later evaluation from inheriting context or authority.
-    await fs.promises.rm(sessionFile, { force: true }).catch(() => undefined);
+    await fs.promises.rm(judgeDir, { force: true, recursive: true }).catch(() => undefined);
   }
 }
 
