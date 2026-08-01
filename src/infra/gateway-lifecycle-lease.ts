@@ -9,6 +9,11 @@ export type GatewayLifecycleLeaseResult =
   | { outcome: "held" }
   | { outcome: "reexecuted"; exitCode: number };
 
+export type GatewayLifecycleServiceEnvRefresh = {
+  root?: string;
+  invocationCwd?: string;
+};
+
 type GatewayLifecycleLeaseDeps = {
   platform: NodeJS.Platform;
   argv: string[];
@@ -186,7 +191,10 @@ export async function ensureGatewayLifecycleLease(
  * re-run their entire parent command merely to serialize its final restart.
  */
 export async function ensureGatewayLifecycleLeaseForRestart(
-  opts: { json?: boolean } = {},
+  opts: {
+    json?: boolean;
+    refreshServiceEnv?: GatewayLifecycleServiceEnvRefresh;
+  } = {},
   overrides: Partial<GatewayLifecycleLeaseDeps> = {},
 ): Promise<GatewayLifecycleLeaseResult> {
   const deps = { ...defaultDeps(), ...overrides };
@@ -211,8 +219,26 @@ export async function ensureGatewayLifecycleLeaseForRestart(
   const sourceEntrypoint = path.join(paths.root, "openclaw.mjs");
   const distEntrypoint = path.join(paths.root, "dist", "index.js");
   const entrypoint = deps.fileExists(sourceEntrypoint) ? sourceEntrypoint : distEntrypoint;
+  const refreshArgs = opts.refreshServiceEnv
+    ? [
+        "--refresh-service-env",
+        ...(opts.refreshServiceEnv.root
+          ? ["--refresh-service-env-root", opts.refreshServiceEnv.root]
+          : []),
+        ...(opts.refreshServiceEnv.invocationCwd
+          ? ["--refresh-service-env-cwd", opts.refreshServiceEnv.invocationCwd]
+          : []),
+      ]
+    : [];
   return await ensureGatewayLifecycleLease({
     ...deps,
-    argv: [deps.execPath, entrypoint, "gateway", "restart", ...(opts.json ? ["--json"] : [])],
+    argv: [
+      deps.execPath,
+      entrypoint,
+      "gateway",
+      "restart",
+      ...(opts.json ? ["--json"] : []),
+      ...refreshArgs,
+    ],
   });
 }

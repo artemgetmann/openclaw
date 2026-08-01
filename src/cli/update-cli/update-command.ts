@@ -34,7 +34,6 @@ import {
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
@@ -42,12 +41,13 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
-import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
+import { runDaemonRestart } from "../daemon-cli.js";
 import {
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
 } from "../daemon-cli/restart-health.js";
+import { refreshGatewayServiceEnv } from "../daemon-cli/service-env-refresh.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
@@ -70,14 +70,6 @@ import {
 import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
-const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
-const SERVICE_REFRESH_PATH_ENV_KEYS = [
-  "OPENCLAW_HOME",
-  "OPENCLAW_STATE_DIR",
-  "CLAWDBOT_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "CLAWDBOT_CONFIG_PATH",
-] as const;
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -106,55 +98,12 @@ function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
 }
 
-function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
-  if (!root) {
-    return [];
-  }
-  return [
-    path.join(root, "dist", "entry.js"),
-    path.join(root, "dist", "entry.mjs"),
-    path.join(root, "dist", "index.js"),
-    path.join(root, "dist", "index.mjs"),
-  ];
-}
-
-function formatCommandFailure(stdout: string, stderr: string): string {
-  const detail = (stderr || stdout).trim();
-  if (!detail) {
-    return "command returned a non-zero exit code";
-  }
-  return detail.split("\n").slice(-3).join("\n");
-}
-
 function tryResolveInvocationCwd(): string | undefined {
   try {
     return process.cwd();
   } catch {
     return undefined;
   }
-}
-
-function resolveServiceRefreshEnv(
-  env: NodeJS.ProcessEnv,
-  invocationCwd?: string,
-): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = { ...env };
-  for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
-    const rawValue = resolvedEnv[key]?.trim();
-    if (!rawValue) {
-      continue;
-    }
-    if (rawValue.startsWith("~") || path.isAbsolute(rawValue) || path.win32.isAbsolute(rawValue)) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    if (!invocationCwd) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
-  }
-  return resolvedEnv;
 }
 
 type UpdateDryRunPreview = {
@@ -214,36 +163,6 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
       defaultRuntime.log(`  - ${theme.muted(note)}`);
     }
   }
-}
-
-async function refreshGatewayServiceEnv(params: {
-  result: UpdateRunResult;
-  jsonMode: boolean;
-  invocationCwd?: string;
-}): Promise<void> {
-  const args = ["gateway", "install", "--force"];
-  if (params.jsonMode) {
-    args.push("--json");
-  }
-
-  for (const candidate of resolveGatewayInstallEntrypointCandidates(params.result.root)) {
-    if (!(await pathExists(candidate))) {
-      continue;
-    }
-    const res = await runCommandWithTimeout([resolveNodeRunner(), candidate, ...args], {
-      cwd: params.result.root,
-      env: resolveServiceRefreshEnv(process.env, params.invocationCwd),
-      timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
-    });
-    if (res.code === 0) {
-      return;
-    }
-    throw new Error(
-      `updated install refresh failed (${candidate}): ${formatCommandFailure(res.stdout, res.stderr)}`,
-    );
-  }
-
-  await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
 }
 
 async function tryInstallShellCompletion(opts: {
@@ -574,6 +493,10 @@ async function maybeRestartService(params: {
       // lease and therefore has no authority to refresh or restart again.
       const lease = await ensureGatewayLifecycleLeaseForRestart({
         json: Boolean(params.opts.json),
+        refreshServiceEnv: {
+          root: params.result.root,
+          invocationCwd: params.invocationCwd,
+        },
       });
       if (lease.outcome === "reexecuted") {
         if (lease.exitCode !== 0) {
@@ -594,7 +517,7 @@ async function maybeRestartService(params: {
       if (params.refreshServiceEnv) {
         try {
           await refreshGatewayServiceEnv({
-            result: params.result,
+            root: params.result.root,
             jsonMode: Boolean(params.opts.json),
             invocationCwd: params.invocationCwd,
           });

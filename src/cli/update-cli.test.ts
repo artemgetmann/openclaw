@@ -132,6 +132,12 @@ vi.mock("./daemon-cli.js", () => ({
   runDaemonInstall: mockedRunDaemonInstall,
   runDaemonRestart: vi.fn(),
 }));
+// The shared refresh helper imports the narrow install implementation directly
+// to avoid a daemon-cli export cycle. Keep both import surfaces on one spy so
+// the update behavior assertions still observe the real call graph.
+vi.mock("./daemon-cli/install.js", () => ({
+  runDaemonInstall: mockedRunDaemonInstall,
+}));
 
 // Mock the runtime
 vi.mock("../runtime.js", () => ({
@@ -696,7 +702,13 @@ describe("update-cli", () => {
 
     await withPlatform("darwin", async () => await updateCommand({}));
 
-    expect(ensureGatewayLifecycleLeaseForRestart).toHaveBeenCalledWith({ json: false });
+    expect(ensureGatewayLifecycleLeaseForRestart).toHaveBeenCalledWith({
+      json: false,
+      refreshServiceEnv: expect.objectContaining({
+        root: undefined,
+        invocationCwd: expect.any(String),
+      }),
+    });
     expect(prepareRestartScript).not.toHaveBeenCalled();
     expect(runRestartScript).not.toHaveBeenCalled();
     expect(runDaemonRestart).toHaveBeenCalledOnce();
@@ -705,7 +717,7 @@ describe("update-cli", () => {
     );
   });
 
-  it("returns before macOS service refresh when the guarded child owns restart", async () => {
+  it("hands macOS service refresh to the guarded child before returning", async () => {
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     serviceLoaded.mockResolvedValue(true);
     ensureGatewayLifecycleLeaseForRestart.mockResolvedValue({
@@ -715,6 +727,13 @@ describe("update-cli", () => {
 
     await withPlatform("darwin", async () => await updateCommand({}));
 
+    expect(ensureGatewayLifecycleLeaseForRestart).toHaveBeenCalledWith({
+      json: false,
+      refreshServiceEnv: expect.objectContaining({
+        root: undefined,
+        invocationCwd: expect.any(String),
+      }),
+    });
     expect(prepareRestartScript).not.toHaveBeenCalled();
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runRestartScript).not.toHaveBeenCalled();

@@ -168,7 +168,13 @@ describe("gateway lifecycle lease", () => {
     const spawn = vi.fn(() => createSpawnedChild(75));
 
     const result = await ensureGatewayLifecycleLeaseForRestart(
-      { json: true },
+      {
+        json: true,
+        refreshServiceEnv: {
+          root: "/tmp/openclaw-updated-root",
+          invocationCwd: "/tmp/openclaw-invocation",
+        },
+      },
       {
         platform: "darwin",
         cwd: process.cwd(),
@@ -192,6 +198,11 @@ describe("gateway lifecycle lease", () => {
         "gateway",
         "restart",
         "--json",
+        "--refresh-service-env",
+        "--refresh-service-env-root",
+        "/tmp/openclaw-updated-root",
+        "--refresh-service-env-cwd",
+        "/tmp/openclaw-invocation",
       ]),
     );
     expect(guardedArgs).not.toContain("update");

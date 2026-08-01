@@ -87,6 +87,26 @@ describe("addGatewayServiceCommands", () => {
         );
       },
     },
+    {
+      name: "forwards the hidden update refresh contract to restart",
+      argv: [
+        "restart",
+        "--refresh-service-env",
+        "--refresh-service-env-root",
+        "/tmp/openclaw-updated-root",
+        "--refresh-service-env-cwd",
+        "/tmp/openclaw-invocation",
+      ],
+      assert: () => {
+        expect(runDaemonRestart).toHaveBeenCalledWith({
+          json: false,
+          refreshServiceEnv: {
+            root: "/tmp/openclaw-updated-root",
+            invocationCwd: "/tmp/openclaw-invocation",
+          },
+        });
+      },
+    },
   ])("$name", async ({ argv, assert }) => {
     const gateway = createGatewayParentLikeCommand();
     await gateway.parseAsync(argv, { from: "user" });

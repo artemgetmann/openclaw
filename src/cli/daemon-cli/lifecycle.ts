@@ -31,6 +31,7 @@ import {
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
+import { refreshGatewayServiceEnv } from "./service-env-refresh.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -234,12 +235,37 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   // This shared runner is also called by `openclaw update` and recovery code.
   // Admission belongs here so no caller can reach signal, stale-process
   // cleanup, bootstrap, or kickstart by bypassing the Commander action.
-  const lease = await ensureGatewayLifecycleLeaseForRestart({ json });
+  const lease = await ensureGatewayLifecycleLeaseForRestart({
+    json,
+    ...(opts.refreshServiceEnv ? { refreshServiceEnv: opts.refreshServiceEnv } : {}),
+  });
   if (lease.outcome === "reexecuted") {
     if (lease.exitCode !== 0) {
       defaultRuntime.exit(lease.exitCode);
     }
     return true;
+  }
+  if (opts.refreshServiceEnv) {
+    try {
+      // A guarded child must preserve the update command's existing service
+      // environment refresh before restart. Running this only after ancestry
+      // proves the lease keeps install/bootstrap mutation serialized.
+      await refreshGatewayServiceEnv({
+        root: opts.refreshServiceEnv.root,
+        invocationCwd: opts.refreshServiceEnv.invocationCwd,
+        jsonMode: json,
+      });
+    } catch (err) {
+      // Refresh was historically best-effort: a failed reinstall must not
+      // prevent the subsequent restart from applying the updated code.
+      if (!json) {
+        defaultRuntime.log(
+          theme.warn(
+            `Failed to refresh gateway service environment from updated install: ${String(err)}`,
+          ),
+        );
+      }
+    }
   }
   const service = resolveGatewayService();
   const installWarnings: string[] = [];

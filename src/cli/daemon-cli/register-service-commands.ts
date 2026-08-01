@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { inheritOptionFromParent } from "../command-options.js";
 import {
   runDaemonInstall,
@@ -103,7 +103,21 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
+    // These options are an internal update-to-restart handoff. They stay
+    // hidden because users should request `openclaw update`, not manually
+    // rebuild launchd state through a restart implementation detail.
+    .addOption(new Option("--refresh-service-env").hideHelp())
+    .addOption(new Option("--refresh-service-env-root <path>").hideHelp())
+    .addOption(new Option("--refresh-service-env-cwd <path>").hideHelp())
     .action(async (cmdOpts) => {
-      await runDaemonRestart(cmdOpts);
+      await runDaemonRestart({
+        json: Boolean(cmdOpts.json),
+        refreshServiceEnv: cmdOpts.refreshServiceEnv
+          ? {
+              root: cmdOpts.refreshServiceEnvRoot,
+              invocationCwd: cmdOpts.refreshServiceEnvCwd,
+            }
+          : undefined,
+      });
     });
 }
