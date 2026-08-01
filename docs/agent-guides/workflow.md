@@ -149,6 +149,12 @@ only the exact builder thread, then waits for a new builder packet and fresh
 tester validation for the changed head. It must not create a duplicate builder,
 tester, or release owner.
 
+For that repair loop, the builder passes the exact active release contract to
+`handoff-test --returning-release-contract`. After the repaired head receives a
+fresh tester receipt and closure, `handoff-release` emits
+`action=resume-thread` for the already-recorded release task; it never emits a
+second `create_thread` action.
+
 After a successful merge, the release worker records and sends the merge receipt
 before archiving the exact builder thread. The receipt proves the reviewed head
 tree equals the landed merge tree and that the merge commit is an ancestor of

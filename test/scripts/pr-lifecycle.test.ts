@@ -215,7 +215,7 @@ describe("scripts/pr-lifecycle", () => {
       "--owner-host",
       "builder-host",
     ]);
-    expect(prematureRelease.stderr).toContain("archived user-visible tester lifecycle");
+    expect(prematureRelease.stderr).toContain("transport's exact tester lifecycle closure");
 
     run(fixture, [
       "close-test",
@@ -311,5 +311,233 @@ describe("scripts/pr-lifecycle", () => {
     const stale = runFailure(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("PR head/diff changed before the tester receipt was recorded");
+  });
+
+  it("accepts a terminal nested tester receipt before user-visible release", () => {
+    const fixture = makeFixture();
+    const tester = run(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "read-only",
+      "--transport",
+      "nested-read-only",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(tester.action).toBe("spawn_nested_read_only");
+
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "nested-agent-id",
+      "--host-id",
+      "nested-agent",
+    ]);
+    const receiptPath = path.join(fixture.root, "nested-receipt.json");
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        contractId: tester.contractId,
+        status: "PASS",
+        headSha: tester.candidate?.headSha,
+        diffFingerprint: tester.candidate?.diffFingerprint,
+        owner: { threadId: "nested-agent-id", hostId: "nested-agent" },
+        evidence: ["deterministic source proof passed"],
+        cleanup: { status: "not-required" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "nested-agent-id",
+      "--host-id",
+      "nested-agent",
+      "--closure",
+      "terminal-receipt",
+    ]);
+
+    const release = run(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(release.action).toBe("create_thread");
+  });
+
+  it("keeps one release owner across a repaired head and resumes it after fresh proof", () => {
+    const fixture = makeFixture();
+    const firstTester = beginLiveTester(fixture);
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      firstTester.contractId,
+      "--thread-id",
+      "first-tester",
+      "--host-id",
+      "tester-host",
+    ]);
+    const firstReceiptPath = path.join(fixture.root, "first-receipt.json");
+    fs.writeFileSync(
+      firstReceiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        contractId: firstTester.contractId,
+        status: "PASS",
+        headSha: firstTester.candidate?.headSha,
+        diffFingerprint: firstTester.candidate?.diffFingerprint,
+        owner: { threadId: "first-tester", hostId: "tester-host" },
+        evidence: ["first candidate passed"],
+        cleanup: { status: "complete" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", firstReceiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      firstTester.contractId,
+      "--thread-id",
+      "first-tester",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+    const release = run(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    run(fixture, [
+      "accept-release-owner",
+      "42",
+      "--contract-id",
+      release.contractId,
+      "--thread-id",
+      "release-thread",
+      "--host-id",
+      "release-host",
+    ]);
+
+    fixture.metadata.headRefOid = "c".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    fixture.env.TEST_PR_PATCH = "diff --git a/AGENTS.md b/AGENTS.md\n+repaired policy\n";
+    const blocked = runFailure(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "read-only",
+      "--transport",
+      "user-visible-task",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(blocked.stderr).toContain("owner may still be active");
+
+    const repairedTester = run(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "read-only",
+      "--transport",
+      "user-visible-task",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--returning-release-contract",
+      release.contractId,
+    ]);
+    expect(repairedTester.action).toBe("create_thread");
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      repairedTester.contractId,
+      "--thread-id",
+      "repaired-tester",
+      "--host-id",
+      "tester-host",
+    ]);
+    const repairedReceiptPath = path.join(fixture.root, "repaired-receipt.json");
+    fs.writeFileSync(
+      repairedReceiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        contractId: repairedTester.contractId,
+        status: "PASS",
+        headSha: repairedTester.candidate?.headSha,
+        diffFingerprint: repairedTester.candidate?.diffFingerprint,
+        owner: { threadId: "repaired-tester", hostId: "tester-host" },
+        evidence: ["repaired candidate passed"],
+        cleanup: { status: "complete" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", repairedReceiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      repairedTester.contractId,
+      "--thread-id",
+      "repaired-tester",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+
+    const resumed = run(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(resumed).toMatchObject({
+      action: "resume-thread",
+      contractId: release.contractId,
+      owner: { threadId: "release-thread", hostId: "release-host" },
+    });
+    expect(resumed.nativeTool?.sequence).toEqual(["send_message_to_thread"]);
   });
 });

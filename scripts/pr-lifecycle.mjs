@@ -24,7 +24,7 @@ function fail(message, exitCode = 1) {
 
 function usage() {
   process.stderr.write(`Usage:
-  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID>
+  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> [--returning-release-contract <ID>]
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
@@ -262,6 +262,7 @@ function handoffTest(pr, options) {
     threadId: requireOption(options, "ownerThread"),
     hostId: requireOption(options, "ownerHost"),
   };
+  const returningReleaseContract = options.returningReleaseContract?.trim() || null;
   if (!new Set(["read-only", "live-external"]).has(testKind)) {
     fail("--test-kind must be read-only or live-external", 2);
   }
@@ -281,12 +282,27 @@ function handoffTest(pr, options) {
   return withStateLock(pr, (existing) => {
     let state = existing;
     if (state && !sameCandidate(state.candidate, candidate)) {
-      if (hasUnclosedOwner(state)) {
+      const returningFromRelease =
+        state.release?.phase === "active" &&
+        state.release.contractId === returningReleaseContract &&
+        state.tester?.phase === "closed";
+      if (!returningFromRelease && hasUnclosedOwner(state)) {
         fail(
           "PR head/diff changed while an owner may still be active; resolve that exact owner first",
         );
       }
-      state = makeBaseState(pr, candidate, builder, state);
+      const previous = state;
+      state = makeBaseState(pr, candidate, builder, previous);
+      if (returningFromRelease) {
+        // A release discrepancy returns source ownership to the exact builder,
+        // but it must not create a second release owner. Carry that identity
+        // across the repaired candidate and park it until fresh proof closes.
+        state.release = {
+          ...previous.release,
+          phase: "awaiting-retest",
+          returnedAt: new Date().toISOString(),
+        };
+      }
     } else if (!state) {
       state = makeBaseState(pr, candidate, builder, null);
     }
@@ -505,14 +521,37 @@ function handoffRelease(pr, options) {
     if (state.builder.threadId !== builder.threadId || state.builder.hostId !== builder.hostId) {
       fail("release handoff builder identity differs from the recorded owner");
     }
+    const requiredClosure =
+      state.tester?.transport === "user-visible-task" ? "archived" : "terminal-receipt";
     if (
       state.tester?.phase !== "closed" ||
       state.tester?.receipt?.status !== "PASS" ||
-      state.tester?.closure?.type !== "archived"
+      state.tester?.closure?.type !== requiredClosure
     ) {
       fail(
-        "release handoff requires an exact-head PASS and archived user-visible tester lifecycle",
+        "release handoff requires an exact-head PASS and the transport's exact tester lifecycle closure",
       );
+    }
+    if (state.release?.phase === "awaiting-retest") {
+      state.release.phase = "active";
+      state.release.resumedAt = new Date().toISOString();
+      state.updatedAt = new Date().toISOString();
+      return {
+        state,
+        output: {
+          schemaVersion: SCHEMA_VERSION,
+          action: "resume-thread",
+          contractId: state.release.contractId,
+          transport: state.release.transport,
+          authority: state.release.authority,
+          owner: state.release.owner,
+          candidate,
+          testerReceipt: state.tester.receipt,
+          nativeTool: { sequence: ["send_message_to_thread"] },
+          prompt: ownerPrompt("release", state),
+          warning: "Resume only the exact recorded release task; never create a replacement owner.",
+        },
+      };
     }
     if (state.release && !["cancelled"].includes(state.release.phase)) {
       return {
