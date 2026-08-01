@@ -15,6 +15,9 @@ import {
   type SessionGoal,
   type SessionGoalAuthorityGrant,
   type SessionGoalAutonomy,
+  type SessionGoalEvaluationAttempt,
+  type SessionGoalEvaluationState,
+  type SessionGoalEvaluatorVerdict,
   type SessionGoalStatus,
 } from "./types.js";
 
@@ -47,9 +50,37 @@ type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
   expectedGoalId?: string;
 };
 
+export type RecordSessionGoalEvaluationOptions = SessionGoalStoreOptions & {
+  expectedGoalId: string;
+  attemptId: string;
+  verdict: SessionGoalEvaluatorVerdict;
+  reason: string;
+  evidence: string[];
+  materialProgress: boolean;
+  blockerKey?: string;
+};
+
+export type SessionGoalEvaluationDecision = {
+  goal: SessionGoal;
+  attempt: SessionGoalEvaluationAttempt;
+  duplicate: boolean;
+  shouldContinueAutomatically: boolean;
+  stopReason?:
+    | "satisfied"
+    | "needs_input"
+    | "approval_required"
+    | "goal_blocked"
+    | "revision_limit";
+};
+
 export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as const;
 
 const TERMINAL_GOAL_STATUSES = new Set<SessionGoalStatus>(["complete"]);
+const DEFAULT_MAX_AUTOMATIC_REVISIONS = 5;
+const DEFAULT_BLOCKER_THRESHOLD = 3;
+const MAX_EVALUATION_HISTORY = 10;
+const MAX_EVALUATION_EVIDENCE = 8;
+const MAX_EVALUATION_TEXT_CHARS = 500;
 
 function nowMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
@@ -164,7 +195,39 @@ export function resolveSessionGoalAutonomy(
 }
 
 function cloneGoal(goal: SessionGoal): SessionGoal {
-  return { ...goal };
+  return structuredClone(goal);
+}
+
+function normalizeEvaluationText(value: string, label: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error(`${label} required`);
+  }
+  return normalized.slice(0, MAX_EVALUATION_TEXT_CHARS);
+}
+
+function normalizeEvaluationEvidence(values: string[]): string[] {
+  const normalized = [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+    .slice(0, MAX_EVALUATION_EVIDENCE)
+    .map((value) => value.slice(0, MAX_EVALUATION_TEXT_CHARS));
+  if (normalized.length === 0) {
+    throw new Error("evaluation evidence required");
+  }
+  return normalized;
+}
+
+function resolveEvaluationState(
+  state: SessionGoalEvaluationState | undefined,
+): SessionGoalEvaluationState {
+  return state
+    ? structuredClone(state)
+    : {
+        schemaVersion: 1,
+        automaticRevisionCount: 0,
+        maxAutomaticRevisions: DEFAULT_MAX_AUTOMATIC_REVISIONS,
+        sameBlockerNoProgressCount: 0,
+        history: [],
+      };
 }
 
 export function resolveSessionGoalDisplayState(
@@ -367,6 +430,151 @@ export async function recordSessionGoalContinuation(
     },
   });
   return updated ? cloneGoal(updated) : undefined;
+}
+
+export async function recordSessionGoalEvaluation(
+  options: RecordSessionGoalEvaluationOptions,
+): Promise<SessionGoalEvaluationDecision> {
+  const now = nowMs(options.now);
+  const attemptId = normalizeEvaluationText(options.attemptId, "evaluation attempt id");
+  const reason = normalizeEvaluationText(options.reason, "evaluation reason");
+  const evidence = normalizeEvaluationEvidence(options.evidence);
+  const blockerKey = options.blockerKey?.trim().slice(0, MAX_EVALUATION_TEXT_CHARS) || undefined;
+  if (options.verdict === "goal_blocked" && (!blockerKey || options.materialProgress)) {
+    throw new Error("goal_blocked requires a blocker key and no material progress");
+  }
+
+  let decision: SessionGoalEvaluationDecision | undefined;
+  let foundSession = false;
+  const result = await updateSessionStoreEntry({
+    sessionKey: options.sessionKey,
+    storePath: options.storePath,
+    update: async (entry) => {
+      foundSession = true;
+      const accounted = accountGoalUsage(entry, now);
+      if (!accounted) {
+        throw new Error("goal not found");
+      }
+      if (accounted.id !== options.expectedGoalId) {
+        throw new Error("goal mismatch");
+      }
+
+      const evaluation = resolveEvaluationState(accounted.evaluation);
+      const duplicate = evaluation.history.find((attempt) => attempt.attemptId === attemptId);
+      if (duplicate) {
+        decision = buildEvaluationDecision(accounted, duplicate, true);
+        return null;
+      }
+      if (accounted.status !== "active") {
+        throw new Error(`goal is ${accounted.status}`);
+      }
+
+      // Progress or a changed blocker breaks the consecutive no-progress chain.
+      // This prevents unrelated failures from accumulating into a false terminal block.
+      const repeatsSameBlocker =
+        !options.materialProgress &&
+        Boolean(blockerKey) &&
+        evaluation.activeBlockerKey === blockerKey;
+      const consecutiveNoProgress =
+        !options.materialProgress && blockerKey
+          ? repeatsSameBlocker
+            ? evaluation.sameBlockerNoProgressCount + 1
+            : 1
+          : 0;
+      const mayResolveBlocked =
+        options.verdict === "goal_blocked" && consecutiveNoProgress >= DEFAULT_BLOCKER_THRESHOLD;
+      const resolvedVerdict =
+        options.verdict === "goal_blocked" && !mayResolveBlocked
+          ? "needs_revision"
+          : options.verdict;
+      const automaticRevisionCount =
+        resolvedVerdict === "needs_revision"
+          ? evaluation.automaticRevisionCount + 1
+          : evaluation.automaticRevisionCount;
+      const automaticRevisionExhausted =
+        resolvedVerdict === "needs_revision" &&
+        automaticRevisionCount >= evaluation.maxAutomaticRevisions;
+      const attempt: SessionGoalEvaluationAttempt = {
+        attemptId,
+        proposedVerdict: options.verdict,
+        verdict: resolvedVerdict,
+        reason,
+        evidence,
+        materialProgress: options.materialProgress,
+        ...(blockerKey ? { blockerKey } : {}),
+        consecutiveNoProgress,
+        createdAt: now,
+      };
+      const nextEvaluation: SessionGoalEvaluationState = {
+        ...evaluation,
+        lastVerdict: resolvedVerdict,
+        automaticRevisionCount,
+        ...(automaticRevisionExhausted
+          ? { automaticRevisionExhaustedAt: now }
+          : options.materialProgress
+            ? { automaticRevisionExhaustedAt: undefined }
+            : {}),
+        ...(blockerKey && !options.materialProgress
+          ? { activeBlockerKey: blockerKey }
+          : { activeBlockerKey: undefined }),
+        sameBlockerNoProgressCount: consecutiveNoProgress,
+        history: [...evaluation.history, attempt].slice(-MAX_EVALUATION_HISTORY),
+      };
+      const next: SessionGoal = {
+        ...accounted,
+        evaluation: nextEvaluation,
+        updatedAt: now,
+        lastStatusNote: reason,
+        ...(resolvedVerdict === "satisfied"
+          ? { status: "complete", completedAt: now }
+          : resolvedVerdict === "goal_blocked"
+            ? { status: "blocked", blockedAt: now }
+            : {}),
+      };
+      decision = buildEvaluationDecision(next, attempt, false);
+      return { goal: next };
+    },
+  });
+  if (!result && !decision) {
+    throw new Error(foundSession ? "goal not found" : "session not found");
+  }
+  if (!decision) {
+    throw new Error("goal evaluation not recorded");
+  }
+  return {
+    ...decision,
+    goal: cloneGoal(decision.goal),
+    attempt: structuredClone(decision.attempt),
+  };
+}
+
+function buildEvaluationDecision(
+  goal: SessionGoal,
+  attempt: SessionGoalEvaluationAttempt,
+  duplicate: boolean,
+): SessionGoalEvaluationDecision {
+  const exhausted = goal.evaluation?.automaticRevisionExhaustedAt !== undefined;
+  if (attempt.verdict === "needs_revision" && !exhausted) {
+    return {
+      goal,
+      attempt,
+      duplicate,
+      shouldContinueAutomatically: true,
+    };
+  }
+  const stopReason =
+    attempt.verdict === "needs_revision"
+      ? "revision_limit"
+      : attempt.verdict === "satisfied"
+        ? "satisfied"
+        : attempt.verdict;
+  return {
+    goal,
+    attempt,
+    duplicate,
+    shouldContinueAutomatically: false,
+    stopReason,
+  };
 }
 
 export async function updateSessionGoalStatus(
