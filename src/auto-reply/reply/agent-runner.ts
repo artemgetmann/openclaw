@@ -834,6 +834,24 @@ async function runReplyAgentWithFinalizationOwnership(
       if (goal?.status !== "active" || !goal.pendingEvaluation) {
         break;
       }
+      if (goal.pendingEvaluation.createdAt < runStartedAt) {
+        const reason =
+          "The prior completion claim survived an interrupted turn, so its original evidence is no longer available for independent verification.";
+        await recordSessionGoalEvaluation({
+          sessionKey,
+          storePath,
+          expectedGoalId: goal.id,
+          attemptId: goal.pendingEvaluation.requestId,
+          verdict: "needs_input",
+          reason,
+          evidence: ["pending completion claim predates the current working turn"],
+          materialProgress: false,
+        });
+        goalEvaluatorPayloadOverride = [
+          { text: `${reason} Do you want me to rerun the verification now?` },
+        ];
+        break;
+      }
 
       // Persist the working turn before grading it. If the process dies after
       // this point, the durable pending claim survives and can be evaluated on
@@ -886,9 +904,19 @@ async function runReplyAgentWithFinalizationOwnership(
           evaluation.kind === "unsupported_provider"
             ? `The selected provider (${evaluation.provider}) cannot guarantee a tool-disabled independent judge.`
             : `The independent judge failed closed: ${evaluation.reason}.`;
+        await recordSessionGoalEvaluation({
+          sessionKey,
+          storePath,
+          expectedGoalId: goal.id,
+          attemptId: goal.pendingEvaluation.requestId,
+          verdict: "needs_input",
+          reason: detail,
+          evidence: [detail],
+          materialProgress: false,
+        });
         goalEvaluatorPayloadOverride = [
           {
-            text: `${detail} The goal remains active; completion was not accepted.`,
+            text: `${detail} The goal remains active; completion was not accepted. Do you want me to retry with isolated verification?`,
             isError: true,
           },
         ];

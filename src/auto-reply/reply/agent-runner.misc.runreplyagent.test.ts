@@ -1911,19 +1911,18 @@ describe("runReplyAgent independent goal evaluation", () => {
         storePath,
         objective: "Prove the release is healthy.",
       });
-      await requestSessionGoalEvaluation({
-        sessionKey,
-        storePath,
-        expectedGoalId: goal.id,
-        requestId: "claim-1",
-        proposedStatus: "complete",
-        reason: "The first check looked healthy.",
-      });
-
       let callCount = 0;
       runEmbeddedPiAgentMock.mockImplementation(async (params: { disableTools?: boolean }) => {
         callCount += 1;
         if (callCount === 1) {
+          await requestSessionGoalEvaluation({
+            sessionKey,
+            storePath,
+            expectedGoalId: goal.id,
+            requestId: "claim-1",
+            proposedStatus: "complete",
+            reason: "The first check looked healthy.",
+          });
           return { payloads: [{ text: "First result." }], meta: {} };
         }
         if (callCount === 2) {
