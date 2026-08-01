@@ -143,6 +143,11 @@ describe("independent goal evaluator", () => {
             toolName: "exec",
             content: [{ type: "text", text: "10 tests passed" }],
           },
+          {
+            role: "toolResult",
+            toolName: "update_goal",
+            content: [{ type: "text", text: "evaluation requested" }],
+          },
         ],
         messagingToolSentTexts: ["Vendor notified."],
         messagingToolSentTargets: [{ provider: "telegram", to: "123" }],
@@ -153,5 +158,26 @@ describe("independent goal evaluator", () => {
       "verified_message_send_text: Vendor notified.",
       "verified_message_send_target: telegram:123",
     ]);
+  });
+
+  it("treats failed tool results as deterministic failure evidence", async () => {
+    const evidence = collectGoalEvaluationEvidence({
+      payloads: [{ text: "Done." }],
+      transcriptMessages: [
+        {
+          role: "toolResult",
+          toolName: "exec",
+          isError: true,
+          content: [{ type: "text", text: "tests failed" }],
+        },
+      ],
+    });
+    const result = await runIndependentGoalEvaluator({ goal, run, evidence });
+
+    expect(result).toMatchObject({
+      kind: "evaluated",
+      result: { verdict: "needs_revision" },
+    });
+    expect(mocks.runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 });

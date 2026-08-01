@@ -11,6 +11,7 @@ import type { FollowupRun } from "./queue.js";
 const MAX_EVIDENCE_ITEMS = 12;
 const MAX_EVIDENCE_CHARS = 2_000;
 const JUDGE_TIMEOUT_MS = 60_000;
+const CONTROL_ONLY_TOOLS = new Set(["create_goal", "get_goal", "update_goal", "update_plan"]);
 const VERDICTS = new Set<SessionGoalEvaluatorVerdict>([
   "satisfied",
   "needs_revision",
@@ -73,6 +74,9 @@ export function collectGoalEvaluationEvidence(params: {
       continue;
     }
     const toolName = normalizeText(record.toolName ?? record.name, 120) ?? "unknown_tool";
+    if (CONTROL_ONLY_TOOLS.has(toolName)) {
+      continue;
+    }
     const content = record.content;
     const text =
       normalizeText(content) ??
@@ -87,7 +91,11 @@ export function collectGoalEvaluationEvidence(params: {
             .join("\n")
         : undefined);
     if (text) {
-      evidence.push(`tool_result:${toolName}: ${text.slice(0, MAX_EVIDENCE_CHARS)}`);
+      evidence.push(
+        record.isError === true
+          ? `runtime_error: ${toolName} failed: ${text.slice(0, MAX_EVIDENCE_CHARS)}`
+          : `tool_result:${toolName}: ${text.slice(0, MAX_EVIDENCE_CHARS)}`,
+      );
     }
   }
   for (const payload of params.payloads) {
