@@ -76,6 +76,10 @@ authorizes a replacement owner. If native task creation definitely failed, use
 created. Ambiguous creation fails closed. The command stores local transition
 state under ignored `.local/pr-lifecycle/`; the PR contract remains the durable
 cross-task receipt surface.
+The wrapper first runs the canonical secret-silent GitHub preflight. A
+restricted `status=indeterminate` result requires the same read-only lifecycle
+command to be rerun in authorized host context; it is not proof that the PR or
+GitHub authentication is unavailable.
 
 ### 1. Builder owns the candidate
 

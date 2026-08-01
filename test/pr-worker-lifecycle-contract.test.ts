@@ -11,6 +11,7 @@ const workflow = readRepoFile("docs/agent-guides/workflow.md");
 const ci = readRepoFile("docs/ci.md");
 const forkGuide = readRepoFile("FORK_CONTRIBUTING.md");
 const prTemplate = readRepoFile(".github/pull_request_template.md");
+const lifecycleCommand = readRepoFile("scripts/pr-lifecycle");
 const normalizedWorkflow = workflow.replace(/\s+/g, " ");
 
 describe("canonical PR worker lifecycle policy", () => {
@@ -89,5 +90,7 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain("Never use both transports for one mutation");
     expect(normalizedWorkflow).toContain("never blindly retry it");
     expect(prTemplate).toContain("authenticated connector + expected head; exactly one");
+    expect(lifecycleCommand).toContain('source "$script_dir/lib/github-auth-preflight.sh"');
+    expect(lifecycleCommand).toContain("openclaw_github_preflight");
   });
 });
