@@ -185,6 +185,16 @@ describe("update-cli", () => {
     });
   };
 
+  const withPlatform = async (platform: NodeJS.Platform, run: () => Promise<void>) => {
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    try {
+      await run();
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  };
+
   const mockPackageInstallStatus = (root: string) => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     vi.mocked(checkUpdateStatus).mockResolvedValue({
@@ -638,7 +648,7 @@ describe("update-cli", () => {
     vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
     serviceLoaded.mockResolvedValue(true);
 
-    await updateCommand({});
+    await withPlatform("linux", async () => await updateCommand({}));
 
     expect(runDaemonInstall).toHaveBeenCalledWith({
       force: true,
@@ -662,7 +672,7 @@ describe("update-cli", () => {
     });
     serviceLoaded.mockResolvedValue(true);
 
-    await updateCommand({});
+    await withPlatform("linux", async () => await updateCommand({}));
 
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
       [expect.stringMatching(/node/), entryPath, "gateway", "install", "--force"],
@@ -670,6 +680,17 @@ describe("update-cli", () => {
     );
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runRestartScript).toHaveBeenCalled();
+  });
+
+  it("routes macOS updates through the guarded daemon restart boundary", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded.mockResolvedValue(true);
+
+    await withPlatform("darwin", async () => await updateCommand({}));
+
+    expect(prepareRestartScript).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).toHaveBeenCalledOnce();
   });
 
   it("updateCommand preserves invocation-relative service env overrides during refresh", async () => {

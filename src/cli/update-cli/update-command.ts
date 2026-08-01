@@ -589,7 +589,11 @@ async function maybeRestartService(params: {
           }
         }
       }
-      if (params.restartScriptPath) {
+      // A prepared script remains the durable post-update handoff on Linux and
+      // Windows. macOS must never execute one: LaunchAgent mutation belongs to
+      // runDaemonRestart, whose common boundary acquires the machine lifecycle
+      // lease and schedules the guarded detached handoff when necessary.
+      if (params.restartScriptPath && process.platform !== "darwin") {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
       } else {
@@ -894,7 +898,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     try {
       const loaded = await resolveGatewayService().isLoaded({ env: process.env });
       if (loaded) {
-        restartScriptPath = await prepareRestartScript(process.env, gatewayPort);
+        // Never even materialize a raw macOS restart helper. Keeping the guard
+        // here as well as in prepareRestartScript makes the update call site
+        // fail closed if that helper's platform behavior regresses later.
+        restartScriptPath =
+          process.platform === "darwin"
+            ? null
+            : await prepareRestartScript(process.env, gatewayPort);
         refreshGatewayServiceEnv = true;
       }
     } catch {

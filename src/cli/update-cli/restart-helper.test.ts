@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { resolveConsumerRuntimeIdentity } from "../../consumer/runtime-identity.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
 vi.mock("node:child_process", () => ({
@@ -89,33 +88,14 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
-    it("creates a launchd restart script on macOS", async () => {
+    it("defers macOS restart to the guarded daemon lifecycle runner", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
 
-      const { scriptPath, content } = await prepareAndReadScript({
+      const scriptPath = await prepareRestartScript({
         OPENCLAW_PROFILE: "default",
       });
-      expect(scriptPath.endsWith(".sh")).toBe(true);
-      expect(content).toContain("#!/bin/sh");
-      expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
-      // Should clear disabled state and fall back to bootstrap when kickstart fails.
-      expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
-      expect(content).toContain("launchctl bootstrap 'gui/501'");
-      expect(content).toContain('rm -f "$0"');
-      await cleanupScript(scriptPath);
-    });
-
-    it("uses OPENCLAW_LAUNCHD_LABEL override on macOS", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 501;
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "default",
-        OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
-      });
-      expect(content).toContain("launchctl kickstart -k 'gui/501/com.custom.openclaw'");
-      await cleanupScript(scriptPath);
+      expect(scriptPath).toBeNull();
     });
 
     it("creates a schtasks restart script on Windows", async () => {
@@ -174,31 +154,6 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
-    it("uses custom profile in macOS launchd label", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 502;
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "staging",
-      });
-      expect(content).toContain("gui/502/ai.openclaw.staging");
-      await cleanupScript(scriptPath);
-    });
-
-    it("uses the consumer runtime contract for consumer lane launchd labels", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 503;
-      const identity = resolveConsumerRuntimeIdentity({
-        instanceId: "main-durable-lane",
-      });
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "consumer-main-durable-lane",
-      });
-      expect(content).toContain(`gui/503/${identity.gatewayLaunchdLabel}`);
-      await cleanupScript(scriptPath);
-    });
-
     it("uses custom profile in Windows task name", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
 
@@ -238,45 +193,6 @@ describe("restart-helper", () => {
       // Single quotes should be escaped with '\'' pattern
       expect(content).not.toContain("it's");
       expect(content).toContain("it'\\''s");
-      await cleanupScript(scriptPath);
-    });
-
-    it("expands HOME in plist path instead of leaving literal $HOME", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 501;
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        HOME: "/Users/testuser",
-        OPENCLAW_PROFILE: "default",
-      });
-      // The plist path must contain the resolved home dir, not literal $HOME
-      expect(content).toMatch(/[\\/]Users[\\/]testuser[\\/]Library[\\/]LaunchAgents[\\/]/);
-      expect(content).not.toContain("$HOME");
-      await cleanupScript(scriptPath);
-    });
-
-    it("prefers env parameter HOME over process.env.HOME for plist path", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 502;
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        HOME: "/Users/envhome",
-        OPENCLAW_PROFILE: "default",
-      });
-      expect(content).toMatch(/[\\/]Users[\\/]envhome[\\/]Library[\\/]LaunchAgents[\\/]/);
-      await cleanupScript(scriptPath);
-    });
-
-    it("shell-escapes the label in the plist path on macOS", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 501;
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        HOME: "/Users/testuser",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.it's-a-test",
-      });
-      // The plist path must also shell-escape the label to prevent injection
-      expect(content).toContain("ai.openclaw.it'\\''s-a-test.plist");
       await cleanupScript(scriptPath);
     });
 
