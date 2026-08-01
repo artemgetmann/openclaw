@@ -19,10 +19,13 @@ function makeCodexStub(source: string) {
 }
 
 function runReview(stubDirectory: string, args: string[]) {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));
+  temporaryDirectories.push(codexHome);
   return spawnSync(process.execPath, [SCRIPT_PATH, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
+      CODEX_HOME: codexHome,
       PATH: `${stubDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
     },
     timeout: 10_000,
@@ -54,6 +57,35 @@ describe("scripts/codex-review.mjs", () => {
     const result = runReview(stubDirectory, ["--timeout", "5"]);
 
     expect(result.status).toBe(7);
+  });
+
+  it("classifies readonly Codex state before spawning a review", () => {
+    const stubDirectory = makeCodexStub(
+      "process.stderr.write('review spawned'); process.exit(99);\n",
+    );
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-readonly-codex-home-"));
+    temporaryDirectories.push(codexHome);
+    const statePath = path.join(codexHome, "state_5.sqlite");
+    fs.writeFileSync(statePath, "");
+    fs.chmodSync(statePath, 0o444);
+
+    const result = spawnSync(process.execPath, [SCRIPT_PATH, "--timeout", "5"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        PATH: `${stubDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      timeout: 10_000,
+    });
+
+    expect(result.status).toBe(75);
+    expect(result.stderr).toContain(
+      "CODEX_REVIEW_PREFLIGHT status=host_context_required code=codex_state_unwritable",
+    );
+    expect(result.stderr).toContain("Re-run this exact command once outside");
+    expect(result.stderr).not.toContain("review spawned");
+    expect(fs.readdirSync(codexHome)).toEqual(["state_5.sqlite"]);
   });
 
   it("terminates a stalled review once and reports the missing verdict", () => {
