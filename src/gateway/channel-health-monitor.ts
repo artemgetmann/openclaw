@@ -59,7 +59,9 @@ export type ChannelHealthMonitorDeps = {
   restartStopTimeoutMs?: number;
   /** Time the old process may remain alive after accepting a gateway restart request. */
   gatewayRestartVerificationTimeoutMs?: number;
-  requestGatewayRestart?: (reason: string) => void | GatewayRestartRequestResult;
+  requestGatewayRestart?: (
+    reason: string,
+  ) => void | GatewayRestartRequestResult | Promise<void | GatewayRestartRequestResult>;
   telegramRecoveryStore?: TelegramRecoveryStateStore;
   abortSignal?: AbortSignal;
 };
@@ -326,7 +328,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     try {
       // Invoke only after the durable record exists: restart implementations may
       // synchronously tear down this server and recreate its ChannelManager.
-      const result = requestGatewayRestart(params.reason);
+      const result = await requestGatewayRestart(params.reason);
       // `undefined` remains accepted for legacy callbacks. New callers can
       // return `{ok:false}` so failure becomes visible instead of optimistic.
       if (result && !result.ok) {
@@ -542,7 +544,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
                   });
                 } else {
                   gatewayRestartRequested = true;
-                  requestGatewayRestart?.(restartReason);
+                  await requestGatewayRestart?.(restartReason);
                 }
                 return;
               }

@@ -140,6 +140,7 @@ create_instrumented_runtime() {
   local fixture_helper_tmp="$fixture_helper.tmp"
   local fixture_health_hook="$FIXTURE_ROOT/scripts/lib/heavy-local-slot-health-fixture.sh"
   local fixture_hotfix="$FIXTURE_ROOT/scripts/ship-jarvis-hotfix.sh"
+  local fixture_lifecycle_command="$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh"
   local fixture_runner="$FIXTURE_ROOT/scripts/lib/heavy-local-slot-runner.pl"
   local fixture_runner_tmp="$fixture_runner.tmp"
   local fixture_wrapper_tmp="$FIXTURE_WRAPPER.tmp"
@@ -223,6 +224,21 @@ sleep 0.2
 : >"$marker"
 EOF
   chmod +x "$fixture_hotfix"
+
+  # The production lifecycle command validates the real Node entrypoint and
+  # launchd target. This disposable counterpart keeps the wrapper policy proof
+  # focused: only the canonical path and explicit `cli` mode can reach work.
+  cat >"$fixture_lifecycle_command" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ "${1:-}" == "cli" ]] || exit 75
+shift
+[[ "${1:-}" == "--" ]] || exit 75
+shift
+exec "$@"
+EOF
+  chmod +x "$fixture_lifecycle_command"
 
   cat >"$fixture_health_hook" <<'EOF'
 host_health_reason() {
@@ -819,6 +835,9 @@ create_minimal_clone_pair() {
 
   mkdir -p "$seed/scripts/lib"
   cp "$FIXTURE_WRAPPER" "$seed/scripts/with-heavy-local-slot.sh"
+  cp \
+    "$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh" \
+    "$seed/scripts/gateway-lifecycle-command.sh"
   cp "$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh" "$seed/scripts/lib/heavy-local-slot.sh"
   cp \
     "$FIXTURE_ROOT/scripts/lib/heavy-local-slot-runner.pl" \
@@ -847,6 +866,7 @@ test_machine_wide_default_and_separate_clone_contention() {
   local holder_out="$TMP_DIR/cross-clone-holder.out"
   local holder_err="$TMP_DIR/cross-clone-holder.err"
   local contender_err="$TMP_DIR/cross-clone-contender.err"
+  local loser_mutations="$TMP_DIR/cross-clone-loser-mutations.log"
   local path_a="" path_b=""
   local guarded_pid="" holder_pid=0 holder_status=0 ready_attempt=0 status=0
 
@@ -924,12 +944,18 @@ test_machine_wide_default_and_separate_clone_contention() {
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$contender_health" \
     "$clone_b/scripts/with-heavy-local-slot.sh" \
-      --label "clone-b-contender" \
-      -- true \
+      --policy gateway-lifecycle \
+      --label "gateway-restart:clone-b-contender" \
+      -- "$clone_b/scripts/gateway-lifecycle-command.sh" cli -- bash -c \
+        'printf "signal\nbootstrap\nkickstart\n" >>"$1"' \
+        openclaw-gateway-restart-contender \
+        "$loser_mutations" \
       >/dev/null 2>"$contender_err"
   status=$?
   set -e
   [[ "$status" -eq 75 ]] || fail "separate-clone contender returned $status instead of 75"
+  [[ ! -e "$loser_mutations" ]] ||
+    fail "losing gateway restart contender reached signal/bootstrap/kickstart mutations"
   grep -Fq 'clone-a-holder' "$contender_err" || fail "contention omitted live cross-clone owner"
   if ! kill -0 "$holder_pid" 2>/dev/null; then
     set +e
@@ -958,7 +984,7 @@ test_machine_wide_default_and_separate_clone_contention() {
     fail "clone-a-holder did not exit cleanly"
   fi
   wait_for_absence "$lock_path"
-  pass "machine-wide path and separate-clone contention"
+  pass "machine-wide path and separate-clone gateway restart contention"
 }
 
 create_nested_fixture() {
@@ -1986,6 +2012,295 @@ test_jarvis_remediation_policy_is_narrow_and_non_ambient() {
   pass "Jarvis remediation is canonical-entrypoint-only and skips only Jarvis health"
 }
 
+test_gateway_lifecycle_policy_skips_only_gateway_health() {
+  local lock_path="$TMP_DIR/gateway-lifecycle.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle.health"
+  local marker="$TMP_DIR/gateway-lifecycle.marker"
+  local stdout_path="$TMP_DIR/gateway-lifecycle.stdout"
+  local sample=0
+
+  : >"$health_path"
+  while [[ "$sample" -lt 20 ]]; do
+    printf 'jarvis-unhealthy\n' >>"$health_path"
+    sample=$((sample + 1))
+  done
+
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy gateway-lifecycle \
+      --label "gateway-restart:ai.jarvis.gateway" \
+      -- \
+      "$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh" cli -- touch "$marker" \
+      >"$stdout_path"
+
+  [[ -f "$marker" ]] || fail "gateway lifecycle policy deadlocked on the listener it must restart"
+  [[ ! -s "$stdout_path" ]] ||
+    fail "gateway lifecycle wrapper polluted structured command stdout"
+  [[ ! -e "$lock_path" ]] || fail "gateway lifecycle policy leaked its lease"
+  pass "gateway lifecycle policy preserves the lease while skipping gateway self-health"
+}
+
+test_gateway_lifecycle_inherits_verified_standard_owner() {
+  local lock_path="$TMP_DIR/gateway-lifecycle-standard-owner.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle-standard-owner.health"
+  local marker="$TMP_DIR/gateway-lifecycle-standard-owner.marker"
+
+  write_healthy_samples "$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --label "restart-mac:unsigned-fixture" \
+      -- \
+      /bin/bash -c \
+        'source "$1"; openclaw_heavy_local_slot_inherited_lease_is_valid gateway-lifecycle 1; touch "$2"' \
+        openclaw-gateway-lifecycle-standard-owner \
+        "$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh" \
+        "$marker"
+
+  [[ -f "$marker" ]] || fail "gateway lifecycle rejected verified standard-owner ancestry"
+  [[ ! -e "$lock_path" ]] || fail "standard owner leaked its machine-wide lease"
+  pass "gateway lifecycle reuses a verified canonical standard owner"
+}
+
+test_gateway_lifecycle_policy_preserves_jarvis_health_for_other_targets() {
+  local lock_path="$TMP_DIR/gateway-lifecycle-other-target.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle-other-target.health"
+  local marker="$TMP_DIR/gateway-lifecycle-other-target.marker"
+  local stderr_path="$TMP_DIR/gateway-lifecycle-other-target.err"
+  local status=0
+
+  printf 'jarvis-unhealthy\n' >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy gateway-lifecycle \
+      --label "gateway-restart:ai.openclaw.test" \
+      -- \
+      "$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh" cli -- touch "$marker" \
+      2>"$stderr_path"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "unrelated gateway restart ignored unhealthy Jarvis"
+  [[ ! -e "$marker" ]] || fail "unrelated gateway restart mutated while Jarvis was unhealthy"
+  grep -Fq "code=jarvis_unhealthy" "$stderr_path" ||
+    fail "unrelated gateway restart omitted Jarvis health refusal"
+  [[ ! -e "$lock_path" ]] || fail "unrelated gateway restart leaked its lease"
+  pass "gateway lifecycle preserves Jarvis health for unrelated targets"
+}
+
+test_gateway_lifecycle_policy_rejects_unrelated_labels() {
+  local lock_path="$TMP_DIR/gateway-lifecycle-invalid-label.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle-invalid-label.health"
+  local marker="$TMP_DIR/gateway-lifecycle-invalid-label.marker"
+  local stderr_path="$TMP_DIR/gateway-lifecycle-invalid-label.err"
+  local status=0
+
+  : >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy gateway-lifecycle \
+      --label "not-a-gateway-restart" \
+      -- \
+      "$FIXTURE_ROOT/scripts/gateway-lifecycle-command.sh" cli -- touch "$marker" \
+      2>"$stderr_path"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "invalid gateway lifecycle label returned $status instead of 75"
+  [[ ! -e "$marker" ]] || fail "invalid gateway lifecycle label reached guarded mutation"
+  grep -Fq \
+    "HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=invalid_gateway_lifecycle_label" \
+    "$stderr_path" ||
+    fail "invalid gateway lifecycle label omitted structured refusal"
+  [[ ! -e "$lock_path" ]] || fail "invalid gateway lifecycle label created a lease"
+  pass "gateway lifecycle policy rejects unrelated labels before mutation"
+}
+
+test_gateway_lifecycle_policy_rejects_arbitrary_commands() {
+  local lock_path="$TMP_DIR/gateway-lifecycle-invalid-command.lock"
+  local health_path="$TMP_DIR/gateway-lifecycle-invalid-command.health"
+  local marker="$TMP_DIR/gateway-lifecycle-invalid-command.marker"
+  local stderr_path="$TMP_DIR/gateway-lifecycle-invalid-command.err"
+  local status=0
+
+  : >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy gateway-lifecycle \
+      --label "gateway-restart:test-arbitrary-command" \
+      -- \
+      touch "$marker" \
+      2>"$stderr_path"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "arbitrary gateway lifecycle command returned $status instead of 75"
+  [[ ! -e "$marker" ]] || fail "arbitrary gateway lifecycle command reached guarded mutation"
+  grep -Fq \
+    "HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=invalid_gateway_lifecycle_command" \
+    "$stderr_path" ||
+    fail "arbitrary gateway lifecycle command omitted structured refusal"
+  [[ ! -e "$lock_path" ]] || fail "arbitrary gateway lifecycle command created a lease"
+  pass "gateway lifecycle policy rejects arbitrary commands before mutation"
+}
+
+test_gateway_lifecycle_command_accepts_only_restart_shape() {
+  local fake_bin="$TMP_DIR/gateway-lifecycle-command-bin"
+  local fake_node="$fake_bin/node"
+  local marker="$TMP_DIR/gateway-lifecycle-command.marker"
+  local stderr_path="$TMP_DIR/gateway-lifecycle-command.err"
+  local status=0
+
+  mkdir -p "$fake_bin"
+  cat >"$fake_node" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"$OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER"
+EOF
+  chmod +x "$fake_node"
+
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER="$marker" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+      cli -- "$fake_node" "$ROOT_DIR/openclaw.mjs" gateway restart --json
+  grep -Fq "$ROOT_DIR/openclaw.mjs gateway restart --json" "$marker" ||
+    fail "canonical lifecycle command did not preserve the restart argv"
+
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER="$marker" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+      cli -- "$fake_node" "$ROOT_DIR/openclaw.mjs" daemon restart --json
+  grep -Fq "$ROOT_DIR/openclaw.mjs daemon restart --json" "$marker" ||
+    fail "canonical lifecycle command rejected the daemon restart alias"
+
+  : >"$marker"
+  set +e
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER="$marker" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+      cli -- "$fake_node" "$ROOT_DIR/openclaw.mjs" gateway status \
+      2>"$stderr_path"
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "non-restart lifecycle command returned $status instead of 75"
+  [[ ! -s "$marker" ]] || fail "non-restart lifecycle command reached the fake Node mutation"
+  grep -Fq "guarded CLI is not a gateway restart command" "$stderr_path" ||
+    fail "non-restart lifecycle command omitted its fail-closed reason"
+
+  : >"$marker"
+  set +e
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER="$marker" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+      cli -- "$(command -v node)" -e \
+      'require("node:fs").writeFileSync(process.env.OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_MARKER, "bypass")' \
+      "$ROOT_DIR/openclaw.mjs" gateway restart \
+      2>"$stderr_path"
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "Node eval lifecycle bypass returned $status instead of 75"
+  [[ ! -s "$marker" ]] || fail "Node eval executed before the decoy canonical entrypoint"
+  grep -Fq "guarded command is not this package's OpenClaw CLI" "$stderr_path" ||
+    fail "Node eval lifecycle bypass omitted its fail-closed reason"
+
+  set +e
+  "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+    local-script -- /bin/bash "$TMP_DIR/not-the-canonical-restart-script.sh" \
+    2>"$stderr_path"
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "arbitrary local restart script returned $status instead of 75"
+  grep -Fq "guarded local restart script is not canonical" "$stderr_path" ||
+    fail "arbitrary local restart script omitted its fail-closed reason"
+  pass "canonical lifecycle command preserves restart argv and rejects other CLI shapes"
+}
+
+test_gateway_lifecycle_handoff_accepts_only_active_custom_label() {
+  local fake_bin="$TMP_DIR/gateway-lifecycle-handoff-bin"
+  local fake_launchctl="$fake_bin/launchctl"
+  local custom_home="$TMP_DIR/gateway-lifecycle-custom-home"
+  local custom_label="com.custom.openclaw"
+  local other_label="com.other.openclaw"
+  local domain="gui/$(id -u)"
+  local receipt_dir="$TMP_DIR/openclaw-gateway-lifecycle-$(id -u)-custom"
+  local launchctl_log="$TMP_DIR/gateway-lifecycle-handoff.log"
+  local watcher_pid=0 watcher_status=0 status=0
+
+  mkdir -p "$fake_bin" "$custom_home/Library/LaunchAgents" "$receipt_dir"
+  cat >"$fake_launchctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_LAUNCHCTL_LOG"
+EOF
+  chmod +x "$fake_launchctl"
+
+  # Admission remains two-phase even in this fixture: acknowledge only after
+  # the helper publishes ready, so the launchctl mutation cannot race ahead of
+  # its caller's receipt.
+  (
+    local attempt=0
+    while [[ ! -f "$receipt_dir/ready" && "$attempt" -lt 200 ]]; do
+      sleep 0.025
+      attempt=$((attempt + 1))
+    done
+    [[ -f "$receipt_dir/ready" ]] || exit 1
+    : >"$receipt_dir/ack"
+  ) &
+  watcher_pid=$!
+
+  HOME="$custom_home" \
+  TMPDIR="$TMP_DIR" \
+  PATH="$fake_bin:$PATH" \
+  OPENCLAW_LAUNCHD_LABEL="$custom_label" \
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_LAUNCHCTL_LOG="$launchctl_log" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" handoff \
+      kickstart \
+      "$domain/$custom_label" \
+      "$domain" \
+      "$custom_home/Library/LaunchAgents/$custom_label.plist" \
+      0 \
+      0 \
+      "$receipt_dir" \
+      - \
+      "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+  set +e
+  wait "$watcher_pid"
+  watcher_status=$?
+  set -e
+  [[ "$watcher_status" -eq 0 ]] || fail "custom-label handoff watcher failed"
+  grep -Fq "kickstart -k $domain/$custom_label" "$launchctl_log" ||
+    fail "active custom launchd label did not reach the guarded kickstart"
+  [[ ! -e "$receipt_dir" ]] || fail "custom-label handoff leaked its receipt directory"
+
+  mkdir -p "$receipt_dir"
+  set +e
+  HOME="$custom_home" \
+  TMPDIR="$TMP_DIR" \
+  PATH="$fake_bin:$PATH" \
+  OPENCLAW_LAUNCHD_LABEL="$custom_label" \
+  OPENCLAW_GATEWAY_LIFECYCLE_FIXTURE_LAUNCHCTL_LOG="$launchctl_log" \
+    "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" handoff \
+      kickstart \
+      "$domain/$other_label" \
+      "$domain" \
+      "$custom_home/Library/LaunchAgents/$other_label.plist" \
+      0 \
+      0 \
+      "$receipt_dir" \
+      - \
+      "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" \
+      >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "mismatched custom launchd label returned $status instead of 75"
+  [[ ! -f "$receipt_dir/ready" ]] || fail "mismatched custom label reached handoff admission"
+  pass "gateway lifecycle handoff accepts only the active configured custom label"
+}
+
 create_lock_order_fixture() {
   local fixture="$TMP_DIR/lock-order-fixture.sh"
 
@@ -2291,6 +2606,26 @@ if [[ "${1:-}" == "--cleanup-only" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "--gateway-lifecycle-only" ]]; then
+  SUITE_PHASE="create_instrumented_runtime"
+  create_instrumented_runtime
+  SUITE_PHASE="create_sigint_reset_launcher"
+  create_sigint_reset_launcher
+  SUITE_PHASE="create_term_attribution_holder"
+  create_term_attribution_holder
+  run_suite_test test_machine_wide_default_and_separate_clone_contention
+  run_suite_test test_gateway_lifecycle_inherits_verified_standard_owner
+  run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
+  run_suite_test test_gateway_lifecycle_policy_preserves_jarvis_health_for_other_targets
+  run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
+  run_suite_test test_gateway_lifecycle_policy_rejects_arbitrary_commands
+  run_suite_test test_gateway_lifecycle_command_accepts_only_restart_shape
+  run_suite_test test_gateway_lifecycle_handoff_accepts_only_active_custom_label
+  SUITE_PHASE="complete"
+  echo "Gateway lifecycle contention tests passed."
+  exit 0
+fi
+
 SUITE_PHASE="create_instrumented_runtime"
 create_instrumented_runtime
 SUITE_PHASE="create_sigint_reset_launcher"
@@ -2325,6 +2660,13 @@ run_suite_test test_wrapper_sigkill_retains_lease_until_orphan_group_dies
 run_suite_test test_two_sample_health_stop_kills_tree
 run_suite_test test_signal_cleanup_kills_tree_and_releases
 run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient
+run_suite_test test_gateway_lifecycle_inherits_verified_standard_owner
+run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health
+run_suite_test test_gateway_lifecycle_policy_preserves_jarvis_health_for_other_targets
+run_suite_test test_gateway_lifecycle_policy_rejects_unrelated_labels
+run_suite_test test_gateway_lifecycle_policy_rejects_arbitrary_commands
+run_suite_test test_gateway_lifecycle_command_accepts_only_restart_shape
+run_suite_test test_gateway_lifecycle_handoff_accepts_only_active_custom_label
 run_suite_test test_fleet_and_release_lock_coexistence_and_wiring
 
 SUITE_PHASE="complete"

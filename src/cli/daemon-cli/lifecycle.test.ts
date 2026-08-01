@@ -51,6 +51,15 @@ const buildGatewayInstallPlan = vi.fn();
 const resolveGatewayInstallToken = vi.fn();
 const detectSharedGatewayInstallOwnershipConflict = vi.fn();
 const loadConfig = vi.fn(() => ({}));
+const ensureGatewayLifecycleLeaseForRestart = vi.fn(
+  async (_opts?: {
+    json?: boolean;
+    refreshServiceEnv?: { root?: string; invocationCwd?: string };
+  }): Promise<{ outcome: "held" } | { outcome: "reexecuted"; exitCode: number }> => ({
+    outcome: "held",
+  }),
+);
+const refreshGatewayServiceEnv = vi.fn();
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -72,6 +81,17 @@ vi.mock("../../gateway/probe.js", () => ({
     auth?: { token?: string; password?: string };
     timeoutMs: number;
   }) => probeGateway(opts),
+}));
+
+vi.mock("../../infra/gateway-lifecycle-lease.js", () => ({
+  ensureGatewayLifecycleLeaseForRestart: (opts?: {
+    json?: boolean;
+    refreshServiceEnv?: { root?: string; invocationCwd?: string };
+  }) => ensureGatewayLifecycleLeaseForRestart(opts),
+}));
+
+vi.mock("./service-env-refresh.js", () => ({
+  refreshGatewayServiceEnv: (opts: unknown) => refreshGatewayServiceEnv(opts),
 }));
 
 vi.mock("../../config/commands.js", () => ({
@@ -117,7 +137,10 @@ vi.mock("./lifecycle-core.js", () => ({
 }));
 
 describe("runDaemonRestart health checks", () => {
-  let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
+  let runDaemonRestart: (opts?: {
+    json?: boolean;
+    refreshServiceEnv?: { root?: string; invocationCwd?: string };
+  }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
 
   function mockUnmanagedRestart({
@@ -168,6 +191,8 @@ describe("runDaemonRestart health checks", () => {
     resolveGatewayInstallToken.mockReset();
     detectSharedGatewayInstallOwnershipConflict.mockReset();
     loadConfig.mockReset();
+    ensureGatewayLifecycleLeaseForRestart.mockReset();
+    refreshGatewayServiceEnv.mockReset();
 
     service.install.mockResolvedValue(undefined);
     service.readCommand.mockResolvedValue({
@@ -185,6 +210,8 @@ describe("runDaemonRestart health checks", () => {
       unavailableReason: undefined,
     });
     detectSharedGatewayInstallOwnershipConflict.mockResolvedValue(null);
+    ensureGatewayLifecycleLeaseForRestart.mockResolvedValue({ outcome: "held" });
+    refreshGatewayServiceEnv.mockResolvedValue(undefined);
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       const fail = (message: string, hints?: string[]) => {
@@ -240,6 +267,42 @@ describe("runDaemonRestart health checks", () => {
     expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
     expect(service.restart).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns after a successful guarded child restart without mutating in the parent", async () => {
+    ensureGatewayLifecycleLeaseForRestart.mockResolvedValueOnce({
+      outcome: "reexecuted",
+      exitCode: 0,
+    });
+
+    await expect(runDaemonRestart({ json: true })).resolves.toBe(true);
+
+    expect(ensureGatewayLifecycleLeaseForRestart).toHaveBeenCalledWith({ json: true });
+    expect(runServiceRestart).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the loaded service environment inside the admitted restart transaction", async () => {
+    runServiceRestart.mockResolvedValue(true);
+    const refresh = {
+      root: "/tmp/openclaw-updated-root",
+      invocationCwd: "/tmp/openclaw-invocation",
+    };
+
+    await expect(runDaemonRestart({ json: true, refreshServiceEnv: refresh })).resolves.toBe(true);
+
+    expect(ensureGatewayLifecycleLeaseForRestart).toHaveBeenCalledWith({
+      json: true,
+      refreshServiceEnv: refresh,
+    });
+    expect(refreshGatewayServiceEnv).toHaveBeenCalledWith({
+      ...refresh,
+      jsonMode: true,
+    });
+    expect(refreshGatewayServiceEnv.mock.invocationCallOrder[0]).toBeLessThan(
+      runServiceRestart.mock.invocationCallOrder[0],
+    );
   });
 
   it("skips stale-pid retry health checks when the retry restart is only scheduled", async () => {

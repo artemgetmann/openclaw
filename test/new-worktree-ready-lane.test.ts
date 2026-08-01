@@ -48,6 +48,18 @@ const installNewWorktreeFixture = (cloneDir: string) => {
     path.join(process.cwd(), "scripts", "lib", "worktree-guards.sh"),
     path.join(cloneDir, "scripts", "lib", "worktree-guards.sh"),
   );
+  // new-worktree sources the canonical machine guard before bootstrapping.
+  // These fixture repos exercise readiness only, so provide the narrow no-op
+  // contract instead of contending for the real host-wide lease.
+  writeFileSync(
+    path.join(cloneDir, "scripts", "lib", "heavy-local-slot.sh"),
+    `#!/usr/bin/env bash
+openclaw_heavy_local_slot_require_or_reexec() {
+  return 0
+}
+`,
+    { encoding: "utf8", mode: 0o755 },
+  );
   writeFileSync(
     path.join(cloneDir, "scripts", "lib", "validated-node.sh"),
     `#!/usr/bin/env bash

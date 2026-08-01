@@ -9,8 +9,6 @@ NODE="$OPENCLAW_NODE_BIN"
 CLI="$ROOT/openclaw.mjs"
 EXPECTED_ENTRY="$ROOT/dist/index.js"
 PREFLIGHT="$ROOT/scripts/local-runtime-preflight.sh"
-DEFERRED_RESTART_DELAY_SECONDS="${OPENCLAW_DEFERRED_RESTART_DELAY_SECONDS:-1}"
-HELPER_LOG_PATH="${OPENCLAW_RESTART_HELPER_LOG:-/tmp/openclaw-restart-helper.log}"
 source "$ROOT/scripts/lib/consumer-instance.sh"
 source "$ROOT/scripts/lib/worktree-guards.sh"
 
@@ -95,15 +93,6 @@ has_explicit_runtime_lane_env() {
   [[ -n "${OPENCLAW_STATE_DIR:-}" || -n "${OPENCLAW_CONFIG_PATH:-}" || -n "${OPENCLAW_GATEWAY_PORT:-}" ]]
 }
 
-is_telegram_live_runtime_context() {
-  local config_path="${OPENCLAW_CONFIG_PATH:-}"
-  local state_dir="${OPENCLAW_STATE_DIR:-}"
-  [[ "$config_path" == *"/openclaw.telegram-live.json" ]] && return 0
-  [[ "$state_dir" == *"/.openclaw/telegram-live-worktrees/"* ]] && return 0
-  [[ "$state_dir" == *"/telegram-live-worktrees/"* ]] && return 0
-  return 1
-}
-
 # Apply the generated lane env before any consumer-instance fallback. Generic
 # linked worktrees like Telegram live lanes should restart the runtime they
 # booted, not manufacture a consumer instance from the checkout name.
@@ -146,89 +135,40 @@ fi
 worktree_guard_require_sacred_home_clone_base_branch "$ROOT" "scripts/restart-local-gateway.sh"
 worktree_guard_reject_sacred_home_edits "$ROOT" worktree --context "scripts/restart-local-gateway.sh"
 
-is_self_restart_context() {
-  # OPENCLAW_RESTART_DETACHED is set when the gateway asks us to restart from
-  # inside an active command. LAUNCH_JOB_LABEL/XPC_SERVICE_NAME are set when
-  # this script is running under the same launchd job being restarted.
-  if [[ "${OPENCLAW_RESTART_DETACHED:-0}" == "1" ]]; then
-    return 0
-  fi
-  if [[ "${LAUNCH_JOB_LABEL:-}" == "$LAUNCHD_LABEL" ]]; then
-    return 0
-  fi
-  if [[ "${XPC_SERVICE_NAME:-}" == "$LAUNCHD_LABEL" ]]; then
-    return 0
-  fi
-  return 1
-}
-
-schedule_detached_restart() {
-  local helper_script
-  helper_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-restart-detached.XXXXXX.sh")"
-  cat >"$helper_script" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-LAUNCHD_TARGET="$1"
-LAUNCHD_DOMAIN="$2"
-PLIST="$3"
-DELAY_SECONDS="$4"
-HELPER_SCRIPT="$0"
-
-sleep "$DELAY_SECONDS"
-launchctl bootout "$LAUNCHD_TARGET" >/dev/null 2>&1 || true
-launchctl bootstrap "$LAUNCHD_DOMAIN" "$PLIST" >/dev/null
-launchctl kickstart -k "$LAUNCHD_TARGET" >/dev/null
-rm -f "$HELPER_SCRIPT"
-EOF
-  chmod 700 "$helper_script"
-  nohup "$helper_script" "$LAUNCHD_TARGET" "$LAUNCHD_DOMAIN" "$PLIST" "$DEFERRED_RESTART_DELAY_SECONDS" >"$HELPER_LOG_PATH" 2>&1 </dev/null &
-  local helper_pid="$!"
-  disown || true
-  echo "OK: scheduled detached gateway restart helper (pid ${helper_pid})."
-  echo "Helper log: ${HELPER_LOG_PATH}"
-}
-
-schedule_detached_telegram_live_restart() {
-  local helper_script
-  helper_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-telegram-live-restart.XXXXXX.sh")"
-  cat >"$helper_script" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT="$1"
-PORT="$2"
-DELAY_SECONDS="$3"
-HELPER_SCRIPT="$0"
-
-sleep "$DELAY_SECONDS"
-
-if [[ -n "$PORT" ]]; then
-  runtime_pid="$(lsof -nP -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | sed -n '1p' || true)"
-  if [[ -n "$runtime_pid" ]]; then
-    kill "$runtime_pid" >/dev/null 2>&1 || true
-    for _ in {1..15}; do
-      if ! kill -0 "$runtime_pid" >/dev/null 2>&1; then
-        break
-      fi
-      sleep 1
-    done
-    kill -9 "$runtime_pid" >/dev/null 2>&1 || true
-  fi
+# A script running inside the LaunchAgent it is replacing cannot safely keep a
+# machine lease alive after launchd tears down that process tree. Those callers
+# must use the CLI/run-loop handoff, whose detached owner holds the lease through
+# the cutover. Refuse the legacy detached recipe before any signal or launchctl
+# mutation instead of creating an unowned helper.
+if [[ "${OPENCLAW_RESTART_DETACHED:-0}" == "1" || \
+  "${LAUNCH_JOB_LABEL:-}" == "$LAUNCHD_LABEL" || \
+  "${XPC_SERVICE_NAME:-}" == "$LAUNCHD_LABEL" ]]; then
+  echo "Gateway restart temporarily unavailable: use the guarded openclaw gateway restart handoff from inside the service." >&2
+  exit 75
 fi
 
-cd "$ROOT"
-bash scripts/telegram-live-runtime.sh ensure
-rm -f "$HELPER_SCRIPT"
-EOF
-  chmod 700 "$helper_script"
-  nohup "$helper_script" "$ROOT" "${OPENCLAW_GATEWAY_PORT:-}" "$DEFERRED_RESTART_DELAY_SECONDS" \
-    >"$HELPER_LOG_PATH" 2>&1 </dev/null &
-  local helper_pid="$!"
-  disown || true
-  echo "OK: scheduled detached Telegram live restart helper (pid ${helper_pid})."
-  echo "Helper log: ${HELPER_LOG_PATH}"
-}
+LIFECYCLE_WRAPPER="$ROOT/scripts/with-heavy-local-slot.sh"
+LIFECYCLE_HELPER="$ROOT/scripts/lib/heavy-local-slot.sh"
+LIFECYCLE_COMMAND="$ROOT/scripts/gateway-lifecycle-command.sh"
+if [[ ! -x "$LIFECYCLE_WRAPPER" || ! -r "$LIFECYCLE_HELPER" || ! -x "$LIFECYCLE_COMMAND" ]]; then
+  echo "Gateway restart temporarily unavailable: packaged lifecycle lease helpers are missing." >&2
+  exit 75
+fi
+
+# Direct `openclaw-local ... gateway restart` calls enter through this script,
+# not the TypeScript CLI. Re-exec the exact script through the canonical helper
+# so the lease covers install, bootout, bootstrap, kickstart, and health proof.
+# A verified descendant reuses the existing owner; an unrelated contender exits
+# 75 before reaching the first mutation below.
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$LIFECYCLE_HELPER"
+if ! openclaw_heavy_local_slot_inherited_lease_is_valid gateway-lifecycle 1; then
+  exec "$LIFECYCLE_WRAPPER" \
+    --policy gateway-lifecycle \
+    --label "gateway-restart:${LAUNCHD_LABEL}" \
+    -- \
+    "$LIFECYCLE_COMMAND" local-script -- /bin/bash "$ROOT/scripts/restart-local-gateway.sh"
+fi
 
 # Reinstall the lane-local service from this worktree entrypoint itself. Using
 # the wrapper/legacy daemon alias here leaves room for whichever launch context
@@ -242,16 +182,6 @@ if [[ -n "${OPENCLAW_GATEWAY_PORT:-}" ]]; then
   INSTALL_PORT_ARGS=(--port "$OPENCLAW_GATEWAY_PORT")
 fi
 "$NODE" "$EXPECTED_ENTRY" gateway install --force --allow-shared-service-takeover --runtime node "${INSTALL_PORT_ARGS[@]}" >/dev/null
-
-if is_telegram_live_runtime_context; then
-  schedule_detached_telegram_live_restart
-  exit 0
-fi
-
-if is_self_restart_context; then
-  schedule_detached_restart
-  exit 0
-fi
 
 # Restart deterministically via launchctl so we don't depend on whichever global
 # openclaw binary might be active in PATH.

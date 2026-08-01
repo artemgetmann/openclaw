@@ -5,7 +5,6 @@ import path from "node:path";
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
-  resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
@@ -35,15 +34,6 @@ function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
   return `${resolveGatewaySystemdServiceName(daemonEnv.OPENCLAW_PROFILE)}.service`;
 }
 
-function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
-  const daemonEnv = resolveGatewayRuntimeIdentityEnv(env);
-  const override = daemonEnv.OPENCLAW_LAUNCHD_LABEL?.trim();
-  if (override) {
-    return override;
-  }
-  return resolveGatewayLaunchAgentLabel(daemonEnv.OPENCLAW_PROFILE);
-}
-
 function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
   const daemonEnv = resolveGatewayRuntimeIdentityEnv(env);
   const override = daemonEnv.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -54,10 +44,13 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
 }
 
 /**
- * Prepares a standalone script to restart the gateway service.
+ * Prepares a standalone script to restart the gateway service where the
+ * platform lifecycle contract permits it.
  * This script is written to a temporary directory and does not depend on
  * the installed package files, ensuring restart capability even if the
- * update process temporarily removes or corrupts installation files.
+ * update process temporarily removes or corrupts installation files. macOS
+ * deliberately returns null because LaunchAgent mutation must use the guarded
+ * daemon lifecycle runner instead of raw launchctl commands.
  */
 export async function prepareRestartScript(
   env: NodeJS.ProcessEnv = process.env,
@@ -84,31 +77,13 @@ systemctl --user restart '${escaped}'
 rm -f "$0"
 `;
     } else if (platform === "darwin") {
-      const label = resolveLaunchdLabel(env);
-      const escaped = shellEscape(label);
-      // Fallback to 501 if getuid is not available (though it should be on macOS)
-      const uid = process.getuid ? process.getuid() : 501;
-      // Resolve HOME at generation time via env/process.env to match launchd.ts,
-      // and shell-escape the label in the plist filename to prevent injection.
-      const home = env.HOME?.trim() || process.env.HOME || os.homedir();
-      const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
-      const escapedPlistPath = shellEscape(plistPath);
-      filename = `openclaw-restart-${timestamp}.sh`;
-      scriptContent = `#!/bin/sh
-# Standalone restart script — survives parent process termination.
-# Wait briefly to ensure file locks are released after update.
-sleep 1
-# Try kickstart first (works when the service is still registered).
-# If it fails (e.g. after bootout), clear any persisted disabled state,
-# then re-register via bootstrap and kickstart.
-if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
-  launchctl enable 'gui/${uid}/${escaped}' 2>/dev/null
-  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
-  launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
-fi
-# Self-cleanup
-rm -f "$0"
-`;
+      // macOS gateway mutation must pass through runDaemonRestart after the
+      // update. That common runner admits the canonical machine-wide lifecycle
+      // lease and, when called from the managed gateway, performs its guarded
+      // detached launchd handoff. A standalone launchctl script cannot prove
+      // lease ownership, so generating one would recreate the exact race this
+      // lifecycle contract exists to prevent.
+      return null;
     } else if (platform === "win32") {
       const taskName = resolveWindowsTaskName(env);
       if (!isBatchSafe(taskName)) {

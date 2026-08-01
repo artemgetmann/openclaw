@@ -9,6 +9,7 @@ export type GatewayRespawnResult = {
   mode: RespawnMode;
   pid?: number;
   detail?: string;
+  cancel?: () => boolean;
 };
 
 function isTruthy(value: string | undefined): boolean {
@@ -25,7 +26,7 @@ function isTruthy(value: string | undefined): boolean {
  * - OPENCLAW_NO_RESPAWN=1: caller should keep in-process restart behavior (tests/dev)
  * - otherwise: spawn detached child with current argv/execArgv, then caller exits
  */
-export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
+export async function restartGatewayProcessWithFreshPid(): Promise<GatewayRespawnResult> {
   if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled" };
   }
@@ -34,24 +35,25 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     // Hand off launchd restarts to a detached helper before exiting so config
     // reloads and SIGUSR1-driven restarts do not depend on exit/respawn timing.
     if (supervisor === "launchd") {
-      const handoff = scheduleDetachedLaunchdRestartHandoff({
+      const handoff = await scheduleDetachedLaunchdRestartHandoff({
         env: process.env,
         mode: "start-after-exit",
         waitForPid: process.pid,
       });
       if (!handoff.ok) {
         return {
-          mode: "supervised",
-          detail: `launchd exit fallback (${handoff.detail ?? "restart handoff failed"})`,
+          mode: "failed",
+          detail: `launchd restart refused (${handoff.detail ?? "restart handoff failed"})`,
         };
       }
       return {
         mode: "supervised",
         detail: `launchd restart handoff pid ${handoff.pid ?? "unknown"}`,
+        ...(handoff.cancel ? { cancel: handoff.cancel } : {}),
       };
     }
     if (supervisor === "schtasks") {
-      const restart = triggerOpenClawRestart();
+      const restart = await triggerOpenClawRestart();
       if (!restart.ok) {
         return {
           mode: "failed",

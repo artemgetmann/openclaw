@@ -13,7 +13,8 @@ function writeStub(filePath: string, contents: string): void {
 
 function createRestartHarness(): {
   root: string;
-  run: (launchdLabel: string) => ReturnType<typeof spawnSync>;
+  wrapperLog: string;
+  run: (launchdLabel: string, overrides?: NodeJS.ProcessEnv) => ReturnType<typeof spawnSync>;
   cleanup: () => void;
 } {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "restart-local-gateway-"));
@@ -21,6 +22,7 @@ function createRestartHarness(): {
   const home = path.join(temp, "home");
   fs.mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
   fs.mkdirSync(home, { recursive: true });
+  const wrapperLog = path.join(temp, "wrapper.log");
   fs.copyFileSync(SCRIPT_PATH, path.join(root, "scripts", "restart-local-gateway.sh"));
 
   // The ownership refusal runs after shared library setup, so the harness
@@ -47,19 +49,35 @@ function createRestartHarness(): {
       "worktree_guard_reject_sacred_home_edits() { :; }",
     ].join("\n"),
   );
+  writeStub(
+    path.join(root, "scripts", "lib", "heavy-local-slot.sh"),
+    "openclaw_heavy_local_slot_inherited_lease_is_valid() { return 1; }",
+  );
+  writeStub(
+    path.join(root, "scripts", "with-heavy-local-slot.sh"),
+    ["#!/usr/bin/env bash", 'printf "%s\\n" "$*" >"$OPENCLAW_TEST_WRAPPER_LOG"', "exit 75"].join(
+      "\n",
+    ),
+  );
+  writeStub(path.join(root, "scripts", "gateway-lifecycle-command.sh"), "#!/usr/bin/env bash");
+  fs.chmodSync(path.join(root, "scripts", "with-heavy-local-slot.sh"), 0o700);
+  fs.chmodSync(path.join(root, "scripts", "gateway-lifecycle-command.sh"), 0o700);
 
   return {
     root,
-    run: (launchdLabel) =>
+    wrapperLog,
+    run: (launchdLabel, overrides = {}) =>
       spawnSync("/bin/bash", [path.join(root, "scripts", "restart-local-gateway.sh")], {
         cwd: root,
         env: {
           ...process.env,
           HOME: home,
           OPENCLAW_LAUNCHD_LABEL: launchdLabel,
+          OPENCLAW_TEST_WRAPPER_LOG: wrapperLog,
           // An explicit lane value prevents checkout-name inference from
           // replacing the exact label under test.
           OPENCLAW_STATE_DIR: path.join(temp, "state"),
+          ...overrides,
         },
         encoding: "utf8",
       }),
@@ -84,4 +102,37 @@ describe("scripts/restart-local-gateway.sh shared ownership guard", () => {
       }
     },
   );
+
+  it("enters the canonical lifecycle wrapper before a lane-local mutation", () => {
+    const harness = createRestartHarness();
+    try {
+      const label = "ai.openclaw.consumer.test.gateway";
+      const result = harness.run(label);
+
+      expect(result.status).toBe(75);
+      expect(fs.readFileSync(harness.wrapperLog, "utf8")).toContain(
+        `--policy gateway-lifecycle --label gateway-restart:${label}`,
+      );
+      expect(fs.readFileSync(harness.wrapperLog, "utf8")).toContain(
+        "gateway-lifecycle-command.sh local-script -- /bin/bash",
+      );
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("refuses a legacy detached self-restart before lifecycle mutation", () => {
+    const harness = createRestartHarness();
+    try {
+      const result = harness.run("ai.openclaw.consumer.test.gateway", {
+        OPENCLAW_RESTART_DETACHED: "1",
+      });
+
+      expect(result.status).toBe(75);
+      expect(result.stderr).toContain("use the guarded openclaw gateway restart handoff");
+      expect(fs.existsSync(harness.wrapperLog)).toBe(false);
+    } finally {
+      harness.cleanup();
+    }
+  });
 });

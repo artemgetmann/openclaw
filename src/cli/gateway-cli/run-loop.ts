@@ -6,13 +6,17 @@ import {
 import { formatGatewayStartupPreflightFailure } from "../../gateway/server-startup-preflight.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
-import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
+import {
+  restartGatewayProcessWithFreshPid,
+  type GatewayRespawnResult,
+} from "../../infra/process-respawn.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
+import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   cancelGatewayDraining,
@@ -100,10 +104,12 @@ export async function runGatewayLoop<TPrepared = never>(params: {
       return false;
     }
   };
-  const handleRestartAfterServerClose = async () => {
+  const handleRestartAfterServerClose = async (preparedRespawn?: GatewayRespawnResult) => {
     const hadLock = await releaseLockIfHeld();
-    // Release the lock BEFORE spawning so the child can acquire it immediately.
-    const respawn = restartGatewayProcessWithFreshPid();
+    // Unsupervised children still need the port lock released before spawn.
+    // A launchd child was already admitted while the listener was healthy and
+    // is holding the lifecycle lease until this exact process exits.
+    const respawn = preparedRespawn ?? (await restartGatewayProcessWithFreshPid());
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
       const modeLabel =
         respawn.mode === "spawned"
@@ -176,6 +182,7 @@ export async function runGatewayLoop<TPrepared = never>(params: {
     // Allow extra time for draining active turns on restart.
     void (async () => {
       let restartPreparation: GatewayRestartPreparation<TPrepared> | undefined;
+      let preparedRespawn: GatewayRespawnResult | undefined;
       if (isRestart && params.prepareRestart) {
         const preparationGeneration = ++restartPreparationGeneration;
         activeRestartPreparationGeneration = preparationGeneration;
@@ -220,8 +227,8 @@ export async function runGatewayLoop<TPrepared = never>(params: {
       // A staged restart keeps the serving listener open through its bounded
       // drain and final credential refresh. Arm the destructive shutdown timer
       // only after those safe-to-cancel phases have committed to cutover.
-      if (!restartPreparation) {
-        armForceExit(isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS);
+      if (!isRestart) {
+        armForceExit(SHUTDOWN_TIMEOUT_MS);
       }
       const continueWithPendingStop = (): boolean => {
         if (!pendingStopSignal) {
@@ -235,9 +242,65 @@ export async function runGatewayLoop<TPrepared = never>(params: {
         queueMicrotask(() => request("stop", stopSignal));
         return true;
       };
+      const cancelPreparedRespawn = (): boolean => {
+        if (!preparedRespawn) {
+          return true;
+        }
+        // A launchd admission without a cancellation receipt is ambiguous: the
+        // detached owner may still restart this PID after a later explicit
+        // stop. Keep the gateway alive fail-closed unless cancellation is both
+        // available and durably published.
+        if (!preparedRespawn.cancel || !preparedRespawn.cancel()) {
+          return false;
+        }
+        preparedRespawn = undefined;
+        return true;
+      };
+      const preserveGatewayAfterCancellationFailure = () => {
+        gatewayLog.error(
+          "could not cancel admitted launchd restart; preserving the current gateway instead of stopping",
+        );
+        pendingStopSignal = null;
+        shuttingDown = false;
+      };
 
       try {
         let drainTimedOut = false;
+        if (isRestart && detectRespawnSupervisor(process.env) === "launchd") {
+          // Acquire the lifecycle lease before rejecting new ingress. A losing
+          // contender must leave the serving gateway completely untouched,
+          // including its queue admission state.
+          const respawn = await restartGatewayProcessWithFreshPid();
+          if (respawn.mode === "failed") {
+            if (continueWithPendingStop()) {
+              return;
+            }
+            gatewayLog.error(
+              `gateway restart admission failed: ${respawn.detail ?? "launchd handoff refused"}. Restart cancelled; current gateway remains running.`,
+            );
+            shuttingDown = false;
+            return;
+          }
+          if (respawn.mode === "supervised") {
+            preparedRespawn = respawn;
+          }
+        }
+
+        if (pendingStopSignal) {
+          if (!cancelPreparedRespawn()) {
+            preserveGatewayAfterCancellationFailure();
+            return;
+          }
+          continueWithPendingStop();
+          return;
+        }
+
+        if (!restartPreparation) {
+          // Admission is complete and the restart is now committed to its
+          // bounded drain/cutover path.
+          armForceExit(DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS);
+        }
+
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
@@ -276,6 +339,10 @@ export async function runGatewayLoop<TPrepared = never>(params: {
 
         if (restartPreparation && pendingStopSignal) {
           cancelGatewayDraining();
+          if (!cancelPreparedRespawn()) {
+            preserveGatewayAfterCancellationFailure();
+            return;
+          }
           continueWithPendingStop();
           return;
         }
@@ -305,6 +372,10 @@ export async function runGatewayLoop<TPrepared = never>(params: {
             // The old listener and any timed-out active tasks are still alive.
             // Re-open ingress without clearing their lane bookkeeping.
             cancelGatewayDraining();
+            if (!cancelPreparedRespawn()) {
+              preserveGatewayAfterCancellationFailure();
+              return;
+            }
             if (continueWithPendingStop()) {
               return;
             }
@@ -318,6 +389,13 @@ export async function runGatewayLoop<TPrepared = never>(params: {
             return;
           }
           pendingPreparedRestart = restartPreparation.prepared;
+        }
+
+        if (restartPreparation) {
+          // Admission can legitimately wait while another lifecycle owner exits.
+          // Start the shutdown deadline only after we have committed to cutover;
+          // otherwise lock contention can consume the entire close budget while
+          // the old listener is still intentionally serving.
           armForceExit(SHUTDOWN_TIMEOUT_MS);
         }
 
@@ -341,10 +419,18 @@ export async function runGatewayLoop<TPrepared = never>(params: {
         if (shuttingDown) {
           server = null;
           if (isRestart && !pendingStopSignal) {
-            await handleRestartAfterServerClose();
+            await handleRestartAfterServerClose(preparedRespawn);
           } else {
-            pendingStopSignal = null;
-            await handleStopAfterServerClose();
+            if (!cancelPreparedRespawn()) {
+              // Losing the cancellation receipt would make exit ambiguous: the
+              // detached helper could relaunch after an explicit stop. Keep the
+              // current process alive and reopen the listener fail-closed.
+              preserveGatewayAfterCancellationFailure();
+              restartResolver?.();
+            } else {
+              pendingStopSignal = null;
+              await handleStopAfterServerClose();
+            }
           }
         }
       }

@@ -43,6 +43,16 @@ const launchdRestartHandoffState = vi.hoisted(() => ({
   isCurrentProcessLaunchdServiceLabel: vi.fn<(label: string) => boolean>(() => false),
   scheduleDetachedLaunchdRestartHandoff: vi.fn((_params: unknown) => ({ ok: true, pid: 7331 })),
 }));
+const gatewayLifecycleLeaseState = vi.hoisted(() => ({
+  ensureForRestart: vi.fn(
+    async (
+      _opts: unknown,
+      _overrides: unknown,
+    ): Promise<{ outcome: "held" } | { outcome: "reexecuted"; exitCode: number }> => ({
+      outcome: "held",
+    }),
+  ),
+}));
 const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number) => number[]>(() => []),
 );
@@ -120,6 +130,12 @@ vi.mock("./launchd-restart-handoff.js", () => ({
     launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel(label),
   scheduleDetachedLaunchdRestartHandoff: (params: unknown) =>
     launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff(params),
+}));
+
+vi.mock("../infra/gateway-lifecycle-lease.js", () => ({
+  GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE: 75,
+  ensureGatewayLifecycleLeaseForRestart: (opts: unknown, overrides: unknown) =>
+    gatewayLifecycleLeaseState.ensureForRestart(opts, overrides),
 }));
 
 vi.mock("../infra/restart-stale-pids.js", () => ({
@@ -216,6 +232,8 @@ beforeEach(() => {
     ok: true,
     pid: 7331,
   });
+  gatewayLifecycleLeaseState.ensureForRestart.mockReset();
+  gatewayLifecycleLeaseState.ensureForRestart.mockResolvedValue({ outcome: "held" });
   cwdSpy?.mockRestore();
   cwdSpy = null;
   vi.clearAllMocks();
@@ -489,6 +507,7 @@ describe("launchd install", () => {
     const label = "ai.openclaw.gateway";
     const serviceId = `${domain}/${label}`;
     expect(result).toEqual({ outcome: "completed" });
+    expect(gatewayLifecycleLeaseState.ensureForRestart).toHaveBeenCalledWith({}, { env });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
     expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", serviceId]);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
@@ -674,9 +693,39 @@ describe("launchd install", () => {
     expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).toHaveBeenCalledWith({
       env,
       mode: "kickstart",
-      waitForPid: process.pid,
+      delayMs: 2_000,
     });
+    expect(gatewayLifecycleLeaseState.ensureForRestart).not.toHaveBeenCalled();
     expect(state.launchctlCalls).toEqual([]);
+  });
+
+  it("returns after a direct gateway restart is re-executed beneath the machine lease", async () => {
+    const env = createDefaultLaunchdEnv();
+    gatewayLifecycleLeaseState.ensureForRestart.mockResolvedValueOnce({
+      outcome: "reexecuted",
+      exitCode: 0,
+    });
+
+    const result = await restartLaunchAgent({ env, stdout: new PassThrough() });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(state.launchctlCalls).toEqual([]);
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before direct gateway mutation when lease admission loses", async () => {
+    const env = createDefaultLaunchdEnv();
+    gatewayLifecycleLeaseState.ensureForRestart.mockResolvedValueOnce({
+      outcome: "reexecuted",
+      exitCode: 75,
+    });
+
+    await expect(restartLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+      "LaunchAgent restart temporarily unavailable (exit 75)",
+    );
+
+    expect(state.launchctlCalls).toEqual([]);
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {

@@ -263,6 +263,21 @@ management, Sparkle apply, shared restart smoke, and Jarvis/shared-main live
 Telegram acceptance. A nested canonical call reuses the outer lease only
 through the verified ancestry contract above.
 
+`openclaw gateway restart` is a packaged CLI boundary, not only a repository
+shell entrypoint. On macOS its complete mutation transaction re-executes through
+the same wrapper, and the npm/runtime package therefore includes the canonical
+lifecycle command, wrapper, lease helper, and session runner. The detached
+launchd handoff acquires that lease independently and publishes an admission
+receipt before restart is reported as scheduled. Missing packaged helpers fail
+closed with exit `75`; they never downgrade to raw signal, bootstrap, or
+kickstart.
+The narrow `gateway-lifecycle` admission policy skips managed Jarvis health
+only when the validated target is exactly `ai.jarvis.gateway`, because that
+restart may block or close the listener while acquiring the lease. Restarts of
+default or isolated OpenClaw profiles still require healthy Jarvis. CPU,
+memory, remote-access, ownership, ancestry, stale recovery, and runtime
+monitoring remain enforced.
+
 This one lease is also the deterministic operational reservation for package,
 release, deploy, restart, and live-runtime campaigns. Public Jarvis release
 work then acquires the narrower canonical release lock second. Keeping one

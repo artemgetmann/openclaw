@@ -1,4 +1,5 @@
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { GatewayLifecycleServiceEnvRefresh } from "../../infra/gateway-lifecycle-lease.js";
 
 export type GatewayRpcOpts = {
   url?: string;
@@ -26,4 +27,5 @@ export type DaemonInstallOptions = {
 
 export type DaemonLifecycleOptions = {
   json?: boolean;
+  refreshServiceEnv?: GatewayLifecycleServiceEnvRefresh;
 };

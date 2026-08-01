@@ -382,6 +382,42 @@ verify_required_telegram_user_tooling() {
   fi
 }
 
+verify_required_gateway_lifecycle_tooling() {
+  local runtime_root="$1"
+  local context_label="$2"
+  local missing=()
+  local relative_path=""
+  local required_paths=(
+    "scripts/gateway-lifecycle-command.sh"
+    "scripts/with-heavy-local-slot.sh"
+    "scripts/lib/heavy-local-slot.sh"
+    "scripts/lib/heavy-local-slot-runner.pl"
+  )
+  local required_executable_paths=(
+    "scripts/gateway-lifecycle-command.sh"
+    "scripts/with-heavy-local-slot.sh"
+  )
+
+  # A bundled runtime must be able to acquire the same UID-stable lease as a
+  # source checkout. Treat a partial cache/stage as unusable instead of making
+  # `gateway restart` fail closed only after installation.
+  for relative_path in "${required_paths[@]}"; do
+    if [[ ! -f "$runtime_root/$relative_path" ]]; then
+      missing+=("$relative_path")
+    fi
+  done
+  for relative_path in "${required_executable_paths[@]}"; do
+    if [[ ! -x "$runtime_root/$relative_path" ]]; then
+      missing+=("$relative_path (not executable)")
+    fi
+  done
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "ERROR: ${context_label} is missing gateway lifecycle tooling." >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    return 1
+  fi
+}
+
 verify_required_capabilities_manifest() {
   local runtime_root="$1"
   local context_label="$2"
@@ -1203,6 +1239,10 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "scripts/telegram-e2e/session_owner.py"
       hash_consumer_runtime_path "scripts/telegram-e2e/telethon_cli.py"
       hash_consumer_runtime_path "scripts/telegram-e2e/telethon_compat.py"
+      hash_consumer_runtime_path "scripts/gateway-lifecycle-command.sh"
+      hash_consumer_runtime_path "scripts/with-heavy-local-slot.sh"
+      hash_consumer_runtime_path "scripts/lib/heavy-local-slot.sh"
+      hash_consumer_runtime_path "scripts/lib/heavy-local-slot-runner.pl"
       hash_consumer_runtime_path "dist"
       hash_consumer_runtime_path "extensions"
       hash_consumer_runtime_path "skills"
@@ -1313,6 +1353,7 @@ prepare_bundled_consumer_runtime() {
   if [[ -n "$REUSABLE_RUNTIME_STAGE_DIR" ]]; then
     if verify_required_workspace_templates "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/docs/reference/templates" "reused bundled consumer runtime workspace templates" \
       && verify_required_telegram_user_tooling "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/scripts/telegram-e2e" "reused bundled consumer runtime Telegram user tooling" \
+      && verify_required_gateway_lifecycle_tooling "$REUSABLE_RUNTIME_STAGE_DIR/openclaw" "reused bundled consumer runtime" \
       && verify_required_capabilities_manifest "$REUSABLE_RUNTIME_STAGE_DIR" "reused bundled consumer runtime"; then
       echo "📦 Reusing previous bundled consumer runtime (smoke-only)"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
@@ -1329,6 +1370,7 @@ prepare_bundled_consumer_runtime() {
   if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" && -d "$cache_root" && -f "$cache_root/manifest.json" ]]; then
     if verify_required_workspace_templates "$cache_templates_dir" "cached bundled consumer runtime workspace templates" \
       && verify_required_telegram_user_tooling "$cache_telegram_user_tooling_dir" "cached bundled consumer runtime Telegram user tooling" \
+      && verify_required_gateway_lifecycle_tooling "$cache_root/openclaw" "cached bundled consumer runtime" \
       && verify_required_capabilities_manifest "$cache_root" "cached bundled consumer runtime"; then
       echo "📦 Reusing cached bundled consumer runtime"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
@@ -1424,6 +1466,19 @@ prepare_bundled_consumer_runtime() {
     cp "$ROOT_DIR/scripts/telegram-e2e/$telegram_user_tooling_file" \
       "$telegram_user_tooling_dest/$telegram_user_tooling_file"
   done
+
+  # The consumer runtime is assembled manually rather than through npm pack.
+  # Copy the canonical lease implementation explicitly so packaged gateway
+  # restarts preserve the same cross-clone ownership contract as source.
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/lib"
+  cp "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+    "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/gateway-lifecycle-command.sh"
+  cp "$ROOT_DIR/scripts/with-heavy-local-slot.sh" \
+    "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/with-heavy-local-slot.sh"
+  cp "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" \
+    "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/lib/heavy-local-slot.sh"
+  cp "$ROOT_DIR/scripts/lib/heavy-local-slot-runner.pl" \
+    "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/lib/heavy-local-slot-runner.pl"
 
   if [[ -d "$ROOT_DIR/skills" ]]; then
     rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"

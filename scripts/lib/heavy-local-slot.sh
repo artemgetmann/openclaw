@@ -512,6 +512,7 @@ openclaw_heavy_local_slot_acquire() {
 
 openclaw_heavy_local_slot_inherited_lease_is_valid() {
   local required_policy="${1:-standard}"
+  local allow_standard_gateway_owner="${2:-0}"
   local inherited_token="${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-}"
   local lock_path="" owner_path=""
   local owner_pid="" owner_token="" owner_start="" owner_policy=""
@@ -527,12 +528,16 @@ openclaw_heavy_local_slot_inherited_lease_is_valid() {
   owner_policy="$(openclaw_heavy_local_slot_value "$owner_path" policy)"
   [[ "$owner_token" == "$inherited_token" ]] || return 1
 
-  # Standard nested work can safely run inside the stricter remediation
-  # transaction. The reverse is false: a standard outer monitor would kill an
-  # authorized hotfix during the Jarvis restart window it exists to repair.
-  if [[ "$required_policy" == "jarvis-remediation" &&
-    "$owner_policy" != "jarvis-remediation" ]]; then
-    return 1
+  # Standard nested work can safely run inside either stricter transaction.
+  # Gateway lifecycle work may explicitly admit the canonical standard owner:
+  # both are the same machine-wide exclusion lease, and restart-mac already
+  # owns the standard transaction before its final OpenClaw gateway restart.
+  # Jarvis replacement and remediation remain exact-policy-only because their
+  # owner must exempt the listener being replaced from health monitoring.
+  if [[ "$required_policy" != "standard" && "$owner_policy" != "$required_policy" ]]; then
+    [[ "$required_policy" == "gateway-lifecycle" &&
+      "$owner_policy" == "standard" &&
+      "$allow_standard_gateway_owner" == "1" ]] || return 1
   fi
   openclaw_heavy_local_slot_process_descends_from_owner "$$" "$owner_pid" "$owner_start"
 }
@@ -545,7 +550,7 @@ openclaw_heavy_local_slot_require_or_reexec_with_policy() {
   shift 4
 
   case "$policy" in
-    standard | jarvis-remediation)
+    standard | gateway-lifecycle | jarvis-remediation)
       ;;
     *)
       printf 'HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=unknown_policy\n' >&2

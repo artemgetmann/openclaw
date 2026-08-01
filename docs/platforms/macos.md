@@ -37,10 +37,10 @@ capabilities to the agent as a node.
 The app manages a per‑user LaunchAgent labeled `ai.openclaw.gateway`
 (or `ai.openclaw.<profile>` when using `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.*` still unloads).
 
-```bash
-launchctl kickstart -k gui/$UID/ai.openclaw.gateway
-launchctl bootout gui/$UID/ai.openclaw.gateway
-```
+Use `openclaw gateway restart` for routine restarts so the full lifecycle
+transaction acquires the machine-wide lease. Direct `launchctl kickstart -k`
+or `bootout` is break-glass only: reserve the machine-wide slot explicitly
+before bypassing the guarded CLI.
 
 Replace the label with `ai.openclaw.<profile>` when running a named profile.
 

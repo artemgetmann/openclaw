@@ -212,7 +212,10 @@ openclaw gateway --port 18789
 openclaw logs --follow
 ```
 
-If you’re supervised:
+If you’re supervised, prefer `openclaw gateway restart`. The raw supervisor
+commands below are break-glass diagnostics that bypass OpenClaw's guarded
+lifecycle transaction; reserve the machine-wide slot explicitly before using
+them:
 
 - macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/ai.openclaw.gateway` (use `ai.openclaw.<profile>`; legacy `com.openclaw.*` still works)
 - Linux systemd user service: `systemctl --user restart openclaw-gateway[-<profile>].service`

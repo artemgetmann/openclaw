@@ -246,6 +246,33 @@ validate_policy_for_command() {
     standard)
       return 0
       ;;
+    gateway-lifecycle)
+      # Gateway restart is itself the operation that may repair or replace the
+      # managed Jarvis listener. It still needs the machine lease and all host
+      # headroom checks, but requiring that same listener to answer /healthz
+      # would deadlock an in-process detached handoff.
+      guarded_command="$(resolve_command_path "${1:-}" || true)"
+      allowed_command="$(resolve_command_path "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" || true)"
+      if [[ -z "$guarded_command" || "$guarded_command" != "$allowed_command" ]]; then
+        emit_refusal \
+          "guard_internal" \
+          "invalid_gateway_lifecycle_command" \
+          "gateway-lifecycle policy requires the canonical lifecycle command"
+        return 75
+      fi
+      case "$label:${2:-}" in
+        gateway-restart:*:cli | gateway-restart-handoff:*:handoff)
+          return 0
+          ;;
+        *)
+          emit_refusal \
+            "guard_internal" \
+            "invalid_gateway_lifecycle_label" \
+            "gateway-lifecycle policy requires a gateway restart label"
+          return 75
+          ;;
+      esac
+      ;;
     jarvis-remediation)
       [ "$check_only" = false ] || {
         emit_refusal \
@@ -447,7 +474,7 @@ trap 'handle_interrupt INT 130' INT
 trap 'handle_interrupt TERM 143' TERM
 trap 'handle_interrupt HUP 129' HUP
 
-if validate_policy_for_command "${1:-}"; then
+if validate_policy_for_command "$@"; then
   :
 else
   policy_status=$?
@@ -573,10 +600,17 @@ host_health_reason() {
 
 require_jarvis_health=1
 if [ "$policy" = "jarvis-remediation" ]; then
-  # The canonical hotfix intentionally replaces ai.jarvis.gateway. Continue to
-  # enforce workstation and remote-access health, but do not let the broken
-  # service or its planned restart kill the repair transaction.
+  # Remediation intentionally repairs ai.jarvis.gateway and cannot depend on
+  # that listener already being healthy.
   require_jarvis_health=0
+elif [ "$policy" = "gateway-lifecycle" ]; then
+  # Only the exact Jarvis restart target gets the same self-health exemption.
+  # Isolated/default OpenClaw profiles must still preserve healthy main Jarvis.
+  case "$label" in
+    gateway-restart:ai.jarvis.gateway | gateway-restart-handoff:ai.jarvis.gateway)
+      require_jarvis_health=0
+      ;;
+  esac
 fi
 
 while true; do
@@ -627,7 +661,11 @@ while true; do
 done
 health_stop_file="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/health_stop_reason"
 
-printf 'Heavy-local slot granted to "%s".\n' "$display_label"
+if [[ "$policy" == "gateway-lifecycle" ]]; then
+  printf 'Heavy-local slot granted to "%s".\n' "$display_label" >&2
+else
+  printf 'Heavy-local slot granted to "%s".\n' "$display_label"
+fi
 if [ "$check_only" = true ]; then
   exit 0
 fi

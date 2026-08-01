@@ -1,5 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
-import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
@@ -15,7 +14,10 @@ import {
 } from "../daemon/launchd-restart-handoff.js";
 import { resolveGatewayRuntimeIdentityEnv } from "../daemon/service-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import {
+  ensureGatewayLifecycleLeaseForRestart,
+  GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE,
+} from "./gateway-lifecycle-lease.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
@@ -301,38 +303,6 @@ function normalizeSystemdUnit(raw?: string, profile?: string): string {
   return unit.endsWith(".service") ? unit : `${unit}.service`;
 }
 
-function resolveScriptPathIfExists(scriptPath: string | undefined | null): string | null {
-  if (typeof scriptPath !== "string") {
-    return null;
-  }
-  const trimmed = scriptPath.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return fs.existsSync(trimmed) ? trimmed : null;
-}
-
-function resolveLocalRestartScriptPath(): string | null {
-  const envScriptPath = resolveScriptPathIfExists(process.env.OPENCLAW_LOCAL_RESTART_SCRIPT);
-  if (envScriptPath) {
-    return envScriptPath;
-  }
-
-  const openclawRoot = resolveOpenClawPackageRootSync({
-    cwd: process.cwd(),
-    argv1: process.argv[1],
-    moduleUrl: import.meta.url,
-  });
-  if (!openclawRoot) {
-    return null;
-  }
-  return resolveScriptPathIfExists(path.join(openclawRoot, "scripts", "restart-local-gateway.sh"));
-}
-
-export function isLocalRestartScriptAvailable(): boolean {
-  return resolveLocalRestartScriptPath() !== null;
-}
-
 function resolveCurrentLaunchdLabel(env: NodeJS.ProcessEnv = process.env): string {
   const daemonEnv = resolveGatewayRuntimeIdentityEnv(env);
   const configuredLabel = daemonEnv.OPENCLAW_LAUNCHD_LABEL?.trim();
@@ -350,62 +320,19 @@ export function isCanonicalSharedMainLaunchdRuntime(env: NodeJS.ProcessEnv = pro
   return label === GATEWAY_LAUNCH_AGENT_LABEL || label === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL;
 }
 
-export function isSafeLocalRestartScriptAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (isCanonicalSharedMainLaunchdRuntime(env)) {
-    return false;
-  }
-  const label =
-    env.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
-  if (isCurrentProcessLaunchdServiceLabel(label)) {
-    return false;
-  }
-  return isLocalRestartScriptAvailable();
-}
-
-function triggerDetachedLocalRestartScript(scriptPath: string): {
+async function triggerDetachedLaunchdRestartHandoff(label: string): Promise<{
   ok: boolean;
   command: string;
   detail?: string;
-} {
-  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
-  const command = `OPENCLAW_RESTART_DETACHED=1 /bin/bash ${scriptPath}`;
-  try {
-    // Run restart work in a detached helper so the active gateway request can
-    // return before launchctl tears down this process.
-    const child = spawn("/bin/bash", [scriptPath], {
-      detached: true,
-      stdio: "ignore",
-      env: {
-        ...daemonEnv,
-        OPENCLAW_RESTART_DETACHED: "1",
-      },
-    });
-    child.unref();
-    return {
-      ok: true,
-      command,
-      detail: `scheduled local restart script: ${scriptPath}`,
-    };
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      command,
-      detail: `local restart script failed: ${detail}`,
-    };
-  }
-}
-
-function triggerDetachedLaunchdRestartHandoff(label: string): {
-  ok: boolean;
-  command: string;
-  detail?: string;
-} {
+}> {
   const command = `launchd-handoff kickstart ${label}`;
-  const handoff = scheduleDetachedLaunchdRestartHandoff({
+  const handoff = await scheduleDetachedLaunchdRestartHandoff({
     env: process.env,
     mode: "kickstart",
-    waitForPid: process.pid,
+    // This path can be called by a chat command that keeps the gateway alive
+    // until launchctl replaces it. Waiting for our own PID would therefore pin
+    // the machine lease forever; a bounded delay lets the receipt flush first.
+    delayMs: 2000,
   });
   if (!handoff.ok) {
     return {
@@ -421,16 +348,15 @@ function triggerDetachedLaunchdRestartHandoff(label: string): {
   };
 }
 
-export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): RestartAttempt {
+export async function triggerOpenClawRestart(): Promise<RestartAttempt> {
   const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
 
-  cleanStaleGatewayProcessesSync();
-
   const tried: string[] = [];
   if (process.platform === "linux") {
+    cleanStaleGatewayProcessesSync();
     const unit = normalizeSystemdUnit(daemonEnv.OPENCLAW_SYSTEMD_UNIT, daemonEnv.OPENCLAW_PROFILE);
     const userArgs = ["--user", "restart", unit];
     tried.push(`systemctl ${userArgs.join(" ")}`);
@@ -458,6 +384,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   }
 
   if (process.platform === "win32") {
+    cleanStaleGatewayProcessesSync();
     return relaunchGatewayScheduledTask(daemonEnv as NodeJS.ProcessEnv);
   }
 
@@ -474,54 +401,57 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
   const target = `${domain}/${label}`;
-  const shouldPreferLocalScript = opts?.preferLocalScript === true;
-  let localScriptFailure: string | undefined;
-  if (shouldPreferLocalScript) {
-    const isSharedManagedRuntime = isCanonicalSharedMainLaunchdRuntime(
-      daemonEnv as NodeJS.ProcessEnv,
-    );
-    // Shared managed labels always belong to their external supervisor. The
-    // label check remains decisive even if launchd's process markers are absent
-    // or incomplete; isolated lane labels retain marker-based handoff behavior.
-    if (isSharedManagedRuntime || isCurrentProcessLaunchdServiceLabel(label)) {
-      const handoffRestart = triggerDetachedLaunchdRestartHandoff(label);
-      tried.push(handoffRestart.command);
-      if (handoffRestart.ok) {
-        return {
-          ok: true,
-          method: "launchctl",
-          detail: handoffRestart.detail,
-          tried,
-        };
-      }
-      if (isSharedManagedRuntime) {
-        // Do not downgrade a supervisor-owned service to a direct kickstart or
-        // checkout-local helper when scheduling its safe handoff fails.
-        return {
-          ok: false,
-          method: "launchctl",
-          detail: handoffRestart.detail,
-          tried,
-        };
-      }
-      localScriptFailure = handoffRestart.detail;
+  const isSharedManagedRuntime = isCanonicalSharedMainLaunchdRuntime(
+    daemonEnv as NodeJS.ProcessEnv,
+  );
+  // Shared managed labels always belong to their external supervisor. The
+  // label check remains decisive even if launchd's process markers are absent
+  // or incomplete. This admission must happen before stale cleanup because
+  // cleanup itself sends signals.
+  if (isSharedManagedRuntime || isCurrentProcessLaunchdServiceLabel(label)) {
+    const handoffRestart = await triggerDetachedLaunchdRestartHandoff(label);
+    tried.push(handoffRestart.command);
+    if (handoffRestart.ok) {
+      return {
+        ok: true,
+        method: "launchctl",
+        detail: handoffRestart.detail,
+        tried,
+      };
     }
-
-    const localRestartScriptPath = isSharedManagedRuntime ? null : resolveLocalRestartScriptPath();
-    if (localRestartScriptPath) {
-      const scriptRestart = triggerDetachedLocalRestartScript(localRestartScriptPath);
-      tried.push(`local-restart-script ${scriptRestart.command}`);
-      if (scriptRestart.ok) {
-        return {
-          ok: true,
-          method: "launchctl",
-          detail: scriptRestart.detail,
-          tried,
-        };
-      }
-      localScriptFailure = scriptRestart.detail;
-    }
+    // Once this process identifies itself as the service being replaced, every
+    // fallback would mutate outside the refused machine lease. Fail closed
+    // before stale cleanup, local scripts, or direct kickstart.
+    return {
+      ok: false,
+      method: "launchctl",
+      detail: handoffRestart.detail,
+      tried,
+    };
   }
+
+  // Non-current lane labels used to fall through to stale-process cleanup and
+  // raw launchctl operations. Re-enter the canonical CLI so this branch owns
+  // the same UID-stable machine lease as every other gateway restart. The
+  // guarded descendant proves inherited ownership and continues exactly once;
+  // a contender returns the established temporary-unavailable status before
+  // any signal, bootstrap, or kickstart.
+  const lease = await ensureGatewayLifecycleLeaseForRestart({}, { env: daemonEnv });
+  tried.push("gateway-lifecycle lease");
+  if (lease.outcome === "reexecuted") {
+    const exitCode = lease.exitCode || GATEWAY_LIFECYCLE_TEMPORARY_UNAVAILABLE_EXIT_CODE;
+    return {
+      ok: lease.exitCode === 0,
+      method: "launchctl",
+      detail:
+        lease.exitCode === 0
+          ? "completed guarded gateway restart"
+          : `gateway restart temporarily unavailable (exit ${exitCode})`,
+      tried,
+    };
+  }
+
+  cleanStaleGatewayProcessesSync();
 
   const args = ["kickstart", "-k", target];
   tried.push(`launchctl ${args.join(" ")}`);
@@ -562,13 +492,10 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
     return { ok: true, method: "launchctl", tried };
   }
   const retryDetail = formatSpawnDetail(retry);
-  const detail = localScriptFailure
-    ? `${localScriptFailure}; launchctl: ${retryDetail}`
-    : retryDetail;
   return {
     ok: false,
     method: "launchctl",
-    detail,
+    detail: retryDetail,
     tried,
   };
 }
@@ -619,14 +546,14 @@ function normalizeRestartReason(reasonRaw: string | undefined): string | undefin
  * guard prevents. Tester/worktree runtimes keep the existing SIGUSR1 path so
  * lane-local behavior remains unchanged.
  */
-export function requestGatewayToolRestart(opts?: {
+export async function requestGatewayToolRestart(opts?: {
   delayMs?: number;
   reason?: string;
-}): GatewayToolRestartRequest {
+}): Promise<GatewayToolRestartRequest> {
   const delayMs = normalizeRestartDelayMs(opts?.delayMs);
   const reason = normalizeRestartReason(opts?.reason);
   if (process.platform === "darwin" && isCanonicalSharedMainLaunchdRuntime()) {
-    const handoff = scheduleDetachedLaunchdRestartHandoff({
+    const handoff = await scheduleDetachedLaunchdRestartHandoff({
       env: process.env,
       mode: "kickstart",
       delayMs,
