@@ -143,7 +143,6 @@ type ThreadServiceOptions = {
   client: () => Promise<CodexRpcClient>;
   turnTimeoutMs: number;
   defaultWorkspaceDir: string;
-  dynamicTools?: readonly Record<string, unknown>[];
   workspaceManager?: {
     prepare(request: PrepareWorkspaceRequest): Promise<PreparedCodexWorkspace>;
     discard?(prepared: PreparedCodexWorkspace): Promise<void>;
@@ -439,7 +438,6 @@ export class CodexThreadService {
       serviceName: "OpenClaw",
       developerInstructions: ANALYSIS_DEVELOPER_INSTRUCTIONS,
       experimentalRawEvents: true,
-      ...(this.options.dynamicTools?.length ? { dynamicTools: this.options.dynamicTools } : {}),
     });
     this.loadedThreadIds.add(requireThreadId(response));
     return response;
@@ -621,7 +619,6 @@ export class CodexThreadService {
           ? IMPLEMENTATION_DEVELOPER_INSTRUCTIONS
           : ANALYSIS_DEVELOPER_INSTRUCTIONS,
       experimentalRawEvents: true,
-      ...(this.options.dynamicTools?.length ? { dynamicTools: this.options.dynamicTools } : {}),
     });
     assertExecutionPolicyApplied(response, execution, policy);
     this.loadedThreadIds.add(requireThreadId(response));

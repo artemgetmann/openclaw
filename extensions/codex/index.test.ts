@@ -15,6 +15,43 @@ import type { AnyAgentTool, OpenClawPluginToolFactory } from "../../src/plugins/
 import { createTestPluginApi } from "../test-utils/plugin-api.js";
 import { CodexDelegationRegistry } from "./src/delegation-registry.js";
 
+type TestGatewayHandler = (options: {
+  params: Record<string, unknown>;
+  respond: (ok: boolean, payload: unknown) => void;
+}) => Promise<void> | void;
+
+function readCallbackRoute(prompt: string | undefined): {
+  routeId: string;
+  capability: string;
+} {
+  const routeId = prompt?.match(/- Durable callback route: ([^\n]+)/)?.[1];
+  const capability = prompt?.match(/- Scoped callback capability: ([^\n]+)/)?.[1];
+  if (!routeId || !capability) {
+    throw new Error("delegated prompt omitted its durable callback route");
+  }
+  return { routeId, capability };
+}
+
+async function callGatewayHandler(
+  handler: TestGatewayHandler | undefined,
+  params: Record<string, unknown>,
+): Promise<{ ok: boolean; payload: unknown }> {
+  if (!handler) {
+    throw new Error("codex.callback Gateway handler was not registered");
+  }
+  let response: { ok: boolean; payload: unknown } | undefined;
+  await handler({
+    params,
+    respond(ok, payload) {
+      response = { ok, payload };
+    },
+  });
+  if (!response) {
+    throw new Error("codex.callback Gateway handler did not respond");
+  }
+  return response;
+}
+
 const appServer = vi.hoisted(() => {
   const requests: Array<{ method: string; params: unknown }> = [];
   let handlers = new Set<
@@ -491,9 +528,11 @@ describe("Codex natural-language delegation", () => {
       /Jarvis-owned Codex worker return contract:[\s\S]*Native Codex thread ID: thread-natural/,
     );
     expect(delegatedPrompt).toContain(
-      "When the jarvis_callback tool is available, use it for meaningful progress, blocker, decision-needed, or completion messages",
+      "Proactive return route: use the shipped `openclaw codex-callback` command",
     );
-    expect(delegatedPrompt).toContain("Never call jarvis_callback merely to acknowledge receipt");
+    expect(delegatedPrompt).toContain("Durable callback route:");
+    expect(delegatedPrompt).toContain("Scoped callback capability:");
+    expect(delegatedPrompt).toContain("Never send a callback merely to acknowledge receipt");
     expect(delegatedPrompt).toContain(
       "- Permissions: read-only; network disabled; approval prompts disabled.",
     );
@@ -683,6 +722,7 @@ describe("Codex natural-language delegation", () => {
     const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
     const state = await createRelayState();
     let factory: OpenClawPluginToolFactory | undefined;
+    let callbackHandler: TestGatewayHandler | undefined;
 
     registerCodex(
       createTestPluginApi({
@@ -704,6 +744,11 @@ describe("Codex natural-language delegation", () => {
             factory = next;
           }
         },
+        registerGatewayMethod(method, handler) {
+          if (method === "codex.callback") {
+            callbackHandler = handler as TestGatewayHandler;
+          }
+        },
       }),
     );
 
@@ -722,54 +767,45 @@ describe("Codex natural-language delegation", () => {
     const delegationId = (accepted as { details?: { delegationId?: string } }).details
       ?.delegationId;
     expect(delegationId).toBeTruthy();
-    expect(appServer.requests[0]).toMatchObject({
-      method: "thread/start",
-      params: {
-        dynamicTools: [
-          expect.objectContaining({
-            name: "jarvis_callback",
-            type: "function",
-          }),
-        ],
-      },
-    });
-
+    const delegatedTurn = appServer.requests.find((request) => request.method === "turn/start");
+    expect(delegatedTurn).not.toHaveProperty("params.dynamicTools");
+    const delegatedPrompt = (delegatedTurn?.params as { input?: Array<{ text?: string }> })
+      ?.input?.[0]?.text;
+    const callbackRoute = readCallbackRoute(delegatedPrompt);
     const callbackRequest = {
-      method: "item/tool/call",
-      params: {
-        tool: "jarvis_callback",
-        callId: "call-progress-1",
-        threadId: "thread-natural",
-        turnId: "turn-natural",
-        arguments: {
-          delegation_id: delegationId,
-          callback_id: "progress-1",
-          sequence: 1,
-          status: "decision-needed",
-          message: "\nThe architecture is clean. Choose whether to keep the API narrow.\n",
-          changed_files: ["extensions/codex/index.ts"],
-          proof: ["Exact App Server turn identity verified"],
-          next_action: "Wait for Jarvis steering.",
-          work_continues: true,
-        },
-      },
+      routeId: callbackRoute.routeId,
+      capability: callbackRoute.capability,
+      sourceThreadId: "thread-natural",
+      callbackId: "progress-1",
+      sequence: 1,
+      status: "decision-needed",
+      message: "\nThe architecture is clean. Choose whether to keep the API narrow.\n",
+      changedFiles: ["extensions/codex/index.ts"],
+      proof: ["Exact App Server turn identity verified"],
+      nextAction: "Wait for Jarvis steering.",
+      workContinues: true,
     };
-    const handler = [...appServer.serverRequestHandlers][0];
-    await expect(handler?.(callbackRequest)).resolves.toMatchObject({ success: true });
-    await expect(handler?.(callbackRequest)).resolves.toMatchObject({ success: true });
+    await expect(callGatewayHandler(callbackHandler, callbackRequest)).resolves.toMatchObject({
+      ok: true,
+      payload: { status: "delivered" },
+    });
+    await expect(callGatewayHandler(callbackHandler, callbackRequest)).resolves.toMatchObject({
+      ok: true,
+      payload: { status: "already-delivered" },
+    });
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:telegram:direct:owner",
         deliver: true,
         idempotencyKey: expect.stringContaining(
-          `codex-callback:${delegationId}:progress-1:1:thread-natural:turn-natural`,
+          `codex-callback:${callbackRoute.routeId}:progress-1:1:thread-natural`,
         ),
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "codex:thread:thread-natural:turn:turn-natural",
           sourceChannel: "codex",
-          sourceTool: "jarvis_callback",
+          sourceTool: "codex-callback",
         },
         message: expect.stringContaining(
           "\nThe architecture is clean. Choose whether to keep the API narrow.\n",
@@ -802,6 +838,139 @@ describe("Codex natural-language delegation", () => {
     });
   });
 
+  it("keeps one callback route across plugin restart and same-thread resume", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.serverRequestHandlers = new Set();
+    appServer.autoComplete = false;
+    let runCount = 0;
+    const run = vi.fn(
+      async (_payload: {
+        sessionKey: string;
+        message: string;
+        inputProvenance?: { sourceTool?: string; sourceSessionKey?: string };
+      }) => ({ runId: `jarvis-run-${++runCount}` }),
+    );
+    const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+    const state = await createRelayState();
+    const callbackHandlers: TestGatewayHandler[] = [];
+
+    const registerInstance = () => {
+      let factory: OpenClawPluginToolFactory | undefined;
+      registerCodex(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: { command: "fake-codex", defaultWorkspaceDir: "/repo/openclaw" },
+          runtime: {
+            state,
+            subagent: { run, waitForRun },
+            system: {
+              enqueueSystemEvent: vi.fn(() => true),
+              requestHeartbeatNow: vi.fn(),
+            },
+          } as never,
+          registerTool(next) {
+            if (typeof next === "function") {
+              factory = next;
+            }
+          },
+          registerGatewayMethod(method, handler) {
+            if (method === "codex.callback") {
+              callbackHandlers.push(handler as TestGatewayHandler);
+            }
+          },
+        }),
+      );
+      return factory?.({
+        senderIsOwner: true,
+        sandboxed: false,
+        sessionKey: "agent:main:telegram:direct:owner",
+        agentId: "main",
+      }) as AnyAgentTool;
+    };
+
+    const firstTool = registerInstance();
+    await firstTool.execute("delegate-before-restart", {
+      action: "delegate_async",
+      text: "Send one progress update, then finish this turn.",
+      task_mode: "analysis",
+      project_dir: process.cwd(),
+    });
+    const firstPrompt = (
+      appServer.requests.find((request) => request.method === "turn/start")?.params as {
+        input?: Array<{ text?: string }>;
+      }
+    )?.input?.[0]?.text;
+    const firstRoute = readCallbackRoute(firstPrompt);
+    await expect(
+      callGatewayHandler(callbackHandlers[0], {
+        ...firstRoute,
+        sourceThreadId: "thread-natural",
+        callbackId: "progress-before-restart",
+        sequence: 1,
+        status: "progress",
+        message: "The first turn proved its durable callback route.",
+        workContinues: true,
+      }),
+    ).resolves.toMatchObject({ ok: true, payload: { status: "delivered" } });
+    finishNaturalTurn();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+
+    // Re-registering the plugin creates fresh process-local objects while both
+    // durable registries remain on disk. This is the relevant Gateway restart
+    // boundary; the resumed worker may arrive through a different host.
+    const resumedTool = registerInstance();
+    await resumedTool.execute("resume-after-restart", {
+      action: "message_async",
+      thread_id: "thread-natural",
+      text: "Resume the same thread and send the next update.",
+    });
+    const resumedTurn = appServer.requests
+      .filter((request) => request.method === "turn/start")
+      .at(-1);
+    const resumedPrompt = (resumedTurn?.params as { input?: Array<{ text?: string }> })?.input?.[0]
+      ?.text;
+    const resumedRoute = readCallbackRoute(resumedPrompt);
+    expect(resumedRoute).toEqual(firstRoute);
+    expect(resumedPrompt).toContain("Next callback sequence: 2");
+
+    const secondCallback = {
+      ...resumedRoute,
+      sourceThreadId: "thread-natural",
+      callbackId: "decision-after-restart",
+      sequence: 2,
+      status: "decision-needed",
+      message: "The same native thread resumed; Jarvis must choose the final wording.",
+      nextAction: "Choose the final wording.",
+      workContinues: false,
+    };
+    await expect(callGatewayHandler(callbackHandlers[1], secondCallback)).resolves.toMatchObject({
+      ok: true,
+      payload: { status: "delivered" },
+    });
+    await expect(callGatewayHandler(callbackHandlers[1], secondCallback)).resolves.toMatchObject({
+      ok: true,
+      payload: { status: "already-delivered" },
+    });
+
+    const callbackRuns = run.mock.calls.filter(
+      ([payload]) => payload.inputProvenance?.sourceTool === "codex-callback",
+    );
+    expect(callbackRuns).toHaveLength(2);
+    expect(callbackRuns[1]?.[0]).toMatchObject({
+      sessionKey: "agent:main:telegram:direct:owner",
+      inputProvenance: {
+        sourceSessionKey: "codex:thread:thread-natural:turn:turn-natural",
+      },
+      message: expect.stringContaining(
+        "The same native thread resumed; Jarvis must choose the final wording.",
+      ),
+    });
+  });
+
   it("uses terminal completion only as fallback after a delivered complete callback", async () => {
     appServer.requests.splice(0);
     appServer.handlers = new Set();
@@ -813,6 +982,7 @@ describe("Codex natural-language delegation", () => {
     const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
     const state = await createRelayState();
     let factory: OpenClawPluginToolFactory | undefined;
+    let callbackHandler: TestGatewayHandler | undefined;
     registerCodex(
       createTestPluginApi({
         id: "codex",
@@ -833,6 +1003,11 @@ describe("Codex natural-language delegation", () => {
             factory = next;
           }
         },
+        registerGatewayMethod(method, handler) {
+          if (method === "codex.callback") {
+            callbackHandler = handler as TestGatewayHandler;
+          }
+        },
       }),
     );
     const tool = factory?.({
@@ -844,25 +1019,20 @@ describe("Codex natural-language delegation", () => {
       action: "delegate_async",
       text: "Complete the bounded task.",
     });
-    const delegationId = (accepted as { details?: { delegationId?: string } }).details
-      ?.delegationId;
-    const handler = [...appServer.serverRequestHandlers][0];
-    await handler?.({
-      method: "item/tool/call",
-      params: {
-        tool: "jarvis_callback",
-        callId: "call-complete-1",
-        threadId: "thread-natural",
-        turnId: "turn-natural",
-        arguments: {
-          delegation_id: delegationId,
-          callback_id: "complete-1",
-          sequence: 1,
-          status: "complete",
-          message: "The bounded task is complete with focused proof.",
-          work_continues: false,
-        },
-      },
+    expect(accepted).toMatchObject({ details: { status: "accepted" } });
+    const delegatedTurn = appServer.requests.find((request) => request.method === "turn/start");
+    const delegatedPrompt = (delegatedTurn?.params as { input?: Array<{ text?: string }> })
+      ?.input?.[0]?.text;
+    const callbackRoute = readCallbackRoute(delegatedPrompt);
+    await callGatewayHandler(callbackHandler, {
+      routeId: callbackRoute.routeId,
+      capability: callbackRoute.capability,
+      sourceThreadId: "thread-natural",
+      callbackId: "complete-1",
+      sequence: 1,
+      status: "complete",
+      message: "The bounded task is complete with focused proof.",
+      workContinues: false,
     });
     finishNaturalTurn();
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
@@ -1044,7 +1214,10 @@ describe("Codex natural-language delegation", () => {
       "The launcher also watches this exact turn and relays terminal output when no complete callback was delivered.",
     );
     expect(followupPrompt).toContain(
-      "A resumed pre-existing thread may not expose jarvis_callback. If it is unavailable, continue the task and use the terminal handback below",
+      "The command reads exact native thread identity from CODEX_THREAD_ID and remains valid after this turn ends when the same thread later resumes through Slingshot.",
+    );
+    expect(followupPrompt).toContain(
+      "Never use a persisted `jarvis_callback` dynamic-tool schema.",
     );
     const followupBoundary = followupPrompt?.match(
       /-----BEGIN (JARVIS_TASK_PAYLOAD_[^\n]+)-----/,

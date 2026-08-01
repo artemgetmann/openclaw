@@ -14,6 +14,7 @@ describe("method scope resolution", () => {
     ["monitor.get", ["operator.read"]],
     ["poll", ["operator.write"]],
     ["monitor.update", ["operator.write"]],
+    ["codex.callback", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],

@@ -119,6 +119,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "monitor.update",
     "monitor.routeEvent",
     "monitor.stop",
+    // A native Codex worker presents its separate route capability to this
+    // method; the CLI connection itself needs only normal mutation scope.
+    "codex.callback",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
