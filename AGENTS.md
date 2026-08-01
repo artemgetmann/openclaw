@@ -48,7 +48,15 @@
 - Never edit `node_modules`.
 - Never update the Carbon dependency.
 - Do not patch dependencies without explicit approval.
-- Before making a host-level macOS claim from `codesign`, `security`, Keychain, TCC, `trustd`, signing-identity, or similar system output, rerun the decisive command outside the sandbox. Treat sandbox-only failures as indeterminate; never recommend a reboot or host-state mutation from sandbox-only evidence.
+- Before reporting a host-level blocker from a sandboxed or restricted result,
+  identify whether the check depends on host-only state such as credentials or
+  keyring access, network reachability, signing or trust, TCC, launchd,
+  services, or listeners. A sandbox-only failure is indeterminate. Rerun only
+  the smallest decisive read-only diagnostic in authorized host context before
+  claiming host failure. Never automatically repeat a mutation, send, merge,
+  deploy, restart, credential change, or destructive action after an ambiguous
+  result; inspect state read-only, preserve its approval and expected-head
+  rules, and never print tokens or secrets.
 - Treat the default shared gateway service as sacred: tester/consumer/rescue runtimes must use explicit profile/config/state/port isolation instead of plain `openclaw gateway install`.
 - Only replace the default shared gateway service intentionally, via `openclaw gateway install --force --allow-shared-service-takeover`.
 - When adding a new `AGENTS.md`, add a sibling `CLAUDE.md` symlink to it.

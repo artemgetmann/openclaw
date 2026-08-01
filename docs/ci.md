@@ -59,6 +59,14 @@ Fast path for normal PRs:
 scripts/pr-merge watch-auto <PR>
 ```
 
+Before GitHub reads or mutation, the helper performs the canonical
+secret-silent authenticated API preflight from
+`docs/agent-guides/workflow.md`. A restricted failure is indeterminate until
+the same read-only probe succeeds in authorized host context or an authenticated
+connector confirms access. The release worker selects one mutation transport
+and binds merge or auto-merge to the tested head; an ambiguous mutation result
+is reconciled read-only and is never retried automatically.
+
 GitHub Copilot pull-request review is disabled for this repository because the
 current account has no code-review entitlement. Do not request `@copilot` or
 wait for a Copilot artifact. The legacy `copilot-check` command remains only as
@@ -160,8 +168,8 @@ For normal OpenClaw PR CI and merge automation, prefer the repo helpers over
 manual `gh pr checks` parsing:
 
 - `bash scripts/pr-merge-fastpath.sh <PR>` for compact required-check proof,
-  safe `BEHIND` or `DIRTY` branch update, and squash auto-merge without
-  `--admin`.
+  fail-closed `BEHIND` or `DIRTY` detection, and expected-head squash
+  auto-merge without `--admin`. The helper does not update a stale branch.
 - `scripts/pr-required-status.sh --pr <PR> --wait` when present for quiet
   `pr-required` waiting without noisy optional rollups.
 - `scripts/pr-merge verify <PR>` when a full prepared-artifact merge gate is
@@ -179,11 +187,13 @@ PR and required-check workflows should run on GitHub-hosted runners and
 through Blacksmith runners or sticky disks; a missing third-party runner should
 never leave a mergeable PR in a long-lived queued state.
 
-Treat GitHub `BEHIND` and `DIRTY` merge states as branch-update-needed. If
-`gh pr update-branch` or the fast-path helper reports conflicts after a
-reused branch was squash-merged earlier, stop fighting the branch shape: create
-a clean branch from current `main`, cherry-pick only the intended commits, open
-a replacement PR, and close the conflicted PR with a short explanation.
+Treat GitHub `BEHIND` and `DIRTY` merge states as builder-refresh-needed. The
+fast-path helper stops before mutation so the builder can refresh or rebase the
+candidate, repeat affected proof, and obtain a fresh tester receipt for the new
+head. If that refresh conflicts after a reused branch was squash-merged earlier,
+stop fighting the branch shape: create a clean branch from current `main`,
+cherry-pick only the intended commits, open a replacement PR, and close the
+conflicted PR with a short explanation.
 
 ## Proof Levels
 

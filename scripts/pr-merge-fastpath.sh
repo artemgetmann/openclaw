@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/github-auth-preflight.sh
+source "${ROOT_DIR}/scripts/lib/github-auth-preflight.sh"
+
 DRY_RUN=0
 PR_NUMBER=""
 
@@ -45,14 +49,6 @@ parse_args() {
   fi
 }
 
-run_or_print() {
-  if [[ "${DRY_RUN}" == "1" ]]; then
-    log "dry-run: $*"
-    return 0
-  fi
-  "$@"
-}
-
 required_check_state() {
   local checks_json="$1"
   node --input-type=module - "${checks_json}" <<'JS'
@@ -82,6 +78,7 @@ has_failed_required_check() {
 
 main() {
   parse_args "$@"
+  openclaw_github_preflight "${OPENCLAW_GITHUB_CONTEXT:-restricted}" host-gh
 
   local pr_json=""
   pr_json="$(gh pr view "${PR_NUMBER}" --json number,headRefOid,mergeStateStatus,isCrossRepository)"
@@ -99,7 +96,10 @@ JS
 )"
 
   local checks_json=""
-  checks_json="$(gh pr checks "${PR_NUMBER}" --json name,state 2>/dev/null || printf '[]')"
+  if ! checks_json="$(gh pr checks "${PR_NUMBER}" --json name,state 2>/dev/null)"; then
+    log "result=indeterminate-required-check-read-failed"
+    return 75
+  fi
   local required_state=""
   required_state="$(required_check_state "${checks_json}")"
 
@@ -108,9 +108,8 @@ JS
   log "required_checks=$(printf '%s' "${required_state}" | paste -sd ',' -)"
 
   if [[ "${merge_state}" == "BEHIND" || "${merge_state}" == "DIRTY" ]]; then
-    run_or_print gh pr update-branch "${PR_NUMBER}"
-    log "result=update-branch-requested"
-    return 0
+    log "result=blocked-builder-refresh-required"
+    return 1
   fi
 
   if has_failed_required_check "${required_state}"; then
@@ -119,12 +118,22 @@ JS
   fi
 
   if has_pending_required_check "${required_state}"; then
-    run_or_print gh pr merge "${PR_NUMBER}" --squash --auto
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      log "dry-run: gh pr merge ${PR_NUMBER} --squash --auto --match-head-commit ${head_sha}"
+    else
+      openclaw_github_pr_mutation_once "${PR_NUMBER}" "${head_sha}" \
+        gh pr merge "${PR_NUMBER}" --squash --auto --match-head-commit "${head_sha}"
+    fi
     log "result=auto-merge-enabled"
     return 0
   fi
 
-  run_or_print gh pr merge "${PR_NUMBER}" --squash
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    log "dry-run: gh pr merge ${PR_NUMBER} --squash --match-head-commit ${head_sha}"
+  else
+    openclaw_github_pr_mutation_once "${PR_NUMBER}" "${head_sha}" \
+      gh pr merge "${PR_NUMBER}" --squash --match-head-commit "${head_sha}"
+  fi
   log "result=merged-or-merge-requested"
 }
 
