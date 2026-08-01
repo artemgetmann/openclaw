@@ -229,6 +229,27 @@ function makeBaseState(pr, candidate, builder, previous) {
   };
 }
 
+function testerRouting(testKind, transport, builder) {
+  // Make the dispatcher and routing decision auditable. The release worker
+  // must never infer either from a worker name or from conversational context.
+  return {
+    dispatcher: { role: "builder", threadId: builder.threadId, hostId: builder.hostId },
+    decision: transport === "nested-read-only" ? "nested-eligible" : "user-visible-required",
+    rationale:
+      transport === "nested-read-only"
+        ? [
+            "short-lived deterministic immutable-head read-only validation",
+            "no protected resource, external effect, cleanup duty, long wait, user decision, or durable-transcript need",
+          ]
+        : [
+            testKind === "live-external"
+              ? "live or external validation requires an independently addressable task"
+              : "validation requires an independently addressable durable task",
+            "archive the exact tester task only after its terminal receipt is recorded",
+          ],
+  };
+}
+
 function ownerPrompt(role, state) {
   const { candidate, builder } = state;
   const testerReceipt = role === "release" ? state.tester?.receipt : null;
@@ -241,6 +262,9 @@ function ownerPrompt(role, state) {
     `Diff: ${candidate.diffFingerprint}; ${candidate.changedPaths.join(", ")}`,
     `Claim / acceptance: ${candidate.acceptance}`,
     `Builder: thread=${builder.threadId} host=${builder.hostId}`,
+    role === "tester"
+      ? `Dispatch: role=${state.tester.routing.dispatcher.role}; decision=${state.tester.routing.decision}; rationale=${state.tester.routing.rationale.join(" | ")}`
+      : `Tester dispatch: role=${state.tester.receipt.routing.dispatcher.role}; decision=${state.tester.receipt.routing.decision}; rationale=${state.tester.receipt.routing.rationale.join(" | ")}`,
     `PR contract (builder proof, risks, overlap, and remaining proof):\n${candidate.prContract}`,
     role === "tester"
       ? `Scope: falsify the fixed acceptance criteria on this exact head; do not edit source, merge, deploy, or expand scope.`
@@ -249,7 +273,7 @@ function ownerPrompt(role, state) {
       ? `Constraints: return one terminal receipt; preserve source/runtime/live proof boundaries; perform external or live actions only when explicitly granted in this task.`
       : `Authority: normal non-admin merge only. No bypass, admin override, deploy, restart, package, install, shared-runtime mutation, or product release.`,
     role === "tester"
-      ? `Handback: send the builder a JSON receipt matching scripts/pr-lifecycle record-test-receipt, including exact task identity, head, diff, PASS|FAIL, evidence, cleanup, and limitations.`
+      ? `Handback: send the builder a JSON receipt matching scripts/pr-lifecycle record-test-receipt, including the emitted routing object, exact task identity, head, diff, PASS|FAIL, evidence, cleanup, and limitations.`
       : `Handback: verify current head/diff/checks/reviews, merge only if every gate passes, send the merge receipt, then archive the exact builder thread above.`,
     `Read AGENTS.md, CONSUMER.md, docs/agent-guides/workflow.md, and docs/agent-guides/fleet-resource-control.md before acting. Never route live/external testing or release through a nested sub-agent.`,
   ].join("\n");
@@ -336,11 +360,13 @@ function handoffTest(pr, options) {
     }
 
     const contractId = randomUUID();
+    const routing = testerRouting(testKind, transport, builder);
     state.tester = {
       phase: "handoff-pending",
       contractId,
       testKind,
       transport,
+      routing,
       owner: null,
       receipt: null,
       closure: null,
@@ -354,6 +380,7 @@ function handoffTest(pr, options) {
         action: transport === "user-visible-task" ? "create_thread" : "spawn_nested_read_only",
         contractId,
         transport,
+        routing,
         candidate,
         nativeTool:
           transport === "user-visible-task"
@@ -430,6 +457,7 @@ function recordTestReceipt(pr, options) {
       receipt.owner?.threadId === expected.owner.threadId &&
       receipt.owner?.hostId === expected.owner.hostId;
     const validCleanup = ["complete", "not-required"].includes(receipt.cleanup?.status);
+    const validRouting = JSON.stringify(receipt.routing) === JSON.stringify(expected.routing);
     if (
       receipt.schemaVersion !== SCHEMA_VERSION ||
       receipt.role !== "tester" ||
@@ -438,13 +466,14 @@ function recordTestReceipt(pr, options) {
       receipt.headSha !== candidate.headSha ||
       receipt.diffFingerprint !== candidate.diffFingerprint ||
       !validOwner ||
+      !validRouting ||
       !Array.isArray(receipt.evidence) ||
       receipt.evidence.length === 0 ||
       !validCleanup ||
       !Array.isArray(receipt.limitations)
     ) {
       fail(
-        "tester receipt is incomplete or does not match the immutable candidate and exact owner",
+        "tester receipt is incomplete or does not match the immutable candidate, dispatcher routing, and exact owner",
       );
     }
     expected.receipt = receipt;
@@ -526,6 +555,8 @@ function handoffRelease(pr, options) {
     if (
       state.tester?.phase !== "closed" ||
       state.tester?.receipt?.status !== "PASS" ||
+      state.tester?.receipt?.routing?.dispatcher?.role !== "builder" ||
+      state.tester?.receipt?.routing?.decision !== state.tester?.routing?.decision ||
       state.tester?.closure?.type !== requiredClosure
     ) {
       fail(

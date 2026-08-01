@@ -90,6 +90,10 @@ claim and fixed acceptance criteria, completed proof, relevant checks, known
 risks, and remaining proof. It invokes `scripts/pr-lifecycle handoff-test` so
 the command confirms that no tester already owns that candidate, then consumes
 the emitted transport contract exactly once.
+The handoff contract records `dispatcher.role=builder` plus the structured
+nested-eligibility or user-visible-routing rationale. This is receipt data, not
+an inference from the worker name. A release worker rejects a tester receipt
+that omits or changes either field.
 
 ### 2. One independent tester validates one immutable head
 
@@ -98,7 +102,8 @@ falsify the fixed acceptance criteria on that exact head, including the smallest
 relevant edge path. It does not change implementation code, relax criteria,
 expand scope, merge, deploy, or claim proof for another head. It reports one
 terminal `PASS` or `FAIL` receipt with its exact worker identity, tested head and
-diff identity, evidence, cleanup state, and unresolved limitations.
+diff identity, the unchanged dispatcher/routing object, evidence, cleanup state,
+and unresolved limitations.
 
 A user-visible live tester additionally proves exact immutable source and
 runtime provenance, uses stable isolated identities, and runs exactly one bounded

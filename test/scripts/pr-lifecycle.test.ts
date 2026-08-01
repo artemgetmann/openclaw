@@ -190,6 +190,7 @@ describe("scripts/pr-lifecycle", () => {
       JSON.stringify({
         schemaVersion: 1,
         role: "tester",
+        routing: tester.routing,
         contractId: tester.contractId,
         status: "PASS",
         headSha: tester.candidate?.headSha,
@@ -297,6 +298,7 @@ describe("scripts/pr-lifecycle", () => {
       JSON.stringify({
         schemaVersion: 1,
         role: "tester",
+        routing: tester.routing,
         contractId: tester.contractId,
         status: "PASS",
         headSha: tester.candidate?.headSha,
@@ -328,6 +330,10 @@ describe("scripts/pr-lifecycle", () => {
       "builder-host",
     ]);
     expect(tester.action).toBe("spawn_nested_read_only");
+    expect(tester.routing).toMatchObject({
+      dispatcher: { role: "builder", threadId: "builder-thread", hostId: "builder-host" },
+      decision: "nested-eligible",
+    });
 
     run(fixture, [
       "accept-test-owner",
@@ -345,6 +351,7 @@ describe("scripts/pr-lifecycle", () => {
       JSON.stringify({
         schemaVersion: 1,
         role: "tester",
+        routing: tester.routing,
         contractId: tester.contractId,
         status: "PASS",
         headSha: tester.candidate?.headSha,
@@ -384,6 +391,52 @@ describe("scripts/pr-lifecycle", () => {
     expect(release.action).toBe("create_thread");
   });
 
+  it("rejects a tester receipt that omits the builder dispatcher rationale", () => {
+    const fixture = makeFixture();
+    const tester = run(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "read-only",
+      "--transport",
+      "nested-read-only",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "nested-agent-id",
+      "--host-id",
+      "nested-agent",
+    ]);
+    const receiptPath = path.join(fixture.root, "missing-routing-receipt.json");
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        contractId: tester.contractId,
+        status: "PASS",
+        headSha: tester.candidate?.headSha,
+        diffFingerprint: tester.candidate?.diffFingerprint,
+        owner: { threadId: "nested-agent-id", hostId: "nested-agent" },
+        evidence: ["deterministic source proof passed"],
+        cleanup: { status: "not-required" },
+        limitations: [],
+      }),
+    );
+
+    const result = runFailure(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("dispatcher routing");
+  });
+
   it("keeps one release owner across a repaired head and resumes it after fresh proof", () => {
     const fixture = makeFixture();
     const firstTester = beginLiveTester(fixture);
@@ -403,6 +456,7 @@ describe("scripts/pr-lifecycle", () => {
       JSON.stringify({
         schemaVersion: 1,
         role: "tester",
+        routing: firstTester.routing,
         contractId: firstTester.contractId,
         status: "PASS",
         headSha: firstTester.candidate?.headSha,
@@ -497,6 +551,7 @@ describe("scripts/pr-lifecycle", () => {
       JSON.stringify({
         schemaVersion: 1,
         role: "tester",
+        routing: repairedTester.routing,
         contractId: repairedTester.contractId,
         status: "PASS",
         headSha: repairedTester.candidate?.headSha,
