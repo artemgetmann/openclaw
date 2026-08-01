@@ -3097,7 +3097,7 @@ export async function runEmbeddedAttempt(
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
         messagesSnapshot,
-        turnMessages: messagesSnapshot.slice(prePromptMessageCount),
+        turnMessages: subscription.getTurnToolResults(),
         assistantTexts,
         assistantPhases: assistantPhases.slice(),
         toolMetas: toolMetasNormalized,

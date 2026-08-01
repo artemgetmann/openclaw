@@ -44,6 +44,8 @@ export type EmbeddedPiSubscribeState = {
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   lastToolError?: ToolErrorSummary;
+  /** Tool results emitted by this run, independent of compacted session indices. */
+  turnToolResults: AgentMessage[];
 
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;
@@ -161,6 +163,7 @@ export type ToolHandlerState = Pick<
   | "toolMetas"
   | "toolSummaryById"
   | "lastToolError"
+  | "turnToolResults"
   | "pendingMessagingTargets"
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"

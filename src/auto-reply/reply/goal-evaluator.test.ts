@@ -51,7 +51,7 @@ describe("independent goal evaluator", () => {
           text: JSON.stringify({
             verdict: "satisfied",
             reason: "The supplied health result proves the objective.",
-            evidence: ["assistant_final: health check passed"],
+            evidence: ["tool_result:exec: health check passed"],
             material_progress: true,
           }),
         },
@@ -64,12 +64,12 @@ describe("independent goal evaluator", () => {
     const first = await runIndependentGoalEvaluator({
       goal,
       run,
-      evidence: ["assistant_final: health check passed"],
+      evidence: ["tool_result:exec: health check passed"],
     });
     const second = await runIndependentGoalEvaluator({
       goal,
       run,
-      evidence: ["assistant_final: health check passed"],
+      evidence: ["tool_result:exec: health check passed"],
     });
 
     expect(first).toMatchObject({ kind: "evaluated", result: { verdict: "satisfied" } });
@@ -97,7 +97,7 @@ describe("independent goal evaluator", () => {
       runIndependentGoalEvaluator({
         goal,
         run: { ...run, provider: "claude-bridge" },
-        evidence: ["assistant_final: health check passed"],
+        evidence: ["tool_result:exec: health check passed"],
       }),
     ).resolves.toEqual({ kind: "unsupported_provider", provider: "claude-bridge" });
     expect(mocks.runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -107,7 +107,7 @@ describe("independent goal evaluator", () => {
     const result = await runIndependentGoalEvaluator({
       goal,
       run,
-      evidence: ["assistant_final: approval is required"],
+      evidence: ["tool_result:exec: approval is required"],
       deterministicApprovalPromptSent: true,
     });
 
@@ -128,12 +128,12 @@ describe("independent goal evaluator", () => {
       runIndependentGoalEvaluator({
         goal,
         run,
-        evidence: ["assistant_final: health check passed"],
+        evidence: ["tool_result:exec: health check passed"],
       }),
     ).resolves.toMatchObject({ kind: "failed" });
   });
 
-  it("collects only bounded runtime-owned final and verified-send evidence", () => {
+  it("treats final prose as an untrusted claim and keeps runtime-owned proof", () => {
     expect(
       collectGoalEvaluationEvidence({
         payloads: [{ text: "Done." }],
@@ -154,13 +154,12 @@ describe("independent goal evaluator", () => {
       }),
     ).toEqual([
       "tool_result:exec: 10 tests passed",
-      "assistant_final: Done.",
       "verified_message_send_text: Vendor notified.",
       "verified_message_send_target: telegram:123",
     ]);
   });
 
-  it("treats failed tool results as deterministic failure evidence", async () => {
+  it("treats an unresolved tool failure as deterministic failure evidence", async () => {
     const evidence = collectGoalEvaluationEvidence({
       payloads: [{ text: "Done." }],
       transcriptMessages: [
@@ -172,12 +171,75 @@ describe("independent goal evaluator", () => {
         },
       ],
     });
-    const result = await runIndependentGoalEvaluator({ goal, run, evidence });
+    const result = await runIndependentGoalEvaluator({
+      goal,
+      run,
+      evidence,
+      unresolvedToolError: true,
+    });
 
     expect(result).toMatchObject({
       kind: "evaluated",
       result: { verdict: "needs_revision" },
     });
     expect(mocks.runEmbeddedPiAgent).not.toHaveBeenCalled();
+  });
+
+  it("lets the judge inspect a recovered error followed by stronger proof", async () => {
+    mocks.runEmbeddedPiAgent.mockResolvedValue({
+      payloads: [
+        {
+          text: JSON.stringify({
+            verdict: "satisfied",
+            reason: "The successful retry proves the objective.",
+            evidence: ["tool_result:exec: tests passed"],
+            material_progress: true,
+          }),
+        },
+      ],
+      meta: { durationMs: 1 },
+    });
+    const evidence = ["runtime_error: exec failed: transient", "tool_result:exec: tests passed"];
+
+    await expect(runIndependentGoalEvaluator({ goal, run, evidence })).resolves.toMatchObject({
+      kind: "evaluated",
+      result: { verdict: "satisfied" },
+    });
+    expect(mocks.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates exact long evidence citations without truncating them", async () => {
+    const longEvidence = `tool_result:exec: ${"x".repeat(700)}`;
+    mocks.runEmbeddedPiAgent.mockResolvedValue({
+      payloads: [
+        {
+          text: JSON.stringify({
+            verdict: "satisfied",
+            reason: "The exact long output proves the objective.",
+            evidence: [longEvidence],
+            material_progress: true,
+          }),
+        },
+      ],
+      meta: { durationMs: 1 },
+    });
+
+    await expect(
+      runIndependentGoalEvaluator({ goal, run, evidence: [longEvidence] }),
+    ).resolves.toMatchObject({ kind: "evaluated", result: { verdict: "satisfied" } });
+  });
+
+  it("retains the newest evidence when the packet exceeds its bound", () => {
+    const transcriptMessages = Array.from({ length: 14 }, (_, index) => ({
+      role: "toolResult",
+      toolName: "exec",
+      content: [{ type: "text", text: `result-${index + 1}` }],
+    }));
+
+    const evidence = collectGoalEvaluationEvidence({ payloads: [], transcriptMessages });
+
+    expect(evidence).toHaveLength(12);
+    expect(evidence[0]).toBe("tool_result:exec: result-3");
+    expect(evidence.at(-1)).toBe("tool_result:exec: result-14");
   });
 });

@@ -897,6 +897,7 @@ async function runReplyAgentWithFinalizationOwnership(
         },
         evidence,
         workingTurnAborted: candidate.runResult.meta?.aborted,
+        unresolvedToolError: candidate.runResult.unresolvedToolError,
         deterministicApprovalPromptSent: candidate.runResult.didSendDeterministicApprovalPrompt,
       });
       if (evaluation.kind !== "evaluated") {

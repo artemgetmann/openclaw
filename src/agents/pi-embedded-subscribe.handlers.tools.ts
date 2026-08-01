@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
@@ -47,6 +47,7 @@ type ToolStartRecord = {
 
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
+const MAX_TURN_TOOL_RESULTS = 200;
 
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
@@ -582,6 +583,21 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const evidenceText = extractToolResultText(sanitizedResult);
+  // Capture the result when the runtime emits it. Session compaction can
+  // restructure message indices later, but it cannot erase this run-local
+  // evidence stream.
+  ctx.state.turnToolResults.push({
+    role: "toolResult",
+    toolCallId,
+    toolName,
+    content: evidenceText ? [{ type: "text", text: evidenceText }] : [],
+    isError: isToolError,
+    timestamp: Date.now(),
+  } as AgentMessage);
+  if (ctx.state.turnToolResults.length > MAX_TURN_TOOL_RESULTS) {
+    ctx.state.turnToolResults.splice(0, ctx.state.turnToolResults.length - MAX_TURN_TOOL_RESULTS);
+  }
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);

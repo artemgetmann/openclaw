@@ -77,6 +77,8 @@ export type EmbeddedPiRunResult = {
   didSendViaMessagingTool?: boolean;
   /** True when runtime policy already emitted an approval prompt for this turn. */
   didSendDeterministicApprovalPrompt?: boolean;
+  /** True only when the turn ended with a tool failure that was not recovered. */
+  unresolvedToolError?: boolean;
   // Texts successfully sent via messaging tools during the run.
   messagingToolSentTexts?: string[];
   // Media URLs successfully sent via messaging tools during the run.

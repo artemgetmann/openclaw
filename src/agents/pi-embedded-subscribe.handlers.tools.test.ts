@@ -52,6 +52,7 @@ function createTestContext(): {
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
+      turnToolResults: [],
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -148,11 +149,23 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
         toolName: "cron",
         toolCallId: "tool-cron-1",
         isError: false,
-        result: { details: { status: "ok" } },
+        result: {
+          content: [{ type: "text", text: "cron added" }],
+          details: { status: "ok" },
+        },
       } as never,
     );
 
     expect(ctx.state.successfulCronAdds).toBe(1);
+    expect(ctx.state.turnToolResults).toEqual([
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "tool-cron-1",
+        toolName: "cron",
+        content: [{ type: "text", text: "cron added" }],
+        isError: false,
+      }),
+    ]);
   });
 
   it("does not increment successfulCronAdds when cron add fails", async () => {

@@ -99,10 +99,10 @@ export function collectGoalEvaluationEvidence(params: {
     }
   }
   for (const payload of params.payloads) {
-    const text = normalizeText(payload.text);
-    if (text) {
-      evidence.push(`assistant_final: ${text}`);
-    }
+    // The working model's final prose is the claim being graded, not proof of
+    // that claim. In particular, it cannot prove that another person or system
+    // confirmed an outcome. Durable proof must come from tool results or
+    // runtime-verified sends.
     if (payload.isError) {
       evidence.push("runtime_error: final payload was marked as an error");
     }
@@ -118,7 +118,10 @@ export function collectGoalEvaluationEvidence(params: {
     const to = normalizeText(target.to, 200) ?? "unknown";
     evidence.push(`verified_message_send_target: ${provider}:${to}`);
   }
-  return [...new Set(evidence)].slice(0, MAX_EVIDENCE_ITEMS);
+  // Keep the newest bounded evidence. Successful retries and verified sends
+  // occur after earlier attempts, so retaining the tail prevents stale or
+  // failed work from crowding out the proof that actually closed the turn.
+  return [...new Set(evidence)].slice(-MAX_EVIDENCE_ITEMS);
 }
 
 function buildJudgePrompt(params: { goal: SessionGoal; evidence: string[] }): string {
@@ -150,7 +153,10 @@ function parseJudgeResult(text: string, allowedEvidence: string[]): GoalEvaluato
   const reason = normalizeText(raw.reason, 500);
   const evidence = Array.isArray(raw.evidence)
     ? raw.evidence
-        .map((value) => normalizeText(value, 500))
+        // Validate the exact supplied string before persistence applies its
+        // smaller audit-history cap. Truncating here makes valid long citations
+        // impossible to match against the evidence packet.
+        .map((value) => normalizeText(value, MAX_EVIDENCE_CHARS))
         .filter((value): value is string => Boolean(value))
         .slice(0, 8)
     : [];
@@ -188,6 +194,7 @@ export async function runIndependentGoalEvaluator(params: {
   run: GoalEvaluatorRun;
   evidence: string[];
   workingTurnAborted?: boolean;
+  unresolvedToolError?: boolean;
   deterministicApprovalPromptSent?: boolean;
 }): Promise<GoalEvaluatorResult> {
   if (!params.goal.pendingEvaluation) {
@@ -197,10 +204,7 @@ export async function runIndependentGoalEvaluator(params: {
   // Deterministic runtime facts outrank another model call. An aborted/error
   // turn cannot prove completion, and an already-issued approval prompt must
   // remain an approval gate rather than being reinterpreted by a grader.
-  if (
-    params.workingTurnAborted ||
-    params.evidence.some((item) => item.startsWith("runtime_error:"))
-  ) {
+  if (params.workingTurnAborted || params.unresolvedToolError) {
     return {
       kind: "evaluated",
       result: {

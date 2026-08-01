@@ -1925,7 +1925,20 @@ describe("runReplyAgent independent goal evaluation", () => {
               proposedStatus: "complete",
               reason: "The first check looked healthy.",
             });
-            return { payloads: [{ text: "First result." }], meta: {} };
+            return {
+              payloads: [{ text: "First result." }],
+              transcriptMessages: [
+                {
+                  role: "toolResult",
+                  toolCallId: "health-stale",
+                  toolName: "exec",
+                  content: [{ type: "text", text: "stale health check" }],
+                  isError: false,
+                  timestamp: Date.now(),
+                },
+              ],
+              meta: {},
+            };
           }
           if (callCount === 2) {
             expect(params.disableTools).toBe(true);
@@ -1935,7 +1948,7 @@ describe("runReplyAgent independent goal evaluation", () => {
                   text: JSON.stringify({
                     verdict: "needs_revision",
                     reason: "A fresh health result is missing.",
-                    evidence: ["assistant_final: First result."],
+                    evidence: ["tool_result:exec: stale health check"],
                     material_progress: true,
                   }),
                 },
