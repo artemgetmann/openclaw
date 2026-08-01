@@ -2206,6 +2206,16 @@ EOF
   [[ ! -s "$marker" ]] || fail "Node eval executed before the decoy canonical entrypoint"
   grep -Fq "guarded command is not this package's OpenClaw CLI" "$stderr_path" ||
     fail "Node eval lifecycle bypass omitted its fail-closed reason"
+
+  set +e
+  "$ROOT_DIR/scripts/gateway-lifecycle-command.sh" \
+    local-script -- /bin/bash "$TMP_DIR/not-the-canonical-restart-script.sh" \
+    2>"$stderr_path"
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "arbitrary local restart script returned $status instead of 75"
+  grep -Fq "guarded local restart script is not canonical" "$stderr_path" ||
+    fail "arbitrary local restart script omitted its fail-closed reason"
   pass "canonical lifecycle command preserves restart argv and rejects other CLI shapes"
 }
 

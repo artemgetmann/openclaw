@@ -16,11 +16,7 @@ import {
   writeRestartSentinel,
   type RestartSentinelPayload,
 } from "../../infra/restart-sentinel.js";
-import {
-  isSafeLocalRestartScriptAvailable,
-  scheduleGatewaySigusr1Restart,
-  triggerOpenClawRestart,
-} from "../../infra/restart.js";
+import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
@@ -755,46 +751,12 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  const preferLocalScriptRestart =
-    process.platform === "darwin" &&
-    commandSurface.length > 0 &&
-    isSafeLocalRestartScriptAvailable();
-  // Any live chat surface on macOS can be hosted by the same gateway process
-  // tree it is trying to restart. Prefer the detached local restart script so
-  // the command can return before launchctl tears the session down. The
-  // canonical shared main LaunchAgent is excluded because the helper reinstalls
-  // a lane-local service and must never take over ai.openclaw.gateway.
-  if (preferLocalScriptRestart) {
-    const restartMethod = await triggerOpenClawRestart({ preferLocalScript: true });
-    if (!restartMethod.ok) {
-      // The trigger failed synchronously, so this command still owns the
-      // sentinel it just wrote. Remove it to prevent a later unrelated restart
-      // from producing a false completion receipt.
-      await consumeRestartSentinel().catch(() => undefined);
-      const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `⚠️ Restart failed (${restartMethod.method}).${detail}`,
-        },
-      };
-    }
-    const usedLocalScript =
-      typeof restartMethod.detail === "string" &&
-      restartMethod.detail.startsWith("scheduled local restart script:");
-    return {
-      shouldContinue: false,
-      reply: {
-        text: usedLocalScript
-          ? "⚙️ Restart queued via the local restart script. I’ll confirm here when the gateway is back online."
-          : `⚙️ Restart queued via ${restartMethod.method}. I’ll confirm here when the gateway is back online.`,
-      },
-    };
-  }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   if (hasSigusr1Listener) {
-    // Keep restart breadcrumbs pinned to the explicit slash command so chat
-    // text never looks executable in logs or postmortems.
+    // The run loop converts this authorized signal into the guarded detached
+    // launchd handoff before it drains or closes ingress. Keeping the current
+    // process alive until that admission is acknowledged preserves the chat
+    // receipt without falling back to an unguarded lane-local helper.
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,

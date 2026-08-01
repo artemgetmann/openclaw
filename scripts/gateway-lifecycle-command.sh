@@ -72,6 +72,25 @@ validate_cli_restart() {
   exec "$command_path" "${args[@]}"
 }
 
+run_local_restart_script() {
+  [[ "$#" -eq 3 && "$1" == "--" ]] ||
+    fail_closed "invalid guarded local restart command"
+
+  local shell_path=""
+  local script_path=""
+  shell_path="$(resolve_path "$2" || true)"
+  script_path="$(resolve_path "$3" || true)"
+  [[ "$shell_path" == "$(resolve_path /bin/bash || true)" ]] ||
+    fail_closed "guarded local restart shell is not /bin/bash"
+  [[ "$script_path" == "$(resolve_path "$ROOT_DIR/scripts/restart-local-gateway.sh" || true)" ]] ||
+    fail_closed "guarded local restart script is not canonical"
+
+  # Keep the wrapper as the direct parent for the complete synchronous script.
+  # The script validates inherited PID/start-time ownership before reaching any
+  # install, signal, or launchctl mutation.
+  exec "$shell_path" "$script_path"
+}
+
 validate_handoff_target() {
   local service_target="$1"
   local domain="$2"
@@ -211,6 +230,10 @@ case "${1:-}" in
   cli)
     shift
     validate_cli_restart "$@"
+    ;;
+  local-script)
+    shift
+    run_local_restart_script "$@"
     ;;
   handoff)
     shift
