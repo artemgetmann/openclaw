@@ -110,6 +110,8 @@ registry under the OpenClaw state directory. The record contains its scoped
 capability and exact Jarvis/native-thread routing, but no task prompt, Telegram
 credential, chat id, or topic authority. A delivered `complete` callback closes
 the route; other statuses advance its next sequence for later same-thread use.
+Completed-route receipts are retained for up to 30 days and pruned oldest-first
+when the bounded registry needs room for a new route.
 
 Accepted async relays are recorded in an atomic owner-only registry under the
 OpenClaw state directory before acceptance returns to Jarvis. The record binds

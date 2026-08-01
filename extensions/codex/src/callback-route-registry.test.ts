@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -137,6 +137,39 @@ describe("CodexCallbackRouteRegistry", () => {
     ).rejects.toThrow("reused with different content");
   });
 
+  it("rejects a different callback while one delivery claim is ambiguous", async () => {
+    const { filePath, registry } = await createRegistry();
+    const route = await registry.acquire({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+    });
+    await registry.claimCallback({
+      routeId: route.routeId,
+      capability: route.capability,
+      sourceThreadId: "thread-1",
+      callback: progress,
+    });
+
+    await expect(
+      registry.claimCallback({
+        routeId: route.routeId,
+        capability: route.capability,
+        sourceThreadId: "thread-1",
+        callback: { ...progress, callbackId: "different-progress" },
+      }),
+    ).rejects.toThrow("only its exact retry is allowed");
+
+    // The rejected claim must not poison shared state for this or any other
+    // route when a new process reconstructs the registry.
+    const restored = new CodexCallbackRouteRegistry(filePath);
+    await expect(
+      restored.acquire({
+        threadId: "thread-2",
+        sessionKey: "agent:main:telegram:direct:owner",
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-2" });
+  });
+
   it("rejects corrupt persisted routing before it can wake another session", async () => {
     const { filePath, registry } = await createRegistry();
     const route = await registry.acquire({
@@ -205,5 +238,53 @@ describe("CodexCallbackRouteRegistry", () => {
     });
     expect(completion.envelope).not.toHaveProperty("turnId");
     expect(completion.envelope).not.toHaveProperty("relayId");
+  });
+
+  it("prunes completed routes before the bounded registry blocks new work", async () => {
+    const now = 3_000_000_000;
+    const { filePath, registry } = await createRegistry(() => now);
+    const routes = Array.from({ length: 1_000 }, (_, index) => {
+      const callback = {
+        callbackId: `complete-${index}`,
+        sequence: 1,
+        status: "complete" as const,
+        message: `Completed route ${index}.`,
+      };
+      const routeId = `route-${index}`;
+      const threadId = `thread-${index}`;
+      const sessionKey = `agent:main:test:${index}`;
+      return {
+        routeId,
+        capability: `capability-${index}`,
+        threadId,
+        sessionKey,
+        nextSequence: 2,
+        callbacks: [
+          {
+            callbackId: callback.callbackId,
+            sequence: 1,
+            fingerprint: JSON.stringify(callback),
+            delivery: "delivered",
+            envelope: { ...callback, routeId, threadId, sessionKey },
+            startedAtMs: now - index - 1,
+            deliveredAtMs: now - index,
+          },
+        ],
+        createdAtMs: now - index - 1,
+        updatedAtMs: now - index,
+        completedAtMs: now - index,
+      };
+    });
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, `${JSON.stringify({ version: 1, routes })}\n`, "utf8");
+
+    await expect(
+      registry.acquire({
+        threadId: "thread-new",
+        sessionKey: "agent:main:telegram:direct:owner",
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-new" });
+    const persisted = JSON.parse(await readFile(filePath, "utf8")) as { routes: unknown[] };
+    expect(persisted.routes).toHaveLength(1_000);
   });
 });

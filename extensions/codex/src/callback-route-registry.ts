@@ -9,6 +9,7 @@ const FILE_MODE = 0o600;
 const MAX_REGISTRY_BYTES = 2 * 1024 * 1024;
 const MAX_ROUTES = 1_000;
 const MAX_CALLBACKS_PER_ROUTE = 100;
+const COMPLETED_ROUTE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 
 export type CodexDurableCallbackStatus = "progress" | "blocked" | "decision-needed" | "complete";
 
@@ -103,6 +104,11 @@ export class CodexCallbackRouteRegistry {
     agentId?: string;
   }): Promise<CodexCallbackRouteGrant> {
     return await this.mutate((document) => {
+      const timestamp = this.now();
+      // Completion closes a capability, so old completed routes can be
+      // discarded without changing any active routing authority. Keep recent
+      // receipts for exact retry, but always reserve capacity for one new route.
+      pruneCompletedRoutes(document, timestamp);
       const threadId = requireStoredString(input.threadId, "threadId");
       const sessionKey = requireStoredString(input.sessionKey, "sessionKey");
       const activeForThread = document.routes.find(
@@ -123,7 +129,6 @@ export class CodexCallbackRouteRegistry {
       if (document.routes.length >= MAX_ROUTES) {
         throw new Error("Codex callback route registry is full");
       }
-      const timestamp = this.now();
       const route: StoredRoute = {
         routeId: randomUUID(),
         // 256 bits keeps this long-lived, narrowly scoped capability
@@ -230,6 +235,15 @@ export class CodexCallbackRouteRegistry {
           kind: prior.delivery === "delivered" ? "delivered" : "ambiguous",
           envelope: prior.envelope,
         };
+      }
+      const pending = route.callbacks.at(-1);
+      if (pending?.delivery === "started") {
+        // nextSequence deliberately does not advance until delivery is proven.
+        // A different id at that sequence would create two claims for one
+        // sequence and make the entire registry unreadable on restart.
+        throw new Error(
+          `Codex callback ${pending.callbackId} delivery is ambiguous; only its exact retry is allowed`,
+        );
       }
       if (route.completedAtMs !== undefined) {
         throw new Error(`Codex callback route ${route.routeId} already delivered completion`);
@@ -349,6 +363,19 @@ export class CodexCallbackRouteRegistry {
       throw error;
     }
   }
+}
+
+function pruneCompletedRoutes(document: RegistryDocument, now: number): void {
+  const active = document.routes.filter((route) => route.completedAtMs === undefined);
+  const recentCompleted = document.routes
+    .filter(
+      (route): route is StoredRoute & { completedAtMs: number } =>
+        route.completedAtMs !== undefined &&
+        now - route.completedAtMs <= COMPLETED_ROUTE_RETENTION_MS,
+    )
+    .sort((left, right) => right.completedAtMs - left.completedAtMs);
+  const availableCompletedSlots = Math.max(0, MAX_ROUTES - active.length - 1);
+  document.routes = [...active, ...recentCompleted.slice(0, availableCompletedSlots)];
 }
 
 function publicGrant(route: StoredRoute): CodexCallbackRouteGrant {
