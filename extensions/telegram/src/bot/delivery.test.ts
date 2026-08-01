@@ -856,6 +856,48 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("preserves quote-prefixed fenced code beside rich tables and copy-safe drafts", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn();
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: [
+            "| Plan | Owner |",
+            "| --- | --- |",
+            "| Ship | Jarvis |",
+            "",
+            "> Hi Sveta, use https://example.com/booking.",
+            "",
+            "```text",
+            "> keep this literal",
+            "curl https://example.com?a=1>b",
+            "```",
+          ].join("\n"),
+        },
+      ],
+      runtime,
+      bot,
+      tableMode: "block",
+      copySafeBlockquotes: true,
+    });
+
+    const richHtml = sendRichMessage.mock.calls[0]?.[0]?.rich_message?.html as string;
+    expect(richHtml).toContain("<table bordered striped>");
+    expect(richHtml).toContain("Hi Sveta, use https://example.com/booking.");
+    expect(richHtml).toContain("&gt; keep this literal");
+    expect(richHtml).toContain("a=1&gt;b");
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(2);
+    expect(richHtml).not.toContain("<p>keep this literal</p>");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("projects shared interactive buttons onto legacy Telegram messages", async () => {
     const runtime = createRuntime();
     const sendRichMessage = vi.fn().mockResolvedValue({
