@@ -24,6 +24,7 @@ const formatPortDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const ensureGatewayLifecycleLeaseForRestart = vi.fn();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -35,6 +36,11 @@ vi.mock("@clack/prompts", () => ({
 // Mock the update-runner module
 vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(),
+}));
+
+vi.mock("../infra/gateway-lifecycle-lease.js", () => ({
+  ensureGatewayLifecycleLeaseForRestart: (...args: unknown[]) =>
+    ensureGatewayLifecycleLeaseForRestart(...args),
 }));
 
 vi.mock("../infra/openclaw-root.js", () => ({
@@ -235,6 +241,7 @@ describe("update-cli", () => {
     prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
+    ensureGatewayLifecycleLeaseForRestart.mockResolvedValue({ outcome: "held" });
 
     await updateCommand({});
 
@@ -349,6 +356,7 @@ describe("update-cli", () => {
     });
     vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
+    ensureGatewayLifecycleLeaseForRestart.mockResolvedValue({ outcome: "held" });
     vi.mocked(doctorCommand).mockResolvedValue(undefined);
     confirm.mockResolvedValue(false);
     select.mockResolvedValue("stable");
@@ -688,9 +696,46 @@ describe("update-cli", () => {
 
     await withPlatform("darwin", async () => await updateCommand({}));
 
+    expect(ensureGatewayLifecycleLeaseForRestart).toHaveBeenCalledWith({ json: false });
     expect(prepareRestartScript).not.toHaveBeenCalled();
     expect(runRestartScript).not.toHaveBeenCalled();
     expect(runDaemonRestart).toHaveBeenCalledOnce();
+    expect(ensureGatewayLifecycleLeaseForRestart.mock.invocationCallOrder[0]).toBeLessThan(
+      mockedRunDaemonInstall.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("returns before macOS service refresh when the guarded child owns restart", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded.mockResolvedValue(true);
+    ensureGatewayLifecycleLeaseForRestart.mockResolvedValue({
+      outcome: "reexecuted",
+      exitCode: 0,
+    });
+
+    await withPlatform("darwin", async () => await updateCommand({}));
+
+    expect(prepareRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before macOS service refresh when lifecycle admission is unavailable", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded.mockResolvedValue(true);
+    ensureGatewayLifecycleLeaseForRestart.mockResolvedValue({
+      outcome: "reexecuted",
+      exitCode: 75,
+    });
+
+    await withPlatform("darwin", async () => await updateCommand({}));
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(75);
+    expect(prepareRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("updateCommand preserves invocation-relative service env overrides during refresh", async () => {

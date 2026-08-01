@@ -12,6 +12,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { ensureGatewayLifecycleLeaseForRestart } from "../../infra/gateway-lifecycle-lease.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -564,6 +565,24 @@ async function maybeRestartService(params: {
   invocationCwd?: string;
 }): Promise<void> {
   if (params.shouldRestart) {
+    if (process.platform === "darwin" && params.refreshServiceEnv) {
+      // Service-environment refresh is implemented as `gateway install
+      // --force`, which bootouts and bootstraps the LaunchAgent. Admit before
+      // that first mutation, not merely before the later restart. A caller
+      // outside the lease is replaced by the canonical guarded restart child;
+      // the parent must then return because it did not inherit that child's
+      // lease and therefore has no authority to refresh or restart again.
+      const lease = await ensureGatewayLifecycleLeaseForRestart({
+        json: Boolean(params.opts.json),
+      });
+      if (lease.outcome === "reexecuted") {
+        if (lease.exitCode !== 0) {
+          defaultRuntime.exit(lease.exitCode);
+        }
+        return;
+      }
+    }
+
     if (!params.opts.json) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Restarting service..."));
