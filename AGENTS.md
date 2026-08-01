@@ -62,6 +62,12 @@
 - Only replace the default shared gateway service intentionally, via `openclaw gateway install --force --allow-shared-service-takeover`.
 - When adding a new `AGENTS.md`, add a sibling `CLAUDE.md` symlink to it.
 
+## Implementation defaults
+
+- Preserve supported behavior and backward compatibility unless the current task explicitly authorizes a breaking change. When it does, document the scope, migration path, and rollback in the PR.
+- Choose the simplest implementation that fully satisfies the current requirements. Do not add speculative abstractions or compatibility shims for unsupported behavior.
+- Prefer established, well-maintained libraries over custom infrastructure when they materially reduce complexity and long-term risk. Existing dependency approval, security, licensing, bundle-size, and Carbon restrictions still apply.
+
 ## Load only the docs you need
 
 - Product context and current priorities:
