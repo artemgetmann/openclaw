@@ -4,7 +4,6 @@ import type {
   CodexRpcClient,
   CodexServerRequestHandler,
 } from "./app-server-client.js";
-import { JARVIS_CALLBACK_DYNAMIC_TOOL } from "./callback-router.js";
 import { CodexThreadService, requireThreadId } from "./thread-service.js";
 
 class FakeCodexClient implements CodexRpcClient {
@@ -141,7 +140,6 @@ function createService(client: FakeCodexClient) {
     client: async () => client,
     turnTimeoutMs: 5_000,
     defaultWorkspaceDir: "/tmp/codex-pilot",
-    dynamicTools: [JARVIS_CALLBACK_DYNAMIC_TOOL],
   });
 }
 
@@ -188,12 +186,6 @@ describe("CodexThreadService", () => {
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "read-only",
-        dynamicTools: [
-          expect.objectContaining({
-            name: "jarvis_callback",
-            type: "function",
-          }),
-        ],
       },
     });
   });
@@ -485,13 +477,12 @@ describe("CodexThreadService", () => {
     });
   });
 
-  it("keeps callbacks while isolating an implementation delegate", async () => {
+  it("isolates an implementation delegate without installing process-local tools", async () => {
     const client = new FakeCodexClient();
     const service = new CodexThreadService({
       client: async () => client,
       turnTimeoutMs: 5_000,
       defaultWorkspaceDir: "/repo/openclaw",
-      dynamicTools: [JARVIS_CALLBACK_DYNAMIC_TOOL],
       workspaceManager: {
         prepare: async () => ({
           taskMode: "implementation",
@@ -518,7 +509,6 @@ describe("CodexThreadService", () => {
         sandbox: "workspace-write",
         approvalPolicy: "on-request",
         approvalsReviewer: "auto_review",
-        dynamicTools: [expect.objectContaining({ name: "jarvis_callback" })],
       }),
     });
     expect(client.requests[1]).toEqual({

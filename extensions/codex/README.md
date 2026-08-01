@@ -41,21 +41,20 @@ default runtime.
   a delegation-specific payload boundary.
 - Exact return attribution for async relays: the continuation carries the
   native Codex thread and turn ids plus trusted inter-session provenance.
-- Proactive worker callbacks through one Jarvis-owned dynamic App Server tool.
-  The natural message body is carried inside a deterministic envelope binding
-  the delegation, exact native thread and turn, originating Jarvis session,
-  callback id, monotonic sequence, and `progress`, `blocked`,
-  `decision-needed`, or `complete` status.
-- Proactive callbacks are guaranteed only for callback-capable threads created
-  through this App Server client. The pinned App Server protocol cannot install
-  dynamic tools while resuming a pre-existing thread, so those workers may not
-  have `jarvis_callback`; their terminal result still returns through the
-  launcher-owned relay fallback.
-- Callback authority is process-local and turn-scoped. Jarvis accepts the tool
-  request only from its owned App Server connection while the exact
-  delegation/thread/turn grant is active; forged, stale, wrong-turn, malformed,
-  non-monotonic, and receipt-only callbacks fail closed. Exact retries are
-  deduplicated before Jarvis wakes or delivers twice.
+- Proactive worker callbacks through the shipped `openclaw codex-callback`
+  command and an owner-only durable route registry. The natural message body is
+  carried inside a deterministic envelope binding the exact native thread,
+  originating Jarvis session, callback id, monotonic sequence, and `progress`,
+  `blocked`, `decision-needed`, or `complete` status.
+- The route survives the launch turn ending, Gateway/plugin restart, and a
+  later same-thread resume through another transport host such as Slingshot.
+  New delegations do not install the old process-local `jarvis_callback`
+  dynamic tool, because its schema could outlive its callable handler.
+- Callback authority is scoped by an unguessable route capability kept in the
+  owner-only state directory plus the native `CODEX_THREAD_ID`. Forged,
+  cross-thread, malformed, non-monotonic, changed-content, and receipt-only
+  callbacks fail closed. Exact retries after confirmed delivery return the
+  same receipt without waking Jarvis twice.
 - Async replies can target the same native thread through `message_async`;
   while the reported turn is still active, Jarvis uses App Server
   `turn/steer` with the exact expected turn id. After terminal completion, the
@@ -86,22 +85,33 @@ conversation or topic is always explicit.
 
 ## Async relay boundary
 
-The relay covers native turns started by this Jarvis-owned App Server process.
-It does not claim that messages sent through an unrelated Codex process are
-broadcast into this stdio client. Cross-process subscription requires a shared
-supervisor or broker and is outside this compatibility slice.
+The terminal listener covers native turns started by this Jarvis-owned App
+Server process. Proactive callbacks use a separate durable route: a resumed
+worker invokes the local OpenClaw CLI, which authenticates to the Gateway using
+normal service configuration and presents only its narrow callback capability.
+This is request/response delivery, not a cross-process App Server subscription.
 
 The worker does not call `send_message_to_thread` back to Jarvis. A Jarvis
-session is not a native Codex thread address. When available, the scoped
-`jarvis_callback` dynamic tool is the proactive return transport; Jarvis
-validates its server-owned thread/turn identity, wakes the exact originating
-session, and retains ownership of user delivery and Telegram routing. No
-Telegram credential, chat id, or topic authority is exposed to Codex.
+session is not a native Codex thread address. The scoped `codex-callback` CLI is
+the proactive return transport; Jarvis validates the durable route and source
+thread, wakes the exact originating session, and retains ownership of user
+delivery and Telegram routing. No Telegram credential, chat id, or topic
+authority is exposed to Codex.
 
 The launcher-owned terminal listener remains reconciliation fallback. A valid
 `complete` callback suppresses the duplicate terminal wake; if the worker never
-calls back—or the resumed thread does not expose `jarvis_callback`—terminal
-output still reaches the originating Jarvis session.
+calls back or the proactive command fails before acquiring delivery authority,
+terminal output still reaches the originating Jarvis session. If delivery
+becomes ambiguous after its durable claim, Jarvis receives a decision-needed
+handback instead of an unsafe duplicate result.
+
+Callback routes and delivery claims are recorded atomically in an owner-only
+registry under the OpenClaw state directory. The record contains its scoped
+capability and exact Jarvis/native-thread routing, but no task prompt, Telegram
+credential, chat id, or topic authority. A delivered `complete` callback closes
+the route; other statuses advance its next sequence for later same-thread use.
+Completed-route receipts are retained for up to 30 days and pruned oldest-first
+when the bounded registry needs room for a new route.
 
 Accepted async relays are recorded in an atomic owner-only registry under the
 OpenClaw state directory before acceptance returns to Jarvis. The record binds
