@@ -520,6 +520,23 @@ describe("scripts/pr-lifecycle", () => {
     ]);
     expect(blocked.stderr).toContain("owner may still be active");
 
+    const stolen = runFailure(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "read-only",
+      "--transport",
+      "user-visible-task",
+      "--owner-thread",
+      "attacker-thread",
+      "--owner-host",
+      "attacker-host",
+      "--returning-release-contract",
+      release.contractId,
+    ]);
+    expect(stolen.status).toBe(1);
+    expect(stolen.stderr).toContain("builder identity differs from the recorded candidate owner");
+
     const repairedTester = run(fixture, [
       "handoff-test",
       "42",

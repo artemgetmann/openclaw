@@ -305,6 +305,15 @@ function handoffTest(pr, options) {
   const candidate = fetchCandidate(pr);
   return withStateLock(pr, (existing) => {
     let state = existing;
+    if (
+      state &&
+      (state.builder.threadId !== builder.threadId || state.builder.hostId !== builder.hostId)
+    ) {
+      // Validate the durable owner before rebuilding state for a new candidate.
+      // Comparing after makeBaseState would only compare caller input to itself
+      // and would let a repaired-head handoff replace the recorded builder.
+      fail("builder identity differs from the recorded candidate owner");
+    }
     if (state && !sameCandidate(state.candidate, candidate)) {
       const returningFromRelease =
         state.release?.phase === "active" &&
