@@ -54,6 +54,33 @@ Worker transport is part of the ownership contract:
   independently addressable so it can archive or, for a concrete repair, revive
   the exact builder task.
 
+Transport selection is executable, not a memory decision. Immediately before
+tester or release delegation—including after context compaction—the builder
+must invoke the matching `scripts/pr-lifecycle handoff-test` or
+`scripts/pr-lifecycle handoff-release` command. Do not call `spawn_agent` first
+and backfill the receipt later.
+
+The command cannot create a native Codex task from a shell. It therefore makes
+the transition a mandatory two-step gate:
+
+1. The command validates the current GitHub PR/head/diff and existing owner
+   state, reserves one pending handoff, and emits a machine-readable contract.
+2. Only when that contract says `action=create_thread`, the native agent calls
+   `list_projects` then `create_thread`, and immediately records the exact
+   returned thread and host with `accept-test-owner` or
+   `accept-release-owner`.
+
+Re-running a pending or active handoff returns `action=do-not-create`; it never
+authorizes a replacement owner. If native task creation definitely failed, use
+`cancel-pending --confirm-no-thread-created` only after proving no task was
+created. Ambiguous creation fails closed. The command stores local transition
+state under ignored `.local/pr-lifecycle/`; the PR contract remains the durable
+cross-task receipt surface.
+The wrapper first runs the canonical secret-silent GitHub preflight. A
+restricted `status=indeterminate` result requires the same read-only lifecycle
+command to be rerun in authorized host context; it is not proof that the PR or
+GitHub authentication is unavailable.
+
 ### 1. Builder owns the candidate
 
 The builder owns implementation in its isolated worktree, focused local proof,
@@ -64,8 +91,13 @@ refreshes. It never merges its own PR and never deploys.
 When the candidate is ready, the builder records the immutable PR number and
 URL, head SHA, base branch and SHA, diff identity and changed paths, observable
 claim and fixed acceptance criteria, completed proof, relevant checks, known
-risks, and remaining proof. It confirms that no tester already owns that
-candidate, then creates exactly one fresh independent tester.
+risks, and remaining proof. It invokes `scripts/pr-lifecycle handoff-test` so
+the command confirms that no tester already owns that candidate, then consumes
+the emitted transport contract exactly once.
+The handoff contract records `dispatcher.role=builder` plus the structured
+nested-eligibility or user-visible-routing rationale. This is receipt data, not
+an inference from the worker name. A release worker rejects a tester receipt
+that omits or changes either field.
 
 ### 2. One independent tester validates one immutable head
 
@@ -74,7 +106,8 @@ falsify the fixed acceptance criteria on that exact head, including the smallest
 relevant edge path. It does not change implementation code, relax criteria,
 expand scope, merge, deploy, or claim proof for another head. It reports one
 terminal `PASS` or `FAIL` receipt with its exact worker identity, tested head and
-diff identity, evidence, cleanup state, and unresolved limitations.
+diff identity, the unchanged dispatcher/routing object, evidence, cleanup state,
+and unresolved limitations.
 
 A user-visible live tester additionally proves exact immutable source and
 runtime provenance, uses stable isolated identities, and runs exactly one bounded
@@ -94,12 +127,20 @@ rebase, or other head change makes prior tester proof stale; the builder repeats
 affected proof and creates exactly one fresh tester for the new immutable head.
 There is never more than one active tester owner for a PR candidate.
 
+Mechanically, feed the terminal JSON to
+`scripts/pr-lifecycle record-test-receipt`, perform the exact native archival
+or nested-agent resolution it returns, then run `close-test` with the same
+identity. `handoff-release` refuses a stale, failed, incomplete, or unclosed
+tester receipt.
+
 ### 3. One release worker owns merge
 
 Only after a terminal tester `PASS` is recorded and the exact tester lifecycle
 is closed does the builder confirm that no release worker already owns the PR.
-The builder then creates exactly one fresh user-visible project-scoped release
-worker and supplies the immutable PR, head, base, diff, builder proof, tester
+The builder invokes `scripts/pr-lifecycle handoff-release`; only its first
+`action=create_thread` contract may create exactly one fresh user-visible
+project-scoped release worker. The contract supplies the immutable PR, head,
+base, diff, builder identity, tester
 receipt, cleanup receipt, review/check state, dependencies and overlap, risks,
 rollback, remaining proof, and explicit normal-merge authority. Builders and
 testers never merge or deploy.
@@ -116,6 +157,12 @@ discrepancy requires source repair, the release worker may unarchive and steer
 only the exact builder thread, then waits for a new builder packet and fresh
 tester validation for the changed head. It must not create a duplicate builder,
 tester, or release owner.
+
+For that repair loop, the builder passes the exact active release contract to
+`handoff-test --returning-release-contract`. After the repaired head receives a
+fresh tester receipt and closure, `handoff-release` emits
+`action=resume-thread` for the already-recorded release task; it never emits a
+second `create_thread` action.
 
 After a successful merge, the release worker records and sends the merge receipt
 before archiving the exact builder thread. The receipt proves the reviewed head

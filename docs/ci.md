@@ -147,6 +147,12 @@ The release worker should use the helpers below only after the canonical tester
 and handoff gates pass. Runtime changes ship only after merge and only when
 explicitly requested.
 
+Before using any merge helper, the builder must have produced and consumed the
+release contract with `scripts/pr-lifecycle handoff-release`; that command
+fails closed unless the immutable tester `PASS` and exact task closure are
+recorded. The shell emits the contract, while the native agent creates the
+fresh user-visible task and records its exact identity.
+
 Agents should not:
 
 - Enable, disable, or mutate GitHub branch protection, rulesets, required
