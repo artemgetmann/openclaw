@@ -59,7 +59,7 @@ describe("scripts/codex-review.mjs", () => {
     expect(result.status).toBe(7);
   });
 
-  it("classifies readonly Codex state before spawning a review", () => {
+  it("classifies a readonly Codex state directory before spawning a review", () => {
     const stubDirectory = makeCodexStub(
       "process.stderr.write('review spawned'); process.exit(99);\n",
     );
@@ -67,17 +67,23 @@ describe("scripts/codex-review.mjs", () => {
     temporaryDirectories.push(codexHome);
     const statePath = path.join(codexHome, "state_5.sqlite");
     fs.writeFileSync(statePath, "");
-    fs.chmodSync(statePath, 0o444);
+    fs.chmodSync(codexHome, 0o555);
 
-    const result = spawnSync(process.execPath, [SCRIPT_PATH, "--timeout", "5"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CODEX_HOME: codexHome,
-        PATH: `${stubDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      timeout: 10_000,
-    });
+    const result = (() => {
+      try {
+        return spawnSync(process.execPath, [SCRIPT_PATH, "--timeout", "5"], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CODEX_HOME: codexHome,
+            PATH: `${stubDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
+          },
+          timeout: 10_000,
+        });
+      } finally {
+        fs.chmodSync(codexHome, 0o755);
+      }
+    })();
 
     expect(result.status).toBe(75);
     expect(result.stderr).toContain(

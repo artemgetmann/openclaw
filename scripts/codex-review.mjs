@@ -63,16 +63,6 @@ function requireWritableCodexState() {
     // its journal/WAL sidecars. A disposable directory proves the latter
     // without writing to Codex credentials, configuration, or state records.
     probeDirectory = fs.mkdtempSync(path.join(codexHome, ".codex-review-preflight-"));
-
-    // Codex versions may advance the state schema filename. Check every primary
-    // state database present instead of pinning this wrapper to one version.
-    const stateDatabases = fs
-      .readdirSync(codexHome, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && /^state(?:_\d+)?\.sqlite$/.test(entry.name));
-    for (const database of stateDatabases) {
-      const descriptor = fs.openSync(path.join(codexHome, database.name), "r+");
-      fs.closeSync(descriptor);
-    }
   } catch (error) {
     failure = error;
   } finally {
