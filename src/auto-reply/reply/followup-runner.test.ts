@@ -11,6 +11,7 @@ import { createMockFollowupRun, createMockTypingController } from "./test-helper
 const runEmbeddedPiAgentMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
+const maybeApplyTtsToPayloadMock = vi.fn();
 
 vi.mock(
   "../../agents/model-fallback.js",
@@ -19,6 +20,10 @@ vi.mock(
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+}));
+
+vi.mock("../../tts/tts.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => maybeApplyTtsToPayloadMock(params),
 }));
 
 vi.mock("./route-reply.js", async (importOriginal) => {
@@ -65,6 +70,10 @@ beforeEach(() => {
   isRoutableChannelMock.mockReset();
   isRoutableChannelMock.mockImplementation((ch: string | undefined) =>
     Boolean(ch?.trim() && ROUTABLE_TEST_CHANNELS.has(ch.trim().toLowerCase())),
+  );
+  maybeApplyTtsToPayloadMock.mockReset();
+  maybeApplyTtsToPayloadMock.mockImplementation(
+    async (params: { payload: unknown }) => params.payload,
   );
 });
 
@@ -771,6 +780,79 @@ describe("createFollowupRunner durable delivery recovery", () => {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("persists and delivers Telegram queued finals as text followed by TTS", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "telegram:group:-1003783709877:topic:17592",
+      originatingThreadId: "17592",
+      run: {
+        messageProvider: "telegram",
+        ttsChannel: "telegram",
+        resolvedTtsAuto: "always",
+      },
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "durable-telegram-final-tts",
+      run: queued,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "The exact queued final answer." }],
+      meta: {},
+    });
+    maybeApplyTtsToPayloadMock.mockImplementationOnce(
+      async (params: { payload: { text?: string } }) => ({
+        ...params.payload,
+        mediaUrl: "/tmp/queued-final.mp3",
+        audioAsVoice: true,
+      }),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await runner({ ...queued, durableId: input.id });
+
+    expect(maybeApplyTtsToPayloadMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        kind: "final",
+        ttsAuto: "always",
+      }),
+    );
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "The exact queued final answer.",
+          channelData: {
+            openclaw: { assistantPhase: "final_answer" },
+          },
+        }),
+      }),
+    );
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          mediaUrl: "/tmp/queued-final.mp3",
+          audioAsVoice: true,
+          channelData: {
+            openclaw: {
+              assistantPhase: "final_answer",
+              finalTtsSupplement: true,
+            },
+          },
+        }),
+      }),
+    );
   });
 
   it("rejects model failures after staging a visible restart receipt", async () => {

@@ -108,6 +108,10 @@ export type FollowupRun = {
     extraSystemPrompt?: string;
     enforceFinalTag?: boolean;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    /** Per-turn TTS state captured before the inbound dispatcher returns. */
+    resolvedTtsAuto?: string;
+    inboundAudio?: boolean;
+    ttsChannel?: string;
     /** Runtime-trusted reminder destination, independent of source-topic routing. */
     cronDefaultDelivery?: CronDelivery;
   };

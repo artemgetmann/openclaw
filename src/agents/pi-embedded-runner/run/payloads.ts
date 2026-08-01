@@ -54,7 +54,9 @@ type ResolvedAssistantErrorState = {
   normalizedErrorText: string | null;
 };
 
-function isTerminalSilentAssistantReply(lastAssistant: AssistantMessage | undefined): boolean {
+export function isTerminalSilentAssistantReply(
+  lastAssistant: AssistantMessage | undefined,
+): boolean {
   if (!lastAssistant || lastAssistant.stopReason !== "stop") {
     return false;
   }

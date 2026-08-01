@@ -90,6 +90,7 @@ import { isRenderablePayload, shouldSuppressReasoningPayload } from "./reply-pay
 import { startReplyRunWatchdog } from "./reply-run-watchdog.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { RESTART_INTERRUPTED_TURN_PAYLOAD } from "./restart-recovery.js";
+import { resolveReplyRunPayloads } from "./run-result-payloads.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import {
   isExplicitAgentTimeoutPayload,
@@ -767,7 +768,7 @@ async function runReplyAgentWithFinalizationOwnership(
     recordDurableTaskAttemptStart(durableTask);
     let runOutcome = await runSingleTurn(commandBody);
     while (runOutcome.kind !== "final") {
-      const runPayloads = runOutcome.runResult.payloads ?? [];
+      const runPayloads = resolveReplyRunPayloads(runOutcome.runResult);
       const isExplicitTimeout =
         runPayloads.length === 1 && isExplicitAgentTimeoutPayload(runPayloads[0]);
       // The embedded runner marks provider timeouts as aborted after cancelling
@@ -869,7 +870,7 @@ async function runReplyAgentWithFinalizationOwnership(
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
-    const payloadArray = runResult.payloads ?? [];
+    const payloadArray = resolveReplyRunPayloads(runResult);
     logTelegramProgressDebug("finalization.raw-payloads", {
       runId,
       sessionKey,

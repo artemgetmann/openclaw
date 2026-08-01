@@ -982,6 +982,12 @@ export async function dispatchReplyFromConfig(params: {
         sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        // A durable queued turn finishes after this inbound dispatcher has
+        // returned. Carry the already-resolved voice policy with the queue
+        // record so its final uses the same Telegram text + TTS contract.
+        resolvedTtsAuto: turnTtsAuto,
+        inboundAudio,
+        ttsChannel,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = isSourcePreviewToolPayload(payload)
