@@ -28,10 +28,12 @@ TIMEOUT_SECONDS="${JARVIS_SPARKLE_E2E_TIMEOUT_SECONDS:-900}"
 DOWNLOAD_GRACE_SECONDS="${JARVIS_SPARKLE_E2E_DOWNLOAD_GRACE_SECONDS:-120}"
 MIN_FREE_GB="${JARVIS_SPARKLE_E2E_MIN_FREE_GB:-12}"
 TEST_ROOT=""
+PROTECTED_HOTFIX_RECEIPT=""
 
 JARVIS_HOME="${HOME}/Library/Application Support/Jarvis"
 JARVIS_STATE_DIR="${JARVIS_HOME}/.jarvis"
 MANAGED_MANIFEST="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json"
+PROTECTION_MARKER="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json"
 GATEWAY_PLIST="${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist"
 PREFERENCES_PLIST="${HOME}/Library/Preferences/${PREFERENCES_DOMAIN}.plist"
 SPARKLE_CACHE_ROOT="${HOME}/Library/Caches/${PREFERENCES_DOMAIN}/org.sparkle-project.Sparkle"
@@ -70,6 +72,7 @@ GATEWAY_RESTART_STARTED=0
 GATEWAY_RESTART_FINISHED=0
 APP_PIDS=""
 SPARKLE_CACHE_SNAPSHOT=""
+BASELINE_MODE="normal-signed"
 
 OLD_VERSION=""
 OLD_BUILD=""
@@ -99,6 +102,9 @@ Options:
   --scratch-root PATH      Parent for the sentinel-owned disposable run.
   --telegram-chat CHAT     Optional Telegram-as-user nonce proof; runs last.
   --expected-commit SHA    Exact release/package commit expected in the new app.
+  --protected-hotfix-compatibility-receipt PATH
+                           Short-lived receipt for one exact protected private
+                           baseline and one exact signed public target.
   --timeout SECONDS        Per-transition timeout (default: 900).
   --download-grace SECONDS Wait before asking the old app to terminate (default: 120).
   --min-free-gb GB         Minimum actual free space (default: 12).
@@ -144,6 +150,11 @@ parse_args() {
       --expected-commit)
         require_arg_value "$@"
         EXPECTED_COMMIT="$2"
+        shift 2
+        ;;
+      --protected-hotfix-compatibility-receipt)
+        require_arg_value "$@"
+        PROTECTED_HOTFIX_RECEIPT="$2"
         shift 2
         ;;
       --timeout)
@@ -264,6 +275,18 @@ verify_strict_app_trust() {
     die "preflight blocked: $label app failed Gatekeeper assessment: $app"
 }
 
+verify_strict_codesign() {
+  local app="$1"
+  local label="$2"
+
+  "$CODESIGN_BIN" --verify --deep --strict --verbose=2 "$app" >/dev/null 2>&1 || \
+    die "preflight blocked: $label app failed strict codesign: $app"
+}
+
+gatekeeper_accepts() {
+  "$SPCTL_BIN" --assess --type execute --verbose=2 "$1" >/dev/null 2>&1
+}
+
 app_team_identifier() {
   local app="$1"
   "$CODESIGN_BIN" -dv --verbose=4 "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -n 1
@@ -272,6 +295,19 @@ app_team_identifier() {
 app_designated_requirement() {
   local app="$1"
   "$CODESIGN_BIN" -d -r- "$app" 2>&1 | sed -n 's/^designated => //p' | head -n 1
+}
+
+app_code_directory_hash() {
+  local app="$1"
+  "$CODESIGN_BIN" -dv --verbose=4 "$app" 2>&1 | sed -n 's/^CDHash=//p' | head -n 1
+}
+
+sha256_file() {
+  /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
+}
+
+sha256_text() {
+  printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
 }
 
 verify_one_official_signing_identity() {
@@ -360,9 +396,174 @@ verify_installed_baseline() {
     die "preflight blocked: installed app bundle id is not $OFFICIAL_BUNDLE_ID"
   [[ "$installed_version" == "$OLD_VERSION" && "$installed_build" == "$OLD_BUILD" ]] || \
     die "preflight blocked: installed app is not the declared old baseline"
-  verify_strict_app_trust "$INSTALLED_APP" installed
+  verify_strict_codesign "$INSTALLED_APP" installed
+  gatekeeper_accepts "$INSTALLED_APP" || \
+    die "preflight blocked: installed app failed Gatekeeper without a valid protected-hotfix compatibility receipt"
 
-  log "proof.installed_app=ok version=$installed_version build=$installed_build"
+  log "baseline_mode=normal_signed"
+  log "proof.installed_app=normal_signed_baseline version=$installed_version build=$installed_build"
+}
+
+verify_protected_hotfix_compatibility_receipt() {
+  local installed_team
+  local installed_requirement
+  local installed_cdhash
+  local old_team
+  local old_requirement
+  local old_cdhash
+  local compatibility_commit
+  local compatibility_build
+  local protected_commit
+  local marker_compatibility_commit
+  local marker_compatibility_build
+  local marker_source
+  local backup_path
+  local backup_commit
+  local backup_build
+  local receipt_proof
+
+  [[ -f "$PROTECTED_HOTFIX_RECEIPT" && -r "$PROTECTED_HOTFIX_RECEIPT" && ! -L "$PROTECTED_HOTFIX_RECEIPT" ]] || \
+    die "preflight blocked: protected-hotfix compatibility receipt is missing, unreadable, or a symlink"
+
+  # A receipt is never an unsigned-app bypass. Both private-baseline copies must
+  # still have intact code signatures; only their Gatekeeper verdict may fail.
+  verify_strict_codesign "$OLD_APP" old
+  verify_strict_codesign "$INSTALLED_APP" installed
+  if gatekeeper_accepts "$INSTALLED_APP"; then
+    die "preflight blocked: normal signed baseline detected; protected-hotfix compatibility receipt is not applicable"
+  fi
+
+  [[ "$OLD_VERSION" == "$INSTALLED_VERSION" && "$OLD_BUILD" == "$INSTALLED_BUILD" && "$OLD_COMMIT" == "$INSTALLED_COMMIT" ]] || \
+    die "preflight blocked: installed/live mismatch: protected installed app is not the declared old baseline"
+
+  installed_team="$(app_team_identifier "$INSTALLED_APP")"
+  installed_requirement="$(app_designated_requirement "$INSTALLED_APP")"
+  installed_cdhash="$(app_code_directory_hash "$INSTALLED_APP")"
+  old_team="$(app_team_identifier "$OLD_APP")"
+  old_requirement="$(app_designated_requirement "$OLD_APP")"
+  old_cdhash="$(app_code_directory_hash "$OLD_APP")"
+  [[ -n "$installed_team" && -n "$installed_requirement" && "$installed_cdhash" =~ ^[0-9a-fA-F]{40}$ ]] || \
+    die "preflight blocked: protected installed app has missing or ambiguous code-signing provenance"
+  [[ "$old_team" == "$installed_team" && "$old_requirement" == "$installed_requirement" && "$old_cdhash" == "$installed_cdhash" ]] || \
+    die "preflight blocked: installed/live mismatch: old and installed private app signing identities differ"
+
+  require_readable_file "$MANAGED_MANIFEST" "protected-hotfix compatibility manifest"
+  require_readable_file "$PROTECTION_MARKER" "protected-hotfix protection marker"
+  compatibility_commit="$(manifest_commit "$MANAGED_MANIFEST")"
+  compatibility_build="$(manifest_build "$MANAGED_MANIFEST")"
+  protected_commit="$(manifest_value "$PROTECTION_MARKER" '.protectedRuntimeGitCommit // empty')"
+  marker_compatibility_commit="$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestGitCommit // empty')"
+  marker_compatibility_build="$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestBundleVersion // empty')"
+  marker_source="$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestSource // empty')"
+  backup_path="$(manifest_value "$PROTECTION_MARKER" '.backupPath // empty')"
+  [[ "$backup_path" == /* ]] || die "preflight blocked: protected-hotfix backup provenance is missing or ambiguous"
+  require_readable_file "$backup_path" "protected-hotfix backup receipt"
+  backup_commit="$(manifest_commit "$backup_path")"
+  backup_build="$(manifest_build "$backup_path")"
+
+  # Node validates exact keys as well as values. Rejecting unknown fields keeps
+  # future receipt versions from silently acquiring broader authority.
+  receipt_proof="$({
+    OPENCLAW_RECEIPT_PATH="$PROTECTED_HOTFIX_RECEIPT" \
+    "$NODE_BIN" --input-type=module - \
+      "$INSTALLED_VERSION" "$INSTALLED_BUILD" "$INSTALLED_COMMIT" \
+      "$installed_team" "$(sha256_text "$installed_requirement")" "$installed_cdhash" \
+      "$compatibility_commit" "$compatibility_build" "$(sha256_file "$MANAGED_MANIFEST")" \
+      "$protected_commit" "$marker_compatibility_commit" "$marker_compatibility_build" "$marker_source" \
+      "$backup_commit" "$backup_build" "$(sha256_file "$backup_path")" "$(sha256_file "$PROTECTION_MARKER")" \
+      "$NEW_VERSION" "$NEW_BUILD" "$NEW_COMMIT" "$CANONICAL_FEED_URL" <<'NODE'
+import fs from "node:fs";
+
+const values = process.argv.slice(2);
+const [
+  installedVersion, installedBuild, installedCommit, installedTeam, requirementSha256, codeDirectoryHash,
+  compatibilityCommit, compatibilityBuild, compatibilityManifestSha256,
+  protectedCommit, markerCompatibilityCommit, markerCompatibilityBuild, markerSource,
+  backupCommit, backupBuild, backupManifestSha256, protectionMarkerSha256,
+  targetVersion, targetBuild, targetCommit, canonicalFeedURL,
+] = values;
+const fail = (message) => {
+  process.stderr.write(`${message}\n`);
+  process.exit(1);
+};
+const exactKeys = (value, keys, label) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${label} must be an object`);
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) fail(`${label} has missing or ambiguous fields`);
+};
+const exact = (actual, expected, label) => {
+  if (actual !== expected) fail(`${label} mismatch`);
+};
+const fullCommit = (value, label) => {
+  if (!/^[0-9a-f]{40}$/i.test(value)) fail(`${label} must be one full git commit`);
+};
+let receipt;
+try {
+  receipt = JSON.parse(fs.readFileSync(process.env.OPENCLAW_RECEIPT_PATH, "utf8"));
+} catch {
+  fail("receipt is not valid readable JSON");
+}
+exactKeys(receipt, ["schemaVersion", "kind", "receiptId", "issuedAt", "expiresAt", "intent", "installedApp", "protectedRuntime", "targetRelease"], "receipt");
+exact(receipt.schemaVersion, 1, "schemaVersion");
+exact(receipt.kind, "jarvis-sparkle-protected-hotfix-baseline-compatibility", "kind");
+if (!/^[a-z0-9][a-z0-9._-]{7,127}$/.test(receipt.receiptId)) fail("receiptId is invalid");
+
+const issuedAt = Date.parse(receipt.issuedAt);
+const expiresAt = Date.parse(receipt.expiresAt);
+const now = Date.now();
+if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt)) fail("receipt timestamps are invalid");
+if (issuedAt > now + 5 * 60_000) fail("receipt is not yet valid");
+if (expiresAt <= now) fail("receipt is stale");
+if (expiresAt <= issuedAt || expiresAt - issuedAt > 7 * 24 * 60 * 60_000) fail("receipt validity window is invalid");
+
+exactKeys(receipt.intent, ["operation", "oneTimeUse", "feedURL"], "intent");
+exact(receipt.intent.operation, "sparkle-n-to-n-plus-1", "intent.operation");
+exact(receipt.intent.oneTimeUse, true, "intent.oneTimeUse");
+exact(receipt.intent.feedURL, canonicalFeedURL, "intent.feedURL");
+
+exactKeys(receipt.installedApp, ["bundleIdentifier", "version", "build", "gitCommit", "teamIdentifier", "designatedRequirementSha256", "codeDirectoryHash"], "installedApp");
+exact(receipt.installedApp.bundleIdentifier, "ai.jarvis.mac", "installedApp.bundleIdentifier");
+exact(receipt.installedApp.version, installedVersion, "installedApp.version");
+exact(receipt.installedApp.build, installedBuild, "installedApp.build");
+exact(receipt.installedApp.gitCommit, installedCommit, "installedApp.gitCommit");
+exact(receipt.installedApp.teamIdentifier, installedTeam, "installedApp.teamIdentifier");
+exact(receipt.installedApp.designatedRequirementSha256, requirementSha256, "installedApp.designatedRequirementSha256");
+exact(receipt.installedApp.codeDirectoryHash, codeDirectoryHash, "installedApp.codeDirectoryHash");
+
+exactKeys(receipt.protectedRuntime, ["runtimeSource", "gitCommit", "bundleVersion", "compatibilityManifestGitCommit", "compatibilityManifestBundleVersion", "compatibilityManifestSource", "compatibilityManifestSha256", "backupManifestSha256", "protectionMarkerSha256"], "protectedRuntime");
+exact(receipt.protectedRuntime.runtimeSource, "jarvis-break-glass-hotfix", "protectedRuntime.runtimeSource");
+exact(receipt.protectedRuntime.gitCommit, protectedCommit, "protectedRuntime.gitCommit");
+exact(receipt.protectedRuntime.bundleVersion, backupBuild, "protectedRuntime.bundleVersion");
+exact(receipt.protectedRuntime.compatibilityManifestGitCommit, compatibilityCommit, "protectedRuntime.compatibilityManifestGitCommit");
+exact(receipt.protectedRuntime.compatibilityManifestBundleVersion, compatibilityBuild, "protectedRuntime.compatibilityManifestBundleVersion");
+exact(receipt.protectedRuntime.compatibilityManifestSource, markerSource, "protectedRuntime.compatibilityManifestSource");
+exact(receipt.protectedRuntime.compatibilityManifestSha256, compatibilityManifestSha256, "protectedRuntime.compatibilityManifestSha256");
+exact(receipt.protectedRuntime.backupManifestSha256, backupManifestSha256, "protectedRuntime.backupManifestSha256");
+exact(receipt.protectedRuntime.protectionMarkerSha256, protectionMarkerSha256, "protectedRuntime.protectionMarkerSha256");
+
+exactKeys(receipt.targetRelease, ["bundleIdentifier", "version", "build", "gitCommit", "feedURL"], "targetRelease");
+exact(receipt.targetRelease.bundleIdentifier, "ai.jarvis.mac", "targetRelease.bundleIdentifier");
+exact(receipt.targetRelease.version, targetVersion, "targetRelease.version");
+exact(receipt.targetRelease.build, targetBuild, "targetRelease.build");
+exact(receipt.targetRelease.gitCommit, targetCommit, "targetRelease.gitCommit");
+exact(receipt.targetRelease.feedURL, canonicalFeedURL, "targetRelease.feedURL");
+
+for (const [value, label] of [[installedCommit, "installed commit"], [protectedCommit, "protected runtime commit"], [backupCommit, "backup commit"], [targetCommit, "target commit"]]) fullCommit(value, label);
+exact(markerCompatibilityCommit, compatibilityCommit, "protection marker compatibility commit");
+exact(markerCompatibilityBuild, compatibilityBuild, "protection marker compatibility build");
+exact(markerSource, process.env.OPENCLAW_EXPECTED_INSTALLED_APP, "protection marker source");
+exact(backupCommit, protectedCommit, "backup protected commit");
+exact(compatibilityCommit, installedCommit, "compatibility installed commit");
+exact(compatibilityBuild, installedBuild, "compatibility installed build");
+process.stdout.write(`receipt_id=${receipt.receiptId}`);
+NODE
+  } 2>&1)" || die "preflight blocked: protected-hotfix compatibility receipt rejected: $receipt_proof"
+
+  BASELINE_MODE="protected-hotfix-compatibility-receipt"
+  log "baseline_mode=accepted_protected_hotfix_compatibility_receipt $receipt_proof receipt_sha256=$(sha256_file "$PROTECTED_HOTFIX_RECEIPT")"
+  log "proof.installed_app=accepted_protected_hotfix_compatibility_receipt version=$INSTALLED_VERSION build=$INSTALLED_BUILD commit=$INSTALLED_COMMIT"
+  log "proof.protected_runtime=receipt_bound commit=$protected_commit backup_build=$backup_build"
 }
 
 verify_live_managed_baseline() {
@@ -548,6 +749,7 @@ configure_test_root() {
   JARVIS_STATE_DIR="$JARVIS_HOME/.jarvis"
   INSTALLED_APP="$TEST_ROOT/apps/installed/Jarvis.app"
   MANAGED_MANIFEST="$JARVIS_STATE_DIR/.consumer-bundled-runtime.json"
+  PROTECTION_MARKER="$JARVIS_STATE_DIR/.consumer-bundled-runtime.protection.json"
   GATEWAY_PLIST="$TEST_ROOT/live/LaunchAgents/$GATEWAY_LABEL.plist"
   PREFERENCES_PLIST="$TEST_ROOT/live/Preferences/$PREFERENCES_DOMAIN.plist"
   SPARKLE_CACHE_ROOT="$TEST_ROOT/live/Caches/$PREFERENCES_DOMAIN/org.sparkle-project.Sparkle"
@@ -572,18 +774,26 @@ run_preflight() {
 
   read_app_truth "$OLD_APP" OLD
   read_app_truth "$NEW_APP" NEW
+  read_app_truth "$INSTALLED_APP" INSTALLED
   (( NEW_BUILD > OLD_BUILD )) || die "preflight blocked: candidate build is not strictly newer than old build"
   [[ "$NEW_COMMIT" != "$OLD_COMMIT" ]] || die "preflight blocked: candidate package commit did not change"
   [[ "$EXPECTED_COMMIT" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "--expected-commit must be a 7-40 character git commit"
   [[ "$NEW_COMMIT" == "$EXPECTED_COMMIT"* || "$EXPECTED_COMMIT" == "$NEW_COMMIT"* ]] || \
     die "preflight blocked: candidate bundled package commit does not match --expected-commit"
 
-  verify_strict_app_trust "$OLD_APP" old
   verify_strict_app_trust "$NEW_APP" new
-  verify_installed_baseline
-  verify_official_signing_identity
+  verify_one_official_signing_identity "$NEW_APP" new
+  if [[ -n "$PROTECTED_HOTFIX_RECEIPT" ]]; then
+    OPENCLAW_EXPECTED_INSTALLED_APP="$INSTALLED_APP" verify_protected_hotfix_compatibility_receipt
+  else
+    verify_installed_baseline
+    verify_strict_app_trust "$OLD_APP" old
+    verify_official_signing_identity
+  fi
   verify_latest_public_feed
-  verify_live_managed_baseline
+  if [[ "$BASELINE_MODE" == "normal-signed" ]]; then
+    verify_live_managed_baseline
+  fi
   verify_gateway_plist_identity
   inspect_release_and_process_owners
   verify_safe_scratch_root
