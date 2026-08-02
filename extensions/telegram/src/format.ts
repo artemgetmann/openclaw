@@ -187,16 +187,24 @@ function stripMarkdownIndentColumns(line: string, targetColumns: number): string
   let index = 0;
   while (index < line.length && columns < targetColumns) {
     const char = line[index];
+    let residualColumns = 0;
     if (char === " ") {
       columns += 1;
     } else if (char === "\t") {
       columns += 4 - (columns % 4);
+      residualColumns = Math.max(0, columns - targetColumns);
     } else {
       return undefined;
     }
     index += 1;
+    if (columns >= targetColumns) {
+      // Consuming a tab can cross the container boundary. Preserve those
+      // residual visual columns so a four-space fence stays invalid instead
+      // of being shifted left into a false closer.
+      return `${" ".repeat(residualColumns)}${line.slice(index)}`;
+    }
   }
-  return columns >= targetColumns ? line.slice(index) : undefined;
+  return undefined;
 }
 
 function trackMarkdownFenceLine(

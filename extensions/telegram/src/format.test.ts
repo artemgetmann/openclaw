@@ -283,6 +283,29 @@ describe("markdownToTelegramHtml", () => {
     expect(richHtml).not.toContain("<th>fenced</th>");
   });
 
+  it("preserves tab overshoot inside a list-contained fence", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "- ```md",
+        "\t  ```",
+        "  | fenced | code |",
+        "  | --- | --- |",
+        "  > keep literal",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| fenced | code |");
+    expect(richHtml).toContain("&gt; keep literal");
+    expect(richHtml).not.toContain("<th>fenced</th>");
+  });
+
   it("keeps space-tab-indented table-like code literal", () => {
     const richHtml = markdownToTelegramRichHtml(
       [
