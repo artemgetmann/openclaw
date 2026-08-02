@@ -169,12 +169,15 @@ for CPU and memory pressure.
 Refusals retain exit code `75` for compatibility and also emit a stable line:
 
 ```text
-HEAVY_LOCAL_SLOT_REFUSAL class=<occupied|host_unhealthy|guard_internal> code=<reason> [measurement fields]
+HEAVY_LOCAL_SLOT_REFUSAL class=<occupied|host_unhealthy|guard_internal> code=<reason> [measurement fields] phase=<admission|runtime> outcome=<refused|terminated> next_action=<safe-action>
 ```
 
 The class separates normal serialization, measured host pressure, and failures
 inside the guard or its measurement backends. The following human line retains
-the useful owner, PID, measurement, or recovery detail. A bounded wait that
+the useful owner, PID, measurement, or recovery detail and names the same next
+safe action. Retryable admission pressure additionally emits
+`HEAVY_LOCAL_SLOT_PAUSED` with `phase=admission`, `outcome=paused`, the decisive
+observation, and the recovery condition before the bounded waiter sleeps. A bounded wait that
 expires emits the last retryable class with `code=wait_timeout`.
 Measured CPU, memory, Tailscale, and Jarvis refusals also expose stable
 `metric`, `observed`, `threshold`, `expected`, and `unit` fields when relevant.
@@ -183,11 +186,13 @@ These are refusal telemetry, not a complete capacity profile.
 Dedicated transactions also emit three bounded telemetry lines:
 
 - `HEAVY_LOCAL_RESOURCE_TELEMETRY` records elapsed time, macOS memory-pressure
-  state, swap used/free KiB, cumulative pageouts/swapouts, and thermal state;
+  state, swap used/free KiB, cumulative pageouts/swapouts, thermal state, and
+  explicitly labels paging counters as observed telemetry with no kill limit;
 - `HEAVY_LOCAL_JARVIS_TELEMETRY` records the matching LaunchAgent/listener PID,
   sample phase/time, HTTP status, and latency; and
 - `HEAVY_LOCAL_GROUP_TELEMETRY` records only the guarded PGID's process count and
-  aggregate RSS.
+  aggregate RSS, explicitly labeled as observations under the single-group
+  enforcement boundary.
 
 Absolute swap use and process count are observations, not unevidenced kill
 thresholds. macOS can retain historical swap after pressure recovers, and the

@@ -125,11 +125,62 @@ task_generated_before_kib=''
 task_disk_before_kib=''
 dedicated_jarvis_baseline_pid=''
 
+# Map stable refusal codes to machine-readable recovery conditions. These are
+# intentionally actions, not shell commands: callers can wake on recovery
+# without exposing argv/environment data or guessing a universal threshold.
+refusal_next_action() {
+  case "$1" in
+    memory_pressure | memory_pressure_state)
+      printf '%s' 'wait_for_memory_pressure_normal'
+      ;;
+    memory_measurement_failed | memory_state_measurement_failed | paging_measurement_failed)
+      printf '%s' 'restore_native_memory_telemetry'
+      ;;
+    thermal_pressure)
+      printf '%s' 'wait_for_thermal_and_performance_pressure_clear'
+      ;;
+    thermal_measurement_failed)
+      printf '%s' 'restore_native_thermal_telemetry'
+      ;;
+    disk_pressure)
+      printf '%s' 'reclaim_owner_attributed_space_above_hard_floor'
+      ;;
+    disk_measurement_failed)
+      printf '%s' 'restore_disk_headroom_telemetry'
+      ;;
+    jarvis_identity_changed | jarvis_listener_mismatch)
+      printf '%s' 'restore_single_stable_jarvis_listener'
+      ;;
+    jarvis_http_failed)
+      printf '%s' 'restore_jarvis_healthz_http_200'
+      ;;
+    jarvis_identity_measurement_failed | jarvis_health_measurement_failed)
+      printf '%s' 'restore_jarvis_identity_and_http_telemetry'
+      ;;
+    fanout_measurement_failed)
+      printf '%s' 'restore_guarded_process_group_telemetry'
+      ;;
+    live_owner | wait_timeout)
+      printf '%s' 'wait_for_current_owner_or_health_condition'
+      ;;
+    *)
+      printf '%s' 'inspect_receipt_and_retry_only_when_safe'
+      ;;
+  esac
+}
+
 emit_refusal() {
   local refusal_class="$1"
   local refusal_code="$2"
   local refusal_message="$3"
   local refusal_data="${4:-}"
+  local refusal_phase="${5:-admission}"
+  local refusal_outcome="${6:-refused}"
+  local next_action="${7:-}"
+
+  if [ -z "$next_action" ]; then
+    next_action="$(refusal_next_action "$refusal_code")"
+  fi
 
   printf 'HEAVY_LOCAL_SLOT_REFUSAL class=%s code=%s' \
     "$refusal_class" \
@@ -137,8 +188,41 @@ emit_refusal() {
   if [ -n "$refusal_data" ]; then
     printf ' %s' "$refusal_data" >&2
   fi
-  printf '\n' >&2
-  printf 'Refusing heavy work: %s\n' "$refusal_message" >&2
+  printf ' phase=%s outcome=%s next_action=%s\n' \
+    "$refusal_phase" \
+    "$refusal_outcome" \
+    "$next_action" >&2
+  if [ "$refusal_outcome" = "terminated" ]; then
+    printf 'Guarded work terminated: %s. Next safe action: %s.\n' \
+      "$refusal_message" \
+      "$next_action" >&2
+  else
+    printf 'Refusing heavy work: %s. Next safe action: %s.\n' \
+      "$refusal_message" \
+      "$next_action" >&2
+  fi
+}
+
+emit_admission_pause() {
+  local refusal_class="$1"
+  local refusal_code="$2"
+  local refusal_message="$3"
+  local refusal_data="${4:-}"
+  local next_action=""
+
+  # A pause is distinct from refusal or termination: no command has started,
+  # and the bounded waiter has already released the machine-wide lease.
+  next_action="$(refusal_next_action "$refusal_code")"
+  printf 'HEAVY_LOCAL_SLOT_PAUSED class=%s code=%s' \
+    "$refusal_class" \
+    "$refusal_code" >&2
+  if [ -n "$refusal_data" ]; then
+    printf ' %s' "$refusal_data" >&2
+  fi
+  printf ' phase=admission outcome=paused next_action=%s\n' "$next_action" >&2
+  printf 'Paused new admission: %s. Next safe action: %s; the bounded waiter will retry.\n' \
+    "$refusal_message" \
+    "$next_action" >&2
 }
 
 wait_deadline_has_expired() {
@@ -211,6 +295,11 @@ queue_or_refuse() {
   fi
 
   if [ "$queue_notice_emitted" -eq 0 ]; then
+    emit_admission_pause \
+      "$refusal_class" \
+      "$refusal_code" \
+      "$refusal_message" \
+      "$refusal_data"
     printf 'Heavy-local slot queued for "%s" (class=%s, code=%s); waiting up to %ss.\n' \
       "$display_label" \
       "$refusal_class" \
@@ -652,7 +741,7 @@ dedicated_resource_health_reason() {
     return 0
   fi
 
-  printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s elapsed_seconds=%s memory_pressure=%s memory_pressure_level=%s swap_used_kib=%s swap_free_kib=%s pageouts_total=%s swapouts_total=%s thermal_state=%s\n' \
+  printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s elapsed_seconds=%s memory_pressure=%s memory_pressure_level=%s swap_used_kib=%s swap_free_kib=%s pageouts_total=%s swapouts_total=%s paging_status=observed paging_enforcement=telemetry_only thermal_state=%s next_action=observe_pageout_swapout_trend\n' \
     "$sample_phase" \
     "$SECONDS" \
     "$pressure_state" \
@@ -709,7 +798,7 @@ dedicated_group_health_reason() {
       'guard_internal|fanout_measurement_failed|could not measure the guarded process group|metric=guarded_group_fanout status=unavailable'
     return 0
   fi
-  printf 'HEAVY_LOCAL_GROUP_TELEMETRY cpu_policy=dedicated-agent phase=runtime pgid=%s process_count=%s rss_kib=%s enforcement=single_guarded_group\n' \
+  printf 'HEAVY_LOCAL_GROUP_TELEMETRY cpu_policy=dedicated-agent phase=runtime pgid=%s process_count=%s rss_kib=%s enforcement=single_guarded_group fanout_status=observed rss_status=observed next_action=inspect_guarded_group_growth_if_sustained\n' \
     "$child_pgid" \
     "$process_count" \
     "$group_rss_kib" >&2
@@ -769,7 +858,7 @@ probe_dedicated_jarvis() {
       http://127.0.0.1:18789/healthz 2>/dev/null
   )"; then
     printf '%s' \
-      'error|host_unhealthy|jarvis_unhealthy|managed Jarvis health check failed|metric=jarvis_health observed=unhealthy expected=healthy'
+      'error|host_unhealthy|jarvis_http_failed|managed Jarvis health check failed|metric=jarvis_http_health observed=request_failed expected=http_200'
     return 0
   fi
   IFS='|' read -r http_code latency_seconds <<<"$http_sample"
@@ -922,7 +1011,7 @@ host_health_reason() {
     return 0
   fi
   if [ "$emit_disk_report" = "1" ] && [ "$disk_free" -lt "$DISK_REPORT_BELOW_KIB" ]; then
-    printf 'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=%s report_below_kib=%s hard_floor_kib=%s owner=%s\n' \
+    printf 'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=%s report_below_kib=%s hard_floor_kib=%s owner=%s phase=admission outcome=advisory next_action=reclaim_owner_attributed_space_before_hard_floor\n' \
       "$disk_free" \
       "$DISK_REPORT_BELOW_KIB" \
       "$MIN_DISK_FREE_KIB" \
@@ -1160,7 +1249,9 @@ monitor_guarded_child() {
         "$runtime_code" \
         "$runtime_reason" \
         "$runtime_data" >"$health_stop_file"
-      printf 'Stopping guarded work after repeated host-health failures: %s\n' "$runtime_reason" >&2
+      printf 'Stopping guarded work after repeated host-health failures: %s. Next safe action: %s.\n' \
+        "$runtime_reason" \
+        "$(refusal_next_action "$runtime_code")" >&2
       stop_guarded_child
       return 0
     fi
@@ -1241,7 +1332,9 @@ if [ -s "$health_stop_file" ]; then
     "$health_stop_class" \
     "$health_stop_code" \
     "$health_stop_reason" \
-    "$health_stop_data"
+    "$health_stop_data" \
+    runtime \
+    terminated
   exit 75
 fi
 exit "$child_status"

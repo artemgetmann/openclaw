@@ -296,21 +296,29 @@ host_health_reason() {
         'host_unhealthy|jarvis_unhealthy|managed Jarvis health check failed|metric=jarvis_health observed=unhealthy expected=healthy'
     fi
   elif [[ "$test_health_sample" == "memory-warning" ]]; then
-    printf '%s\n' \
-      'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=fixture memory_pressure=warn memory_pressure_level=2 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 thermal_state=normal' >&2
+    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=warn memory_pressure_level=2 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 paging_status=observed paging_enforcement=telemetry_only thermal_state=normal next_action=observe_pageout_swapout_trend\n' \
+      "$sample_phase" >&2
     printf '%s' \
       'host_unhealthy|memory_pressure_state|macOS memory pressure is warn|metric=memory_pressure_state observed=warn expected=normal'
+  elif [[ "$test_health_sample" == "memory-critical" ]]; then
+    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=critical memory_pressure_level=4 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 paging_status=observed paging_enforcement=telemetry_only thermal_state=normal next_action=observe_pageout_swapout_trend\n' \
+      "$sample_phase" >&2
+    printf '%s' \
+      'host_unhealthy|memory_pressure_state|macOS memory pressure is critical|metric=memory_pressure_state observed=critical expected=normal'
   elif [[ "$test_health_sample" == "thermal-warning" ]]; then
-    printf '%s\n' \
-      'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=fixture memory_pressure=normal memory_pressure_level=1 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 thermal_state=pressure' >&2
+    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=normal memory_pressure_level=1 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 paging_status=observed paging_enforcement=telemetry_only thermal_state=pressure next_action=observe_pageout_swapout_trend\n' \
+      "$sample_phase" >&2
     printf '%s' \
       'host_unhealthy|thermal_pressure|macOS reports thermal or performance pressure|metric=thermal_pressure observed=pressure expected=normal'
   elif [[ "$test_health_sample" == "jarvis-identity-mismatch" ]]; then
     printf '%s' \
       'host_unhealthy|jarvis_listener_mismatch|managed Jarvis LaunchAgent PID does not exclusively own port 18789|metric=jarvis_listener_pid observed=5252 expected=4242 listener_count=1'
+  elif [[ "$test_health_sample" == "jarvis-identity-changed" ]]; then
+    printf '%s' \
+      'host_unhealthy|jarvis_identity_changed|managed Jarvis PID changed during guarded work|metric=jarvis_launch_pid observed=5252 expected=4242'
   elif [[ "$test_health_sample" == "jarvis-latency-timeout" ]]; then
     printf '%s' \
-      'host_unhealthy|jarvis_unhealthy|managed Jarvis health check failed|metric=jarvis_health observed=unhealthy expected=healthy'
+      'host_unhealthy|jarvis_http_failed|managed Jarvis health check failed|metric=jarvis_http_health observed=request_failed expected=http_200'
   elif [[ "$test_health_sample" == "resource-unavailable" ]]; then
     printf '%s' \
       'guard_internal|paging_measurement_failed|could not measure swap and pageout counters|metric=paging_trend status=unavailable'
@@ -318,20 +326,23 @@ host_health_reason() {
     printf '%s' \
       'guard_internal|fanout_measurement_failed|could not measure the guarded process group|metric=guarded_group_fanout status=unavailable'
   elif [[ "$test_health_sample" == "resource-advisory" ]]; then
-    printf '%s\n' \
-      'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=fixture memory_pressure=normal memory_pressure_level=1 swap_used_kib=2048 swap_free_kib=1024 pageouts_total=20 swapouts_total=10 thermal_state=normal' >&2
+    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=normal memory_pressure_level=1 swap_used_kib=2048 swap_free_kib=1024 pageouts_total=20 swapouts_total=10 paging_status=observed paging_enforcement=telemetry_only thermal_state=normal next_action=observe_pageout_swapout_trend\n' \
+      "$sample_phase" >&2
   elif [[ "$test_health_sample" == "fanout-observed" ]]; then
     printf '%s\n' \
-      'HEAVY_LOCAL_GROUP_TELEMETRY cpu_policy=dedicated-agent phase=runtime pgid=4242 process_count=3 rss_kib=4096 enforcement=single_guarded_group' >&2
+      'HEAVY_LOCAL_GROUP_TELEMETRY cpu_policy=dedicated-agent phase=runtime pgid=4242 process_count=3 rss_kib=4096 enforcement=single_guarded_group fanout_status=observed rss_status=observed next_action=inspect_guarded_group_growth_if_sustained' >&2
   elif [[ "$test_health_sample" == "guard-internal" ]]; then
     printf '%s' \
       'guard_internal|fixture_measurement_failed|synthetic measurement backend failed|metric=fixture status=unavailable'
   elif [[ "$test_health_sample" == "disk-low" ]]; then
     printf '%s' \
       'host_unhealthy|disk_pressure|disk availability is 25000000 KiB (minimum 26214400 KiB)|metric=disk_available_kib observed=25000000 threshold=26214400 unit=KiB'
+  elif [[ "$test_health_sample" == "disk-unavailable" ]]; then
+    printf '%s' \
+      'guard_internal|disk_measurement_failed|could not measure disk headroom|metric=disk_available_kib status=unavailable'
   elif [[ "$test_health_sample" == "disk-warning" ]]; then
     printf '%s\n' \
-      'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=34000000 report_below_kib=36700160 hard_floor_kib=26214400 owner=disk-warning' >&2
+      'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=34000000 report_below_kib=36700160 hard_floor_kib=26214400 owner=disk-warning phase=admission outcome=advisory next_action=reclaim_owner_attributed_space_before_hard_floor' >&2
   elif [[ -n "$test_health_sample" && "$test_health_sample" != "healthy" ]]; then
     printf 'host_unhealthy|fixture_host_pressure|%s|metric=fixture observed=unhealthy' \
       "$test_health_sample"
@@ -731,7 +742,7 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   local marker="$TMP_DIR/dedicated-resource.marker"
   local output="$TMP_DIR/dedicated-resource.out"
   local secret_argument="must-not-appear-in-resource-telemetry"
-  local sample="" expected_class="" expected_code=""
+  local sample="" expected_class="" expected_code="" expected_action=""
   local status=0
 
   # pmset writes error text containing both monitored keywords. The production
@@ -749,30 +760,48 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   # reading, so a broken sampler cannot silently weaken the dedicated profile.
   for sample in \
     memory-warning \
+    memory-critical \
     thermal-warning \
     jarvis-identity-mismatch \
+    jarvis-identity-changed \
     jarvis-latency-timeout \
+    disk-unavailable \
     resource-unavailable; do
     case "$sample" in
-      memory-warning)
+      memory-warning | memory-critical)
         expected_class=host_unhealthy
         expected_code=memory_pressure_state
+        expected_action=wait_for_memory_pressure_normal
         ;;
       thermal-warning)
         expected_class=host_unhealthy
         expected_code=thermal_pressure
+        expected_action=wait_for_thermal_and_performance_pressure_clear
         ;;
       jarvis-identity-mismatch)
         expected_class=host_unhealthy
         expected_code=jarvis_listener_mismatch
+        expected_action=restore_single_stable_jarvis_listener
+        ;;
+      jarvis-identity-changed)
+        expected_class=host_unhealthy
+        expected_code=jarvis_identity_changed
+        expected_action=restore_single_stable_jarvis_listener
         ;;
       jarvis-latency-timeout)
         expected_class=host_unhealthy
-        expected_code=jarvis_unhealthy
+        expected_code=jarvis_http_failed
+        expected_action=restore_jarvis_healthz_http_200
+        ;;
+      disk-unavailable)
+        expected_class=guard_internal
+        expected_code=disk_measurement_failed
+        expected_action=restore_disk_headroom_telemetry
         ;;
       resource-unavailable)
         expected_class=guard_internal
         expected_code=paging_measurement_failed
+        expected_action=restore_native_memory_telemetry
         ;;
     esac
     printf '%s\n' "$sample" >"$health_path"
@@ -791,7 +820,33 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
       fail "$sample ran work or leaked the machine lease"
     grep -Fq "class=${expected_class} code=${expected_code}" "$output" ||
       fail "$sample omitted its stable refusal class/code"
+    grep -Fq "phase=admission outcome=refused next_action=${expected_action}" "$output" ||
+      fail "$sample omitted admission outcome or next safe action"
+    grep -Fq "Next safe action: ${expected_action}." "$output" ||
+      fail "$sample omitted its actionable human explanation"
   done
+
+  # A retryable host hazard pauses only new admission, names the root cause,
+  # and wakes automatically after a healthy sample without holding the lease.
+  {
+    printf 'memory-warning\n'
+    printf 'healthy\n'
+    printf 'healthy\n'
+  } >"$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --wait-seconds 3 \
+      --label "resource-pause-root-cause" \
+      -- /usr/bin/true >"$output" 2>&1
+  grep -Fq \
+    'HEAVY_LOCAL_SLOT_PAUSED class=host_unhealthy code=memory_pressure_state metric=memory_pressure_state observed=warn expected=normal phase=admission outcome=paused next_action=wait_for_memory_pressure_normal' \
+    "$output" || fail "memory pressure pause omitted root cause and wake condition"
+  grep -Fq \
+    'Paused new admission: macOS memory pressure is warn. Next safe action: wait_for_memory_pressure_normal; the bounded waiter will retry.' \
+    "$output" || fail "memory pressure pause omitted actionable human output"
+  [[ ! -e "$lock_path" ]] || fail "recovered admission pause leaked the lease"
 
   # Paging totals and fanout/RSS are observations, not arbitrary kill limits.
   # A healthy advisory sample must admit the command and redact its argument.
@@ -812,8 +867,14 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
     fail "healthy resource telemetry blocked work or leaked the lease"
   grep -Fq 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent' "$output" ||
     fail "paging trend telemetry was not emitted"
+  grep -Fq \
+    'paging_status=observed paging_enforcement=telemetry_only thermal_state=normal next_action=observe_pageout_swapout_trend' \
+    "$output" || fail "paging observations look like an enforced universal threshold"
   grep -Fq 'HEAVY_LOCAL_GROUP_TELEMETRY cpu_policy=dedicated-agent' "$output" ||
     fail "fanout/RSS telemetry was not emitted"
+  grep -Fq \
+    'fanout_status=observed rss_status=observed next_action=inspect_guarded_group_growth_if_sustained' \
+    "$output" || fail "fanout/RSS observations omitted their advisory action"
   if grep -Fq "$secret_argument" "$output"; then
     fail "resource telemetry exposed a guarded command argument"
   fi
@@ -857,6 +918,12 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
     fail "repeated thermal pressure failed tree cleanup or leaked the lease"
   grep -Fq 'code=thermal_pressure' "$output" ||
     fail "repeated thermal stop lost its structured reason"
+  grep -Fq \
+    'phase=runtime outcome=terminated next_action=wait_for_thermal_and_performance_pressure_clear' \
+    "$output" || fail "repeated thermal stop omitted termination and wake condition"
+  grep -Fq \
+    'Guarded work terminated: macOS reports thermal or performance pressure. Next safe action: wait_for_thermal_and_performance_pressure_clear.' \
+    "$output" || fail "repeated thermal stop omitted actionable human output"
 
   # Fanout measurement starts only after the committed process group exists.
   # Two unreadable samples therefore stop at runtime and still prove cleanup.
@@ -880,6 +947,9 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
     fail "unavailable fanout telemetry failed cleanup or leaked the lease"
   grep -Fq 'class=guard_internal code=fanout_measurement_failed' "$output" ||
     fail "fanout measurement failure lost its structured reason"
+  grep -Fq \
+    'phase=runtime outcome=terminated next_action=restore_guarded_process_group_telemetry' \
+    "$output" || fail "fanout measurement failure omitted termination and repair action"
   pass "dedicated resource guardrails fail safe and preserve healthy work"
 }
 
