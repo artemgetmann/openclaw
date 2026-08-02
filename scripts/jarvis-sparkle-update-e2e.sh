@@ -420,6 +420,7 @@ verify_protected_hotfix_compatibility_receipt() {
   local backup_path
   local backup_commit
   local backup_build
+  local live_proof
   local receipt_proof
 
   [[ -f "$PROTECTED_HOTFIX_RECEIPT" && -r "$PROTECTED_HOTFIX_RECEIPT" && ! -L "$PROTECTED_HOTFIX_RECEIPT" ]] || \
@@ -541,6 +542,8 @@ exact(receipt.protectedRuntime.compatibilityManifestSource, markerSource, "prote
 exact(receipt.protectedRuntime.compatibilityManifestSha256, compatibilityManifestSha256, "protectedRuntime.compatibilityManifestSha256");
 exact(receipt.protectedRuntime.backupManifestSha256, backupManifestSha256, "protectedRuntime.backupManifestSha256");
 exact(receipt.protectedRuntime.protectionMarkerSha256, protectionMarkerSha256, "protectedRuntime.protectionMarkerSha256");
+if (!/^\d+$/.test(backupBuild) || !/^\d+$/.test(targetBuild)) fail("protected or target build is invalid");
+if (BigInt(targetBuild) <= BigInt(backupBuild)) fail("target release build is not newer than protected runtime build");
 
 exactKeys(receipt.targetRelease, ["bundleIdentifier", "version", "build", "gitCommit", "feedURL"], "targetRelease");
 exact(receipt.targetRelease.bundleIdentifier, "ai.jarvis.mac", "targetRelease.bundleIdentifier");
@@ -560,10 +563,22 @@ process.stdout.write(`receipt_id=${receipt.receiptId}`);
 NODE
   } 2>&1)" || die "preflight blocked: protected-hotfix compatibility receipt rejected: $receipt_proof"
 
+  # Static receipts prove the protection chain, not the daemon currently bound
+  # to ai.jarvis.gateway. Reuse the canonical read-only proof so a stale marker
+  # cannot authorize overwriting an unrelated live runtime.
+  live_proof="$($BASH_BIN "$PROVE_RUNTIME_SCRIPT" \
+    --runtime-source jarvis-break-glass-hotfix \
+    --expected-commit "$protected_commit" 2>&1)" || \
+    die "preflight blocked: live protected runtime proof failed for receipt commit $protected_commit"
+  [[ "$live_proof" == *"jarvis_runtime_proof=true"* && \
+    "$live_proof" == *"runtime_source=jarvis-break-glass-hotfix"* && \
+    "$live_proof" == *"runtime_commit=$protected_commit"* ]] || \
+    die "preflight blocked: live protected runtime proof did not return the exact receipt identity"
+
   BASELINE_MODE="protected-hotfix-compatibility-receipt"
   log "baseline_mode=accepted_protected_hotfix_compatibility_receipt $receipt_proof receipt_sha256=$(sha256_file "$PROTECTED_HOTFIX_RECEIPT")"
   log "proof.installed_app=accepted_protected_hotfix_compatibility_receipt version=$INSTALLED_VERSION build=$INSTALLED_BUILD commit=$INSTALLED_COMMIT"
-  log "proof.protected_runtime=receipt_bound commit=$protected_commit backup_build=$backup_build"
+  log "proof.protected_runtime=receipt_and_live_bound commit=$protected_commit backup_build=$backup_build"
 }
 
 verify_live_managed_baseline() {

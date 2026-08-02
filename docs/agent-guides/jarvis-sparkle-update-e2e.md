@@ -86,8 +86,11 @@ This path still requires strict code-signature integrity for the private old and
 installed apps. It excuses only their Gatekeeper rejection. The target still
 must pass strict codesign, Gatekeeper, pinned Jarvis Team ID, designated
 requirement, package-commit, and public-appcast checks. Missing, stale, unknown,
-or extra receipt fields fail closed. Installed/live, protection/backup, signing,
-or target drift also fails before any run directory is created. After a
+or extra receipt fields fail closed. The target build must be newer than both
+the private app and the protected runtime backup. The canonical read-only
+runtime proof must also match the receipt's exact protected commit and
+break-glass source. Installed/live, protection/backup, signing, or target drift
+therefore fails before any run directory is created. After a
 successful transition changes the managed manifest, replaying the old receipt
 fails the same exact-state binding.
 

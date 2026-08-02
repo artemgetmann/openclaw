@@ -260,10 +260,17 @@ EOF
 set -e
 root="${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}"
 [[ ! -e "$root/control/prove-fail" ]] || exit 31
-commit="$(jq -r '.gitCommit' "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json")"
+if [[ "$*" == *'--runtime-source jarvis-break-glass-hotfix'* ]]; then
+  commit="$(jq -r '.protectedRuntimeGitCommit' "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.protection.json")"
+  source='jarvis-break-glass-hotfix'
+  [[ ! -e "$root/control/protected-proof-drift" ]] || commit='7777777777777777777777777777777777777777'
+else
+  commit="$(jq -r '.gitCommit' "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json")"
+  source='jarvis-managed-bundle'
+fi
 printf '[prove-jarvis-runtime] jarvis_runtime_proof=true\n'
 printf '[prove-jarvis-runtime] service_label=ai.jarvis.gateway\n'
-printf '[prove-jarvis-runtime] runtime_source=jarvis-managed-bundle\n'
+printf '[prove-jarvis-runtime] runtime_source=%s\n' "$source"
 printf '[prove-jarvis-runtime] runtime_commit=%s\n' "$commit"
 EOF
 
@@ -329,9 +336,13 @@ write_protected_receipt() {
   local requirement_hash
   local issued_at
   local expires_at
+  local protected_build
+  local protected_commit
   requirement_hash="$(printf '%s' "$requirement" | shasum -a 256 | awk '{print $1}')"
   issued_at="$(node -e 'process.stdout.write(new Date(Date.now() - 60000).toISOString())')"
   expires_at="$(node -e 'process.stdout.write(new Date(Date.now() + 3600000).toISOString())')"
+  protected_build="$(jq -r '.bundleVersion' "$backup")"
+  protected_commit="$(jq -r '.gitCommit' "$backup")"
 
   jq -n \
     --arg issuedAt "$issued_at" \
@@ -343,6 +354,8 @@ write_protected_receipt() {
     --arg backupManifestSha256 "$(shasum -a 256 "$backup" | awk '{print $1}')" \
     --arg protectionMarkerSha256 "$(shasum -a 256 "$marker" | awk '{print $1}')" \
     --arg markerSource "$fixture/apps/installed/Jarvis.app" \
+    --arg protectedBuild "$protected_build" \
+    --arg protectedCommit "$protected_commit" \
     --arg targetCommit "$NEW_COMMIT" \
     --arg feedURL "$CANONICAL_FEED" \
     '{
@@ -363,8 +376,8 @@ write_protected_receipt() {
       },
       protectedRuntime: {
         runtimeSource: "jarvis-break-glass-hotfix",
-        gitCommit: "4444444444444444444444444444444444444444",
-        bundleVersion: "2026071402",
+        gitCommit: $protectedCommit,
+        bundleVersion: $protectedBuild,
         compatibilityManifestGitCommit: $installedCommit,
         compatibilityManifestBundleVersion: "2026071401",
         compatibilityManifestSource: $markerSource,
@@ -499,9 +512,23 @@ after="$(fixture_hashes "$case_root")"
 [[ "$before" == "$after" ]] || fail "accepted protected-hotfix preflight wrote fixture state"
 [[ "$protected_output" == *"baseline_mode=accepted_protected_hotfix_compatibility_receipt"* ]] || \
   fail "exact protected-hotfix receipt was not distinguished in proof output"
-[[ "$protected_output" == *"proof.protected_runtime=receipt_bound commit=$PROTECTED_COMMIT"* ]] || \
+[[ "$protected_output" == *"proof.protected_runtime=receipt_and_live_bound commit=$PROTECTED_COMMIT"* ]] || \
   fail "accepted receipt omitted protected runtime identity"
 pass "exact protected-hotfix compatibility receipt is accepted read-only"
+
+case_root="$(copy_case protected-target-older-than-runtime)"
+protect_fixture "$case_root"
+printf '{"format":1,"bundleVersion":"2026071601","gitCommit":"%s"}\n' "$PROTECTED_COMMIT" \
+  >"$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json.backup.fixture"
+write_protected_receipt "$case_root"
+run_expect_fail "target older than protected runtime blocks" "$case_root" "target release build is not newer than protected runtime build" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-live-runtime-drift)"
+protect_fixture "$case_root"
+: >"$case_root/control/protected-proof-drift"
+run_expect_fail "live protected runtime drift blocks" "$case_root" "live protected runtime proof did not return the exact receipt identity" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
 
 case_root="$(copy_case protected-missing-receipt)"
 protect_fixture "$case_root"
