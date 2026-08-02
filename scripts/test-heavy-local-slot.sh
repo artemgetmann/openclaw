@@ -241,6 +241,12 @@ EOF
   chmod +x "$fixture_lifecycle_command"
 
   cat >"$fixture_health_hook" <<'EOF'
+probe_dedicated_jarvis() {
+  # The copied wrapper must never inspect the live Jarvis service. Individual
+  # fixture samples below own every healthy and unhealthy identity transition.
+  printf '%s' 'ok|4242'
+}
+
 host_health_reason() {
   local required_cpu_idle="$1"
   local require_jarvis_health="$2"
@@ -289,6 +295,34 @@ host_health_reason() {
       printf '%s' \
         'host_unhealthy|jarvis_unhealthy|managed Jarvis health check failed|metric=jarvis_health observed=unhealthy expected=healthy'
     fi
+  elif [[ "$test_health_sample" == "memory-warning" ]]; then
+    printf '%s\n' \
+      'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=fixture memory_pressure=warn memory_pressure_level=2 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 thermal_state=normal' >&2
+    printf '%s' \
+      'host_unhealthy|memory_pressure_state|macOS memory pressure is warn|metric=memory_pressure_state observed=warn expected=normal'
+  elif [[ "$test_health_sample" == "thermal-warning" ]]; then
+    printf '%s\n' \
+      'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=fixture memory_pressure=normal memory_pressure_level=1 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 thermal_state=pressure' >&2
+    printf '%s' \
+      'host_unhealthy|thermal_pressure|macOS reports thermal or performance pressure|metric=thermal_pressure observed=pressure expected=normal'
+  elif [[ "$test_health_sample" == "jarvis-identity-mismatch" ]]; then
+    printf '%s' \
+      'host_unhealthy|jarvis_listener_mismatch|managed Jarvis LaunchAgent PID does not exclusively own port 18789|metric=jarvis_listener_pid observed=5252 expected=4242 listener_count=1'
+  elif [[ "$test_health_sample" == "jarvis-latency-timeout" ]]; then
+    printf '%s' \
+      'host_unhealthy|jarvis_unhealthy|managed Jarvis health check failed|metric=jarvis_health observed=unhealthy expected=healthy'
+  elif [[ "$test_health_sample" == "resource-unavailable" ]]; then
+    printf '%s' \
+      'guard_internal|paging_measurement_failed|could not measure swap and pageout counters|metric=paging_trend status=unavailable'
+  elif [[ "$test_health_sample" == "fanout-unavailable" ]]; then
+    printf '%s' \
+      'guard_internal|fanout_measurement_failed|could not measure the guarded process group|metric=guarded_group_fanout status=unavailable'
+  elif [[ "$test_health_sample" == "resource-advisory" ]]; then
+    printf '%s\n' \
+      'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=fixture memory_pressure=normal memory_pressure_level=1 swap_used_kib=2048 swap_free_kib=1024 pageouts_total=20 swapouts_total=10 thermal_state=normal' >&2
+  elif [[ "$test_health_sample" == "fanout-observed" ]]; then
+    printf '%s\n' \
+      'HEAVY_LOCAL_GROUP_TELEMETRY cpu_policy=dedicated-agent phase=runtime pgid=4242 process_count=3 rss_kib=4096 enforcement=single_guarded_group' >&2
   elif [[ "$test_health_sample" == "guard-internal" ]]; then
     printf '%s' \
       'guard_internal|fixture_measurement_failed|synthetic measurement backend failed|metric=fixture status=unavailable'
@@ -525,6 +559,23 @@ test_production_has_no_ambient_test_bypass() {
     fail "production stop rule is not fixed at two unhealthy samples"
   grep -Fq 'readonly HOST_HEALTH_HTTP_TIMEOUT_SECONDS=3' "$WRAPPER" ||
     fail "production health timeout is not fixed at three seconds"
+  grep -Fq '/usr/sbin/sysctl -n kern.memorystatus_vm_pressure_level' "$WRAPPER" ||
+    fail "dedicated resource policy does not read the macOS memory-pressure state"
+  grep -Fq '/usr/sbin/sysctl -n vm.swapusage' "$WRAPPER" ||
+    fail "dedicated resource policy does not measure swap usage"
+  grep -Fq '/usr/bin/vm_stat' "$WRAPPER" ||
+    fail "dedicated resource policy does not measure pageout counters"
+  grep -Fq '/usr/bin/pmset -g therm' "$WRAPPER" ||
+    fail "dedicated resource policy does not measure thermal pressure"
+  grep -Fq '/usr/sbin/lsof -nP -tiTCP:18789 -sTCP:LISTEN' "$WRAPPER" ||
+    fail "dedicated resource policy does not bind Jarvis to its listener PID"
+  grep -Fq -- "-w '%{http_code}|%{time_total}'" "$WRAPPER" ||
+    fail "dedicated resource policy does not measure Jarvis HTTP latency"
+  grep -Fq 'HEAVY_LOCAL_GROUP_TELEMETRY' "$WRAPPER" ||
+    fail "dedicated resource policy does not expose guarded-group fanout"
+  if grep -Eq 'MIN_SWAP_FREE|MAX_SWAP|MAX_PAGEOUT|MAX_FANOUT' "$WRAPPER"; then
+    fail "production wrapper invented an unevidenced paging or fanout threshold"
+  fi
   pass "production wrapper exposes no ambient bypass or health tuning"
 }
 
@@ -672,6 +723,154 @@ test_cpu_policy_is_explicit_narrow_and_receipted() {
   grep -Fq 'code=memory_pressure metric=memory_free_percent observed=10 threshold=25' "$output" ||
     fail "dedicated CPU runtime lost its memory stop receipt"
   pass "CPU policy is explicit, telemetry-only when dedicated, and narrow"
+}
+
+test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
+  local lock_path="$TMP_DIR/dedicated-resource.lock"
+  local health_path="$TMP_DIR/dedicated-resource.health"
+  local marker="$TMP_DIR/dedicated-resource.marker"
+  local output="$TMP_DIR/dedicated-resource.out"
+  local secret_argument="must-not-appear-in-resource-telemetry"
+  local sample="" expected_class="" expected_code=""
+  local status=0
+
+  # Every platform or identity hazard refuses before the command starts. An
+  # unavailable required backend is guard_internal rather than a retryable host
+  # reading, so a broken sampler cannot silently weaken the dedicated profile.
+  for sample in \
+    memory-warning \
+    thermal-warning \
+    jarvis-identity-mismatch \
+    jarvis-latency-timeout \
+    resource-unavailable; do
+    case "$sample" in
+      memory-warning)
+        expected_class=host_unhealthy
+        expected_code=memory_pressure_state
+        ;;
+      thermal-warning)
+        expected_class=host_unhealthy
+        expected_code=thermal_pressure
+        ;;
+      jarvis-identity-mismatch)
+        expected_class=host_unhealthy
+        expected_code=jarvis_listener_mismatch
+        ;;
+      jarvis-latency-timeout)
+        expected_class=host_unhealthy
+        expected_code=jarvis_unhealthy
+        ;;
+      resource-unavailable)
+        expected_class=guard_internal
+        expected_code=paging_measurement_failed
+        ;;
+    esac
+    printf '%s\n' "$sample" >"$health_path"
+    set +e
+    OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+    OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+      "$FIXTURE_WRAPPER" \
+        --cpu-policy dedicated-agent \
+        --label "resource-${sample}" \
+        -- touch "$marker" >"$output" 2>&1
+    status=$?
+    set -e
+    [[ "$status" -eq 75 ]] ||
+      fail "$sample returned $status instead of fail-closed exit 75"
+    [[ ! -e "$marker" && ! -e "$lock_path" ]] ||
+      fail "$sample ran work or leaked the machine lease"
+    grep -Fq "class=${expected_class} code=${expected_code}" "$output" ||
+      fail "$sample omitted its stable refusal class/code"
+  done
+
+  # Paging totals and fanout/RSS are observations, not arbitrary kill limits.
+  # A healthy advisory sample must admit the command and redact its argument.
+  {
+    printf 'resource-advisory\n'
+    printf 'fanout-observed\n'
+    printf 'healthy\n'
+    printf 'healthy\n'
+  } >"$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --label "resource-advisory" \
+      -- bash -c 'sleep 0.2; touch "$1"' "$secret_argument" "$marker" \
+      >"$output" 2>&1
+  [[ -f "$marker" && ! -e "$lock_path" ]] ||
+    fail "healthy resource telemetry blocked work or leaked the lease"
+  grep -Fq 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent' "$output" ||
+    fail "paging trend telemetry was not emitted"
+  grep -Fq 'HEAVY_LOCAL_GROUP_TELEMETRY cpu_policy=dedicated-agent' "$output" ||
+    fail "fanout/RSS telemetry was not emitted"
+  if grep -Fq "$secret_argument" "$output"; then
+    fail "resource telemetry exposed a guarded command argument"
+  fi
+  /bin/rm -f "$marker"
+
+  # One transient thermal sample is advisory to admitted work. A healthy next
+  # sample resets the strike; two consecutive warnings stop the full tree.
+  {
+    printf 'healthy\n'
+    printf 'thermal-warning\n'
+    printf 'healthy\n'
+    printf 'healthy\n'
+  } >"$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --label "resource-transient" \
+      -- bash -c 'sleep 0.2; touch "$1"' _ "$marker" >"$output" 2>&1
+  [[ -f "$marker" && ! -e "$lock_path" ]] ||
+    fail "one transient thermal warning killed admitted work"
+  /bin/rm -f "$marker"
+
+  {
+    printf 'healthy\n'
+    printf 'thermal-warning\n'
+    printf 'thermal-warning\n'
+  } >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --label "resource-two-strike" \
+      -- bash -c 'sleep 1; touch "$1"' _ "$marker" >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] ||
+    fail "repeated thermal pressure returned $status instead of 75"
+  [[ ! -e "$marker" && ! -e "$lock_path" ]] ||
+    fail "repeated thermal pressure failed tree cleanup or leaked the lease"
+  grep -Fq 'code=thermal_pressure' "$output" ||
+    fail "repeated thermal stop lost its structured reason"
+
+  # Fanout measurement starts only after the committed process group exists.
+  # Two unreadable samples therefore stop at runtime and still prove cleanup.
+  {
+    printf 'healthy\n'
+    printf 'fanout-unavailable\n'
+    printf 'fanout-unavailable\n'
+  } >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --label "resource-fanout-unavailable" \
+      -- bash -c 'sleep 1; touch "$1"' _ "$marker" >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] ||
+    fail "unavailable fanout telemetry returned $status instead of 75"
+  [[ ! -e "$marker" && ! -e "$lock_path" ]] ||
+    fail "unavailable fanout telemetry failed cleanup or leaked the lease"
+  grep -Fq 'class=guard_internal code=fanout_measurement_failed' "$output" ||
+    fail "fanout measurement failure lost its structured reason"
+  pass "dedicated resource guardrails fail safe and preserve healthy work"
 }
 
 test_owner_publish_failure_is_actionable() {
@@ -2802,6 +3001,16 @@ if [[ "${1:-}" == "--cpu-policy-only" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "--resource-policy-only" ]]; then
+  SUITE_PHASE="create_instrumented_runtime"
+  create_instrumented_runtime
+  run_suite_test test_production_has_no_ambient_test_bypass
+  run_suite_test test_dedicated_resource_guardrails_are_fail_safe_and_observable
+  SUITE_PHASE="complete"
+  echo "Heavy-local slot dedicated resource tests passed."
+  exit 0
+fi
+
 if [[ "${1:-}" == "--gateway-lifecycle-only" ]]; then
   SUITE_PHASE="create_instrumented_runtime"
   create_instrumented_runtime
@@ -2830,6 +3039,7 @@ SUITE_PHASE="create_term_attribution_holder"
 create_term_attribution_holder
 run_suite_test test_production_has_no_ambient_test_bypass
 run_suite_test test_cpu_policy_is_explicit_narrow_and_receipted
+run_suite_test test_dedicated_resource_guardrails_are_fail_safe_and_observable
 run_suite_test test_owner_publish_failure_is_actionable
 run_suite_test test_large_generated_state_emits_owner_receipt
 run_suite_test test_disk_pressure_refuses_and_warning_admits
