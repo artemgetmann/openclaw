@@ -411,6 +411,8 @@ verify_protected_hotfix_compatibility_receipt() {
   local old_team
   local old_requirement
   local old_cdhash
+  local new_team
+  local new_requirement
   local compatibility_commit
   local compatibility_build
   local protected_commit
@@ -443,10 +445,18 @@ verify_protected_hotfix_compatibility_receipt() {
   old_team="$(app_team_identifier "$OLD_APP")"
   old_requirement="$(app_designated_requirement "$OLD_APP")"
   old_cdhash="$(app_code_directory_hash "$OLD_APP")"
+  new_team="$(app_team_identifier "$NEW_APP")"
+  new_requirement="$(app_designated_requirement "$NEW_APP")"
   [[ -n "$installed_team" && -n "$installed_requirement" && "$installed_cdhash" =~ ^[0-9a-fA-F]{40}$ ]] || \
     die "preflight blocked: protected installed app has missing or ambiguous code-signing provenance"
   [[ "$old_team" == "$installed_team" && "$old_requirement" == "$installed_requirement" && "$old_cdhash" == "$installed_cdhash" ]] || \
     die "preflight blocked: installed/live mismatch: old and installed private app signing identities differ"
+
+  # Sparkle validates the replacement against the running host application's
+  # designated requirement. A receipt can authorize Gatekeeper-ineligible
+  # provenance, but it cannot make an incompatible signature updateable.
+  [[ "$old_team" == "$new_team" && "$old_requirement" == "$new_requirement" ]] || \
+    die "preflight blocked: protected private baseline signing identity is incompatible with the signed public target"
 
   require_readable_file "$MANAGED_MANIFEST" "protected-hotfix compatibility manifest"
   require_readable_file "$PROTECTION_MARKER" "protected-hotfix protection marker"

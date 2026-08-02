@@ -83,7 +83,9 @@ not a symlink. Its validity window may not exceed seven days. It binds:
 - `targetRelease`: bundle id, version, build, full commit, and canonical feed.
 
 This path still requires strict code-signature integrity for the private old and
-installed apps. It excuses only their Gatekeeper rejection. The target still
+installed apps, and their Team ID plus designated requirement must match the
+signed public target so Sparkle can replace the running host. It excuses only
+their Gatekeeper rejection. The target still
 must pass strict codesign, Gatekeeper, pinned Jarvis Team ID, designated
 requirement, package-commit, and public-appcast checks. Missing, stale, unknown,
 or extra receipt fields fail closed. The target build must be newer than both

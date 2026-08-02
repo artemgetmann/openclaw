@@ -556,6 +556,13 @@ printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' >"$case_root/apps/installed/
 run_expect_fail "receipt rejects private signing identity drift" "$case_root" "signing identities differ" \
   --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
 
+case_root="$(copy_case protected-target-signing-incompatible)"
+protect_fixture "$case_root"
+printf 'OTHERTEAM\n' >"$case_root/apps/old/Jarvis.app/.fixture-team"
+printf 'OTHERTEAM\n' >"$case_root/apps/installed/Jarvis.app/.fixture-team"
+run_expect_fail "receipt rejects Sparkle-incompatible private signing identity" "$case_root" "incompatible with the signed public target" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
 case_root="$(copy_case protected-stale)"
 protect_fixture "$case_root"
 jq '.expiresAt = "2000-01-01T00:00:00.000Z"' "$case_root/protected-hotfix-receipt.json" >"$case_root/receipt.tmp"
