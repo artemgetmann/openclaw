@@ -352,6 +352,50 @@ describe("markdownToTelegramHtml", () => {
     expect(richHtml).not.toContain("<blockquote>");
   });
 
+  it("uses parser-owned cells for list tables and pipe-less rows", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      ["- | H1 | H2 |", "  | --- | --- |", "  solo"].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml).toContain("<th>H1</th><th>H2</th>");
+    expect(richHtml).toContain("<td>solo</td><td></td>");
+    expect(richHtml).not.toContain("<th>•</th>");
+  });
+
+  it("rewrites parser-owned list blockquotes as copy blocks", () => {
+    const drafts = [
+      "- > Send this draft.",
+      ["- item", "    > Send this draft."].join("\n"),
+      ["- item", "\t> Send this draft."].join("\n"),
+    ];
+
+    for (const draft of drafts) {
+      const richHtml = markdownToTelegramRichHtml(draft, {
+        tableMode: "block",
+        copySafeBlockquotes: true,
+      });
+      expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+      expect(richHtml).toContain("Send this draft.");
+      expect(richHtml).not.toContain("<blockquote>");
+    }
+  });
+
+  it("keeps list-blockquote fenced samples in one copy block", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      ["- > Paste this Markdown:", "  > ```", "  > | A | B |", "  > | --- | --- |", "  > ```"].join(
+        "\n",
+      ),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("Paste this Markdown:");
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).not.toContain("<blockquote>");
+  });
+
   it("keeps space-tab-indented table-like code literal", () => {
     const richHtml = markdownToTelegramRichHtml(
       [

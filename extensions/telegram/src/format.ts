@@ -191,10 +191,27 @@ function findMarkdownLiteralCodeLines(markdown: string): Set<number> {
   return codeLines;
 }
 
+function findMarkdownBlockquoteLines(markdown: string): Set<number> {
+  const blockquoteLines = new Set<number>();
+  for (const token of parseTelegramMarkdownTokens(markdown)) {
+    if (token.type !== "blockquote_open" || !token.map) {
+      continue;
+    }
+    const [startLine, endLineExclusive] = token.map;
+    // Parser ranges include list same-line and continuation blockquotes that
+    // raw `^>` matching misses. Mark the complete source-owned draft range.
+    for (let line = startLine; line < endLineExclusive; line += 1) {
+      blockquoteLines.add(line);
+    }
+  }
+  return blockquoteLines;
+}
+
 export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string {
   const normalized = (markdown ?? "").replace(/\r\n?/g, "\n");
   const lines = normalized.split("\n");
   const literalCodeLines = findMarkdownLiteralCodeLines(normalized);
+  const blockquoteLines = findMarkdownBlockquoteLines(normalized);
   const output: string[] = [];
   let quoteLines: string[] = [];
 
@@ -223,9 +240,12 @@ export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string
       output.push(line);
       continue;
     }
-    const quoteMatch = /^(?: {0,3}>\s?)(.*)$/.exec(line);
-    if (quoteMatch) {
-      quoteLines.push(quoteMatch[1] ?? "");
+    if (blockquoteLines.has(lineIndex)) {
+      // Once the canonical parser identifies this source line as blockquote
+      // content, remove only its actual list/indent/quote container prefix.
+      // Lazy continuation text has no marker and is kept after indentation.
+      const quoteMatch = /^(?:[ \t]*(?:[*+-]|\d{1,9}[.)])[ \t]+)?[ \t]*>\s?(.*)$/.exec(line);
+      quoteLines.push(quoteMatch?.[1] ?? line.trimStart());
       continue;
     }
     flushQuote();
@@ -415,38 +435,6 @@ type MarkdownTableBlock = {
   rows: string[][];
 };
 
-function splitMarkdownTableRow(line: string): string[] {
-  const trimmed = line.trim();
-  const body = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
-  const withoutTrailingPipe = body.endsWith("|") ? body.slice(0, -1) : body;
-  const cells: string[] = [];
-  let current = "";
-  let escaped = false;
-  for (const char of withoutTrailingPipe) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === "|") {
-      cells.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  cells.push(current.trim());
-  return cells;
-}
-
-function isMarkdownTableRow(line: string): boolean {
-  return line.includes("|") && splitMarkdownTableRow(line).length > 1;
-}
-
 function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
   const lines = markdown.split("\n");
   const lineStarts: number[] = [];
@@ -457,7 +445,8 @@ function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
   }
 
   const blocks: MarkdownTableBlock[] = [];
-  for (const token of parseTelegramMarkdownTokens(markdown)) {
+  const tokens = parseTelegramMarkdownTokens(markdown);
+  for (const [tokenIndex, token] of tokens.entries()) {
     if (token.type !== "table_open" || !token.map) {
       continue;
     }
@@ -465,12 +454,38 @@ function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
     if (endLineExclusive <= startLine + 1) {
       continue;
     }
+    const headers: string[] = [];
+    const rows: string[][] = [];
+    let currentRow: string[] = [];
+    let currentCell: string | undefined;
+    let inHeader = false;
+    for (let index = tokenIndex + 1; index < tokens.length; index += 1) {
+      const tableToken = tokens[index];
+      if (!tableToken || tableToken.type === "table_close") {
+        break;
+      }
+      if (tableToken.type === "thead_open") {
+        inHeader = true;
+      } else if (tableToken.type === "thead_close") {
+        inHeader = false;
+      } else if (tableToken.type === "tr_open") {
+        currentRow = [];
+      } else if (tableToken.type === "th_open" || tableToken.type === "td_open") {
+        currentCell = "";
+      } else if (tableToken.type === "inline" && currentCell !== undefined) {
+        currentCell = tableToken.content;
+      } else if (tableToken.type === "th_close" || tableToken.type === "td_close") {
+        currentRow.push(currentCell ?? "");
+        currentCell = undefined;
+      } else if (tableToken.type === "tr_close") {
+        if (inHeader) {
+          headers.push(...currentRow);
+        } else {
+          rows.push(currentRow);
+        }
+      }
+    }
     const endLine = endLineExclusive - 1;
-    const headers = splitMarkdownTableRow(lines[startLine] ?? "");
-    const rows = lines
-      .slice(startLine + 2, endLineExclusive)
-      .filter(isMarkdownTableRow)
-      .map(splitMarkdownTableRow);
     const start = lineStarts[startLine] ?? 0;
     const end = (lineStarts[endLine] ?? start) + (lines[endLine] ?? "").length;
     blocks.push({ start, end, headers, rows });
