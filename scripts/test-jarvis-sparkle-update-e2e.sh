@@ -585,6 +585,13 @@ protect_fixture "$case_root"
 run_expect_fail "receipt rejects missing private Sparkle public key" "$case_root" "Sparkle public key is missing or incompatible" \
   --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
 
+case_root="$(copy_case protected-mismatched-sparkle-key)"
+protect_fixture "$case_root"
+/usr/libexec/PlistBuddy -c 'Set :SUPublicEDKey OTHERFIXTURESPARKLEKEY' "$case_root/apps/old/Jarvis.app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :SUPublicEDKey OTHERFIXTURESPARKLEKEY' "$case_root/apps/installed/Jarvis.app/Contents/Info.plist"
+run_expect_fail "receipt rejects private Sparkle public key mismatch" "$case_root" "Sparkle public key is missing or incompatible" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
 case_root="$(copy_case protected-target-code-directory-drift)"
 protect_fixture "$case_root"
 printf '7777777777777777777777777777777777777777\n' >"$case_root/apps/new/Jarvis.app/.fixture-cdhash"

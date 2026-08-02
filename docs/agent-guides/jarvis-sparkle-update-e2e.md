@@ -86,8 +86,9 @@ not a symlink. Its validity window may not exceed seven days. It binds:
 
 This path still requires strict code-signature integrity for the private old and
 installed apps, and their Team ID plus designated requirement must match the
-signed public target. All three apps must also carry the pinned Sparkle public
-key so the running host can authenticate and replace itself. It excuses only
+signed public target. The old and installed apps must also carry the exact
+nonblank Sparkle public key from that receipt-bound signed target so the running
+host can authenticate and replace itself. It excuses only
 their Gatekeeper rejection. The target still
 must pass strict codesign, Gatekeeper, pinned Jarvis Team ID, designated
 requirement, package-commit, and public-appcast checks. Missing, stale, unknown,

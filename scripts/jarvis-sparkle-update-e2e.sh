@@ -16,7 +16,6 @@ GATEWAY_LABEL="ai.jarvis.gateway"
 PREFERENCES_DOMAIN="ai.jarvis.mac"
 OFFICIAL_BUNDLE_ID="ai.jarvis.mac"
 OFFICIAL_TEAM_ID="SKDYY4SBVV"
-OFFICIAL_SPARKLE_PUBLIC_ED_KEY="AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI="
 
 MODE="preflight"
 OLD_APP=""
@@ -480,9 +479,8 @@ verify_protected_hotfix_compatibility_receipt() {
   # provenance, but it cannot make an incompatible signature updateable.
   [[ "$old_team" == "$new_team" && "$old_requirement" == "$new_requirement" ]] || \
     die "preflight blocked: protected private baseline signing identity is incompatible with the signed public target"
-  [[ "$old_sparkle_key" == "$OFFICIAL_SPARKLE_PUBLIC_ED_KEY" && \
-    "$installed_sparkle_key" == "$OFFICIAL_SPARKLE_PUBLIC_ED_KEY" && \
-    "$new_sparkle_key" == "$OFFICIAL_SPARKLE_PUBLIC_ED_KEY" ]] || \
+  [[ -n "$new_sparkle_key" && "$old_sparkle_key" == "$new_sparkle_key" && \
+    "$installed_sparkle_key" == "$new_sparkle_key" ]] || \
     die "preflight blocked: protected private baseline Sparkle public key is missing or incompatible with the signed public target"
   [[ "$new_cdhash" =~ ^[0-9a-fA-F]{40}$ ]] || \
     die "preflight blocked: signed public target has missing or ambiguous CodeDirectory identity"
@@ -844,7 +842,6 @@ configure_test_root() {
   OPENCLAW_BIN="${OPENCLAW_JARVIS_CLI_BIN:-$TEST_ROOT/bin/openclaw}"
   PROVE_RUNTIME_SCRIPT="${OPENCLAW_PROVE_JARVIS_RUNTIME_SCRIPT:-$TEST_ROOT/bin/prove-jarvis-runtime}"
   OFFICIAL_TEAM_ID="FIXTURETEAM"
-  OFFICIAL_SPARKLE_PUBLIC_ED_KEY="FIXTURESPARKLEPUBLICKEY"
 }
 
 run_preflight() {
