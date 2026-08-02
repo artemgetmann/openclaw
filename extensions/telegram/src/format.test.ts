@@ -389,9 +389,9 @@ describe("markdownToTelegramHtml", () => {
   it("renders table cell contents as inline Markdown", () => {
     const richHtml = markdownToTelegramRichHtml(
       [
-        "| Quote | Heading | Rule | Fence |",
-        "| --- | --- | --- | --- |",
-        "| > literal | # literal | --- | ```literal |",
+        "| Quote | Heading | Rule | Fence | Italic | Bold |",
+        "| --- | --- | --- | --- | --- | --- |",
+        "| > literal | # literal | --- | ```literal | _italic_ | __bold__ |",
       ].join("\n"),
       { tableMode: "block" },
     );
@@ -401,6 +401,8 @@ describe("markdownToTelegramHtml", () => {
     expect(richHtml).toContain("<td># literal</td>");
     expect(richHtml).toContain("<td>---</td>");
     expect(richHtml).toContain("<td>```literal</td>");
+    expect(richHtml).toContain("<td><i>italic</i></td>");
+    expect(richHtml).toContain("<td><b>bold</b></td>");
     expect(richHtml).not.toContain("<blockquote>");
     expect(richHtml).not.toContain("<pre><code>");
     expect(richHtml).not.toContain("───");

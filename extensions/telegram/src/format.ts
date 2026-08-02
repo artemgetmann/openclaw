@@ -666,11 +666,16 @@ function renderTelegramRichTableFallback(table: MarkdownTableBlock): string {
 }
 
 function renderTelegramRichCell(markdown: string): string {
+  const cellMarkdown = markdown.trim();
+  if (!cellMarkdown) {
+    return "";
+  }
   // Markdown-it table cells are inline contexts, but the legacy renderer parses
-  // an isolated string as a whole block. Prefix a private sentinel so literal
-  // cell text such as `>`, `#`, `---`, or ``` cannot become block syntax.
-  const sentinel = "\uE000";
-  const html = markdownToTelegramHtml(`${sentinel}${markdown.trim()}`, {
+  // an isolated string as a whole block. Prefix a private sentinel plus a space:
+  // the sentinel blocks `>`, `#`, `---`, and ``` from becoming block syntax,
+  // while the whitespace preserves normal inline emphasis delimiter boundaries.
+  const sentinel = "\uE000 ";
+  const html = markdownToTelegramHtml(`${sentinel}${cellMarkdown}`, {
     tableMode: "off",
     wrapFileRefs: false,
   });
