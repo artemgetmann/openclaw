@@ -1,3 +1,4 @@
+import MarkdownIt from "markdown-it";
 import type { MarkdownTableMode } from "../../../src/config/types.base.js";
 import {
   chunkMarkdownIR,
@@ -147,134 +148,55 @@ function buildSafeMarkdownFence(text: string): string {
   return fenceChar.repeat(fenceLength);
 }
 
-type MarkdownFenceState = {
-  markerChar: "`" | "~";
-  markerLength: number;
-  containerIndentColumns: number;
-};
+function parseTelegramMarkdownTokens(markdown: string) {
+  const parser = new MarkdownIt({
+    html: false,
+    linkify: true,
+    breaks: false,
+    typographer: false,
+  });
+  parser.enable(["strikethrough", "table"]);
+  return parser.parse(markdown, {});
+}
 
-function measureMarkdownIndentColumns(line: string): number {
-  let columns = 0;
-  for (const char of line) {
-    if (char === " ") {
-      columns += 1;
+function findMarkdownLiteralCodeLines(markdown: string): Set<number> {
+  const codeLines = new Set<number>();
+  let blockquoteDepth = 0;
+  for (const token of parseTelegramMarkdownTokens(markdown)) {
+    if (token.type === "blockquote_open") {
+      blockquoteDepth += 1;
       continue;
     }
-    if (char === "\t") {
-      // CommonMark tabs advance to the next four-column tab stop. Measuring
-      // columns instead of bytes catches mixed prefixes such as space+tab.
-      columns += 4 - (columns % 4);
+    if (token.type === "blockquote_close") {
+      blockquoteDepth = Math.max(0, blockquoteDepth - 1);
       continue;
     }
-    break;
-  }
-  return columns;
-}
-
-function measureMarkdownColumns(text: string): number {
-  let columns = 0;
-  for (const char of text) {
-    columns += char === "\t" ? 4 - (columns % 4) : 1;
-  }
-  return columns;
-}
-
-function stripMarkdownIndentColumns(line: string, targetColumns: number): string | undefined {
-  if (targetColumns <= 0) {
-    return line;
-  }
-  let columns = 0;
-  let index = 0;
-  while (index < line.length && columns < targetColumns) {
-    const char = line[index];
-    let residualColumns = 0;
-    if (char === " ") {
-      columns += 1;
-    } else if (char === "\t") {
-      columns += 4 - (columns % 4);
-      residualColumns = Math.max(0, columns - targetColumns);
-    } else {
-      return undefined;
+    // A fenced Markdown sample inside a recipient blockquote belongs to that
+    // same copyable draft block. Only code outside blockquotes masks literal
+    // greater-than lines from draft conversion.
+    if (blockquoteDepth > 0) {
+      continue;
     }
-    index += 1;
-    if (columns >= targetColumns) {
-      // Consuming a tab can cross the container boundary. Preserve those
-      // residual visual columns so a four-space fence stays invalid instead
-      // of being shifted left into a false closer.
-      return `${" ".repeat(residualColumns)}${line.slice(index)}`;
+    if ((token.type !== "fence" && token.type !== "code_block") || !token.map) {
+      continue;
+    }
+    const [startLine, endLineExclusive] = token.map;
+    // Markdown-it already owns CommonMark list, blockquote, tab-stop, and
+    // implicit-closure semantics. Reuse its exact source map instead of
+    // maintaining a second, inevitably divergent fence state machine.
+    for (let line = startLine; line < endLineExclusive; line += 1) {
+      codeLines.add(line);
     }
   }
-  return undefined;
-}
-
-function trackMarkdownFenceLine(
-  line: string,
-  openFence: MarkdownFenceState | undefined,
-): { isFenced: boolean; nextFence: MarkdownFenceState | undefined } {
-  let scanLine = line;
-  if (openFence && openFence.containerIndentColumns > 0) {
-    const strippedLine = stripMarkdownIndentColumns(line, openFence.containerIndentColumns);
-    if (strippedLine === undefined) {
-      if (!line.trim()) {
-        return { isFenced: true, nextFence: openFence };
-      }
-      // CommonMark implicitly closes an unclosed fenced block when its list
-      // container ends. Re-evaluate the deindented line from scratch so a
-      // top-level table or a new top-level fence keeps its own semantics.
-      return trackMarkdownFenceLine(line, undefined);
-    }
-    scanLine = strippedLine;
-  }
-  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(scanLine);
-  let containerIndentColumns = 0;
-  if (openFence) {
-    const marker = match?.[2] ?? "";
-    const closesFence =
-      marker[0] === openFence.markerChar &&
-      marker.length >= openFence.markerLength &&
-      (match?.[3] ?? "").trim().length === 0;
-    return { isFenced: true, nextFence: closesFence ? undefined : openFence };
-  }
-  if (!match) {
-    // A fence may open directly after a list marker. Its body is indented to
-    // the marker's content column, so remember that column while scanning for
-    // the matching closer and keep every contained pipe row literal.
-    const listFence = /^( {0,3})(?:[*+-]|\d{1,9}[.)])([ \t]+)(`{3,}|~{3,})(.*)$/.exec(line);
-    if (!listFence) {
-      return { isFenced: false, nextFence: undefined };
-    }
-    const marker = listFence[3] ?? "";
-    const markerIndex = line.indexOf(marker);
-    const markerChar = marker[0] as "`" | "~";
-    const info = listFence[4] ?? "";
-    if (markerChar === "`" && info.includes("`")) {
-      return { isFenced: false, nextFence: undefined };
-    }
-    containerIndentColumns = measureMarkdownColumns(line.slice(0, markerIndex));
-    return {
-      isFenced: true,
-      nextFence: { markerChar, markerLength: marker.length, containerIndentColumns },
-    };
-  }
-  const marker = match[2] ?? "";
-  const markerChar = marker[0] as "`" | "~";
-  // CommonMark does not allow a backtick in a backtick fence's info string.
-  // Treating that malformed line as prose keeps our scanner aligned with the
-  // Markdown renderer that ultimately owns Telegram's visible output.
-  if (markerChar === "`" && (match[3] ?? "").includes("`")) {
-    return { isFenced: false, nextFence: undefined };
-  }
-  return {
-    isFenced: true,
-    nextFence: { markerChar, markerLength: marker.length, containerIndentColumns },
-  };
+  return codeLines;
 }
 
 export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string {
   const normalized = (markdown ?? "").replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  const literalCodeLines = findMarkdownLiteralCodeLines(normalized);
   const output: string[] = [];
   let quoteLines: string[] = [];
-  let openFence: MarkdownFenceState | undefined;
 
   const flushQuote = () => {
     if (quoteLines.length === 0) {
@@ -292,14 +214,11 @@ export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string
     output.push(`${fence}\n${quoteText}\n${fence}`);
   };
 
-  for (const line of normalized.split("\n")) {
+  for (const [lineIndex, line] of lines.entries()) {
     // A greater-than sign inside a fenced code body is literal source text,
-    // never a recipient draft marker. Track matching opener/closer state
-    // instead of hiding bytes with placeholders so downstream chunk limits
-    // use the exact HTML Telegram will receive.
-    const fence = trackMarkdownFenceLine(line, openFence);
-    openFence = fence.nextFence;
-    if (fence.isFenced) {
+    // never a recipient draft marker. Parser-owned source maps keep this
+    // correct across list containers, blockquotes, tabs, and implicit closes.
+    if (literalCodeLines.has(lineIndex)) {
       flushQuote();
       output.push(line);
       continue;
@@ -524,23 +443,8 @@ function splitMarkdownTableRow(line: string): string[] {
   return cells;
 }
 
-function isMarkdownTableDelimiter(line: string): boolean {
-  if (!line.includes("|")) {
-    return false;
-  }
-  const cells = splitMarkdownTableRow(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
-}
-
 function isMarkdownTableRow(line: string): boolean {
   return line.includes("|") && splitMarkdownTableRow(line).length > 1;
-}
-
-function isMarkdownIndentedCodeLine(line: string): boolean {
-  // CommonMark uses visual columns, not raw bytes, for indented code. Those
-  // literal pipe rows must never become Telegram native tables merely because
-  // a separate real table selects rich delivery.
-  return measureMarkdownIndentColumns(line) >= 4;
 }
 
 function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
@@ -553,47 +457,23 @@ function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
   }
 
   const blocks: MarkdownTableBlock[] = [];
-  let index = 0;
-  let openFence: MarkdownFenceState | undefined;
-  while (index + 1 < lines.length) {
-    const headerLine = lines[index] ?? "";
-    if (!openFence && isMarkdownIndentedCodeLine(headerLine)) {
-      index += 1;
+  for (const token of parseTelegramMarkdownTokens(markdown)) {
+    if (token.type !== "table_open" || !token.map) {
       continue;
     }
-    const fence = trackMarkdownFenceLine(headerLine, openFence);
-    openFence = fence.nextFence;
-    if (fence.isFenced) {
-      index += 1;
+    const [startLine, endLineExclusive] = token.map;
+    if (endLineExclusive <= startLine + 1) {
       continue;
     }
-
-    const delimiterLine = lines[index + 1] ?? "";
-    if (
-      isMarkdownIndentedCodeLine(delimiterLine) ||
-      !isMarkdownTableRow(headerLine) ||
-      !isMarkdownTableDelimiter(delimiterLine)
-    ) {
-      index += 1;
-      continue;
-    }
-
-    const headers = splitMarkdownTableRow(headerLine);
-    const rows: string[][] = [];
-    let endLine = index + 1;
-    for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
-      const rowLine = lines[rowIndex] ?? "";
-      if (isMarkdownIndentedCodeLine(rowLine) || !isMarkdownTableRow(rowLine)) {
-        break;
-      }
-      rows.push(splitMarkdownTableRow(rowLine));
-      endLine = rowIndex;
-    }
-
-    const start = lineStarts[index] ?? 0;
+    const endLine = endLineExclusive - 1;
+    const headers = splitMarkdownTableRow(lines[startLine] ?? "");
+    const rows = lines
+      .slice(startLine + 2, endLineExclusive)
+      .filter(isMarkdownTableRow)
+      .map(splitMarkdownTableRow);
+    const start = lineStarts[startLine] ?? 0;
     const end = (lineStarts[endLine] ?? start) + (lines[endLine] ?? "").length;
     blocks.push({ start, end, headers, rows });
-    index = endLine + 1;
   }
   return blocks;
 }
