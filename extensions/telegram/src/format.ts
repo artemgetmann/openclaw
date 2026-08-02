@@ -179,7 +179,7 @@ function measureMarkdownColumns(text: string): number {
   return columns;
 }
 
-function stripMarkdownIndentColumns(line: string, targetColumns: number): string {
+function stripMarkdownIndentColumns(line: string, targetColumns: number): string | undefined {
   if (targetColumns <= 0) {
     return line;
   }
@@ -192,20 +192,31 @@ function stripMarkdownIndentColumns(line: string, targetColumns: number): string
     } else if (char === "\t") {
       columns += 4 - (columns % 4);
     } else {
-      return line;
+      return undefined;
     }
     index += 1;
   }
-  return columns >= targetColumns ? line.slice(index) : line;
+  return columns >= targetColumns ? line.slice(index) : undefined;
 }
 
 function trackMarkdownFenceLine(
   line: string,
   openFence: MarkdownFenceState | undefined,
 ): { isFenced: boolean; nextFence: MarkdownFenceState | undefined } {
-  const scanLine = openFence
-    ? stripMarkdownIndentColumns(line, openFence.containerIndentColumns)
-    : line;
+  let scanLine = line;
+  if (openFence && openFence.containerIndentColumns > 0) {
+    const strippedLine = stripMarkdownIndentColumns(line, openFence.containerIndentColumns);
+    if (strippedLine === undefined) {
+      if (!line.trim()) {
+        return { isFenced: true, nextFence: openFence };
+      }
+      // CommonMark implicitly closes an unclosed fenced block when its list
+      // container ends. Re-evaluate the deindented line from scratch so a
+      // top-level table or a new top-level fence keeps its own semantics.
+      return trackMarkdownFenceLine(line, undefined);
+    }
+    scanLine = strippedLine;
+  }
   const match = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(scanLine);
   let containerIndentColumns = 0;
   if (openFence) {

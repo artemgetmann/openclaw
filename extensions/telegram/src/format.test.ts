@@ -237,6 +237,52 @@ describe("markdownToTelegramHtml", () => {
     expect(richHtml).toContain("| x | y |");
   });
 
+  it("ends an unclosed list fence when its container deindents", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "- ```md",
+        "  | literal | code |",
+        "  | --- | --- |",
+        "",
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "> Send this draft.",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(2);
+    expect(richHtml).toContain("| literal | code |");
+    expect(richHtml).toContain("Send this draft.");
+    expect(richHtml).not.toContain("<blockquote>");
+  });
+
+  it("reopens a deindented top-level fence after a list fence", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "- ```md",
+        "  literal list code",
+        "```",
+        "| fenced | code |",
+        "| --- | --- |",
+        "```",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(2);
+    expect(richHtml).toContain("| fenced | code |");
+    expect(richHtml).not.toContain("<th>fenced</th>");
+  });
+
   it("keeps space-tab-indented table-like code literal", () => {
     const richHtml = markdownToTelegramRichHtml(
       [
