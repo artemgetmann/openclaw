@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ const SCRIPT = path.join(ROOT, "scripts", "pr-lifecycle.mjs");
 type LifecycleOutput = {
   action: string;
   authority?: string;
+  taskAuthority?: { allowedActions: string[]; source: string };
   candidate?: {
     headSha: string;
     diffFingerprint: string;
@@ -18,6 +20,12 @@ type LifecycleOutput = {
   nativeTool?: { sequence: string[] };
   owner?: { threadId: string; hostId: string } | null;
   prompt?: string;
+  retryOfContractId?: string | null;
+  routing?: {
+    dispatcher: { role: string; threadId: string; hostId: string };
+    decision: string;
+    rationale: string[];
+  };
 };
 
 function makeFixture() {
@@ -101,6 +109,190 @@ function beginLiveTester(fixture: ReturnType<typeof makeFixture>) {
   ]);
 }
 
+function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
+  const tester = run(fixture, [
+    "handoff-test",
+    "42",
+    "--test-kind",
+    "read-only",
+    "--transport",
+    "user-visible-task",
+    "--owner-thread",
+    "builder-thread",
+    "--owner-host",
+    "builder-host",
+  ]);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "capacity-blocked-tester",
+    "--host-id",
+    "tester-host",
+  ]);
+  const receiptPath = path.join(fixture.root, "capacity-fail.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "FAIL",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "capacity-blocked-tester", hostId: "tester-host" },
+      evidence: ["heavy guard refused disk pressure before workload start"],
+      cleanup: { status: "not-required", evidence: "workload never started" },
+      limitations: [],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "capacity-blocked-tester",
+    "--host-id",
+    "tester-host",
+    "--closure",
+    "archived",
+  ]);
+  return tester;
+}
+
+function writeCapacityRecovery(
+  fixture: ReturnType<typeof makeFixture>,
+  priorTesterContractId: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const receiptPath = path.join(fixture.root, `capacity-recovery-${randomUUID()}.json`);
+  const receipt = {
+    schemaVersion: 1,
+    role: "capacity-recovery",
+    source: "authorized-capacity-owner-receipt",
+    priorTesterContractId,
+    cause: { class: "host_unhealthy", code: "disk_pressure", workloadStarted: false },
+    capacity: {
+      availableKiB: 36_756_724,
+      requiredKiB: 36_700_160,
+      heavyLockDirectoriesEmpty: true,
+      releaseLockDirectoriesEmpty: true,
+    },
+    evidence: ["material disk floor restored and lock directories are empty"],
+    ...overrides,
+  };
+  fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+  return receiptPath;
+}
+
+function capacityRetryArgs(priorTesterContractId: string, recoveryPath: string) {
+  return [
+    "handoff-test",
+    "42",
+    "--test-kind",
+    "read-only",
+    "--transport",
+    "user-visible-task",
+    "--owner-thread",
+    "builder-thread",
+    "--owner-host",
+    "builder-host",
+    "--capacity-retry-contract",
+    priorTesterContractId,
+    "--capacity-recovery-receipt",
+    recoveryPath,
+  ];
+}
+
+function acceptReleaseHandoff(fixture: ReturnType<typeof makeFixture>, contractId: string) {
+  return run(fixture, [
+    "accept-release-handoff",
+    "42",
+    "--contract-id",
+    contractId,
+    "--thread-id",
+    "release-thread",
+    "--host-id",
+    "release-host",
+    "--builder-thread",
+    "builder-thread",
+    "--builder-host",
+    "builder-host",
+    "--builder-archived",
+    "true",
+  ]);
+}
+
+function returnSource(fixture: ReturnType<typeof makeFixture>, contractId: string) {
+  return run(fixture, [
+    "return-source",
+    "42",
+    "--contract-id",
+    contractId,
+    "--thread-id",
+    "release-thread",
+    "--host-id",
+    "release-host",
+    "--builder-thread",
+    "builder-thread",
+    "--builder-host",
+    "builder-host",
+    "--builder-unarchived",
+    "true",
+    "--finding",
+    "archive receipt must gate review",
+  ]);
+}
+
+function completeTesterPass(fixture: ReturnType<typeof makeFixture>) {
+  const tester = beginLiveTester(fixture);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "tester-thread",
+    "--host-id",
+    "tester-host",
+  ]);
+  const receiptPath = path.join(fixture.root, "tester-pass.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "PASS",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "tester-thread", hostId: "tester-host" },
+      evidence: ["exact-head lifecycle proof passed"],
+      cleanup: { status: "complete" },
+      limitations: [],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "tester-thread",
+    "--host-id",
+    "tester-host",
+    "--closure",
+    "archived",
+  ]);
+}
+
 describe("scripts/pr-lifecycle", () => {
   it("fails closed when live or external testing requests nested transport", () => {
     const fixture = makeFixture();
@@ -168,6 +360,111 @@ describe("scripts/pr-lifecycle", () => {
     ]);
     expect(duplicate.status).toBe(1);
     expect(duplicate.stderr).toContain("a different tester owner is already active");
+  });
+
+  it("atomically reserves one fresh tester after typed capacity recovery", () => {
+    const fixture = makeFixture();
+    const priorTester = completeCapacityOnlyFailure(fixture);
+    const recoveryPath = writeCapacityRecovery(fixture, priorTester.contractId);
+    const retryArgs = capacityRetryArgs(priorTester.contractId, recoveryPath);
+    const retry = run(fixture, retryArgs);
+    expect(retry.action).toBe("create_thread");
+    expect(retry.contractId).not.toBe(priorTester.contractId);
+    expect(retry.retryOfContractId).toBe(priorTester.contractId);
+
+    // Retrying the same command is safe: the new pending reservation wins and
+    // the caller cannot create a second tester from the same recovery receipt.
+    const repeated = run(fixture, retryArgs);
+    expect(repeated).toMatchObject({ action: "do-not-create", contractId: retry.contractId });
+
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.testerHistory).toHaveLength(1);
+    expect(state.testerHistory[0].tester.contractId).toBe(priorTester.contractId);
+    expect(state.tester.retryOfContractId).toBe(priorTester.contractId);
+  });
+
+  it("refuses a recursive capacity retry after the one replacement also fails", () => {
+    const fixture = makeFixture();
+    const originalTester = completeCapacityOnlyFailure(fixture);
+    const originalRecovery = writeCapacityRecovery(fixture, originalTester.contractId);
+    const replacement = run(
+      fixture,
+      capacityRetryArgs(originalTester.contractId, originalRecovery),
+    );
+
+    // Close the authorized replacement with the same pre-work capacity-only
+    // failure. This must not mint a fresh retry budget from its new identity.
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      replacement.contractId,
+      "--thread-id",
+      "replacement-tester",
+      "--host-id",
+      "tester-host",
+    ]);
+    const replacementReceiptPath = path.join(fixture.root, "replacement-capacity-fail.json");
+    fs.writeFileSync(
+      replacementReceiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: replacement.routing,
+        contractId: replacement.contractId,
+        status: "FAIL",
+        headSha: replacement.candidate?.headSha,
+        diffFingerprint: replacement.candidate?.diffFingerprint,
+        owner: { threadId: "replacement-tester", hostId: "tester-host" },
+        evidence: ["heavy guard again refused disk pressure before workload start"],
+        cleanup: { status: "not-required", evidence: "workload never started" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", replacementReceiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      replacement.contractId,
+      "--thread-id",
+      "replacement-tester",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+
+    const secondRecovery = writeCapacityRecovery(fixture, replacement.contractId);
+    const recursiveRetry = runFailure(
+      fixture,
+      capacityRetryArgs(replacement.contractId, secondRecovery),
+    );
+    expect(recursiveRetry.status).toBe(1);
+    expect(recursiveRetry.stderr).toContain(
+      "capacity retry was already consumed for this immutable candidate",
+    );
+
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.tester.contractId).toBe(replacement.contractId);
+    expect(state.tester.phase).toBe("closed");
+    expect(state.testerHistory).toHaveLength(1);
+  });
+
+  it("rejects capacity retry without exact no-work and recovered-capacity proof", () => {
+    const fixture = makeFixture();
+    const priorTester = completeCapacityOnlyFailure(fixture);
+    const recoveryPath = writeCapacityRecovery(fixture, priorTester.contractId, {
+      cause: { class: "host_unhealthy", code: "disk_pressure", workloadStarted: true },
+    });
+
+    const result = runFailure(fixture, capacityRetryArgs(priorTester.contractId, recoveryPath));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("prove disk-pressure refusal before workload start");
   });
 
   it("consumes the exact tester receipt before routing one user-visible release worker", () => {
@@ -259,7 +556,16 @@ describe("scripts/pr-lifecycle", () => {
     ]);
     expect(release.action).toBe("create_thread");
     expect(release.authority).toBe("normal-merge");
-    expect(release.prompt).toContain("No bypass, admin override, deploy, restart");
+    expect(release.taskAuthority?.allowedActions).toEqual(["normal-merge"]);
+    expect(release.nativeTool?.sequence).toEqual([
+      "list_projects",
+      "create_thread",
+      "accept-release-owner",
+      "set_thread_archived",
+      "accept-release-handoff",
+    ]);
+    expect(release.prompt).toContain("archive the exact builder thread");
+    expect(release.prompt).toContain("Builder archival belongs to acceptance");
 
     const repeated = run(fixture, [
       "handoff-release",
@@ -437,6 +743,71 @@ describe("scripts/pr-lifecycle", () => {
     expect(result.stderr).toContain("dispatcher routing");
   });
 
+  it("carries direct normal-merge and deploy authority but rejects protected actions", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const authorityPath = path.join(fixture.root, "task-authority.json");
+    fs.writeFileSync(
+      authorityPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        source: "direct-user-task",
+        scope: "merge PR #42 and deploy it to the already-authorized staging target",
+        allowedActions: ["normal-merge", "deploy"],
+        constraints: ["no credentials", "no admin or bypass", "no public release"],
+      }),
+    );
+    const release = run(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--task-authority",
+      authorityPath,
+    ]);
+    expect(release.taskAuthority).toMatchObject({
+      source: "direct-user-task",
+      allowedActions: ["normal-merge", "deploy"],
+    });
+    expect(release.prompt).toContain('"allowedActions":["normal-merge","deploy"]');
+
+    const protectedFixture = makeFixture();
+    completeTesterPass(protectedFixture);
+    const protectedPath = path.join(protectedFixture.root, "bad-authority.json");
+    fs.writeFileSync(
+      protectedPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        source: "direct-user-task",
+        scope: "PR #42",
+        allowedActions: ["normal-merge", "credentials"],
+        constraints: [],
+      }),
+    );
+    const rejected = runFailure(protectedFixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--task-authority",
+      protectedPath,
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("granting only normal-merge and optional deploy");
+  });
+
   it("keeps one release owner across a repaired head and resumes it after fresh proof", () => {
     const fixture = makeFixture();
     const firstTester = beginLiveTester(fixture);
@@ -502,6 +873,32 @@ describe("scripts/pr-lifecycle", () => {
       "--host-id",
       "release-host",
     ]);
+    const prematureReturn = runFailure(fixture, [
+      "return-source",
+      "42",
+      "--contract-id",
+      release.contractId,
+      "--thread-id",
+      "release-thread",
+      "--host-id",
+      "release-host",
+      "--builder-thread",
+      "builder-thread",
+      "--builder-host",
+      "builder-host",
+      "--builder-unarchived",
+      "true",
+      "--finding",
+      "must not skip acceptance",
+    ]);
+    expect(prematureReturn.status).toBe(1);
+    expect(prematureReturn.stderr).toContain("active accepted release handoff");
+    expect(acceptReleaseHandoff(fixture, release.contractId).action).toBe(
+      "release-handoff-accepted",
+    );
+    expect(acceptReleaseHandoff(fixture, release.contractId).action).toBe(
+      "release-handoff-already-accepted",
+    );
 
     fixture.metadata.headRefOid = "c".repeat(40);
     fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
@@ -537,7 +934,10 @@ describe("scripts/pr-lifecycle", () => {
     expect(stolen.status).toBe(1);
     expect(stolen.stderr).toContain("builder identity differs from the recorded candidate owner");
 
-    const repairedTester = run(fixture, [
+    expect(returnSource(fixture, release.contractId).action).toBe("source-returned");
+    expect(returnSource(fixture, release.contractId).action).toBe("source-already-returned");
+
+    const returningTestArgs = (contractId: string) => [
       "handoff-test",
       "42",
       "--test-kind",
@@ -549,8 +949,9 @@ describe("scripts/pr-lifecycle", () => {
       "--owner-host",
       "builder-host",
       "--returning-release-contract",
-      release.contractId,
-    ]);
+      contractId,
+    ];
+    const repairedTester = run(fixture, returningTestArgs(release.contractId));
     expect(repairedTester.action).toBe("create_thread");
     run(fixture, [
       "accept-test-owner",
@@ -570,11 +971,11 @@ describe("scripts/pr-lifecycle", () => {
         role: "tester",
         routing: repairedTester.routing,
         contractId: repairedTester.contractId,
-        status: "PASS",
+        status: "FAIL",
         headSha: repairedTester.candidate?.headSha,
         diffFingerprint: repairedTester.candidate?.diffFingerprint,
         owner: { threadId: "repaired-tester", hostId: "tester-host" },
-        evidence: ["repaired candidate passed"],
+        evidence: ["tester found a second source repair"],
         cleanup: { status: "complete" },
         limitations: [],
       }),
@@ -587,6 +988,86 @@ describe("scripts/pr-lifecycle", () => {
       repairedTester.contractId,
       "--thread-id",
       "repaired-tester",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+
+    fixture.metadata.headRefOid = "d".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    fixture.env.TEST_PR_PATCH = "diff --git a/AGENTS.md b/AGENTS.md\n+second repaired policy\n";
+    const mismatchedReturn = runFailure(fixture, returningTestArgs("wrong-release-contract"));
+    expect(mismatchedReturn.status).toBe(1);
+    expect(mismatchedReturn.stderr).toContain("owner may still be active");
+
+    const secondRepairedTester = run(fixture, returningTestArgs(release.contractId));
+    expect(secondRepairedTester.action).toBe("create_thread");
+    expect(secondRepairedTester.contractId).not.toBe(repairedTester.contractId);
+    expect(run(fixture, returningTestArgs(release.contractId))).toMatchObject({
+      action: "do-not-create",
+      contractId: secondRepairedTester.contractId,
+      owner: null,
+    });
+
+    const repeatedState = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(repeatedState.history).toHaveLength(2);
+    expect(
+      repeatedState.history.map(
+        (entry: { release: { contractId: string } }) => entry.release.contractId,
+      ),
+    ).toEqual([release.contractId, release.contractId]);
+    expect(repeatedState.release).toMatchObject({
+      phase: "awaiting-retest",
+      contractId: release.contractId,
+      owner: { threadId: "release-thread", hostId: "release-host" },
+    });
+
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      secondRepairedTester.contractId,
+      "--thread-id",
+      "second-repaired-tester",
+      "--host-id",
+      "tester-host",
+    ]);
+    fixture.metadata.headRefOid = "e".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    const activeTesterBlocksRefresh = runFailure(fixture, returningTestArgs(release.contractId));
+    expect(activeTesterBlocksRefresh.status).toBe(1);
+    expect(activeTesterBlocksRefresh.stderr).toContain("owner may still be active");
+
+    fixture.metadata.headRefOid = "d".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    const secondReceiptPath = path.join(fixture.root, "second-repaired-receipt.json");
+    fs.writeFileSync(
+      secondReceiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: secondRepairedTester.routing,
+        contractId: secondRepairedTester.contractId,
+        status: "PASS",
+        headSha: secondRepairedTester.candidate?.headSha,
+        diffFingerprint: secondRepairedTester.candidate?.diffFingerprint,
+        owner: { threadId: "second-repaired-tester", hostId: "tester-host" },
+        evidence: ["second repaired candidate passed"],
+        cleanup: { status: "complete" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", secondReceiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      secondRepairedTester.contractId,
+      "--thread-id",
+      "second-repaired-tester",
       "--host-id",
       "tester-host",
       "--closure",
@@ -610,6 +1091,11 @@ describe("scripts/pr-lifecycle", () => {
       contractId: release.contractId,
       owner: { threadId: "release-thread", hostId: "release-host" },
     });
-    expect(resumed.nativeTool?.sequence).toEqual(["send_message_to_thread"]);
+    expect(resumed.nativeTool?.sequence).toEqual([
+      "send_message_to_thread",
+      "set_thread_archived",
+      "accept-release-handoff",
+    ]);
+    expect(resumed.prompt).toContain("repeat the acceptance gate and re-archive the builder");
   });
 });

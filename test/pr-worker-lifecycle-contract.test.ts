@@ -39,6 +39,15 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain(
       "must not create a duplicate builder, tester, or release owner",
     );
+    expect(normalizedWorkflow).toContain(
+      "builder therefore leaves the active Codex task list at accepted handoff, not after merge",
+    );
+    expect(normalizedWorkflow).toContain(
+      "records the exact finding and identities with `return-source`",
+    );
+    expect(normalizedWorkflow).toContain(
+      "repeat this cycle from `awaiting-retest` with that exact release contract",
+    );
   });
 
   it("forces user-visible transport for live or protected testing", () => {
@@ -58,6 +67,9 @@ describe("canonical PR worker lifecycle policy", () => {
     // or repair steering cannot hit an adjacent user-visible task.
     expect(normalizedWorkflow).toContain("head change makes prior tester proof stale");
     expect(normalizedWorkflow).toContain("fresh tester for the new immutable head");
+    expect(normalizedWorkflow).toContain("typed capacity-owner recovery receipt");
+    expect(normalizedWorkflow).toContain("atomically reserves exactly one fresh tester");
+    expect(normalizedWorkflow).toContain("record `workloadStarted=false`");
     expect(normalizedWorkflow).toContain("archive nothing adjacent");
     expect(normalizedWorkflow).toContain("preserve the one known owner");
     expect(normalizedWorkflow).toContain("unarchive and steer only the exact builder thread");
@@ -77,6 +89,17 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(prTemplate).not.toContain("exact thread/head/diff");
     expect(prTemplate).toContain("Tester lifecycle closure");
     expect(prTemplate).toContain("fresh user-visible project task ID");
+    expect(prTemplate).toContain("exact builder `archived=true` receipt");
+    expect(prTemplate).toContain("same-builder `archived=false` receipt");
+  });
+
+  it("preserves direct user authority without weakening protected gates", () => {
+    // Routine continuation should not repeatedly ask for authority already
+    // granted by the user, while sensitive or broader actions remain excluded.
+    expect(normalizedWorkflow).toContain("preserves it in the typed release packet");
+    expect(normalizedWorkflow).toContain("do not ask the user to repeat that authority");
+    expect(normalizedWorkflow).toContain("only `normal-merge` and an explicitly granted `deploy`");
+    expect(normalizedWorkflow).toContain("credentials, OTP, admin/bypass");
   });
 
   it("treats restricted host-state failures and ambiguous mutations safely", () => {

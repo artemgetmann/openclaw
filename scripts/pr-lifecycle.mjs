@@ -8,6 +8,7 @@ import process from "node:process";
 
 const SCHEMA_VERSION = 1;
 const GH_BIN = process.env.OPENCLAW_PR_LIFECYCLE_GH ?? "gh";
+const RELEASE_ACTIONS = new Set(["normal-merge", "deploy"]);
 
 class LifecycleError extends Error {
   constructor(message, exitCode = 1) {
@@ -24,12 +25,14 @@ function fail(message, exitCode = 1) {
 
 function usage() {
   process.stderr.write(`Usage:
-  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> [--returning-release-contract <ID>]
+  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>]
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
-  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID>
+  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>]
   scripts/pr-lifecycle accept-release-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
+  scripts/pr-lifecycle accept-release-handoff <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-archived true
+  scripts/pr-lifecycle return-source <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-unarchived true --finding <TEXT>
   scripts/pr-lifecycle cancel-pending <PR> --role <tester|release> --contract-id <ID> --confirm-no-thread-created
 
 The handoff commands emit JSON. A native agent must consume action=create_thread
@@ -213,6 +216,7 @@ function makeBaseState(pr, candidate, builder, previous) {
     candidate,
     builder,
     tester: null,
+    testerHistory: [],
     release: null,
     history: previous
       ? [
@@ -220,6 +224,7 @@ function makeBaseState(pr, candidate, builder, previous) {
           {
             candidate: previous.candidate,
             tester: previous.tester,
+            testerHistory: previous.testerHistory ?? [],
             release: previous.release,
             retiredAt: new Date().toISOString(),
           },
@@ -250,9 +255,51 @@ function testerRouting(testKind, transport, builder) {
   };
 }
 
+function readCapacityRecovery(receiptPath, priorTester) {
+  let receipt;
+  try {
+    receipt = JSON.parse(fs.readFileSync(path.resolve(receiptPath), "utf8"));
+  } catch (error) {
+    fail(`cannot read capacity recovery receipt: ${error.message}`);
+  }
+
+  // Capacity retry is intentionally narrower than a generic tester retry. The
+  // packet must prove the old guard refusal happened before workload start and
+  // that the same resource floor is now satisfied without occupied heavy locks.
+  const availableKiB = receipt?.capacity?.availableKiB;
+  const requiredKiB = receipt?.capacity?.requiredKiB;
+  const validCapacity =
+    Number.isSafeInteger(availableKiB) &&
+    Number.isSafeInteger(requiredKiB) &&
+    availableKiB > 0 &&
+    requiredKiB > 0 &&
+    availableKiB >= requiredKiB;
+  if (
+    receipt?.schemaVersion !== SCHEMA_VERSION ||
+    receipt?.role !== "capacity-recovery" ||
+    receipt?.source !== "authorized-capacity-owner-receipt" ||
+    receipt?.priorTesterContractId !== priorTester.contractId ||
+    receipt?.cause?.class !== "host_unhealthy" ||
+    receipt?.cause?.code !== "disk_pressure" ||
+    receipt?.cause?.workloadStarted !== false ||
+    !validCapacity ||
+    receipt?.capacity?.heavyLockDirectoriesEmpty !== true ||
+    receipt?.capacity?.releaseLockDirectoriesEmpty !== true ||
+    !Array.isArray(receipt?.evidence) ||
+    receipt.evidence.length === 0 ||
+    receipt.evidence.some((item) => typeof item !== "string" || item.trim() === "")
+  ) {
+    fail(
+      "capacity recovery receipt must bind the prior tester, prove disk-pressure refusal before workload start, satisfy the disk floor, and prove empty heavy/release locks",
+    );
+  }
+  return receipt;
+}
+
 function ownerPrompt(role, state) {
   const { candidate, builder } = state;
   const testerReceipt = role === "release" ? state.tester?.receipt : null;
+  const releaseAuthority = role === "release" ? state.release?.taskAuthority : null;
   return [
     `Task: ${role === "tester" ? "Independently test" : "Release"} OpenClaw PR #${candidate.number} on the immutable candidate below.`,
     `Owner/cwd: fresh user-visible project-scoped Codex task in the OpenClaw project.`,
@@ -271,12 +318,20 @@ function ownerPrompt(role, state) {
       : `Tester: ${testerReceipt.status}; thread=${testerReceipt.owner.threadId} host=${testerReceipt.owner.hostId}; evidence=${testerReceipt.evidence.join(" | ")}`,
     role === "tester"
       ? `Constraints: return one terminal receipt; preserve source/runtime/live proof boundaries; perform external or live actions only when explicitly granted in this task.`
-      : `Authority: normal non-admin merge only. No bypass, admin override, deploy, restart, package, install, shared-runtime mutation, or product release.`,
+      : `Authority packet: ${JSON.stringify(releaseAuthority)}. Treat only allowedActions as durable authority. Never infer credentials, OTP, admin/bypass, irreversible/public-release, or new-scope authority.`,
     role === "tester"
       ? `Handback: send the builder a JSON receipt matching scripts/pr-lifecycle record-test-receipt, including the emitted routing object, exact task identity, head, diff, PASS|FAIL, evidence, cleanup, and limitations.`
-      : `Handback: verify current head/diff/checks/reviews, merge only if every gate passes, send the merge receipt, then archive the exact builder thread above.`,
+      : `Acceptance gate: before review, merge, or deploy work, archive the exact builder thread above, verify archived=true, then run scripts/pr-lifecycle accept-release-handoff with both exact identities and --builder-archived true. Stop if that receipt is not release-handoff-accepted.`,
+    role === "release"
+      ? `Source return: if review finds concrete source work, unarchive only that exact builder, verify archived=false, run scripts/pr-lifecycle return-source with the exact finding, send the finding to that same builder, and pause. Never create a replacement builder. After repaired proof resumes this task, repeat the acceptance gate and re-archive the builder before continuing.`
+      : null,
+    role === "release"
+      ? `Handback: independently verify current head/diff/checks/reviews; merge only if every gate passes; send the merge receipt. Builder archival belongs to acceptance, not post-merge cleanup.`
+      : null,
     `Read AGENTS.md, CONSUMER.md, docs/agent-guides/workflow.md, and docs/agent-guides/fleet-resource-control.md before acting. Never route live/external testing or release through a nested sub-agent.`,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function handoffTest(pr, options) {
@@ -287,6 +342,17 @@ function handoffTest(pr, options) {
     hostId: requireOption(options, "ownerHost"),
   };
   const returningReleaseContract = options.returningReleaseContract?.trim() || null;
+  const capacityRetryContract = options.capacityRetryContract?.trim() || null;
+  const capacityRecoveryReceipt = options.capacityRecoveryReceipt?.trim() || null;
+  if (Boolean(capacityRetryContract) !== Boolean(capacityRecoveryReceipt)) {
+    fail(
+      "capacity retry requires both --capacity-retry-contract and --capacity-recovery-receipt",
+      2,
+    );
+  }
+  if (capacityRetryContract && returningReleaseContract) {
+    fail("capacity retry and release source-return retry are separate transitions", 2);
+  }
   if (!new Set(["read-only", "live-external"]).has(testKind)) {
     fail("--test-kind must be read-only or live-external", 2);
   }
@@ -316,7 +382,7 @@ function handoffTest(pr, options) {
     }
     if (state && !sameCandidate(state.candidate, candidate)) {
       const returningFromRelease =
-        state.release?.phase === "active" &&
+        ["awaiting-source", "awaiting-retest"].includes(state.release?.phase) &&
         state.release.contractId === returningReleaseContract &&
         state.tester?.phase === "closed";
       if (!returningFromRelease && hasUnclosedOwner(state)) {
@@ -329,7 +395,8 @@ function handoffTest(pr, options) {
       if (returningFromRelease) {
         // A release discrepancy returns source ownership to the exact builder,
         // but it must not create a second release owner. Carry that identity
-        // across the repaired candidate and park it until fresh proof closes.
+        // across both the first repair and any tester-driven follow-up repairs,
+        // then park it until fresh proof closes.
         state.release = {
           ...previous.release,
           phase: "awaiting-retest",
@@ -344,6 +411,35 @@ function handoffTest(pr, options) {
       fail("builder identity differs from the recorded candidate owner");
     }
 
+    // Capacity recovery grants one replacement for this immutable candidate,
+    // not one replacement per failed tester. The attempt ledger is therefore
+    // the durable retry budget: once it contains a recovery receipt, a later
+    // replacement failure cannot recursively become a new retry source.
+    const consumedCapacityRetry = state.testerHistory?.some(
+      (attempt) => attempt?.capacityRecoveryReceipt !== null,
+    );
+    if (
+      capacityRetryContract &&
+      consumedCapacityRetry &&
+      state.tester?.retryOfContractId === capacityRetryContract
+    ) {
+      // The recovery packet is one-shot, but its replay remains idempotent even
+      // after the replacement tester advances beyond pending or later closes.
+      return {
+        state,
+        output: {
+          schemaVersion: SCHEMA_VERSION,
+          action: "do-not-create",
+          reason: `capacity retry already created tester lifecycle ${state.tester.phase}`,
+          contractId: state.tester.contractId,
+          owner: state.tester.owner ?? null,
+        },
+      };
+    }
+    if (capacityRetryContract && consumedCapacityRetry) {
+      fail("capacity retry was already consumed for this immutable candidate");
+    }
+
     if (state.tester && !["closed", "cancelled"].includes(state.tester.phase)) {
       return {
         state,
@@ -356,16 +452,54 @@ function handoffTest(pr, options) {
         },
       };
     }
+    let retryOfContractId = null;
+    let recoveryReceipt = null;
     if (state.tester?.phase === "closed") {
-      return {
-        state,
-        output: {
-          schemaVersion: SCHEMA_VERSION,
-          action: "do-not-create",
-          reason: "this immutable candidate already has a closed tester lifecycle",
-          contractId: state.tester.contractId,
+      if (!capacityRetryContract) {
+        return {
+          state,
+          output: {
+            schemaVersion: SCHEMA_VERSION,
+            action: "do-not-create",
+            reason: "this immutable candidate already has a closed tester lifecycle",
+            contractId: state.tester.contractId,
+          },
+        };
+      }
+
+      const priorTester = state.tester;
+      if (priorTester.contractId !== capacityRetryContract) {
+        fail("capacity retry contract does not match the exact closed tester");
+      }
+      if (
+        priorTester.transport !== "user-visible-task" ||
+        priorTester.transport !== transport ||
+        priorTester.testKind !== testKind ||
+        priorTester.receipt?.status !== "FAIL" ||
+        priorTester.receipt?.cleanup?.status !== "not-required" ||
+        priorTester.closure?.type !== "archived" ||
+        state.release !== null
+      ) {
+        fail(
+          "capacity retry requires the same test contract, one archived user-visible FAIL with no workload cleanup, and no release owner",
+        );
+      }
+
+      recoveryReceipt = readCapacityRecovery(capacityRecoveryReceipt, priorTester);
+      retryOfContractId = priorTester.contractId;
+      // Preserve the terminal failed tester verbatim. Moving it into an attempt
+      // ledger makes the new reservation atomic without rewriting past truth.
+      state.testerHistory = [
+        ...(Array.isArray(state.testerHistory) ? state.testerHistory : []),
+        {
+          tester: priorTester,
+          capacityRecoveryReceipt: recoveryReceipt,
+          retiredAt: new Date().toISOString(),
         },
-      };
+      ];
+      state.tester = null;
+    } else if (capacityRetryContract) {
+      fail("capacity retry requires the exact closed tester on this immutable candidate");
     }
 
     const contractId = randomUUID();
@@ -379,6 +513,8 @@ function handoffTest(pr, options) {
       owner: null,
       receipt: null,
       closure: null,
+      retryOfContractId,
+      capacityRecoveryReceipt: recoveryReceipt,
       createdAt: new Date().toISOString(),
     };
     state.updatedAt = new Date().toISOString();
@@ -391,6 +527,7 @@ function handoffTest(pr, options) {
         transport,
         routing,
         candidate,
+        retryOfContractId,
         nativeTool:
           transport === "user-visible-task"
             ? {
@@ -423,7 +560,8 @@ function acceptOwner(pr, options, role) {
       fail(`no matching ${role} handoff contract`);
     }
     const record = state[role];
-    if (record.phase === "active") {
+    const acceptedPhase = role === "release" ? "owner-recorded" : "active";
+    if (record.phase === acceptedPhase || (role === "release" && record.phase === "active")) {
       if (record.owner.threadId !== owner.threadId || record.owner.hostId !== owner.hostId) {
         fail(`a different ${role} owner is already active`);
       }
@@ -433,10 +571,141 @@ function acceptOwner(pr, options, role) {
       fail(`${role} handoff is ${record.phase}, not handoff-pending`);
     }
     record.owner = owner;
-    record.phase = "active";
+    record.phase = acceptedPhase;
     record.acceptedAt = new Date().toISOString();
     state.updatedAt = new Date().toISOString();
     return { state, output: { action: "owner-recorded", role, contractId, owner } };
+  });
+}
+
+function exactReleaseAndBuilder(state, options) {
+  const contractId = requireOption(options, "contractId");
+  const releaseOwner = {
+    threadId: requireOption(options, "threadId"),
+    hostId: requireOption(options, "hostId"),
+  };
+  const builder = {
+    threadId: requireOption(options, "builderThread"),
+    hostId: requireOption(options, "builderHost"),
+  };
+  if (!state?.release || state.release.contractId !== contractId) {
+    fail("no matching release handoff contract");
+  }
+  if (
+    state.release.owner?.threadId !== releaseOwner.threadId ||
+    state.release.owner?.hostId !== releaseOwner.hostId
+  ) {
+    fail("release transition identity does not match the exact recorded owner");
+  }
+  if (state.builder.threadId !== builder.threadId || state.builder.hostId !== builder.hostId) {
+    fail("release transition builder identity does not match the exact recorded builder");
+  }
+  return { contractId, releaseOwner, builder };
+}
+
+function acceptReleaseHandoff(pr, options) {
+  return withStateLock(pr, (state) => {
+    const { contractId, releaseOwner, builder } = exactReleaseAndBuilder(state, options);
+    const release = state.release;
+    if (release.phase === "active" && release.builderArchiveReceipt?.archived === true) {
+      return {
+        state,
+        output: {
+          action: "release-handoff-already-accepted",
+          contractId,
+          owner: releaseOwner,
+          builderArchiveReceipt: release.builderArchiveReceipt,
+        },
+      };
+    }
+    // States written by the first deterministic lifecycle revision marked the
+    // release active immediately after owner recording. Treat only that
+    // receipt-less legacy shape as awaiting acceptance; never grandfather it
+    // into release authority.
+    const legacyAwaitingAcceptance =
+      release.phase === "active" && release.builderArchiveReceipt == null;
+    if (release.phase !== "owner-recorded" && !legacyAwaitingAcceptance) {
+      fail(`release handoff is ${release.phase}, not owner-recorded`);
+    }
+    if (requireOption(options, "builderArchived") !== "true") {
+      fail("release acceptance requires --builder-archived true after exact native verification");
+    }
+
+    // This is the release work gate. Recording the exact native result here
+    // makes acceptance retry-safe and prevents review or merge while the
+    // builder still appears in the active task list.
+    release.builderArchiveReceipt = {
+      archived: true,
+      builder,
+      verifiedBy: releaseOwner,
+      recordedAt: new Date().toISOString(),
+    };
+    release.phase = "active";
+    release.handoffAcceptedAt = new Date().toISOString();
+    state.updatedAt = new Date().toISOString();
+    return {
+      state,
+      output: {
+        action: "release-handoff-accepted",
+        contractId,
+        owner: releaseOwner,
+        builderArchiveReceipt: release.builderArchiveReceipt,
+        authority: release.taskAuthority,
+      },
+    };
+  });
+}
+
+function returnSource(pr, options) {
+  return withStateLock(pr, (state) => {
+    const { contractId, releaseOwner, builder } = exactReleaseAndBuilder(state, options);
+    const release = state.release;
+    const finding = requireOption(options, "finding");
+    if (release.phase === "awaiting-source") {
+      if (release.sourceReturn?.finding !== finding) {
+        fail("source was already returned with a different exact finding");
+      }
+      return {
+        state,
+        output: {
+          action: "source-already-returned",
+          contractId,
+          owner: releaseOwner,
+          builder,
+          finding,
+        },
+      };
+    }
+    if (release.phase !== "active" || release.builderArchiveReceipt?.archived !== true) {
+      fail(
+        `source return requires an active accepted release handoff with builder archive proof, not ${release.phase}`,
+      );
+    }
+    if (requireOption(options, "builderUnarchived") !== "true") {
+      fail("source return requires --builder-unarchived true after exact native verification");
+    }
+
+    release.sourceReturn = {
+      finding,
+      builder,
+      unarchived: true,
+      verifiedBy: releaseOwner,
+      recordedAt: new Date().toISOString(),
+    };
+    release.phase = "awaiting-source";
+    state.updatedAt = new Date().toISOString();
+    return {
+      state,
+      output: {
+        action: "source-returned",
+        contractId,
+        owner: releaseOwner,
+        builder,
+        finding,
+        nativeTool: { sequence: ["send_message_to_thread"] },
+        warning: "Steer only the exact revived builder and pause this release task.",
+      },
+    };
   });
 }
 
@@ -448,6 +717,52 @@ function readReceipt(receiptPath) {
     fail(`cannot read tester receipt: ${error.message}`);
   }
   return receipt;
+}
+
+function readTaskAuthority(authorityPath, pr) {
+  if (!authorityPath) {
+    // Normal merge is the narrow default explicitly requested by the existing
+    // --authority flag. Protected runtime work never appears by implication.
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      source: "builder-handoff",
+      scope: `PR #${pr} source merge only`,
+      allowedActions: ["normal-merge"],
+      constraints: [
+        "no admin or bypass",
+        "no credentials or OTP",
+        "no irreversible or public release",
+        "no new scope",
+      ],
+    };
+  }
+
+  let authority;
+  try {
+    authority = JSON.parse(fs.readFileSync(path.resolve(authorityPath), "utf8"));
+  } catch (error) {
+    fail(`cannot read task authority: ${error.message}`);
+  }
+  const allowedActions = authority?.allowedActions;
+  const validActions =
+    Array.isArray(allowedActions) &&
+    allowedActions.length > 0 &&
+    allowedActions.every((action) => RELEASE_ACTIONS.has(action));
+  if (
+    authority?.schemaVersion !== SCHEMA_VERSION ||
+    authority?.source !== "direct-user-task" ||
+    typeof authority?.scope !== "string" ||
+    authority.scope.trim() === "" ||
+    !validActions ||
+    !allowedActions.includes("normal-merge") ||
+    !Array.isArray(authority.constraints) ||
+    authority.constraints.some((constraint) => typeof constraint !== "string")
+  ) {
+    fail(
+      "task authority must be a direct-user-task packet granting only normal-merge and optional deploy with explicit scope and constraints",
+    );
+  }
+  return authority;
 }
 
 function recordTestReceipt(pr, options) {
@@ -547,6 +862,7 @@ function handoffRelease(pr, options) {
       "release handoff requires explicit authority=normal-merge and cannot invent broader authority",
     );
   }
+  const taskAuthority = readTaskAuthority(options.taskAuthority, pr);
   const candidate = fetchCandidate(pr);
   if (candidate.isDraft) {
     fail("release handoff requires a ready-for-review PR, not a draft");
@@ -573,7 +889,10 @@ function handoffRelease(pr, options) {
       );
     }
     if (state.release?.phase === "awaiting-retest") {
-      state.release.phase = "active";
+      // The same release owner resumes, but it cannot resume release work until
+      // it re-archives the repaired builder and records acceptance again.
+      state.release.phase = "owner-recorded";
+      state.release.builderArchiveReceipt = null;
       state.release.resumedAt = new Date().toISOString();
       state.updatedAt = new Date().toISOString();
       return {
@@ -584,10 +903,13 @@ function handoffRelease(pr, options) {
           contractId: state.release.contractId,
           transport: state.release.transport,
           authority: state.release.authority,
+          taskAuthority: state.release.taskAuthority,
           owner: state.release.owner,
           candidate,
           testerReceipt: state.tester.receipt,
-          nativeTool: { sequence: ["send_message_to_thread"] },
+          nativeTool: {
+            sequence: ["send_message_to_thread", "set_thread_archived", "accept-release-handoff"],
+          },
           prompt: ownerPrompt("release", state),
           warning: "Resume only the exact recorded release task; never create a replacement owner.",
         },
@@ -612,6 +934,7 @@ function handoffRelease(pr, options) {
       contractId,
       transport,
       authority,
+      taskAuthority,
       owner: null,
       createdAt: new Date().toISOString(),
     };
@@ -624,10 +947,17 @@ function handoffRelease(pr, options) {
         contractId,
         transport,
         authority,
+        taskAuthority,
         candidate,
         testerReceipt: state.tester.receipt,
         nativeTool: {
-          sequence: ["list_projects", "create_thread", "accept-release-owner"],
+          sequence: [
+            "list_projects",
+            "create_thread",
+            "accept-release-owner",
+            "set_thread_archived",
+            "accept-release-handoff",
+          ],
           target: { type: "project", environment: { type: "worktree" } },
         },
         prompt: ownerPrompt("release", state),
@@ -680,6 +1010,12 @@ try {
       break;
     case "accept-release-owner":
       output = acceptOwner(pr, options, "release");
+      break;
+    case "accept-release-handoff":
+      output = acceptReleaseHandoff(pr, options);
+      break;
+    case "return-source":
+      output = returnSource(pr, options);
       break;
     case "cancel-pending":
       output = cancelPending(pr, options);
