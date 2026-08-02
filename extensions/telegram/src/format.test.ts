@@ -173,6 +173,28 @@ describe("markdownToTelegramHtml", () => {
     expect(richHtml).toContain("| x | y |");
   });
 
+  it("keeps indented Markdown tables inside literal code blocks", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Plan | Owner |",
+        "| --- | --- |",
+        "| Ship | Jarvis |",
+        "",
+        "    ```",
+        "    | A | B |",
+        "    | --- | --- |",
+        "    | x | y |",
+        "    ```",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
+  });
+
   it("renders fenced code blocks", () => {
     const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
     expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");

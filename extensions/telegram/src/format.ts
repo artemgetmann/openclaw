@@ -448,6 +448,13 @@ function isMarkdownTableRow(line: string): boolean {
   return line.includes("|") && splitMarkdownTableRow(line).length > 1;
 }
 
+function isMarkdownIndentedCodeLine(line: string): boolean {
+  // CommonMark treats one tab or four leading spaces as an indented code
+  // block. Those literal pipe rows must never become Telegram native tables
+  // merely because a separate real table selects rich delivery.
+  return /^(?: {4}|\t)/.test(line);
+}
+
 function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
   const lines = markdown.split("\n");
   const lineStarts: number[] = [];
@@ -462,6 +469,10 @@ function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
   let openFence: MarkdownFenceState | undefined;
   while (index + 1 < lines.length) {
     const headerLine = lines[index] ?? "";
+    if (!openFence && isMarkdownIndentedCodeLine(headerLine)) {
+      index += 1;
+      continue;
+    }
     const fence = trackMarkdownFenceLine(headerLine, openFence);
     openFence = fence.nextFence;
     if (fence.isFenced) {
