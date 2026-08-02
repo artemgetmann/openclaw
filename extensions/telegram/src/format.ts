@@ -244,7 +244,7 @@ export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string
       // Once the canonical parser identifies this source line as blockquote
       // content, remove only its actual list/indent/quote container prefix.
       // Lazy continuation text has no marker and is kept after indentation.
-      const quoteMatch = /^(?:[ \t]*(?:[*+-]|\d{1,9}[.)])[ \t]+)?[ \t]*>\s?(.*)$/.exec(line);
+      const quoteMatch = /^(?:[ \t]*(?:[*+-]|\d{1,9}[.)])[ \t]+)*[ \t]*>\s?(.*)$/.exec(line);
       quoteLines.push(quoteMatch?.[1] ?? line.trimStart());
       continue;
     }
@@ -446,8 +446,19 @@ function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
 
   const blocks: MarkdownTableBlock[] = [];
   const tokens = parseTelegramMarkdownTokens(markdown);
+  let blockquoteDepth = 0;
   for (const [tokenIndex, token] of tokens.entries()) {
-    if (token.type !== "table_open" || !token.map) {
+    if (token.type === "blockquote_open") {
+      blockquoteDepth += 1;
+      continue;
+    }
+    if (token.type === "blockquote_close") {
+      blockquoteDepth = Math.max(0, blockquoteDepth - 1);
+      continue;
+    }
+    // A quoted table is part of the quoted document structure. Lifting it into
+    // a top-level native table would silently discard the surrounding quote.
+    if (blockquoteDepth > 0 || token.type !== "table_open" || !token.map) {
       continue;
     }
     const [startLine, endLineExclusive] = token.map;
@@ -655,10 +666,15 @@ function renderTelegramRichTableFallback(table: MarkdownTableBlock): string {
 }
 
 function renderTelegramRichCell(markdown: string): string {
-  return markdownToTelegramHtml(markdown.trim(), {
+  // Markdown-it table cells are inline contexts, but the legacy renderer parses
+  // an isolated string as a whole block. Prefix a private sentinel so literal
+  // cell text such as `>`, `#`, `---`, or ``` cannot become block syntax.
+  const sentinel = "\uE000";
+  const html = markdownToTelegramHtml(`${sentinel}${markdown.trim()}`, {
     tableMode: "off",
     wrapFileRefs: false,
   });
+  return html.startsWith(sentinel) ? html.slice(sentinel.length) : html;
 }
 
 function renderTelegramRichTable(table: MarkdownTableBlock): string {

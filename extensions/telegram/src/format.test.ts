@@ -367,6 +367,8 @@ describe("markdownToTelegramHtml", () => {
   it("rewrites parser-owned list blockquotes as copy blocks", () => {
     const drafts = [
       "- > Send this draft.",
+      "1. - > Send this draft.",
+      "-\t-\t> Send this draft.",
       ["- item", "    > Send this draft."].join("\n"),
       ["- item", "\t> Send this draft."].join("\n"),
     ];
@@ -378,8 +380,42 @@ describe("markdownToTelegramHtml", () => {
       });
       expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
       expect(richHtml).toContain("Send this draft.");
+      expect(richHtml).not.toContain("1. -");
+      expect(richHtml).not.toContain("-\t-");
       expect(richHtml).not.toContain("<blockquote>");
     }
+  });
+
+  it("renders table cell contents as inline Markdown", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Quote | Heading | Rule | Fence |",
+        "| --- | --- | --- | --- |",
+        "| > literal | # literal | --- | ```literal |",
+      ].join("\n"),
+      { tableMode: "block" },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml).toContain("<td>&gt; literal</td>");
+    expect(richHtml).toContain("<td># literal</td>");
+    expect(richHtml).toContain("<td>---</td>");
+    expect(richHtml).toContain("<td>```literal</td>");
+    expect(richHtml).not.toContain("<blockquote>");
+    expect(richHtml).not.toContain("<pre><code>");
+    expect(richHtml).not.toContain("───");
+  });
+
+  it("preserves quoted tables when copy-safe rewriting is disabled", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      ["> | A | B |", "> | --- | --- |", "> | x | y |"].join("\n"),
+      { tableMode: "block" },
+    );
+
+    expect(richHtml).toContain("<blockquote>");
+    expect(richHtml).not.toContain("<table bordered striped>");
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
   });
 
   it("keeps list-blockquote fenced samples in one copy block", () => {
