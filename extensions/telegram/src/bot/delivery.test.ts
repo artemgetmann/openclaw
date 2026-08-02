@@ -900,6 +900,45 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("keeps fenced Markdown tables inside recipient copy blocks", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn();
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: [
+            "| Plan | Owner |",
+            "| --- | --- |",
+            "| Ship | Jarvis |",
+            "",
+            "> Paste this Markdown:",
+            "> ```",
+            "> | A | B |",
+            "> | --- | --- |",
+            "> | x | y |",
+            "> ```",
+          ].join("\n"),
+        },
+      ],
+      runtime,
+      bot,
+      tableMode: "block",
+      copySafeBlockquotes: true,
+    });
+
+    const richHtml = sendRichMessage.mock.calls[0]?.[0]?.rich_message?.html as string;
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| A | B |");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("projects shared interactive buttons onto legacy Telegram messages", async () => {
     const runtime = createRuntime();
     const sendRichMessage = vi.fn().mockResolvedValue({

@@ -1,5 +1,4 @@
 import type { MarkdownTableMode } from "../../../src/config/types.base.js";
-import { parseFenceSpans } from "../../../src/markdown/fences.js";
 import {
   chunkMarkdownIR,
   markdownToIR,
@@ -148,13 +147,46 @@ function buildSafeMarkdownFence(text: string): string {
   return fenceChar.repeat(fenceLength);
 }
 
+type MarkdownFenceState = {
+  markerChar: "`" | "~";
+  markerLength: number;
+};
+
+function trackMarkdownFenceLine(
+  line: string,
+  openFence: MarkdownFenceState | undefined,
+): { isFenced: boolean; nextFence: MarkdownFenceState | undefined } {
+  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+  if (openFence) {
+    const marker = match?.[2] ?? "";
+    const closesFence =
+      marker[0] === openFence.markerChar &&
+      marker.length >= openFence.markerLength &&
+      (match?.[3] ?? "").trim().length === 0;
+    return { isFenced: true, nextFence: closesFence ? undefined : openFence };
+  }
+  if (!match) {
+    return { isFenced: false, nextFence: undefined };
+  }
+  const marker = match[2] ?? "";
+  const markerChar = marker[0] as "`" | "~";
+  // CommonMark does not allow a backtick in a backtick fence's info string.
+  // Treating that malformed line as prose keeps our scanner aligned with the
+  // Markdown renderer that ultimately owns Telegram's visible output.
+  if (markerChar === "`" && (match[3] ?? "").includes("`")) {
+    return { isFenced: false, nextFence: undefined };
+  }
+  return {
+    isFenced: true,
+    nextFence: { markerChar, markerLength: marker.length },
+  };
+}
+
 export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string {
   const normalized = (markdown ?? "").replace(/\r\n?/g, "\n");
-  const fenceSpans = parseFenceSpans(normalized);
   const output: string[] = [];
   let quoteLines: string[] = [];
-  let fenceIndex = 0;
-  let lineOffset = 0;
+  let openFence: MarkdownFenceState | undefined;
 
   const flushQuote = () => {
     if (quoteLines.length === 0) {
@@ -174,31 +206,23 @@ export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string
 
   for (const line of normalized.split("\n")) {
     // A greater-than sign inside a fenced code body is literal source text,
-    // never a recipient draft marker. Track the shared Markdown fence spans
+    // never a recipient draft marker. Track matching opener/closer state
     // instead of hiding bytes with placeholders so downstream chunk limits
-    // are calculated from the exact HTML Telegram will receive.
-    while (fenceSpans[fenceIndex] && lineOffset > fenceSpans[fenceIndex].end) {
-      fenceIndex += 1;
-    }
-    const fenceSpan = fenceSpans[fenceIndex];
-    const isFencedLine = Boolean(
-      fenceSpan && lineOffset >= fenceSpan.start && lineOffset <= fenceSpan.end,
-    );
-    if (isFencedLine) {
+    // use the exact HTML Telegram will receive.
+    const fence = trackMarkdownFenceLine(line, openFence);
+    openFence = fence.nextFence;
+    if (fence.isFenced) {
       flushQuote();
       output.push(line);
-      lineOffset += line.length + 1;
       continue;
     }
     const quoteMatch = /^(?: {0,3}>\s?)(.*)$/.exec(line);
     if (quoteMatch) {
       quoteLines.push(quoteMatch[1] ?? "");
-      lineOffset += line.length + 1;
       continue;
     }
     flushQuote();
     output.push(line);
-    lineOffset += line.length + 1;
   }
   flushQuote();
 
@@ -435,15 +459,12 @@ function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
 
   const blocks: MarkdownTableBlock[] = [];
   let index = 0;
-  let inFence = false;
+  let openFence: MarkdownFenceState | undefined;
   while (index + 1 < lines.length) {
     const headerLine = lines[index] ?? "";
-    if (/^[ \t]*(?:```|~~~)/.test(headerLine)) {
-      inFence = !inFence;
-      index += 1;
-      continue;
-    }
-    if (inFence) {
+    const fence = trackMarkdownFenceLine(headerLine, openFence);
+    openFence = fence.nextFence;
+    if (fence.isFenced) {
       index += 1;
       continue;
     }

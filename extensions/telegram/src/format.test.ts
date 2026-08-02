@@ -137,6 +137,7 @@ describe("markdownToTelegramHtml", () => {
     const markdown = [
       "```text",
       "> ~~~",
+      "```not-a-close",
       "> keep this literal",
       "```",
       "",
@@ -145,8 +146,31 @@ describe("markdownToTelegramHtml", () => {
 
     const res = rewriteMarkdownBlockquotesAsCopyBlocks(markdown);
 
-    expect(res).toContain("```text\n> ~~~\n> keep this literal\n```");
+    expect(res).toContain("```text\n> ~~~\n```not-a-close\n> keep this literal\n```");
     expect(res).toContain("```\nHi Sveta, please confirm.\n```");
+  });
+
+  it("keeps fenced Markdown tables inside copy-safe drafts", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Plan | Owner |",
+        "| --- | --- |",
+        "| Ship | Jarvis |",
+        "",
+        "> Paste this Markdown:",
+        "> ```",
+        "> | A | B |",
+        "> | --- | --- |",
+        "> | x | y |",
+        "> ```",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
   });
 
   it("renders fenced code blocks", () => {
