@@ -1039,6 +1039,9 @@ export async function runEmbeddedPiAgent(
             images: params.images,
             disableTools: params.disableTools,
             disableGoalTools: params.disableGoalTools,
+            // Preserve caller-enforced isolation in the inner attempt. Dropping
+            // this flag would silently re-enable global setup and subscribe hooks.
+            disableHooks: params.disableHooks,
             provider,
             modelId,
             model: applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),

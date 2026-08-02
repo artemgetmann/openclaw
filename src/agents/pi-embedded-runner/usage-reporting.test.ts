@@ -109,6 +109,33 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     );
   });
 
+  it("preserves hook isolation in the inner embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "isolated-session",
+      assistantTexts: ["isolated response"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await runEmbeddedPiAgent({
+      sessionId: "isolated-session",
+      sessionKey: "isolated-key",
+      sessionFile: "/tmp/isolated-session.json",
+      workspaceDir: "/tmp/isolated-workspace",
+      prompt: "evaluate evidence",
+      timeoutMs: 30000,
+      runId: "run-hook-isolation",
+      disableHooks: true,
+    });
+
+    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ disableHooks: true }),
+    );
+  });
+
   it("reports total usage from the last turn instead of accumulated total", async () => {
     // Simulate a multi-turn run result.
     // Turn 1: Input 100, Output 50. Total 150.
