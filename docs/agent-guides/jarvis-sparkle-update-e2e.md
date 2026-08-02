@@ -80,11 +80,14 @@ not a symlink. Its validity window may not exceed seven days. It binds:
   CodeDirectory hash, and designated-requirement hash for the exact private app;
 - `protectedRuntime`: break-glass source, full protected commit/build, exact
   compatibility manifest, protection marker, backup receipt hashes, and source;
-- `targetRelease`: bundle id, version, build, full commit, and canonical feed.
+- `targetRelease`: bundle id, version, build, full commit, signing Team ID,
+  designated-requirement hash, CodeDirectory hash, Sparkle public-key hash,
+  canonical feed, and the exact enclosure URL, length, and EdDSA-signature hash.
 
 This path still requires strict code-signature integrity for the private old and
 installed apps, and their Team ID plus designated requirement must match the
-signed public target so Sparkle can replace the running host. It excuses only
+signed public target. All three apps must also carry the pinned Sparkle public
+key so the running host can authenticate and replace itself. It excuses only
 their Gatekeeper rejection. The target still
 must pass strict codesign, Gatekeeper, pinned Jarvis Team ID, designated
 requirement, package-commit, and public-appcast checks. Missing, stale, unknown,

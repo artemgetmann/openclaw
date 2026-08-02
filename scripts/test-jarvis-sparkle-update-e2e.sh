@@ -47,6 +47,7 @@ write_app() {
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$build</string>
   <key>SUFeedURL</key><string>$CANONICAL_FEED</string>
+  <key>SUPublicEDKey</key><string>FIXTURESPARKLEPUBLICKEY</string>
 </dict></plist>
 EOF
   cat >"$app/Contents/Resources/OpenClawRuntime/manifest.json" <<EOF
@@ -206,6 +207,9 @@ if [[ "$count" == "1" && ! -e "$root/control/no-transition" ]]; then
   if [[ -e "$root/control/post-update-foreign-team" ]]; then
     printf 'OTHERTEAM\n' >"$app/.fixture-team"
   fi
+  if [[ -e "$root/control/post-update-cdhash-drift" ]]; then
+    printf '8888888888888888888888888888888888888888\n' >"$app/.fixture-cdhash"
+  fi
 fi
 
 if [[ "$count" -ge "2" ]]; then
@@ -321,7 +325,7 @@ make_fixture() {
   printf 'loaded=1\npid=101\n' >"$fixture/control/gateway-state"
   cat >"$fixture/feed.xml" <<EOF
 <?xml version="1.0"?><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel>
-<item><title>Jarvis $NEW_VERSION</title><sparkle:version>$NEW_BUILD</sparkle:version><sparkle:shortVersionString>$NEW_VERSION</sparkle:shortVersionString><enclosure url="https://github.com/artemgetmann/openclaw/releases/download/v-fixture/Jarvis.zip" /></item>
+<item><title>Jarvis $NEW_VERSION</title><sparkle:version>$NEW_BUILD</sparkle:version><sparkle:shortVersionString>$NEW_VERSION</sparkle:shortVersionString><enclosure url="https://github.com/artemgetmann/openclaw/releases/download/v-fixture/Jarvis.zip" length="123456789" sparkle:edSignature="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==" /></item>
 <item><title>Jarvis $OLD_VERSION</title><sparkle:version>$OLD_BUILD</sparkle:version><sparkle:shortVersionString>$OLD_VERSION</sparkle:shortVersionString><enclosure url="https://example.invalid/Jarvis.zip" /></item>
 </channel></rss>
 EOF
@@ -358,6 +362,11 @@ write_protected_receipt() {
     --arg protectedCommit "$protected_commit" \
     --arg targetCommit "$NEW_COMMIT" \
     --arg feedURL "$CANONICAL_FEED" \
+    --arg targetCdHash "$NEW_COMMIT" \
+    --arg sparkleKeyHash "$(printf '%s' 'FIXTURESPARKLEPUBLICKEY' | shasum -a 256 | awk '{print $1}')" \
+    --arg enclosureURL "https://github.com/artemgetmann/openclaw/releases/download/v-fixture/Jarvis.zip" \
+    --arg enclosureLength "123456789" \
+    --arg enclosureSignatureHash "$(printf '%s' 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==' | shasum -a 256 | awk '{print $1}')" \
     '{
       schemaVersion: 1,
       kind: "jarvis-sparkle-protected-hotfix-baseline-compatibility",
@@ -390,7 +399,14 @@ write_protected_receipt() {
         version: "2026.7.15.1",
         build: "2026071501",
         gitCommit: $targetCommit,
-        feedURL: $feedURL
+        feedURL: $feedURL,
+        teamIdentifier: "FIXTURETEAM",
+        designatedRequirementSha256: $requirementHash,
+        codeDirectoryHash: $targetCdHash,
+        sparklePublicEdKeySha256: $sparkleKeyHash,
+        enclosureURL: $enclosureURL,
+        enclosureLength: $enclosureLength,
+        enclosureEdSignatureSha256: $enclosureSignatureHash
       }
     }' >"$fixture/protected-hotfix-receipt.json"
 }
@@ -563,6 +579,39 @@ printf 'OTHERTEAM\n' >"$case_root/apps/installed/Jarvis.app/.fixture-team"
 run_expect_fail "receipt rejects Sparkle-incompatible private signing identity" "$case_root" "incompatible with the signed public target" \
   --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
 
+case_root="$(copy_case protected-missing-sparkle-key)"
+protect_fixture "$case_root"
+/usr/libexec/PlistBuddy -c 'Delete :SUPublicEDKey' "$case_root/apps/installed/Jarvis.app/Contents/Info.plist"
+run_expect_fail "receipt rejects missing private Sparkle public key" "$case_root" "Sparkle public key is missing or incompatible" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-target-code-directory-drift)"
+protect_fixture "$case_root"
+printf '7777777777777777777777777777777777777777\n' >"$case_root/apps/new/Jarvis.app/.fixture-cdhash"
+run_expect_fail "receipt rejects target CodeDirectory drift" "$case_root" "targetRelease.codeDirectoryHash mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-feed-length-drift)"
+protect_fixture "$case_root"
+sed -i.bak 's/length="123456789"/length="987654321"/' "$case_root/feed.xml"
+rm -f "$case_root/feed.xml.bak"
+run_expect_fail "receipt rejects appcast enclosure length drift" "$case_root" "targetRelease.enclosureLength mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-feed-signature-drift)"
+protect_fixture "$case_root"
+sed -i.bak 's/YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==/YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYg==/' "$case_root/feed.xml"
+rm -f "$case_root/feed.xml.bak"
+run_expect_fail "receipt rejects appcast EdDSA signature drift" "$case_root" "targetRelease.enclosureEdSignatureSha256 mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-feed-url-drift)"
+protect_fixture "$case_root"
+sed -i.bak 's#releases/download/v-fixture/Jarvis.zip#releases/download/v-other/Jarvis.zip#' "$case_root/feed.xml"
+rm -f "$case_root/feed.xml.bak"
+run_expect_fail "receipt rejects appcast enclosure URL drift" "$case_root" "targetRelease.enclosureURL mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
 case_root="$(copy_case protected-stale)"
 protect_fixture "$case_root"
 jq '.expiresAt = "2000-01-01T00:00:00.000Z"' "$case_root/protected-hotfix-receipt.json" >"$case_root/receipt.tmp"
@@ -602,6 +651,12 @@ protect_fixture "$case_root"
 harness_env "$case_root" --apply --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json" >/dev/null
 run_expect_fail "protected receipt replay after transition blocks" "$case_root" "protectedRuntime.compatibilityManifestGitCommit mismatch" \
   --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-post-update-target-drift)"
+protect_fixture "$case_root"
+: >"$case_root/control/post-update-cdhash-drift"
+run_expect_fail "protected apply rejects a downloaded target with CodeDirectory drift" "$case_root" "updated disposable CodeDirectory hash does not match" \
+  --apply --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
 
 case_root="$(copy_case test-mode-fail-shut)"
 set +e

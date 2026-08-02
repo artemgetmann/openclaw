@@ -16,6 +16,7 @@ GATEWAY_LABEL="ai.jarvis.gateway"
 PREFERENCES_DOMAIN="ai.jarvis.mac"
 OFFICIAL_BUNDLE_ID="ai.jarvis.mac"
 OFFICIAL_TEAM_ID="SKDYY4SBVV"
+OFFICIAL_SPARKLE_PUBLIC_ED_KEY="AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI="
 
 MODE="preflight"
 OLD_APP=""
@@ -80,6 +81,9 @@ OLD_COMMIT=""
 NEW_VERSION=""
 NEW_BUILD=""
 NEW_COMMIT=""
+FEED_ENCLOSURE_URL=""
+FEED_ENCLOSURE_LENGTH=""
+FEED_ENCLOSURE_ED_SIGNATURE=""
 
 log() {
   printf '[jarvis-sparkle-e2e] %s\n' "$*"
@@ -353,7 +357,7 @@ verify_official_signing_identity() {
 
 verify_latest_public_feed() {
   local feed_body
-  local proof
+  local proof_json
   local feed_old
   local feed_new
 
@@ -367,22 +371,33 @@ verify_latest_public_feed() {
 
   # Sparkle consumes the first item as latest. Match only that item so an older
   # historical item cannot accidentally satisfy the acceptance gate.
-  proof="$(OPENCLAW_SPARKLE_FEED_BODY="$feed_body" "$NODE_BIN" --input-type=module - "$NEW_VERSION" "$NEW_BUILD" <<'NODE'
+  proof_json="$(OPENCLAW_SPARKLE_FEED_BODY="$feed_body" "$NODE_BIN" --input-type=module - "$NEW_VERSION" "$NEW_BUILD" <<'NODE'
 const [expectedVersion, expectedBuild] = process.argv.slice(2);
 const xml = process.env.OPENCLAW_SPARKLE_FEED_BODY ?? "";
 const item = xml.match(/<item(?:\s[^>]*)?>[\s\S]*?<\/item>/i)?.[0] ?? "";
 const text = (name) => item.match(new RegExp(`<${name}[^>]*>([^<]+)</${name}>`, "i"))?.[1]?.trim() ?? "";
-const enclosure = item.match(/<enclosure\b[^>]*\burl=["']([^"']+)["'][^>]*>/i)?.[1] ?? "";
+const enclosureTag = item.match(/<enclosure\b[^>]*>/i)?.[0] ?? "";
+const attr = (name) => enclosureTag.match(new RegExp(`\\b${name}=["']([^"']+)["']`, "i"))?.[1]?.trim() ?? "";
+const enclosure = attr("url");
 const version = text("sparkle:shortVersionString");
 const build = text("sparkle:version");
 if (version !== expectedVersion || build !== expectedBuild || !/^https:\/\/.+\/Jarvis\.zip(?:\?|$)/.test(enclosure)) {
   process.exit(1);
 }
-process.stdout.write(`version=${version} build=${build} enclosure=${enclosure}`);
+process.stdout.write(JSON.stringify({
+  version,
+  build,
+  enclosure,
+  length: attr("length"),
+  edSignature: attr("sparkle:edSignature"),
+}));
 NODE
   )" || die "preflight blocked: latest public appcast item does not match the candidate app"
 
-  log "proof.public_feed=ok $proof"
+  FEED_ENCLOSURE_URL="$(manifest_value /dev/stdin '.enclosure // empty' <<<"$proof_json")"
+  FEED_ENCLOSURE_LENGTH="$(manifest_value /dev/stdin '.length // empty' <<<"$proof_json")"
+  FEED_ENCLOSURE_ED_SIGNATURE="$(manifest_value /dev/stdin '.edSignature // empty' <<<"$proof_json")"
+  log "proof.public_feed=ok version=$NEW_VERSION build=$NEW_BUILD enclosure=$FEED_ENCLOSURE_URL"
 }
 
 verify_installed_baseline() {
@@ -413,6 +428,10 @@ verify_protected_hotfix_compatibility_receipt() {
   local old_cdhash
   local new_team
   local new_requirement
+  local new_cdhash
+  local installed_sparkle_key
+  local old_sparkle_key
+  local new_sparkle_key
   local compatibility_commit
   local compatibility_build
   local protected_commit
@@ -447,6 +466,10 @@ verify_protected_hotfix_compatibility_receipt() {
   old_cdhash="$(app_code_directory_hash "$OLD_APP")"
   new_team="$(app_team_identifier "$NEW_APP")"
   new_requirement="$(app_designated_requirement "$NEW_APP")"
+  new_cdhash="$(app_code_directory_hash "$NEW_APP")"
+  installed_sparkle_key="$(app_plist_value "$INSTALLED_APP" SUPublicEDKey)"
+  old_sparkle_key="$(app_plist_value "$OLD_APP" SUPublicEDKey)"
+  new_sparkle_key="$(app_plist_value "$NEW_APP" SUPublicEDKey)"
   [[ -n "$installed_team" && -n "$installed_requirement" && "$installed_cdhash" =~ ^[0-9a-fA-F]{40}$ ]] || \
     die "preflight blocked: protected installed app has missing or ambiguous code-signing provenance"
   [[ "$old_team" == "$installed_team" && "$old_requirement" == "$installed_requirement" && "$old_cdhash" == "$installed_cdhash" ]] || \
@@ -457,6 +480,18 @@ verify_protected_hotfix_compatibility_receipt() {
   # provenance, but it cannot make an incompatible signature updateable.
   [[ "$old_team" == "$new_team" && "$old_requirement" == "$new_requirement" ]] || \
     die "preflight blocked: protected private baseline signing identity is incompatible with the signed public target"
+  [[ "$old_sparkle_key" == "$OFFICIAL_SPARKLE_PUBLIC_ED_KEY" && \
+    "$installed_sparkle_key" == "$OFFICIAL_SPARKLE_PUBLIC_ED_KEY" && \
+    "$new_sparkle_key" == "$OFFICIAL_SPARKLE_PUBLIC_ED_KEY" ]] || \
+    die "preflight blocked: protected private baseline Sparkle public key is missing or incompatible with the signed public target"
+  [[ "$new_cdhash" =~ ^[0-9a-fA-F]{40}$ ]] || \
+    die "preflight blocked: signed public target has missing or ambiguous CodeDirectory identity"
+  [[ "$FEED_ENCLOSURE_URL" =~ ^https://github\.com/artemgetmann/openclaw/releases/download/[^/]+/Jarvis\.zip$ && \
+    "$FEED_ENCLOSURE_LENGTH" =~ ^[1-9][0-9]*$ && -n "$FEED_ENCLOSURE_ED_SIGNATURE" ]] || \
+    die "preflight blocked: target appcast enclosure is missing length or EdDSA signature provenance"
+  "$NODE_BIN" -e 'const s=process.argv[1]; const b=Buffer.from(s, "base64"); if (b.length !== 64 || b.toString("base64") !== s) process.exit(1)' \
+    "$FEED_ENCLOSURE_ED_SIGNATURE" || \
+    die "preflight blocked: target appcast enclosure has an invalid EdDSA signature"
 
   require_readable_file "$MANAGED_MANIFEST" "protected-hotfix compatibility manifest"
   require_readable_file "$PROTECTION_MARKER" "protected-hotfix protection marker"
@@ -482,7 +517,9 @@ verify_protected_hotfix_compatibility_receipt() {
       "$compatibility_commit" "$compatibility_build" "$(sha256_file "$MANAGED_MANIFEST")" \
       "$protected_commit" "$marker_compatibility_commit" "$marker_compatibility_build" "$marker_source" \
       "$backup_commit" "$backup_build" "$(sha256_file "$backup_path")" "$(sha256_file "$PROTECTION_MARKER")" \
-      "$NEW_VERSION" "$NEW_BUILD" "$NEW_COMMIT" "$CANONICAL_FEED_URL" <<'NODE'
+      "$NEW_VERSION" "$NEW_BUILD" "$NEW_COMMIT" "$CANONICAL_FEED_URL" \
+      "$new_team" "$(sha256_text "$new_requirement")" "$new_cdhash" "$(sha256_text "$new_sparkle_key")" \
+      "$FEED_ENCLOSURE_URL" "$FEED_ENCLOSURE_LENGTH" "$(sha256_text "$FEED_ENCLOSURE_ED_SIGNATURE")" <<'NODE'
 import fs from "node:fs";
 
 const values = process.argv.slice(2);
@@ -492,6 +529,8 @@ const [
   protectedCommit, markerCompatibilityCommit, markerCompatibilityBuild, markerSource,
   backupCommit, backupBuild, backupManifestSha256, protectionMarkerSha256,
   targetVersion, targetBuild, targetCommit, canonicalFeedURL,
+  targetTeam, targetRequirementSha256, targetCodeDirectoryHash, targetSparklePublicKeySha256,
+  targetEnclosureURL, targetEnclosureLength, targetEnclosureEdSignatureSha256,
 ] = values;
 const fail = (message) => {
   process.stderr.write(`${message}\n`);
@@ -555,12 +594,19 @@ exact(receipt.protectedRuntime.protectionMarkerSha256, protectionMarkerSha256, "
 if (!/^\d+$/.test(backupBuild) || !/^\d+$/.test(targetBuild)) fail("protected or target build is invalid");
 if (BigInt(targetBuild) <= BigInt(backupBuild)) fail("target release build is not newer than protected runtime build");
 
-exactKeys(receipt.targetRelease, ["bundleIdentifier", "version", "build", "gitCommit", "feedURL"], "targetRelease");
+exactKeys(receipt.targetRelease, ["bundleIdentifier", "version", "build", "gitCommit", "feedURL", "teamIdentifier", "designatedRequirementSha256", "codeDirectoryHash", "sparklePublicEdKeySha256", "enclosureURL", "enclosureLength", "enclosureEdSignatureSha256"], "targetRelease");
 exact(receipt.targetRelease.bundleIdentifier, "ai.jarvis.mac", "targetRelease.bundleIdentifier");
 exact(receipt.targetRelease.version, targetVersion, "targetRelease.version");
 exact(receipt.targetRelease.build, targetBuild, "targetRelease.build");
 exact(receipt.targetRelease.gitCommit, targetCommit, "targetRelease.gitCommit");
 exact(receipt.targetRelease.feedURL, canonicalFeedURL, "targetRelease.feedURL");
+exact(receipt.targetRelease.teamIdentifier, targetTeam, "targetRelease.teamIdentifier");
+exact(receipt.targetRelease.designatedRequirementSha256, targetRequirementSha256, "targetRelease.designatedRequirementSha256");
+exact(receipt.targetRelease.codeDirectoryHash, targetCodeDirectoryHash, "targetRelease.codeDirectoryHash");
+exact(receipt.targetRelease.sparklePublicEdKeySha256, targetSparklePublicKeySha256, "targetRelease.sparklePublicEdKeySha256");
+exact(receipt.targetRelease.enclosureURL, targetEnclosureURL, "targetRelease.enclosureURL");
+exact(receipt.targetRelease.enclosureLength, targetEnclosureLength, "targetRelease.enclosureLength");
+exact(receipt.targetRelease.enclosureEdSignatureSha256, targetEnclosureEdSignatureSha256, "targetRelease.enclosureEdSignatureSha256");
 
 for (const [value, label] of [[installedCommit, "installed commit"], [protectedCommit, "protected runtime commit"], [backupCommit, "backup commit"], [targetCommit, "target commit"]]) fullCommit(value, label);
 exact(markerCompatibilityCommit, compatibilityCommit, "protection marker compatibility commit");
@@ -798,6 +844,7 @@ configure_test_root() {
   OPENCLAW_BIN="${OPENCLAW_JARVIS_CLI_BIN:-$TEST_ROOT/bin/openclaw}"
   PROVE_RUNTIME_SCRIPT="${OPENCLAW_PROVE_JARVIS_RUNTIME_SCRIPT:-$TEST_ROOT/bin/prove-jarvis-runtime}"
   OFFICIAL_TEAM_ID="FIXTURETEAM"
+  OFFICIAL_SPARKLE_PUBLIC_ED_KEY="FIXTURESPARKLEPUBLICKEY"
 }
 
 run_preflight() {
@@ -818,13 +865,16 @@ run_preflight() {
   verify_strict_app_trust "$NEW_APP" new
   verify_one_official_signing_identity "$NEW_APP" new
   if [[ -n "$PROTECTED_HOTFIX_RECEIPT" ]]; then
+    # Receipt validation binds the exact current appcast artifact, so extract
+    # that immutable target identity before checking the receipt contract.
+    verify_latest_public_feed
     OPENCLAW_EXPECTED_INSTALLED_APP="$INSTALLED_APP" verify_protected_hotfix_compatibility_receipt
   else
     verify_installed_baseline
     verify_strict_app_trust "$OLD_APP" old
     verify_official_signing_identity
+    verify_latest_public_feed
   fi
-  verify_latest_public_feed
   if [[ "$BASELINE_MODE" == "normal-signed" ]]; then
     verify_live_managed_baseline
   fi
@@ -1138,6 +1188,10 @@ run_apply() {
   verify_one_official_signing_identity "$DISPOSABLE_APP" updated-disposable
   [[ "$(app_designated_requirement "$DISPOSABLE_APP")" == "$(app_designated_requirement "$NEW_APP")" ]] || \
     die "updated disposable designated requirement does not match the signed candidate"
+  if [[ "$BASELINE_MODE" == "protected-hotfix-compatibility-receipt" ]]; then
+    [[ "$(app_code_directory_hash "$DISPOSABLE_APP")" == "$(app_code_directory_hash "$NEW_APP")" ]] || \
+      die "updated disposable CodeDirectory hash does not match the receipt-bound signed candidate"
+  fi
   [[ "$(manifest_build "$(app_manifest_path "$DISPOSABLE_APP")")" == "$NEW_BUILD" ]] || die "updated disposable manifest build mismatch"
   [[ "$(manifest_commit "$(app_manifest_path "$DISPOSABLE_APP")")" == "$NEW_COMMIT" ]] || die "updated disposable manifest commit mismatch"
   log "proof.sparkle_transition=ok from_version=$OLD_VERSION from_build=$OLD_BUILD to_version=$NEW_VERSION to_build=$NEW_BUILD"
