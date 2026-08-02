@@ -319,6 +319,9 @@ host_health_reason() {
   elif [[ "$test_health_sample" == "jarvis-latency-timeout" ]]; then
     printf '%s' \
       'host_unhealthy|jarvis_http_failed|managed Jarvis health check failed|metric=jarvis_http_health observed=request_failed expected=http_200'
+  elif [[ "$test_health_sample" == "jarvis-http-non200" ]]; then
+    printf '%s' \
+      'host_unhealthy|jarvis_http_failed|managed Jarvis health endpoint returned HTTP 204|metric=jarvis_http_status observed=204 expected=200'
   elif [[ "$test_health_sample" == "resource-unavailable" ]]; then
     printf '%s' \
       'guard_internal|paging_measurement_failed|could not measure swap and pageout counters|metric=paging_trend status=unavailable'
@@ -754,6 +757,9 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   grep -Fq 'if [ "$thermal_status" -ne 0 ]; then' \
     "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
     fail "thermal sampler does not fail closed on native command failure"
+  grep -Fq 'managed Jarvis health endpoint returned HTTP %s' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "reachable non-200 Jarvis health response is not a concrete health failure"
 
   # Every platform or identity hazard refuses before the command starts. An
   # unavailable required backend is guard_internal rather than a retryable host
@@ -765,6 +771,7 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
     jarvis-identity-mismatch \
     jarvis-identity-changed \
     jarvis-latency-timeout \
+    jarvis-http-non200 \
     disk-unavailable \
     resource-unavailable; do
     case "$sample" in
@@ -789,6 +796,11 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
         expected_action=restore_single_stable_jarvis_listener
         ;;
       jarvis-latency-timeout)
+        expected_class=host_unhealthy
+        expected_code=jarvis_http_failed
+        expected_action=restore_jarvis_healthz_http_200
+        ;;
+      jarvis-http-non200)
         expected_class=host_unhealthy
         expected_code=jarvis_http_failed
         expected_action=restore_jarvis_healthz_http_200
@@ -824,6 +836,12 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
       fail "$sample omitted admission outcome or next safe action"
     grep -Fq "Next safe action: ${expected_action}." "$output" ||
       fail "$sample omitted its actionable human explanation"
+    if [ "$sample" = "jarvis-http-non200" ]; then
+      grep -Fq 'metric=jarvis_http_status observed=204 expected=200' "$output" ||
+        fail "reachable non-200 Jarvis response omitted its decisive HTTP status"
+      grep -Fq 'managed Jarvis health endpoint returned HTTP 204' "$output" ||
+        fail "reachable non-200 Jarvis response omitted its human root cause"
+    fi
   done
 
   # A retryable host hazard pauses only new admission, names the root cause,

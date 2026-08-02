@@ -866,6 +866,17 @@ probe_dedicated_jarvis() {
     /usr/bin/awk -v seconds="$latency_seconds" \
       'BEGIN { if (seconds ~ /^[0-9]+([.][0-9]+)?$/) printf "%.0f", seconds * 1000 }'
   )"
+  # A syntactically valid non-200 response is concrete service-health evidence,
+  # not missing telemetry. Preserve the observed status so the owner repairs
+  # /healthz instead of chasing the measurement backend.
+  if [[ "$http_code" =~ ^[1-5][0-9][0-9]$ ]] &&
+    [[ "$latency_ms" =~ ^[0-9]+$ ]] &&
+    [ "$http_code" != "200" ]; then
+    printf 'error|host_unhealthy|jarvis_http_failed|managed Jarvis health endpoint returned HTTP %s|metric=jarvis_http_status observed=%s expected=200' \
+      "$http_code" \
+      "$http_code"
+    return 0
+  fi
   if [ "$http_code" != "200" ] || [[ ! "$latency_ms" =~ ^[0-9]+$ ]]; then
     printf '%s' \
       'error|guard_internal|jarvis_health_measurement_failed|managed Jarvis health telemetry is invalid|metric=jarvis_health status=unavailable'
