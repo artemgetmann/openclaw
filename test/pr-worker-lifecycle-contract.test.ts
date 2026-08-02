@@ -45,6 +45,9 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain(
       "records the exact finding and identities with `return-source`",
     );
+    expect(normalizedWorkflow).toContain(
+      "repeat this cycle from `awaiting-retest` with that exact release contract",
+    );
   });
 
   it("forces user-visible transport for live or protected testing", () => {

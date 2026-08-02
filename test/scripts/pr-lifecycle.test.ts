@@ -867,7 +867,7 @@ describe("scripts/pr-lifecycle", () => {
     expect(returnSource(fixture, release.contractId).action).toBe("source-returned");
     expect(returnSource(fixture, release.contractId).action).toBe("source-already-returned");
 
-    const repairedTester = run(fixture, [
+    const returningTestArgs = (contractId: string) => [
       "handoff-test",
       "42",
       "--test-kind",
@@ -879,8 +879,9 @@ describe("scripts/pr-lifecycle", () => {
       "--owner-host",
       "builder-host",
       "--returning-release-contract",
-      release.contractId,
-    ]);
+      contractId,
+    ];
+    const repairedTester = run(fixture, returningTestArgs(release.contractId));
     expect(repairedTester.action).toBe("create_thread");
     run(fixture, [
       "accept-test-owner",
@@ -900,11 +901,11 @@ describe("scripts/pr-lifecycle", () => {
         role: "tester",
         routing: repairedTester.routing,
         contractId: repairedTester.contractId,
-        status: "PASS",
+        status: "FAIL",
         headSha: repairedTester.candidate?.headSha,
         diffFingerprint: repairedTester.candidate?.diffFingerprint,
         owner: { threadId: "repaired-tester", hostId: "tester-host" },
-        evidence: ["repaired candidate passed"],
+        evidence: ["tester found a second source repair"],
         cleanup: { status: "complete" },
         limitations: [],
       }),
@@ -917,6 +918,86 @@ describe("scripts/pr-lifecycle", () => {
       repairedTester.contractId,
       "--thread-id",
       "repaired-tester",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+
+    fixture.metadata.headRefOid = "d".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    fixture.env.TEST_PR_PATCH = "diff --git a/AGENTS.md b/AGENTS.md\n+second repaired policy\n";
+    const mismatchedReturn = runFailure(fixture, returningTestArgs("wrong-release-contract"));
+    expect(mismatchedReturn.status).toBe(1);
+    expect(mismatchedReturn.stderr).toContain("owner may still be active");
+
+    const secondRepairedTester = run(fixture, returningTestArgs(release.contractId));
+    expect(secondRepairedTester.action).toBe("create_thread");
+    expect(secondRepairedTester.contractId).not.toBe(repairedTester.contractId);
+    expect(run(fixture, returningTestArgs(release.contractId))).toMatchObject({
+      action: "do-not-create",
+      contractId: secondRepairedTester.contractId,
+      owner: null,
+    });
+
+    const repeatedState = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(repeatedState.history).toHaveLength(2);
+    expect(
+      repeatedState.history.map(
+        (entry: { release: { contractId: string } }) => entry.release.contractId,
+      ),
+    ).toEqual([release.contractId, release.contractId]);
+    expect(repeatedState.release).toMatchObject({
+      phase: "awaiting-retest",
+      contractId: release.contractId,
+      owner: { threadId: "release-thread", hostId: "release-host" },
+    });
+
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      secondRepairedTester.contractId,
+      "--thread-id",
+      "second-repaired-tester",
+      "--host-id",
+      "tester-host",
+    ]);
+    fixture.metadata.headRefOid = "e".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    const activeTesterBlocksRefresh = runFailure(fixture, returningTestArgs(release.contractId));
+    expect(activeTesterBlocksRefresh.status).toBe(1);
+    expect(activeTesterBlocksRefresh.stderr).toContain("owner may still be active");
+
+    fixture.metadata.headRefOid = "d".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    const secondReceiptPath = path.join(fixture.root, "second-repaired-receipt.json");
+    fs.writeFileSync(
+      secondReceiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: secondRepairedTester.routing,
+        contractId: secondRepairedTester.contractId,
+        status: "PASS",
+        headSha: secondRepairedTester.candidate?.headSha,
+        diffFingerprint: secondRepairedTester.candidate?.diffFingerprint,
+        owner: { threadId: "second-repaired-tester", hostId: "tester-host" },
+        evidence: ["second repaired candidate passed"],
+        cleanup: { status: "complete" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", secondReceiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      secondRepairedTester.contractId,
+      "--thread-id",
+      "second-repaired-tester",
       "--host-id",
       "tester-host",
       "--closure",

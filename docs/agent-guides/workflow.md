@@ -197,6 +197,10 @@ fresh tester receipt and closure, `handoff-release` emits
 `action=resume-thread` for the already-recorded release task; it never emits a
 second `create_thread` action. The resumed release owner re-archives the same
 builder and records a fresh `accept-release-handoff` receipt before continuing.
+If a tester finds another source defect before release resumes, the same builder
+may repeat this cycle from `awaiting-retest` with that exact release contract and
+a closed tester. Every retired candidate stays in lifecycle history; tester and
+release identities are never reused or duplicated.
 
 After a successful merge, the release worker records and sends the merge receipt.
 The builder was already archived at accepted handoff. The receipt proves the

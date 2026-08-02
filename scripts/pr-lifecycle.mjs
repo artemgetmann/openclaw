@@ -382,7 +382,7 @@ function handoffTest(pr, options) {
     }
     if (state && !sameCandidate(state.candidate, candidate)) {
       const returningFromRelease =
-        state.release?.phase === "awaiting-source" &&
+        ["awaiting-source", "awaiting-retest"].includes(state.release?.phase) &&
         state.release.contractId === returningReleaseContract &&
         state.tester?.phase === "closed";
       if (!returningFromRelease && hasUnclosedOwner(state)) {
@@ -395,7 +395,8 @@ function handoffTest(pr, options) {
       if (returningFromRelease) {
         // A release discrepancy returns source ownership to the exact builder,
         // but it must not create a second release owner. Carry that identity
-        // across the repaired candidate and park it until fresh proof closes.
+        // across both the first repair and any tester-driven follow-up repairs,
+        // then park it until fresh proof closes.
         state.release = {
           ...previous.release,
           phase: "awaiting-retest",
