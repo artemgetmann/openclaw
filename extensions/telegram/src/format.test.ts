@@ -133,6 +133,22 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toContain("```\nDraft link (https://e.com)\n```");
   });
 
+  it("does not rewrite quote-prefixed lines inside fenced code", () => {
+    const markdown = [
+      "```text",
+      "> ~~~",
+      "> keep this literal",
+      "```",
+      "",
+      "> Hi Sveta, please confirm.",
+    ].join("\n");
+
+    const res = rewriteMarkdownBlockquotesAsCopyBlocks(markdown);
+
+    expect(res).toContain("```text\n> ~~~\n> keep this literal\n```");
+    expect(res).toContain("```\nHi Sveta, please confirm.\n```");
+  });
+
   it("renders fenced code blocks", () => {
     const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
     expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
@@ -268,6 +284,30 @@ describe("markdownToTelegramHtml", () => {
 
     expect(chunk?.text).toContain("<table bordered striped>");
     expect(chunk?.plainText).toBe("Name | Score\nAda | 9");
+  });
+
+  it("accounts for escaped fenced-code bytes before splitting rich chunks", () => {
+    const chunks = splitTelegramRichMessageTextChunks({
+      text: [
+        "| Plan | Owner |",
+        "| --- | --- |",
+        "| Ship | Jarvis |",
+        "",
+        "```text",
+        `> ${">".repeat(90)}`,
+        "```",
+        "",
+        "> Hi Sveta, please confirm.",
+      ].join("\n"),
+      textLimit: 160,
+      textMode: "markdown",
+      tableMode: "block",
+      copySafeBlockquotes: true,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.text.length <= 160)).toBe(true);
+    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("&gt;");
   });
 
   it("keeps list markers readable in rich-message plain-text fallback", () => {

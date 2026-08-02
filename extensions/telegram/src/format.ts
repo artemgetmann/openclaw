@@ -1,4 +1,5 @@
 import type { MarkdownTableMode } from "../../../src/config/types.base.js";
+import { parseFenceSpans } from "../../../src/markdown/fences.js";
 import {
   chunkMarkdownIR,
   markdownToIR,
@@ -149,8 +150,11 @@ function buildSafeMarkdownFence(text: string): string {
 
 export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string {
   const normalized = (markdown ?? "").replace(/\r\n?/g, "\n");
+  const fenceSpans = parseFenceSpans(normalized);
   const output: string[] = [];
   let quoteLines: string[] = [];
+  let fenceIndex = 0;
+  let lineOffset = 0;
 
   const flushQuote = () => {
     if (quoteLines.length === 0) {
@@ -169,13 +173,32 @@ export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string
   };
 
   for (const line of normalized.split("\n")) {
+    // A greater-than sign inside a fenced code body is literal source text,
+    // never a recipient draft marker. Track the shared Markdown fence spans
+    // instead of hiding bytes with placeholders so downstream chunk limits
+    // are calculated from the exact HTML Telegram will receive.
+    while (fenceSpans[fenceIndex] && lineOffset > fenceSpans[fenceIndex].end) {
+      fenceIndex += 1;
+    }
+    const fenceSpan = fenceSpans[fenceIndex];
+    const isFencedLine = Boolean(
+      fenceSpan && lineOffset >= fenceSpan.start && lineOffset <= fenceSpan.end,
+    );
+    if (isFencedLine) {
+      flushQuote();
+      output.push(line);
+      lineOffset += line.length + 1;
+      continue;
+    }
     const quoteMatch = /^(?: {0,3}>\s?)(.*)$/.exec(line);
     if (quoteMatch) {
       quoteLines.push(quoteMatch[1] ?? "");
+      lineOffset += line.length + 1;
       continue;
     }
     flushQuote();
     output.push(line);
+    lineOffset += line.length + 1;
   }
   flushQuote();
 

@@ -876,6 +876,7 @@ describe("deliverReplies", () => {
             "> Hi Sveta, use https://example.com/booking.",
             "",
             "```text",
+            "> ~~~",
             "> keep this literal",
             "curl https://example.com?a=1>b",
             "```",
@@ -892,6 +893,7 @@ describe("deliverReplies", () => {
     expect(richHtml).toContain("<table bordered striped>");
     expect(richHtml).toContain("Hi Sveta, use https://example.com/booking.");
     expect(richHtml).toContain("&gt; keep this literal");
+    expect(richHtml).toContain("&gt; ~~~");
     expect(richHtml).toContain("a=1&gt;b");
     expect(richHtml.match(/<pre><code>/g)).toHaveLength(2);
     expect(richHtml).not.toContain("<p>keep this literal</p>");

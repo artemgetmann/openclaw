@@ -62,11 +62,6 @@ type TelegramReplyChannelData = {
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
 
-type ProtectedFencedCode = {
-  markdown: string;
-  greaterThanPlaceholder?: string;
-};
-
 export type TelegramReplyDeliveredEvent = {
   messageId?: number;
   textLength: number;
@@ -86,56 +81,6 @@ function isFinalTtsSupplementPayload(reply: ReplyPayload): boolean {
     return false;
   }
   return (openclaw as { finalTtsSupplement?: unknown }).finalTtsSupplement === true;
-}
-
-function protectFencedCodeFromCopySafeBlockquoteRewrite(markdown: string): ProtectedFencedCode {
-  // The copy-safe rewrite intentionally treats quote-prefixed lines as draft
-  // text. Fence bodies are literal, though, so hide their greater-than signs
-  // until rich Markdown rendering is complete. A single private-use character
-  // preserves chunk-length accounting and is restored before Telegram sends.
-  let greaterThanPlaceholder: string | undefined;
-  for (let codePoint = 0xe000; codePoint <= 0xf8ff; codePoint += 1) {
-    const candidate = String.fromCodePoint(codePoint);
-    if (!markdown.includes(candidate)) {
-      greaterThanPlaceholder = candidate;
-      break;
-    }
-  }
-  if (!greaterThanPlaceholder) {
-    return { markdown };
-  }
-
-  let fenceCharacter: "`" | "~" | undefined;
-  let fenceLength = 0;
-  let changed = false;
-  const protectedLines = markdown.split("\n").map((line) => {
-    const fenceMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
-    if (fenceMatch) {
-      const fence = fenceMatch[2] ?? "";
-      const character = fence[0] as "`" | "~";
-      if (!fenceCharacter) {
-        fenceCharacter = character;
-        fenceLength = fence.length;
-        return line;
-      }
-      if (
-        character === fenceCharacter &&
-        fence.length >= fenceLength &&
-        (fenceMatch[3] ?? "").trim().length === 0
-      ) {
-        fenceCharacter = undefined;
-        fenceLength = 0;
-        return line;
-      }
-    }
-    if (!fenceCharacter || !line.includes(">")) {
-      return line;
-    }
-    changed = true;
-    return line.replaceAll(">", greaterThanPlaceholder);
-  });
-
-  return changed ? { markdown: protectedLines.join("\n"), greaterThanPlaceholder } : { markdown };
 }
 
 function buildChunkTextResolver(params: {
@@ -161,27 +106,16 @@ function buildChunkTextResolver(params: {
       // formatter so rich-only <p>/<ol>/<ul>/<table> tags cannot leak across
       // the transport boundary and trigger Telegram's plain-text fallback.
       if (params.richMessages !== false && params.tableMode === "block") {
-        const protectedCode = params.copySafeBlockquotes
-          ? protectFencedCodeFromCopySafeBlockquoteRewrite(chunk)
-          : { markdown: chunk };
         chunks.push(
           ...splitTelegramRichMessageTextChunks({
-            text: protectedCode.markdown,
+            text: chunk,
             textLimit: params.textLimit,
             textMode: "markdown",
             tableMode: params.tableMode,
             // Mixed comparison + draft replies need both native table blocks
             // and one-tap-copy pre blocks in the same rich message.
             copySafeBlockquotes: params.copySafeBlockquotes,
-          }).map((richChunk) => {
-            const placeholder = protectedCode.greaterThanPlaceholder;
-            return {
-              html: placeholder ? richChunk.text.replaceAll(placeholder, "&gt;") : richChunk.text,
-              text: placeholder
-                ? richChunk.plainText.replaceAll(placeholder, ">")
-                : richChunk.plainText,
-            };
-          }),
+          }).map((richChunk) => ({ html: richChunk.text, text: richChunk.plainText })),
         );
         continue;
       }

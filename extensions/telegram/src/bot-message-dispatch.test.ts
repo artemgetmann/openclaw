@@ -1709,6 +1709,37 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(call).not.toHaveProperty("richMessages");
   });
 
+  it("routes the Bali lodging comparison through native rich delivery", async () => {
+    const tableText = [
+      "### Practical comparison",
+      "",
+      "| Factor | Friend’s villa in Ubud | Ivy Canggu |",
+      "|---|---|---|",
+      "| **Lodging cost** | Unknown; cap the contribution. | Rp2.6M/week. |",
+      "| **Work setup** | Verify desk, Wi-Fi, quiet, and AC. | Known bad chair and table. |",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      bot: createRichBot(),
+    });
+
+    const call = deliverReplies.mock.calls[0]?.[0];
+    expect(call).toEqual(
+      expect.objectContaining({
+        copySafeBlockquotes: true,
+        replies: [expect.objectContaining({ text: tableText })],
+      }),
+    );
+    expect(call).not.toHaveProperty("richMessages");
+  });
+
   it("keeps table finals on legacy delivery when Telegram lacks rich raw API", async () => {
     const tableText = [
       "| Plan | Owner |",
