@@ -734,6 +734,16 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   local sample="" expected_class="" expected_code=""
   local status=0
 
+  # pmset writes error text containing both monitored keywords. The production
+  # sampler must preserve its exit status so an unavailable thermal backend is
+  # an internal measurement failure, never a false host-pressure reading.
+  grep -Fq 'if thermal_output="$(/usr/bin/pmset -g therm 2>/dev/null)"; then' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "thermal sampler discards the native command exit status"
+  grep -Fq 'if [ "$thermal_status" -ne 0 ]; then' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "thermal sampler does not fail closed on native command failure"
+
   # Every platform or identity hazard refuses before the command starts. An
   # unavailable required backend is guard_internal rather than a retryable host
   # reading, so a broken sampler cannot silently weaken the dedicated profile.

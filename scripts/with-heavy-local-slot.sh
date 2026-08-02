@@ -538,7 +538,7 @@ dedicated_resource_health_reason() {
   local pressure_level="" pressure_state=""
   local swap_line="" swap_used_kib="" swap_free_kib=""
   local vm_stat_output="" pageouts_total="" swapouts_total=""
-  local thermal_output="" thermal_state=""
+  local thermal_output="" thermal_status=0 thermal_state=""
 
   # The kernel memory-pressure level is a platform decision, not a guessed
   # percentage. Its values match the public dispatch memory-pressure states:
@@ -624,7 +624,20 @@ dedicated_resource_health_reason() {
   # pmset reports the macOS thermal and performance-pressure decisions that
   # actually cause throttling. CPU utilization itself remains telemetry-only;
   # a platform warning is the independent hardware-protection boundary.
-  thermal_output="$(/usr/bin/pmset -g therm 2>/dev/null || true)"
+  # Keep command failure separate from the report body. pmset includes the
+  # words "thermal" and "performance" in its error text, so parsing a failed
+  # invocation as a real pressure warning would misclassify an unavailable
+  # platform signal as host heat.
+  if thermal_output="$(/usr/bin/pmset -g therm 2>/dev/null)"; then
+    thermal_status=0
+  else
+    thermal_status=$?
+  fi
+  if [ "$thermal_status" -ne 0 ]; then
+    printf '%s' \
+      'guard_internal|thermal_measurement_failed|could not measure macOS thermal and performance pressure|metric=thermal_pressure status=unavailable'
+    return 0
+  fi
   if printf '%s\n' "$thermal_output" |
       /usr/bin/grep -Fq 'No thermal warning level has been recorded' &&
     printf '%s\n' "$thermal_output" |
