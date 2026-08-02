@@ -566,10 +566,19 @@ NODE
   # Static receipts prove the protection chain, not the daemon currently bound
   # to ai.jarvis.gateway. Reuse the canonical read-only proof so a stale marker
   # cannot authorize overwriting an unrelated live runtime.
-  live_proof="$($BASH_BIN "$PROVE_RUNTIME_SCRIPT" \
-    --runtime-source jarvis-break-glass-hotfix \
-    --expected-commit "$protected_commit" 2>&1)" || \
-    die "preflight blocked: live protected runtime proof failed for receipt commit $protected_commit"
+  if [[ -n "$TEST_ROOT" ]]; then
+    live_proof="$(OPENCLAW_SPARKLE_E2E_TEST_ROOT="$TEST_ROOT" "$BASH_BIN" "$PROVE_RUNTIME_SCRIPT" \
+      --runtime-source jarvis-break-glass-hotfix \
+      --expected-commit "$protected_commit" 2>&1)" || \
+      die "preflight blocked: live protected runtime proof failed for receipt commit $protected_commit"
+  else
+    # The canonical helper supports test overrides of its own. Production must
+    # inspect the actual Jarvis paths and binaries, never inherited debug state.
+    live_proof="$(env -i HOME="$HOME" PATH="$PATH" "$BASH_BIN" "$PROVE_RUNTIME_SCRIPT" \
+      --runtime-source jarvis-break-glass-hotfix \
+      --expected-commit "$protected_commit" 2>&1)" || \
+      die "preflight blocked: live protected runtime proof failed for receipt commit $protected_commit"
+  fi
   [[ "$live_proof" == *"jarvis_runtime_proof=true"* && \
     "$live_proof" == *"runtime_source=jarvis-break-glass-hotfix"* && \
     "$live_proof" == *"runtime_commit=$protected_commit"* ]] || \

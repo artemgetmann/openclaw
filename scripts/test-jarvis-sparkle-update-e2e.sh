@@ -485,6 +485,8 @@ grep -q '^PATH="/usr/bin:/bin:/usr/sbin:/sbin"$' "$HARNESS" || fail "production 
 grep -q '^DF_BIN="/bin/df"$' "$HARNESS" || fail "production df binary is not pinned"
 grep -q 'NODE_BIN="/opt/homebrew/bin/node"' "$HARNESS" || fail "Node proof binary is not allowlisted"
 grep -q 'BASH_BIN="/bin/bash"' "$HARNESS" || fail "runtime proof shell is not pinned"
+grep -q 'env -i HOME="$HOME" PATH="$PATH" "$BASH_BIN" "$PROVE_RUNTIME_SCRIPT"' "$HARNESS" || \
+  fail "production protected-runtime proof does not strip ambient overrides"
 pass "production PATH and proof interpreters are pinned"
 
 before="$(fixture_hashes "$TEST_TMP/base")"
