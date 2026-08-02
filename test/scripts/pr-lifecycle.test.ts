@@ -385,6 +385,76 @@ describe("scripts/pr-lifecycle", () => {
     expect(state.tester.retryOfContractId).toBe(priorTester.contractId);
   });
 
+  it("refuses a recursive capacity retry after the one replacement also fails", () => {
+    const fixture = makeFixture();
+    const originalTester = completeCapacityOnlyFailure(fixture);
+    const originalRecovery = writeCapacityRecovery(fixture, originalTester.contractId);
+    const replacement = run(
+      fixture,
+      capacityRetryArgs(originalTester.contractId, originalRecovery),
+    );
+
+    // Close the authorized replacement with the same pre-work capacity-only
+    // failure. This must not mint a fresh retry budget from its new identity.
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      replacement.contractId,
+      "--thread-id",
+      "replacement-tester",
+      "--host-id",
+      "tester-host",
+    ]);
+    const replacementReceiptPath = path.join(fixture.root, "replacement-capacity-fail.json");
+    fs.writeFileSync(
+      replacementReceiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: replacement.routing,
+        contractId: replacement.contractId,
+        status: "FAIL",
+        headSha: replacement.candidate?.headSha,
+        diffFingerprint: replacement.candidate?.diffFingerprint,
+        owner: { threadId: "replacement-tester", hostId: "tester-host" },
+        evidence: ["heavy guard again refused disk pressure before workload start"],
+        cleanup: { status: "not-required", evidence: "workload never started" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", replacementReceiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      replacement.contractId,
+      "--thread-id",
+      "replacement-tester",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+
+    const secondRecovery = writeCapacityRecovery(fixture, replacement.contractId);
+    const recursiveRetry = runFailure(
+      fixture,
+      capacityRetryArgs(replacement.contractId, secondRecovery),
+    );
+    expect(recursiveRetry.status).toBe(1);
+    expect(recursiveRetry.stderr).toContain(
+      "capacity retry was already consumed for this immutable candidate",
+    );
+
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.tester.contractId).toBe(replacement.contractId);
+    expect(state.tester.phase).toBe("closed");
+    expect(state.testerHistory).toHaveLength(1);
+  });
+
   it("rejects capacity retry without exact no-work and recovered-capacity proof", () => {
     const fixture = makeFixture();
     const priorTester = completeCapacityOnlyFailure(fixture);

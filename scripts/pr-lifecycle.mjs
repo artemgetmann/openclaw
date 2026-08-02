@@ -411,12 +411,18 @@ function handoffTest(pr, options) {
       fail("builder identity differs from the recorded candidate owner");
     }
 
-    const consumedCapacityRetry = capacityRetryContract
-      ? state.testerHistory?.some(
-          (attempt) => attempt?.tester?.contractId === capacityRetryContract,
-        )
-      : false;
-    if (consumedCapacityRetry && state.tester?.retryOfContractId === capacityRetryContract) {
+    // Capacity recovery grants one replacement for this immutable candidate,
+    // not one replacement per failed tester. The attempt ledger is therefore
+    // the durable retry budget: once it contains a recovery receipt, a later
+    // replacement failure cannot recursively become a new retry source.
+    const consumedCapacityRetry = state.testerHistory?.some(
+      (attempt) => attempt?.capacityRecoveryReceipt !== null,
+    );
+    if (
+      capacityRetryContract &&
+      consumedCapacityRetry &&
+      state.tester?.retryOfContractId === capacityRetryContract
+    ) {
       // The recovery packet is one-shot, but its replay remains idempotent even
       // after the replacement tester advances beyond pending or later closes.
       return {
@@ -429,6 +435,9 @@ function handoffTest(pr, options) {
           owner: state.tester.owner ?? null,
         },
       };
+    }
+    if (capacityRetryContract && consumedCapacityRetry) {
+      fail("capacity retry was already consumed for this immutable candidate");
     }
 
     if (state.tester && !["closed", "cancelled"].includes(state.tester.phase)) {
