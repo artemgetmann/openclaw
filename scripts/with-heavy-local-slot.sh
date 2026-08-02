@@ -26,6 +26,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   scripts/with-heavy-local-slot.sh --label <owner> --check
+  scripts/with-heavy-local-slot.sh --cpu-policy dedicated-agent --label <owner> --check
   scripts/with-heavy-local-slot.sh --label <owner> --wait-seconds <seconds> -- <command> [args...]
   scripts/with-heavy-local-slot.sh --label <owner> -- <command> [args...]
 
@@ -36,6 +37,11 @@ headroom, Tailscale, or the managed Jarvis gateway are unhealthy.
 --wait-seconds performs one bounded acquire-and-run transaction. It waits
 without holding the lease, prints at most one queue notice, and executes the
 guarded command exactly once after admission.
+
+--cpu-policy dedicated-agent is an explicit per-transaction mode for Macs
+reserved for agent workloads. It records CPU-idle telemetry but does not use
+CPU idle to refuse admission or stop work. Every non-CPU safety gate remains
+enforced. The default CPU policy retains the 35%/20% idle floors.
 EOF
   exit 2
 }
@@ -43,6 +49,7 @@ EOF
 label=''
 check_only=false
 policy='standard'
+cpu_policy='standard'
 wait_seconds=0
 display_label=''
 telemetry_label=''
@@ -61,6 +68,11 @@ while [ "$#" -gt 0 ]; do
     --policy)
       [ "$#" -ge 2 ] || usage
       policy=$2
+      shift 2
+      ;;
+    --cpu-policy)
+      [ "$#" -ge 2 ] || usage
+      cpu_policy=$2
       shift 2
       ;;
     --wait-seconds)
@@ -302,6 +314,25 @@ validate_policy_for_command() {
   esac
 }
 
+validate_cpu_policy() {
+  # CPU policy is deliberately separate from internal admission policies such
+  # as gateway lifecycle. This public mode changes one metric only and cannot
+  # inherit the Jarvis-health exemptions attached to internal policies.
+  case "$cpu_policy" in
+    standard | dedicated-agent)
+      return 0
+      ;;
+    *)
+      emit_refusal \
+        "guard_internal" \
+        "unknown_cpu_policy" \
+        "unknown CPU policy '$cpu_policy'" \
+        "cpu_policy=$(openclaw_heavy_local_slot_safe_text "$cpu_policy")"
+      return 75
+      ;;
+  esac
+}
+
 guarded_group_is_live() {
   [ -n "$child_pgid" ] || return 1
   kill -0 -- "-$child_pgid" 2>/dev/null
@@ -480,6 +511,12 @@ else
   policy_status=$?
   exit "$policy_status"
 fi
+if validate_cpu_policy; then
+  :
+else
+  cpu_policy_status=$?
+  exit "$cpu_policy_status"
+fi
 [ -n "$PERL_BIN" ] && [ -r "$RUNNER" ] || {
   emit_refusal \
     "guard_internal" \
@@ -499,10 +536,18 @@ host_health_reason() {
   local required_cpu_idle=$1
   local require_jarvis_health=$2
   local emit_disk_report="${3:-0}"
+  local sample_phase="${4:-unknown}"
   local disk_target="/"
   local disk_free=""
+  local cpu_status="healthy"
 
-  [ "$(uname -s)" = "Darwin" ] || return 0
+  if [ "$(uname -s)" != "Darwin" ]; then
+    printf 'HEAVY_LOCAL_CPU_TELEMETRY cpu_policy=%s phase=%s status=not_applicable platform=%s\n' \
+      "$cpu_policy" \
+      "$sample_phase" \
+      "$(uname -s)" >&2
+    return 0
+  fi
 
   # memory_pressure already accounts for compressed memory. Raw "free pages"
   # alone would falsely reject healthy Macs that are using their cache.
@@ -524,18 +569,48 @@ host_health_reason() {
     return 0
   fi
 
-  # Heavy jobs are admitted only while the interactive desktop still has
-  # substantial CPU headroom. This protects WindowServer, VNC, and Tailscale.
+  # CPU is always measured, including in dedicated-agent mode. Shared/personal
+  # Macs retain interactive headroom; a dedicated agent Mac records the same
+  # sample as telemetry and lets macOS scheduling govern CPU saturation.
   cpu_idle=$(
     /usr/bin/top -l 1 -n 0 2>/dev/null |
       awk '/CPU usage:/{gsub(/%/, "", $7); print int($7); exit}'
   )
   if [ -z "$cpu_idle" ]; then
-    printf '%s' \
-      'guard_internal|cpu_measurement_failed|could not measure CPU headroom|metric=cpu_idle_percent status=unavailable'
-    return 0
+    if [ "$cpu_policy" = "dedicated-agent" ]; then
+      printf 'HEAVY_LOCAL_CPU_TELEMETRY cpu_policy=%s phase=%s status=unavailable enforcement=telemetry_only metric=cpu_idle_percent\n' \
+        "$cpu_policy" \
+        "$sample_phase" >&2
+      # Missing CPU telemetry cannot silently disable any later non-CPU gate.
+      # Continue through disk, remote-access, and Jarvis health checks.
+    else
+      printf 'HEAVY_LOCAL_CPU_TELEMETRY cpu_policy=%s phase=%s status=unavailable enforcement=threshold metric=cpu_idle_percent threshold=%s unit=percent\n' \
+        "$cpu_policy" \
+        "$sample_phase" \
+        "$required_cpu_idle" >&2
+      printf '%s' \
+        'guard_internal|cpu_measurement_failed|could not measure CPU headroom|metric=cpu_idle_percent status=unavailable'
+      return 0
+    fi
+  elif [ "$cpu_policy" = "dedicated-agent" ]; then
+    printf 'HEAVY_LOCAL_CPU_TELEMETRY cpu_policy=%s phase=%s status=observed enforcement=telemetry_only metric=cpu_idle_percent observed=%s threshold=none unit=percent\n' \
+      "$cpu_policy" \
+      "$sample_phase" \
+      "$cpu_idle" >&2
+  else
+    if [ "$cpu_idle" -lt "$required_cpu_idle" ]; then
+      cpu_status="pressure"
+    fi
+    printf 'HEAVY_LOCAL_CPU_TELEMETRY cpu_policy=%s phase=%s status=%s enforcement=threshold metric=cpu_idle_percent observed=%s threshold=%s unit=percent\n' \
+      "$cpu_policy" \
+      "$sample_phase" \
+      "$cpu_status" \
+      "$cpu_idle" \
+      "$required_cpu_idle" >&2
   fi
-  if [ "$cpu_idle" -lt "$required_cpu_idle" ]; then
+  if [ -n "$cpu_idle" ] &&
+    [ "$cpu_policy" = "standard" ] &&
+    [ "$cpu_idle" -lt "$required_cpu_idle" ]; then
     printf 'host_unhealthy|cpu_pressure|CPU idle is %s%% (minimum %s%%)|metric=cpu_idle_percent observed=%s threshold=%s unit=percent' \
       "$cpu_idle" \
       "$required_cpu_idle" \
@@ -634,7 +709,7 @@ while true; do
     exit "$acquire_status"
   fi
 
-  preflight_result=$(host_health_reason "$PREFLIGHT_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health" 1)
+  preflight_result=$(host_health_reason "$PREFLIGHT_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health" 1 preflight)
   if [ -z "$preflight_result" ]; then
     # The final health probe may itself consume the remaining wait budget.
     # Preserve the same no-late-launch boundary after that probe completes.
@@ -662,8 +737,12 @@ done
 health_stop_file="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/health_stop_reason"
 
 if [[ "$policy" == "gateway-lifecycle" ]]; then
+  printf 'HEAVY_LOCAL_SLOT_RECEIPT status=granted policy=%s cpu_policy=%s owner=%s\n' \
+    "$policy" "$cpu_policy" "$telemetry_label" >&2
   printf 'Heavy-local slot granted to "%s".\n' "$display_label" >&2
 else
+  printf 'HEAVY_LOCAL_SLOT_RECEIPT status=granted policy=%s cpu_policy=%s owner=%s\n' \
+    "$policy" "$cpu_policy" "$telemetry_label"
   printf 'Heavy-local slot granted to "%s".\n' "$display_label"
 fi
 if [ "$check_only" = true ]; then
@@ -742,7 +821,7 @@ monitor_guarded_child() {
   trap - EXIT INT TERM HUP
 
   while kill -0 "$child_pid" 2>/dev/null; do
-    runtime_result=$(host_health_reason "$RUNTIME_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health" 0)
+    runtime_result=$(host_health_reason "$RUNTIME_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health" 0 runtime)
     if [ -n "$runtime_result" ]; then
       IFS='|' read -r runtime_class runtime_code runtime_reason runtime_data <<<"$runtime_result"
       unhealthy_strikes=$((unhealthy_strikes + 1))

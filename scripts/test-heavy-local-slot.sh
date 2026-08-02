@@ -244,9 +244,10 @@ EOF
 host_health_reason() {
   local required_cpu_idle="$1"
   local require_jarvis_health="$2"
+  local sample_phase="${4:-unknown}"
   local test_health_file="${OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE:-}"
   local test_ready_file="${OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_READY_FILE:-}"
-  local test_health_sample="" test_health_tmp=""
+  local test_health_sample="" test_health_tmp="" test_cpu_idle=""
 
   # Runtime-stop tests must first prove that their complete child tree exists.
   # Until that fixture-owned marker appears, report healthy without consuming a
@@ -261,9 +262,29 @@ host_health_reason() {
     /usr/bin/tail -n +2 "$test_health_file" >"$test_health_tmp"
     /bin/mv "$test_health_tmp" "$test_health_file"
   fi
-  # The remediation policy skips only the Jarvis probe. Synthetic memory, CPU,
-  # and Tailscale failures remain fatal regardless of policy.
-  if [[ "$test_health_sample" == "jarvis-unhealthy" ]]; then
+  # CPU samples exercise the real policy split while keeping production free of
+  # ambient health hooks. Dedicated mode records the same observation and then
+  # continues to every non-CPU fixture gate below.
+  if [[ "$test_health_sample" =~ ^cpu-([0-9]|[1-9][0-9]|100)$ ]]; then
+    test_cpu_idle="${BASH_REMATCH[1]}"
+    if [[ "$cpu_policy" == "dedicated-agent" ]]; then
+      printf 'HEAVY_LOCAL_CPU_TELEMETRY cpu_policy=dedicated-agent phase=%s status=observed enforcement=telemetry_only metric=cpu_idle_percent observed=%s threshold=none unit=percent\n' \
+        "$sample_phase" "$test_cpu_idle" >&2
+    else
+      printf 'HEAVY_LOCAL_CPU_TELEMETRY cpu_policy=standard phase=%s status=%s enforcement=threshold metric=cpu_idle_percent observed=%s threshold=%s unit=percent\n' \
+        "$sample_phase" \
+        "$([[ "$test_cpu_idle" -lt "$required_cpu_idle" ]] && printf pressure || printf healthy)" \
+        "$test_cpu_idle" \
+        "$required_cpu_idle" >&2
+      if [[ "$test_cpu_idle" -lt "$required_cpu_idle" ]]; then
+        printf 'host_unhealthy|cpu_pressure|CPU idle is %s%% (minimum %s%%)|metric=cpu_idle_percent observed=%s threshold=%s unit=percent' \
+          "$test_cpu_idle" "$required_cpu_idle" "$test_cpu_idle" "$required_cpu_idle"
+      fi
+    fi
+  elif [[ "$test_health_sample" == "memory-low" ]]; then
+    printf '%s' \
+      'host_unhealthy|memory_pressure|memory headroom is 10% (minimum 25%)|metric=memory_free_percent observed=10 threshold=25 unit=percent'
+  elif [[ "$test_health_sample" == "jarvis-unhealthy" ]]; then
     if [[ "$require_jarvis_health" == "1" ]]; then
       printf '%s' \
         'host_unhealthy|jarvis_unhealthy|managed Jarvis health check failed|metric=jarvis_health observed=unhealthy expected=healthy'
@@ -299,7 +320,7 @@ EOF
       print "readonly TASK_DISK_RECEIPT_THRESHOLD_KIB=1"
       next
     }
-    $0 == "  preflight_result=$(host_health_reason \"$PREFLIGHT_MIN_CPU_IDLE_PERCENT\" \"$require_jarvis_health\" 1)" {
+    $0 == "  preflight_result=$(host_health_reason \"$PREFLIGHT_MIN_CPU_IDLE_PERCENT\" \"$require_jarvis_health\" 1 preflight)" {
       print "source \"${ROOT_DIR}/scripts/lib/heavy-local-slot-health-fixture.sh\""
     }
     $0 == "  kill -TERM -- \"-$child_pgid\" 2>/dev/null || true" {
@@ -505,6 +526,152 @@ test_production_has_no_ambient_test_bypass() {
   grep -Fq 'readonly HOST_HEALTH_HTTP_TIMEOUT_SECONDS=3' "$WRAPPER" ||
     fail "production health timeout is not fixed at three seconds"
   pass "production wrapper exposes no ambient bypass or health tuning"
+}
+
+test_cpu_policy_is_explicit_narrow_and_receipted() {
+  local default_lock="$TMP_DIR/cpu-policy-default.lock"
+  local dedicated_lock="$TMP_DIR/cpu-policy-dedicated.lock"
+  local runtime_lock="$TMP_DIR/cpu-policy-runtime.lock"
+  local unknown_lock="$TMP_DIR/cpu-policy-unknown.lock"
+  local non_cpu_lock="$TMP_DIR/cpu-policy-non-cpu.lock"
+  local non_cpu_runtime_lock="$TMP_DIR/cpu-policy-non-cpu-runtime.lock"
+  local health_path="$TMP_DIR/cpu-policy.health"
+  local marker="$TMP_DIR/cpu-policy.marker"
+  local output="$TMP_DIR/cpu-policy.out"
+  local status=0
+
+  # No flag retains the conservative 35% admission floor. An ambient value with
+  # the dedicated spelling is intentionally inert.
+  printf 'cpu-33\n' >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$default_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+  OPENCLAW_HEAVY_LOCAL_CPU_POLICY=dedicated-agent \
+    "$FIXTURE_WRAPPER" --label "cpu-default" -- touch "$marker" >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "default CPU policy admitted 33% idle with status $status"
+  [[ ! -e "$marker" ]] || fail "default CPU policy ran work below its admission floor"
+  grep -Fq 'code=cpu_pressure metric=cpu_idle_percent observed=33 threshold=35' "$output" ||
+    fail "default CPU refusal lost its 35% threshold receipt"
+  grep -Fq 'cpu_policy=standard phase=preflight status=pressure enforcement=threshold' "$output" ||
+    fail "default CPU policy omitted its structured sample"
+
+  # The explicit dedicated transaction admits 0% idle and continues sampling at
+  # runtime. The command must complete even after repeated zero-idle samples.
+  {
+    printf 'cpu-0\n'
+    printf 'cpu-0\n'
+    printf 'cpu-0\n'
+    printf 'cpu-0\n'
+  } >"$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$dedicated_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --label "cpu-dedicated" \
+      -- bash -c 'sleep 0.2; touch "$1"' _ "$marker" >"$output" 2>&1
+  [[ -e "$marker" ]] || fail "dedicated CPU policy stopped work at 0% idle"
+  grep -Fq \
+    'HEAVY_LOCAL_SLOT_RECEIPT status=granted policy=standard cpu_policy=dedicated-agent owner=cpu-dedicated' \
+    "$output" || fail "dedicated grant omitted its selected policy"
+  grep -Fq \
+    'cpu_policy=dedicated-agent phase=preflight status=observed enforcement=telemetry_only metric=cpu_idle_percent observed=0 threshold=none' \
+    "$output" || fail "dedicated preflight omitted zero-idle telemetry"
+  grep -Fq \
+    'cpu_policy=dedicated-agent phase=runtime status=observed enforcement=telemetry_only metric=cpu_idle_percent observed=0 threshold=none' \
+    "$output" || fail "dedicated runtime omitted zero-idle telemetry"
+  [[ ! -e "$dedicated_lock" ]] || fail "dedicated CPU policy leaked its lease"
+  /bin/rm -f "$marker"
+
+  # Standard runtime enforcement remains two-strike and kills work below 20%.
+  {
+    printf 'cpu-100\n'
+    printf 'cpu-0\n'
+    printf 'cpu-0\n'
+  } >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$runtime_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --label "cpu-standard-runtime" \
+      -- bash -c 'sleep 1; touch "$1"' _ "$marker" >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "standard runtime CPU pressure returned $status instead of 75"
+  [[ ! -e "$marker" ]] || fail "standard runtime CPU pressure failed to stop work"
+  grep -Fq 'code=cpu_pressure metric=cpu_idle_percent observed=0 threshold=20' "$output" ||
+    fail "standard runtime CPU stop lost its 20% threshold receipt"
+  [[ ! -e "$runtime_lock" ]] || fail "standard runtime CPU stop leaked its lease"
+
+  # Unknown policy values fail before lease acquisition or command execution.
+  printf 'cpu-100\n' >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$unknown_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agents \
+      --label "cpu-unknown" \
+      -- touch "$marker" >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "unknown CPU policy returned $status instead of 75"
+  [[ ! -e "$marker" && ! -e "$unknown_lock" ]] ||
+    fail "unknown CPU policy acquired a lease or ran work"
+  grep -Fq 'class=guard_internal code=unknown_cpu_policy cpu_policy=dedicated-agents' "$output" ||
+    fail "unknown CPU policy omitted its fail-closed receipt"
+
+  # Dedicated CPU mode does not exempt any preflight host-health check. Exercise
+  # memory, disk, and Jarvis independently so a future broad exemption cannot
+  # hide behind one representative failure.
+  local non_cpu_sample="" non_cpu_code=""
+  for non_cpu_sample in memory-low disk-low jarvis-unhealthy; do
+    case "$non_cpu_sample" in
+      memory-low) non_cpu_code=memory_pressure ;;
+      disk-low) non_cpu_code=disk_pressure ;;
+      jarvis-unhealthy) non_cpu_code=jarvis_unhealthy ;;
+    esac
+    printf '%s\n' "$non_cpu_sample" >"$health_path"
+    set +e
+    OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$non_cpu_lock" \
+    OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+      "$FIXTURE_WRAPPER" \
+        --cpu-policy dedicated-agent \
+        --label "cpu-dedicated-${non_cpu_sample}" \
+        -- touch "$marker" >"$output" 2>&1
+    status=$?
+    set -e
+    [[ "$status" -eq 75 ]] ||
+      fail "dedicated CPU policy ignored $non_cpu_sample with status $status"
+    [[ ! -e "$marker" && ! -e "$non_cpu_lock" ]] ||
+      fail "dedicated CPU policy bypassed $non_cpu_sample or leaked its lease"
+    grep -Fq "class=host_unhealthy code=${non_cpu_code}" "$output" ||
+      fail "dedicated CPU policy lost the $non_cpu_sample refusal"
+  done
+
+  # The same boundary holds after admission: two memory-pressure samples stop
+  # the in-flight command and preserve the canonical cleanup/exit-75 contract.
+  {
+    printf 'cpu-100\n'
+    printf 'memory-low\n'
+    printf 'memory-low\n'
+  } >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$non_cpu_runtime_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --label "cpu-dedicated-runtime-memory" \
+      -- bash -c 'sleep 1; touch "$1"' _ "$marker" >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] ||
+    fail "dedicated CPU runtime ignored repeated memory pressure with status $status"
+  [[ ! -e "$marker" && ! -e "$non_cpu_runtime_lock" ]] ||
+    fail "dedicated CPU runtime failed memory cleanup or leaked its lease"
+  grep -Fq 'code=memory_pressure metric=memory_free_percent observed=10 threshold=25' "$output" ||
+    fail "dedicated CPU runtime lost its memory stop receipt"
+  pass "CPU policy is explicit, telemetry-only when dedicated, and narrow"
 }
 
 test_owner_publish_failure_is_actionable() {
@@ -1877,14 +2044,21 @@ run_signal_cleanup_case() {
   local signal_name="$1"
   local expected_status="$2"
   local fixture="$3"
-  local expected_label="signal-cleanup-${signal_name}"
-  local lock_path="$TMP_DIR/signal-${signal_name}.lock"
-  local health_path="$TMP_DIR/signal-${signal_name}.health"
-  local child_pid_file="$TMP_DIR/signal-${signal_name}.child"
-  local grandchild_pid_file="$TMP_DIR/signal-${signal_name}.grandchild"
-  local signaler_result="$TMP_DIR/signal-${signal_name}.signaler"
-  local output="$TMP_DIR/signal-${signal_name}.out"
+  local selected_cpu_policy="${4:-standard}"
+  local case_suffix="${signal_name}-${selected_cpu_policy}"
+  local expected_label="signal-cleanup-${case_suffix}"
+  local lock_path="$TMP_DIR/signal-${case_suffix}.lock"
+  local health_path="$TMP_DIR/signal-${case_suffix}.health"
+  local child_pid_file="$TMP_DIR/signal-${case_suffix}.child"
+  local grandchild_pid_file="$TMP_DIR/signal-${case_suffix}.grandchild"
+  local signaler_result="$TMP_DIR/signal-${case_suffix}.signaler"
+  local output="$TMP_DIR/signal-${case_suffix}.out"
+  local -a cpu_policy_args=()
   local signaler_pid=0 signaler_status=0 status=0 child_pid=0 grandchild_pid=0
+
+  if [[ "$selected_cpu_policy" == "dedicated-agent" ]]; then
+    cpu_policy_args=(--cpu-policy dedicated-agent)
+  fi
 
   write_healthy_samples "$health_path"
   signal_verified_slot_owner \
@@ -1905,6 +2079,7 @@ run_signal_cleanup_case() {
     "$PERL_BIN" \
       "$SIGINT_RESET_LAUNCHER" \
       "$FIXTURE_WRAPPER" \
+        "${cpu_policy_args[@]}" \
         --label "$expected_label" \
         -- \
         "$fixture" "$child_pid_file" "$grandchild_pid_file" \
@@ -1939,6 +2114,14 @@ test_signal_cleanup_kills_tree_and_releases() {
   run_signal_cleanup_case INT 130 "$fixture"
   run_signal_cleanup_case HUP 129 "$fixture"
   pass "TERM, INT, and HUP stop the guarded tree and release the lease"
+}
+
+test_dedicated_cpu_policy_preserves_signal_cleanup() {
+  local fixture=""
+
+  fixture="$(create_process_tree_fixture)"
+  run_signal_cleanup_case TERM 143 "$fixture" dedicated-agent
+  pass "dedicated CPU policy preserves signal propagation and exact cleanup"
 }
 
 test_jarvis_remediation_policy_is_narrow_and_non_ambient() {
@@ -2606,6 +2789,19 @@ if [[ "${1:-}" == "--cleanup-only" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "--cpu-policy-only" ]]; then
+  SUITE_PHASE="create_instrumented_runtime"
+  create_instrumented_runtime
+  SUITE_PHASE="create_sigint_reset_launcher"
+  create_sigint_reset_launcher
+  run_suite_test test_production_has_no_ambient_test_bypass
+  run_suite_test test_cpu_policy_is_explicit_narrow_and_receipted
+  run_suite_test test_dedicated_cpu_policy_preserves_signal_cleanup
+  SUITE_PHASE="complete"
+  echo "Heavy-local slot CPU policy tests passed."
+  exit 0
+fi
+
 if [[ "${1:-}" == "--gateway-lifecycle-only" ]]; then
   SUITE_PHASE="create_instrumented_runtime"
   create_instrumented_runtime
@@ -2633,6 +2829,7 @@ create_sigint_reset_launcher
 SUITE_PHASE="create_term_attribution_holder"
 create_term_attribution_holder
 run_suite_test test_production_has_no_ambient_test_bypass
+run_suite_test test_cpu_policy_is_explicit_narrow_and_receipted
 run_suite_test test_owner_publish_failure_is_actionable
 run_suite_test test_large_generated_state_emits_owner_receipt
 run_suite_test test_disk_pressure_refuses_and_warning_admits
@@ -2659,6 +2856,7 @@ run_suite_test test_root_exit_kills_term_ignoring_orphan_group
 run_suite_test test_wrapper_sigkill_retains_lease_until_orphan_group_dies
 run_suite_test test_two_sample_health_stop_kills_tree
 run_suite_test test_signal_cleanup_kills_tree_and_releases
+run_suite_test test_dedicated_cpu_policy_preserves_signal_cleanup
 run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient
 run_suite_test test_gateway_lifecycle_inherits_verified_standard_owner
 run_suite_test test_gateway_lifecycle_policy_skips_only_gateway_health

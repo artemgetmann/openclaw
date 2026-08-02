@@ -118,7 +118,26 @@ metadata, an incomplete spawn handshake, unreadable process identity, PID or
 group reuse, or mismatched start/session identity fails closed instead of
 guessing that the lease is stale or signaling an unverified group.
 
-On macOS the wrapper currently refuses admission when:
+On a Mac intentionally reserved for agents, one transaction may explicitly
+allow CPU saturation without bypassing the guard:
+
+```bash
+scripts/with-heavy-local-slot.sh \
+  --cpu-policy dedicated-agent \
+  --label "<thread-id>:capacity-ramp" \
+  --wait-seconds 900 \
+  -- pnpm vitest run path/to/focused.test.ts --maxWorkers 1
+```
+
+This named mode changes only CPU-idle enforcement. Preflight and runtime samples
+still emit `HEAVY_LOCAL_CPU_TELEMETRY`, and the grant receipt records
+`cpu_policy=dedicated-agent`, but 0% CPU idle is allowed. The machine-wide lease,
+memory and disk floors, Tailscale and managed-Jarvis health, process identity,
+signal propagation, two-strike non-CPU runtime stops, and exact tree cleanup are
+unchanged. Use it only for a dedicated agent transaction; omitting the flag (or
+selecting `standard`) retains the conservative shared/personal-machine policy.
+
+On macOS the default policy currently refuses admission when:
 
 - another heavy command owns the slot;
 - system memory headroom is below 25%;
@@ -175,11 +194,13 @@ release the lane, and diagnose the command's own resource behavior. Repeatedly
 restarting a deterministic offender is not autonomous completion; it is just a
 slower denial of service.
 
-The 25% memory threshold, 35% admission CPU-idle threshold, 20% runtime
-CPU-idle threshold, 25 GiB disk floor, 35 GiB disk-report threshold, 15-second
-interval, two-strike stop rule, and three-second health timeout remain fixed
-product policy in this revision. Environment variables cannot lower, disable,
-corrupt, or stretch them.
+The 25% memory threshold, standard-policy 35% admission CPU-idle threshold,
+standard-policy 20% runtime CPU-idle threshold, 25 GiB disk floor, 35 GiB
+disk-report threshold, 15-second interval, two-strike stop rule, and three-second
+health timeout remain fixed product policy in this revision. Environment
+variables cannot lower, disable, corrupt, or stretch them. Only the exact
+per-transaction `--cpu-policy dedicated-agent` flag makes CPU idle telemetry-only;
+unknown values fail closed.
 
 ## Task-owned disk receipts
 
@@ -204,8 +225,10 @@ policy. It remains machine-wide for every profile.
 
 Current protection is narrower than the failure list:
 
-- CPU: admission and runtime CPU-idle checks plus background scheduling and
-  reduced priority. There is no direct thermal-pressure or shutdown-risk probe.
+- CPU: the default retains admission and runtime CPU-idle checks; the explicit
+  dedicated-agent transaction records CPU idle without enforcing a floor. Both
+  modes retain background scheduling and reduced priority. There is no direct
+  thermal-pressure or shutdown-risk probe.
 - Memory: `memory_pressure` accounts for compression, but the guard does not
   separately bound swap size or swap-growth rate.
 - Disk: admission reports below 35 GiB and refuses below 25 GiB; retention
@@ -215,10 +238,11 @@ Current protection is narrower than the failure list:
 - Overlap: the machine-wide lease and process-group supervision prevent two
   guarded heavy trees from running concurrently.
 
-That evidence does not justify lowering CPU or memory thresholds yet. Doing so
-would replace an interactive-headroom guess with a thermal, swap, and disk
-guess. The dedicated-host profile stays deferred until this bounded experiment
-is completed in a separate PR:
+The dedicated-agent CPU policy is deliberately narrower than a complete
+dedicated-host safety profile: it changes no memory, disk, availability,
+ownership, signal, or cleanup behavior. Direct thermal, swap-growth, latency,
+and fan-out enforcement remain deferred until this bounded experiment is
+completed in a separate PR:
 
 1. Add a read-only sampler that records monotonic time, CPU idle,
    `memory_pressure`, `vm.swapusage`, Data-volume free space, macOS thermal
@@ -230,13 +254,13 @@ is completed in a separate PR:
 3. Establish stop limits from the first observed thermal, swap-growth, disk, or
    availability degradation, then apply an explicit safety margin. A threshold
    change is invalid if no failure boundary was observed.
-4. Add a named, non-ambient dedicated-host policy that can raise utilization
-   only while thermal, swap, disk, Tailscale, Jarvis, serialization, and
-   process-tree checks remain enforced. Repeat deterministic guard tests and a
-   bounded host soak before making it default.
+4. Use the named, non-ambient dedicated-agent CPU policy while external sampling
+   observes the still-unimplemented thermal, swap-growth, latency, and fan-out
+   boundaries. Repeat deterministic guard tests and a bounded host soak before
+   considering any default change or broader dedicated-host profile.
 
-Until that experiment exists, queue/wait removes coordination waste without
-claiming more safe machine capacity than the guard can prove.
+Until that experiment is complete, dedicated-agent mode is CPU-only. It must not
+be described as direct thermal, swap-trend, latency, or fan-out protection.
 
 Live `scripts/ship-jarvis-hotfix.sh` is the one remediation exception. The
 helper requests an internal `jarvis-remediation` policy, and the wrapper accepts
