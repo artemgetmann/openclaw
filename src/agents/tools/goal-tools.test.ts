@@ -28,9 +28,10 @@ describe("goal tools", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("creates, reads, and updates the current session goal", async () => {
+  it("creates and reads a goal, then records completion as an evaluation request", async () => {
     const options = {
       agentSessionKey: sessionKey,
+      runId: "working-run-1",
       config: { session: { store: storePath }, cron: { store: cronStorePath } },
     };
     const create = createCreateGoalTool(options);
@@ -56,8 +57,16 @@ describe("goal tools", () => {
       note: "Time and place agreed.",
     });
     expect(completed?.details).toMatchObject({
-      status: "updated",
-      goal: { status: "complete", lastStatusNote: "Time and place agreed." },
+      status: "evaluation_requested",
+      goal: {
+        status: "active",
+        pendingEvaluation: {
+          requestId: "call-3",
+          runId: "working-run-1",
+          proposedStatus: "complete",
+          reason: "Time and place agreed.",
+        },
+      },
     });
   });
 
@@ -101,7 +110,7 @@ describe("goal tools", () => {
     });
   });
 
-  it("updates the origin session goal when called from a monitor session", async () => {
+  it("records an evaluation request on the origin goal when called from a monitor session", async () => {
     const originGoal = await createSessionGoal({
       sessionKey,
       storePath,
@@ -139,14 +148,54 @@ describe("goal tools", () => {
     });
 
     expect(completed?.details).toMatchObject({
-      status: "updated",
-      goal: { status: "complete", lastStatusNote: "Refund received." },
+      status: "evaluation_requested",
+      goal: {
+        status: "active",
+        pendingEvaluation: {
+          requestId: "call-monitor-complete",
+          proposedStatus: "complete",
+          reason: "Refund received.",
+        },
+      },
     });
     const originSnapshot = await getSessionGoal({ sessionKey, storePath, persist: false });
-    expect(originSnapshot.goal?.status).toBe("complete");
+    expect(originSnapshot.goal?.status).toBe("active");
+    expect(originSnapshot.goal?.pendingEvaluation?.requestId).toBe("call-monitor-complete");
     expect((await getSessionGoal({ sessionKey: monitorSessionKey, storePath })).status).toBe(
       "missing",
     );
+  });
+
+  it("requires one stable blocker key without directly blocking the goal", async () => {
+    await createSessionGoal({ sessionKey, storePath, objective: "Wait for the vendor reply." });
+    const update = createUpdateGoalTool({
+      agentSessionKey: sessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    });
+
+    await expect(
+      update.execute?.("call-blocked-missing-key", {
+        status: "blocked",
+        note: "The vendor has not replied.",
+      }),
+    ).rejects.toThrow("blocked evaluation request requires a blocker key");
+
+    const requested = await update.execute?.("call-blocked", {
+      status: "blocked",
+      note: "The vendor has not replied.",
+      blocker_key: "awaiting_vendor_reply",
+    });
+    expect(requested?.details).toMatchObject({
+      status: "evaluation_requested",
+      goal: {
+        status: "active",
+        pendingEvaluation: {
+          requestId: "call-blocked",
+          proposedStatus: "blocked",
+          blockerKey: "awaiting_vendor_reply",
+        },
+      },
+    });
   });
 
   it("ignores goal mutation tools from monitor sessions without a bound goal", async () => {

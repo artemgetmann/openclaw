@@ -86,6 +86,8 @@ export type RunEmbeddedPiAgentParams = {
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
+  /** Disable plugin loading and lifecycle hooks for isolated evaluator runs. */
+  disableHooks?: boolean;
   provider?: string;
   model?: string;
   authProfileId?: string;

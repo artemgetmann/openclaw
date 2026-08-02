@@ -45,6 +45,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
     lastToolError: undefined,
+    turnToolResults: [],
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
     includeReasoning: reasoningMode === "on",
@@ -741,6 +742,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
+    getTurnToolResults: () => state.turnToolResults.slice(),
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     waitForCompactionRetry: () => {

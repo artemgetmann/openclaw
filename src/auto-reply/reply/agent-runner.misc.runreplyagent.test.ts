@@ -5,7 +5,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import {
+  createSessionGoal,
+  loadSessionStore,
+  requestSessionGoalEvaluation,
+  saveSessionStore,
+} from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { TemplateContext } from "../templating.js";
@@ -1888,6 +1893,164 @@ describe("runReplyAgent messaging tool suppression", () => {
     expect(store[sessionKey]?.inputTokens).toBe(111);
     expect(store[sessionKey]?.outputTokens).toBe(22);
   });
+});
+
+describe("runReplyAgent independent goal evaluation", () => {
+  it(
+    "runs a tool-disabled judge, revises once, and completes only after satisfied",
+    { timeout: 10_000 },
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-goal-runner-"));
+      const storePath = path.join(tempDir, "sessions.json");
+      const sessionKey = "main";
+      await saveSessionStore(storePath, {
+        [sessionKey]: { sessionId: "session", updatedAt: Date.now() },
+      });
+      const goal = await createSessionGoal({
+        sessionKey,
+        storePath,
+        objective: "Prove the release is healthy.",
+      });
+      let callCount = 0;
+      runEmbeddedPiAgentMock.mockImplementation(
+        async (params: { disableTools?: boolean; runId: string }) => {
+          callCount += 1;
+          if (callCount === 1) {
+            await requestSessionGoalEvaluation({
+              sessionKey,
+              storePath,
+              expectedGoalId: goal.id,
+              requestId: "claim-1",
+              runId: params.runId,
+              proposedStatus: "complete",
+              reason: "The first check looked healthy.",
+            });
+            return {
+              payloads: [{ text: "First result." }],
+              transcriptMessages: [
+                {
+                  role: "toolResult",
+                  toolCallId: "health-stale",
+                  toolName: "exec",
+                  content: [{ type: "text", text: "stale health check" }],
+                  isError: false,
+                  timestamp: Date.now(),
+                },
+              ],
+              meta: {},
+            };
+          }
+          if (callCount === 2) {
+            expect(params.disableTools).toBe(true);
+            return {
+              payloads: [
+                {
+                  text: JSON.stringify({
+                    verdict: "needs_revision",
+                    reason: "A fresh health result is missing.",
+                    evidence: ["tool_result:exec: stale health check"],
+                    material_progress: true,
+                  }),
+                },
+              ],
+              meta: {},
+            };
+          }
+          if (callCount === 3) {
+            await requestSessionGoalEvaluation({
+              sessionKey,
+              storePath,
+              expectedGoalId: goal.id,
+              requestId: "claim-2",
+              runId: params.runId,
+              proposedStatus: "complete",
+              reason: "The fresh health check passed.",
+            });
+            return {
+              payloads: [{ text: "Fresh health check passed." }],
+              transcriptMessages: [
+                {
+                  role: "toolResult",
+                  toolCallId: "health-1",
+                  toolName: "exec",
+                  content: [{ type: "text", text: "health check: ok" }],
+                  isError: false,
+                  timestamp: Date.now(),
+                },
+              ],
+              meta: {},
+            };
+          }
+          expect(params.disableTools).toBe(true);
+          return {
+            payloads: [
+              {
+                text: JSON.stringify({
+                  verdict: "satisfied",
+                  reason: "The fresh health result proves the objective.",
+                  evidence: ["tool_result:exec: health check: ok"],
+                  material_progress: true,
+                }),
+              },
+            ],
+            meta: {},
+          };
+        },
+      );
+
+      const typing = createMockTypingController();
+      const sessionCtx = {
+        Provider: "webchat",
+        OriginatingTo: "session:1",
+        AccountId: "primary",
+        MessageSid: "msg",
+      } as unknown as TemplateContext;
+      const followupRun = createMockFollowupRun({
+        prompt: "finish the goal",
+        run: {
+          agentId: "main",
+          agentDir: tempDir,
+          sessionId: "session",
+          sessionKey,
+          sessionFile: path.join(tempDir, "session.jsonl"),
+          workspaceDir: tempDir,
+          config: {},
+          provider: "anthropic",
+          model: "claude",
+          timeoutMs: 1_000,
+        },
+      });
+
+      const result = await runReplyAgent({
+        commandBody: "finish the goal",
+        followupRun,
+        queueKey: sessionKey,
+        resolvedQueue: { mode: "interrupt" },
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionCtx,
+        sessionKey,
+        storePath,
+        defaultModel: "anthropic/claude",
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+
+      expect(callCount).toBe(4);
+      expect(result).toMatchObject({ text: "Fresh health check passed." });
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]?.goal).toMatchObject({
+        status: "complete",
+        evaluation: { lastVerdict: "satisfied", automaticRevisionCount: 1 },
+      });
+    },
+  );
 });
 
 describe("runReplyAgent reminder commitment guard", () => {

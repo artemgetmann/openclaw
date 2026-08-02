@@ -1933,7 +1933,7 @@ export async function runEmbeddedAttempt(
       }
 
       // Get hook runner early so it's available when creating tools
-      const hookRunner = getGlobalHookRunner();
+      const hookRunner = params.disableHooks ? undefined : getGlobalHookRunner();
 
       const { builtInTools, customTools } = splitSdkTools({
         tools,
@@ -2367,7 +2367,7 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
-        hookRunner: getGlobalHookRunner() ?? undefined,
+        hookRunner: params.disableHooks ? undefined : (getGlobalHookRunner() ?? undefined),
         verboseLevel: params.verboseLevel,
         reasoningMode: params.reasoningLevel ?? "off",
         toolResultFormat: params.toolResultFormat,
@@ -3097,6 +3097,7 @@ export async function runEmbeddedAttempt(
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
         messagesSnapshot,
+        turnMessages: subscription.getTurnToolResults(),
         assistantTexts,
         assistantPhases: assistantPhases.slice(),
         toolMetas: toolMetasNormalized,

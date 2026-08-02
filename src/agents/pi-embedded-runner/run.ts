@@ -333,10 +333,12 @@ export async function runEmbeddedPiAgent(
         );
       }
       traceEmbeddedRunStage("run-pre-ensure-runtime-plugins");
-      ensureRuntimePluginsLoaded({
-        config: params.config,
-        workspaceDir: resolvedWorkspace,
-      });
+      if (!params.disableHooks) {
+        ensureRuntimePluginsLoaded({
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+        });
+      }
       traceEmbeddedRunStage("run-post-ensure-runtime-plugins");
       const prevCwd = process.cwd();
 
@@ -359,7 +361,7 @@ export async function runEmbeddedPiAgent(
       // fields if present. New hook takes precedence when both are set.
       let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
       let legacyBeforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
-      const hookRunner = getGlobalHookRunner();
+      const hookRunner = params.disableHooks ? undefined : getGlobalHookRunner();
       const hookCtx = {
         agentId: workspaceResolution.agentId,
         sessionKey: params.sessionKey,
@@ -1037,6 +1039,9 @@ export async function runEmbeddedPiAgent(
             images: params.images,
             disableTools: params.disableTools,
             disableGoalTools: params.disableGoalTools,
+            // Preserve caller-enforced isolation in the inner attempt. Dropping
+            // this flag would silently re-enable global setup and subscribe hooks.
+            disableHooks: params.disableHooks,
             provider,
             modelId,
             model: applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
@@ -1832,10 +1837,12 @@ export async function runEmbeddedPiAgent(
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+            unresolvedToolError: Boolean(attempt.lastToolError),
             messagingToolSentTexts: attempt.messagingToolSentTexts,
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
             successfulCronAdds: attempt.successfulCronAdds,
+            transcriptMessages: attempt.turnMessages,
           };
         }
       } finally {

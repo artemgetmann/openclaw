@@ -168,6 +168,54 @@ export type SessionGoalAutonomy = {
   authorityGrants?: SessionGoalAuthorityGrant[];
 };
 
+export type SessionGoalEvaluatorVerdict =
+  | "satisfied"
+  | "needs_revision"
+  | "needs_input"
+  | "approval_required"
+  | "goal_blocked";
+
+export type SessionGoalEvaluationAttempt = {
+  /** Caller-stable id used to make post-turn evaluation safe to retry after a restart. */
+  attemptId: string;
+  /** Raw grader verdict before core-owned blocker threshold enforcement. */
+  proposedVerdict: SessionGoalEvaluatorVerdict;
+  /** Persisted verdict after core-owned policy has rejected premature goal_blocked claims. */
+  verdict: SessionGoalEvaluatorVerdict;
+  reason: string;
+  /** Concise proof inspected by the grader; raw transcripts do not belong in session state. */
+  evidence: string[];
+  materialProgress: boolean;
+  blockerKey?: string;
+  consecutiveNoProgress: number;
+  createdAt: number;
+};
+
+export type SessionGoalEvaluationState = {
+  schemaVersion: 1;
+  lastVerdict?: SessionGoalEvaluatorVerdict;
+  automaticRevisionCount: number;
+  maxAutomaticRevisions: number;
+  /** Persisted stop flag prevents a restart from silently beginning an unbounded retry loop. */
+  automaticRevisionExhaustedAt?: number;
+  activeBlockerKey?: string;
+  sameBlockerNoProgressCount: number;
+  /** Small bounded audit trail; enough to prove blocker repetition without storing transcripts. */
+  history: SessionGoalEvaluationAttempt[];
+};
+
+export type SessionGoalEvaluationRequest = {
+  /** Tool-call id makes a completion claim safe to retry across process restarts. */
+  requestId: string;
+  /** Exact working run whose evidence may be used to grade this claim. */
+  runId: string;
+  proposedStatus: "complete" | "blocked";
+  reason: string;
+  /** A blocked claim must identify the exact dependency that prevented progress. */
+  blockerKey?: string;
+  createdAt: number;
+};
+
 export type SessionGoal = {
   schemaVersion: 1;
   id: string;
@@ -181,6 +229,9 @@ export type SessionGoal = {
   tokenBudget?: number;
   continuationTurns: number;
   autonomy?: SessionGoalAutonomy;
+  evaluation?: SessionGoalEvaluationState;
+  /** Model-authored claim awaiting an independent, tool-disabled post-turn evaluation. */
+  pendingEvaluation?: SessionGoalEvaluationRequest;
   lastStatusNote?: string;
   pausedAt?: number;
   blockedAt?: number;

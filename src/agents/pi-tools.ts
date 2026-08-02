@@ -561,6 +561,7 @@ export function createOpenClawCodingTools(options?: {
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
       sessionId: options?.sessionId,
+      runId: options?.runId,
       onYield: options?.onYield,
     }),
   ];

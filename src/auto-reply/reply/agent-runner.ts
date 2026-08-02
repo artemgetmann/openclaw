@@ -7,6 +7,8 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import {
+  getSessionGoal,
+  recordSessionGoalEvaluation,
   resolveAgentIdFromSessionKey,
   loadSessionStore,
   resolveSessionFilePath,
@@ -75,6 +77,11 @@ import {
   shouldReturnEmptyFinalFallback,
 } from "./empty-final-reply.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import {
+  collectGoalEvaluationEvidence,
+  formatGoalRevisionPrompt,
+  runIndependentGoalEvaluator,
+} from "./goal-evaluator.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
@@ -819,6 +826,151 @@ async function runReplyAgentWithFinalizationOwnership(
       runOutcome = await runSingleTurn(REPLY_TIMEOUT_CONTINUATION_PROMPT);
     }
 
+    let goalEvaluatorPayloadOverride: ReplyPayload[] | undefined;
+    while (runOutcome.kind !== "final" && sessionKey && storePath) {
+      const candidate = runOutcome;
+      const snapshot = await getSessionGoal({ sessionKey, storePath, persist: false });
+      const goal = snapshot.goal;
+      if (goal?.status !== "active" || !goal.pendingEvaluation) {
+        break;
+      }
+      if (goal.pendingEvaluation.runId !== candidate.runId) {
+        const reason =
+          "The prior completion claim survived an interrupted turn, so its original evidence is no longer available for independent verification.";
+        await recordSessionGoalEvaluation({
+          sessionKey,
+          storePath,
+          expectedGoalId: goal.id,
+          attemptId: goal.pendingEvaluation.requestId,
+          verdict: "needs_input",
+          reason,
+          evidence: ["pending completion claim predates the current working turn"],
+          materialProgress: false,
+        });
+        goalEvaluatorPayloadOverride = [
+          { text: `${reason} Do you want me to rerun the verification now?` },
+        ];
+        break;
+      }
+
+      // Persist the working turn before grading it. If the process dies after
+      // this point, the durable pending claim survives and can be evaluated on
+      // the next finalization pass without trusting in-memory state.
+      const candidateProvider =
+        candidate.runResult.meta?.agentMeta?.provider ??
+        candidate.fallbackProvider ??
+        followupRun.run.provider;
+      const candidateModel =
+        candidate.runResult.meta?.agentMeta?.model ?? candidate.fallbackModel ?? defaultModel;
+      await persistRunSessionUsage({
+        storePath,
+        sessionKey,
+        usage: candidate.runResult.meta?.agentMeta?.usage,
+        lastCallUsage: candidate.runResult.meta?.agentMeta?.lastCallUsage,
+        promptTokens: candidate.runResult.meta?.agentMeta?.promptTokens,
+        modelUsed: candidateModel,
+        providerUsed: candidateProvider,
+        contextTokensUsed:
+          resolveContextTokensForModel({
+            cfg,
+            provider: candidateProvider,
+            model: candidateModel,
+          }) ?? DEFAULT_CONTEXT_TOKENS,
+        systemPromptReport: candidate.runResult.meta?.systemPromptReport,
+        cliSessionId: isCliProvider(candidateProvider, cfg)
+          ? candidate.runResult.meta?.agentMeta?.sessionId?.trim()
+          : undefined,
+      });
+
+      const evidence = collectGoalEvaluationEvidence({
+        payloads: resolveReplyRunPayloads(candidate.runResult),
+        transcriptMessages: candidate.runResult.transcriptMessages,
+        messagingToolSentTexts: candidate.runResult.messagingToolSentTexts,
+        messagingToolSentTargets: candidate.runResult.messagingToolSentTargets,
+      });
+      const evaluation = await runIndependentGoalEvaluator({
+        goal,
+        run: {
+          ...followupRun.run,
+          provider: candidateProvider,
+          model: candidateModel,
+        },
+        evidence,
+        workingTurnAborted: candidate.runResult.meta?.aborted,
+        unresolvedToolError: candidate.runResult.unresolvedToolError,
+        deterministicApprovalPromptSent: candidate.runResult.didSendDeterministicApprovalPrompt,
+      });
+      if (evaluation.kind !== "evaluated") {
+        const detail =
+          evaluation.kind === "unsupported_provider"
+            ? `The selected provider (${evaluation.provider}) cannot guarantee a tool-disabled independent judge.`
+            : `The independent judge failed closed: ${evaluation.reason}.`;
+        await recordSessionGoalEvaluation({
+          sessionKey,
+          storePath,
+          expectedGoalId: goal.id,
+          attemptId: goal.pendingEvaluation.requestId,
+          verdict: "needs_input",
+          reason: detail,
+          evidence: [detail],
+          materialProgress: false,
+        });
+        goalEvaluatorPayloadOverride = [
+          {
+            text: `${detail} The goal remains active; completion was not accepted. Do you want me to retry with isolated verification?`,
+            isError: true,
+          },
+        ];
+        break;
+      }
+
+      const decision = await recordSessionGoalEvaluation({
+        sessionKey,
+        storePath,
+        expectedGoalId: goal.id,
+        attemptId: goal.pendingEvaluation.requestId,
+        verdict: evaluation.result.verdict,
+        reason: evaluation.result.reason,
+        evidence: evaluation.result.evidence,
+        materialProgress: evaluation.result.materialProgress,
+        blockerKey: evaluation.result.blockerKey,
+      });
+      if (decision.shouldContinueAutomatically) {
+        const durableBudget = canStartAnotherDurableTaskAttempt(durableTask);
+        if (!durableBudget.ok) {
+          goalEvaluatorPayloadOverride = [
+            {
+              text: "The goal still needs revision, but this reply exhausted its safe retry budget. The goal remains active.",
+              isError: true,
+            },
+          ];
+          break;
+        }
+        defaultRuntime.log(
+          `goal ${goal.id} needs revision; starting bounded automatic revision ${decision.goal.evaluation?.automaticRevisionCount ?? 0}/${decision.goal.evaluation?.maxAutomaticRevisions ?? 0}`,
+        );
+        recordDurableTaskAttemptStart(durableTask);
+        runOutcome = await runSingleTurn(formatGoalRevisionPrompt(evaluation.result));
+        continue;
+      }
+
+      if (decision.stopReason === "needs_input" || decision.stopReason === "approval_required") {
+        goalEvaluatorPayloadOverride = [
+          { text: evaluation.result.question ?? evaluation.result.reason },
+        ];
+      } else if (decision.stopReason === "goal_blocked") {
+        goalEvaluatorPayloadOverride = [{ text: `Goal blocked: ${evaluation.result.reason}` }];
+      } else if (decision.stopReason === "revision_limit") {
+        goalEvaluatorPayloadOverride = [
+          {
+            text: `I could not verify completion within the automatic revision limit. The goal remains active. ${evaluation.result.reason}`,
+            isError: true,
+          },
+        ];
+      }
+      break;
+    }
+
     if (runOutcome.kind === "final") {
       completeDurableReplyTask(durableTask);
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
@@ -870,7 +1022,7 @@ async function runReplyAgentWithFinalizationOwnership(
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
-    const payloadArray = resolveReplyRunPayloads(runResult);
+    const payloadArray = goalEvaluatorPayloadOverride ?? resolveReplyRunPayloads(runResult);
     logTelegramProgressDebug("finalization.raw-payloads", {
       runId,
       sessionKey,

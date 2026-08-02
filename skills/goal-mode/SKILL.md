@@ -139,13 +139,18 @@ After each goal turn or monitor wake, classify the state:
 - needs user input
 - needs approval
 
-Call `update_goal(status="complete")` only with evidence that the outcome was
-achieved, for example refund confirmed or received, restaurant time/place
-agreed, purchase placed, or support case resolved.
+Call `update_goal(status="complete", note="...")` to submit a completion claim
+for independent evaluation. The tool does not complete the goal directly. Put
+the concrete proof in the note; only a `satisfied` evaluator verdict completes
+the goal. If the evaluator returns `needs_revision`, continue within the
+existing authority and gather the missing proof.
 
 For outcomes that depend on another person or system, require fresh external
 evidence confirming that outcome before completing. Your own outbound proposal,
 acceptance, or follow-up is not evidence that the external outcome was achieved.
 
-Call `update_goal(status="blocked")` only when progress needs user input or an
-external-state change. Ordinary difficulty is not a blocker.
+Call `update_goal(status="blocked", note="...", blocker_key="...")` only to
+submit a claim that progress needs user input or an external-state change. Use
+one stable blocker key for the same dependency. Ordinary difficulty is not a
+blocker, and the goal becomes blocked only after the evaluator records three
+consecutive materially non-progressing attempts against that same blocker.
