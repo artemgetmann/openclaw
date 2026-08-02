@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +20,12 @@ type LifecycleOutput = {
   nativeTool?: { sequence: string[] };
   owner?: { threadId: string; hostId: string } | null;
   prompt?: string;
+  retryOfContractId?: string | null;
+  routing?: {
+    dispatcher: { role: string; threadId: string; hostId: string };
+    decision: string;
+    rationale: string[];
+  };
 };
 
 function makeFixture() {
@@ -100,6 +107,106 @@ function beginLiveTester(fixture: ReturnType<typeof makeFixture>) {
     "--owner-host",
     "builder-host",
   ]);
+}
+
+function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
+  const tester = run(fixture, [
+    "handoff-test",
+    "42",
+    "--test-kind",
+    "read-only",
+    "--transport",
+    "user-visible-task",
+    "--owner-thread",
+    "builder-thread",
+    "--owner-host",
+    "builder-host",
+  ]);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "capacity-blocked-tester",
+    "--host-id",
+    "tester-host",
+  ]);
+  const receiptPath = path.join(fixture.root, "capacity-fail.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "FAIL",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "capacity-blocked-tester", hostId: "tester-host" },
+      evidence: ["heavy guard refused disk pressure before workload start"],
+      cleanup: { status: "not-required", evidence: "workload never started" },
+      limitations: [],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "capacity-blocked-tester",
+    "--host-id",
+    "tester-host",
+    "--closure",
+    "archived",
+  ]);
+  return tester;
+}
+
+function writeCapacityRecovery(
+  fixture: ReturnType<typeof makeFixture>,
+  priorTesterContractId: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const receiptPath = path.join(fixture.root, `capacity-recovery-${randomUUID()}.json`);
+  const receipt = {
+    schemaVersion: 1,
+    role: "capacity-recovery",
+    source: "authorized-capacity-owner-receipt",
+    priorTesterContractId,
+    cause: { class: "host_unhealthy", code: "disk_pressure", workloadStarted: false },
+    capacity: {
+      availableKiB: 36_756_724,
+      requiredKiB: 36_700_160,
+      heavyLockDirectoriesEmpty: true,
+      releaseLockDirectoriesEmpty: true,
+    },
+    evidence: ["material disk floor restored and lock directories are empty"],
+    ...overrides,
+  };
+  fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+  return receiptPath;
+}
+
+function capacityRetryArgs(priorTesterContractId: string, recoveryPath: string) {
+  return [
+    "handoff-test",
+    "42",
+    "--test-kind",
+    "read-only",
+    "--transport",
+    "user-visible-task",
+    "--owner-thread",
+    "builder-thread",
+    "--owner-host",
+    "builder-host",
+    "--capacity-retry-contract",
+    priorTesterContractId,
+    "--capacity-recovery-receipt",
+    recoveryPath,
+  ];
 }
 
 function acceptReleaseHandoff(fixture: ReturnType<typeof makeFixture>, contractId: string) {
@@ -253,6 +360,41 @@ describe("scripts/pr-lifecycle", () => {
     ]);
     expect(duplicate.status).toBe(1);
     expect(duplicate.stderr).toContain("a different tester owner is already active");
+  });
+
+  it("atomically reserves one fresh tester after typed capacity recovery", () => {
+    const fixture = makeFixture();
+    const priorTester = completeCapacityOnlyFailure(fixture);
+    const recoveryPath = writeCapacityRecovery(fixture, priorTester.contractId);
+    const retryArgs = capacityRetryArgs(priorTester.contractId, recoveryPath);
+    const retry = run(fixture, retryArgs);
+    expect(retry.action).toBe("create_thread");
+    expect(retry.contractId).not.toBe(priorTester.contractId);
+    expect(retry.retryOfContractId).toBe(priorTester.contractId);
+
+    // Retrying the same command is safe: the new pending reservation wins and
+    // the caller cannot create a second tester from the same recovery receipt.
+    const repeated = run(fixture, retryArgs);
+    expect(repeated).toMatchObject({ action: "do-not-create", contractId: retry.contractId });
+
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.testerHistory).toHaveLength(1);
+    expect(state.testerHistory[0].tester.contractId).toBe(priorTester.contractId);
+    expect(state.tester.retryOfContractId).toBe(priorTester.contractId);
+  });
+
+  it("rejects capacity retry without exact no-work and recovered-capacity proof", () => {
+    const fixture = makeFixture();
+    const priorTester = completeCapacityOnlyFailure(fixture);
+    const recoveryPath = writeCapacityRecovery(fixture, priorTester.contractId, {
+      cause: { class: "host_unhealthy", code: "disk_pressure", workloadStarted: true },
+    });
+
+    const result = runFailure(fixture, capacityRetryArgs(priorTester.contractId, recoveryPath));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("prove disk-pressure refusal before workload start");
   });
 
   it("consumes the exact tester receipt before routing one user-visible release worker", () => {

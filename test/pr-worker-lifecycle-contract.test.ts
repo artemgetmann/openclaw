@@ -64,6 +64,9 @@ describe("canonical PR worker lifecycle policy", () => {
     // or repair steering cannot hit an adjacent user-visible task.
     expect(normalizedWorkflow).toContain("head change makes prior tester proof stale");
     expect(normalizedWorkflow).toContain("fresh tester for the new immutable head");
+    expect(normalizedWorkflow).toContain("typed capacity-owner recovery receipt");
+    expect(normalizedWorkflow).toContain("atomically reserves exactly one fresh tester");
+    expect(normalizedWorkflow).toContain("record `workloadStarted=false`");
     expect(normalizedWorkflow).toContain("archive nothing adjacent");
     expect(normalizedWorkflow).toContain("preserve the one known owner");
     expect(normalizedWorkflow).toContain("unarchive and steer only the exact builder thread");

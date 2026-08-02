@@ -25,7 +25,7 @@ function fail(message, exitCode = 1) {
 
 function usage() {
   process.stderr.write(`Usage:
-  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> [--returning-release-contract <ID>]
+  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>]
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
@@ -216,6 +216,7 @@ function makeBaseState(pr, candidate, builder, previous) {
     candidate,
     builder,
     tester: null,
+    testerHistory: [],
     release: null,
     history: previous
       ? [
@@ -223,6 +224,7 @@ function makeBaseState(pr, candidate, builder, previous) {
           {
             candidate: previous.candidate,
             tester: previous.tester,
+            testerHistory: previous.testerHistory ?? [],
             release: previous.release,
             retiredAt: new Date().toISOString(),
           },
@@ -251,6 +253,47 @@ function testerRouting(testKind, transport, builder) {
             "archive the exact tester task only after its terminal receipt is recorded",
           ],
   };
+}
+
+function readCapacityRecovery(receiptPath, priorTester) {
+  let receipt;
+  try {
+    receipt = JSON.parse(fs.readFileSync(path.resolve(receiptPath), "utf8"));
+  } catch (error) {
+    fail(`cannot read capacity recovery receipt: ${error.message}`);
+  }
+
+  // Capacity retry is intentionally narrower than a generic tester retry. The
+  // packet must prove the old guard refusal happened before workload start and
+  // that the same resource floor is now satisfied without occupied heavy locks.
+  const availableKiB = receipt?.capacity?.availableKiB;
+  const requiredKiB = receipt?.capacity?.requiredKiB;
+  const validCapacity =
+    Number.isSafeInteger(availableKiB) &&
+    Number.isSafeInteger(requiredKiB) &&
+    availableKiB > 0 &&
+    requiredKiB > 0 &&
+    availableKiB >= requiredKiB;
+  if (
+    receipt?.schemaVersion !== SCHEMA_VERSION ||
+    receipt?.role !== "capacity-recovery" ||
+    receipt?.source !== "authorized-capacity-owner-receipt" ||
+    receipt?.priorTesterContractId !== priorTester.contractId ||
+    receipt?.cause?.class !== "host_unhealthy" ||
+    receipt?.cause?.code !== "disk_pressure" ||
+    receipt?.cause?.workloadStarted !== false ||
+    !validCapacity ||
+    receipt?.capacity?.heavyLockDirectoriesEmpty !== true ||
+    receipt?.capacity?.releaseLockDirectoriesEmpty !== true ||
+    !Array.isArray(receipt?.evidence) ||
+    receipt.evidence.length === 0 ||
+    receipt.evidence.some((item) => typeof item !== "string" || item.trim() === "")
+  ) {
+    fail(
+      "capacity recovery receipt must bind the prior tester, prove disk-pressure refusal before workload start, satisfy the disk floor, and prove empty heavy/release locks",
+    );
+  }
+  return receipt;
 }
 
 function ownerPrompt(role, state) {
@@ -299,6 +342,17 @@ function handoffTest(pr, options) {
     hostId: requireOption(options, "ownerHost"),
   };
   const returningReleaseContract = options.returningReleaseContract?.trim() || null;
+  const capacityRetryContract = options.capacityRetryContract?.trim() || null;
+  const capacityRecoveryReceipt = options.capacityRecoveryReceipt?.trim() || null;
+  if (Boolean(capacityRetryContract) !== Boolean(capacityRecoveryReceipt)) {
+    fail(
+      "capacity retry requires both --capacity-retry-contract and --capacity-recovery-receipt",
+      2,
+    );
+  }
+  if (capacityRetryContract && returningReleaseContract) {
+    fail("capacity retry and release source-return retry are separate transitions", 2);
+  }
   if (!new Set(["read-only", "live-external"]).has(testKind)) {
     fail("--test-kind must be read-only or live-external", 2);
   }
@@ -356,6 +410,26 @@ function handoffTest(pr, options) {
       fail("builder identity differs from the recorded candidate owner");
     }
 
+    const consumedCapacityRetry = capacityRetryContract
+      ? state.testerHistory?.some(
+          (attempt) => attempt?.tester?.contractId === capacityRetryContract,
+        )
+      : false;
+    if (consumedCapacityRetry && state.tester?.retryOfContractId === capacityRetryContract) {
+      // The recovery packet is one-shot, but its replay remains idempotent even
+      // after the replacement tester advances beyond pending or later closes.
+      return {
+        state,
+        output: {
+          schemaVersion: SCHEMA_VERSION,
+          action: "do-not-create",
+          reason: `capacity retry already created tester lifecycle ${state.tester.phase}`,
+          contractId: state.tester.contractId,
+          owner: state.tester.owner ?? null,
+        },
+      };
+    }
+
     if (state.tester && !["closed", "cancelled"].includes(state.tester.phase)) {
       return {
         state,
@@ -368,16 +442,54 @@ function handoffTest(pr, options) {
         },
       };
     }
+    let retryOfContractId = null;
+    let recoveryReceipt = null;
     if (state.tester?.phase === "closed") {
-      return {
-        state,
-        output: {
-          schemaVersion: SCHEMA_VERSION,
-          action: "do-not-create",
-          reason: "this immutable candidate already has a closed tester lifecycle",
-          contractId: state.tester.contractId,
+      if (!capacityRetryContract) {
+        return {
+          state,
+          output: {
+            schemaVersion: SCHEMA_VERSION,
+            action: "do-not-create",
+            reason: "this immutable candidate already has a closed tester lifecycle",
+            contractId: state.tester.contractId,
+          },
+        };
+      }
+
+      const priorTester = state.tester;
+      if (priorTester.contractId !== capacityRetryContract) {
+        fail("capacity retry contract does not match the exact closed tester");
+      }
+      if (
+        priorTester.transport !== "user-visible-task" ||
+        priorTester.transport !== transport ||
+        priorTester.testKind !== testKind ||
+        priorTester.receipt?.status !== "FAIL" ||
+        priorTester.receipt?.cleanup?.status !== "not-required" ||
+        priorTester.closure?.type !== "archived" ||
+        state.release !== null
+      ) {
+        fail(
+          "capacity retry requires the same test contract, one archived user-visible FAIL with no workload cleanup, and no release owner",
+        );
+      }
+
+      recoveryReceipt = readCapacityRecovery(capacityRecoveryReceipt, priorTester);
+      retryOfContractId = priorTester.contractId;
+      // Preserve the terminal failed tester verbatim. Moving it into an attempt
+      // ledger makes the new reservation atomic without rewriting past truth.
+      state.testerHistory = [
+        ...(Array.isArray(state.testerHistory) ? state.testerHistory : []),
+        {
+          tester: priorTester,
+          capacityRecoveryReceipt: recoveryReceipt,
+          retiredAt: new Date().toISOString(),
         },
-      };
+      ];
+      state.tester = null;
+    } else if (capacityRetryContract) {
+      fail("capacity retry requires the exact closed tester on this immutable candidate");
     }
 
     const contractId = randomUUID();
@@ -391,6 +503,8 @@ function handoffTest(pr, options) {
       owner: null,
       receipt: null,
       closure: null,
+      retryOfContractId,
+      capacityRecoveryReceipt: recoveryReceipt,
       createdAt: new Date().toISOString(),
     };
     state.updatedAt = new Date().toISOString();
@@ -403,6 +517,7 @@ function handoffTest(pr, options) {
         transport,
         routing,
         candidate,
+        retryOfContractId,
         nativeTool:
           transport === "user-visible-task"
             ? {
