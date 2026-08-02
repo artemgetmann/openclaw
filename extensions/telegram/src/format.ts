@@ -150,13 +150,64 @@ function buildSafeMarkdownFence(text: string): string {
 type MarkdownFenceState = {
   markerChar: "`" | "~";
   markerLength: number;
+  containerIndentColumns: number;
 };
+
+function measureMarkdownIndentColumns(line: string): number {
+  let columns = 0;
+  for (const char of line) {
+    if (char === " ") {
+      columns += 1;
+      continue;
+    }
+    if (char === "\t") {
+      // CommonMark tabs advance to the next four-column tab stop. Measuring
+      // columns instead of bytes catches mixed prefixes such as space+tab.
+      columns += 4 - (columns % 4);
+      continue;
+    }
+    break;
+  }
+  return columns;
+}
+
+function measureMarkdownColumns(text: string): number {
+  let columns = 0;
+  for (const char of text) {
+    columns += char === "\t" ? 4 - (columns % 4) : 1;
+  }
+  return columns;
+}
+
+function stripMarkdownIndentColumns(line: string, targetColumns: number): string {
+  if (targetColumns <= 0) {
+    return line;
+  }
+  let columns = 0;
+  let index = 0;
+  while (index < line.length && columns < targetColumns) {
+    const char = line[index];
+    if (char === " ") {
+      columns += 1;
+    } else if (char === "\t") {
+      columns += 4 - (columns % 4);
+    } else {
+      return line;
+    }
+    index += 1;
+  }
+  return columns >= targetColumns ? line.slice(index) : line;
+}
 
 function trackMarkdownFenceLine(
   line: string,
   openFence: MarkdownFenceState | undefined,
 ): { isFenced: boolean; nextFence: MarkdownFenceState | undefined } {
-  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+  const scanLine = openFence
+    ? stripMarkdownIndentColumns(line, openFence.containerIndentColumns)
+    : line;
+  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(scanLine);
+  let containerIndentColumns = 0;
   if (openFence) {
     const marker = match?.[2] ?? "";
     const closesFence =
@@ -166,7 +217,25 @@ function trackMarkdownFenceLine(
     return { isFenced: true, nextFence: closesFence ? undefined : openFence };
   }
   if (!match) {
-    return { isFenced: false, nextFence: undefined };
+    // A fence may open directly after a list marker. Its body is indented to
+    // the marker's content column, so remember that column while scanning for
+    // the matching closer and keep every contained pipe row literal.
+    const listFence = /^( {0,3})(?:[*+-]|\d{1,9}[.)])([ \t]+)(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!listFence) {
+      return { isFenced: false, nextFence: undefined };
+    }
+    const marker = listFence[3] ?? "";
+    const markerIndex = line.indexOf(marker);
+    const markerChar = marker[0] as "`" | "~";
+    const info = listFence[4] ?? "";
+    if (markerChar === "`" && info.includes("`")) {
+      return { isFenced: false, nextFence: undefined };
+    }
+    containerIndentColumns = measureMarkdownColumns(line.slice(0, markerIndex));
+    return {
+      isFenced: true,
+      nextFence: { markerChar, markerLength: marker.length, containerIndentColumns },
+    };
   }
   const marker = match[2] ?? "";
   const markerChar = marker[0] as "`" | "~";
@@ -178,7 +247,7 @@ function trackMarkdownFenceLine(
   }
   return {
     isFenced: true,
-    nextFence: { markerChar, markerLength: marker.length },
+    nextFence: { markerChar, markerLength: marker.length, containerIndentColumns },
   };
 }
 
@@ -449,10 +518,10 @@ function isMarkdownTableRow(line: string): boolean {
 }
 
 function isMarkdownIndentedCodeLine(line: string): boolean {
-  // CommonMark treats one tab or four leading spaces as an indented code
-  // block. Those literal pipe rows must never become Telegram native tables
-  // merely because a separate real table selects rich delivery.
-  return /^(?: {4}|\t)/.test(line);
+  // CommonMark uses visual columns, not raw bytes, for indented code. Those
+  // literal pipe rows must never become Telegram native tables merely because
+  // a separate real table selects rich delivery.
+  return measureMarkdownIndentColumns(line) >= 4;
 }
 
 function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {

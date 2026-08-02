@@ -215,6 +215,48 @@ describe("markdownToTelegramHtml", () => {
     expect(indentedRowHtml).not.toContain("<td>literal</td>");
   });
 
+  it("keeps list-nested fenced tables literal beside native tables", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "- ```md",
+        "  | A | B |",
+        "  | --- | --- |",
+        "  | x | y |",
+        "  ```",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
+  });
+
+  it("keeps space-tab-indented table-like code literal", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        " \t| A | B |",
+        " \t| --- | --- |",
+        " \t| x | y |",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
+  });
+
   it("renders fenced code blocks", () => {
     const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
     expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
