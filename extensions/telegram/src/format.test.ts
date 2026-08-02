@@ -195,6 +195,26 @@ describe("markdownToTelegramHtml", () => {
     expect(richHtml).toContain("| x | y |");
   });
 
+  it("does not absorb indented delimiters or rows into native tables", () => {
+    const indentedDelimiterHtml = markdownToTelegramRichHtml(
+      ["| Literal header | Literal owner |", "    | --- | --- |"].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+    const indentedRowHtml = markdownToTelegramRichHtml(
+      ["| Second | Table |", "| --- | --- |", "    | literal | indented row |"].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    // CommonMark indented code stays literal even when it resembles a table
+    // delimiter or data row next to an otherwise valid table candidate.
+    expect(indentedDelimiterHtml).not.toContain("<table bordered striped>");
+    expect(indentedDelimiterHtml).toContain("| Literal header | Literal owner |");
+    expect(indentedDelimiterHtml).toContain("| --- | --- |");
+    expect(indentedRowHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(indentedRowHtml).toContain("<pre><code>| literal | indented row |");
+    expect(indentedRowHtml).not.toContain("<td>literal</td>");
+  });
+
   it("renders fenced code blocks", () => {
     const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
     expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");

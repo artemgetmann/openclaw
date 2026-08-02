@@ -481,7 +481,11 @@ function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
     }
 
     const delimiterLine = lines[index + 1] ?? "";
-    if (!isMarkdownTableRow(headerLine) || !isMarkdownTableDelimiter(delimiterLine)) {
+    if (
+      isMarkdownIndentedCodeLine(delimiterLine) ||
+      !isMarkdownTableRow(headerLine) ||
+      !isMarkdownTableDelimiter(delimiterLine)
+    ) {
       index += 1;
       continue;
     }
@@ -491,7 +495,7 @@ function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
     let endLine = index + 1;
     for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
       const rowLine = lines[rowIndex] ?? "";
-      if (!isMarkdownTableRow(rowLine)) {
+      if (isMarkdownIndentedCodeLine(rowLine) || !isMarkdownTableRow(rowLine)) {
         break;
       }
       rows.push(splitMarkdownTableRow(rowLine));
