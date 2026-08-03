@@ -6,6 +6,7 @@ WRAPPER="$ROOT_DIR/scripts/with-heavy-local-slot.sh"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-heavy-local-slot-test.XXXXXX")"
 FIXTURE_ROOT="$TMP_DIR/instrumented-root"
 FIXTURE_WRAPPER="$FIXTURE_ROOT/scripts/with-heavy-local-slot.sh"
+FIXTURE_DEDICATED_WRAPPER="$FIXTURE_ROOT/scripts/with-dedicated-agent-slot.sh"
 SIGINT_RESET_LAUNCHER="$TMP_DIR/reset-sigint-and-exec.pl"
 TERM_ATTRIBUTION_HOLDER="$TMP_DIR/term-attribution-holder.pl"
 PERL_BIN=""
@@ -152,6 +153,7 @@ create_instrumented_runtime() {
 
   mkdir -p "$FIXTURE_ROOT/scripts/lib"
   cp "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" "$fixture_helper"
+  cp "$ROOT_DIR/scripts/with-dedicated-agent-slot.sh" "$FIXTURE_DEDICATED_WRAPPER"
   cp \
     "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh" \
     "$FIXTURE_ROOT/scripts/lib/jarvis-release-lock.sh"
@@ -738,6 +740,57 @@ test_cpu_policy_is_explicit_narrow_and_receipted() {
   grep -Fq 'code=memory_pressure metric=memory_free_percent observed=10 threshold=25' "$output" ||
     fail "dedicated CPU runtime lost its memory stop receipt"
   pass "CPU policy is explicit, telemetry-only when dedicated, and narrow"
+}
+
+test_dedicated_entrypoint_cannot_fall_back_to_standard_cpu_gates() {
+  local lock_path="$TMP_DIR/dedicated-entrypoint.lock"
+  local health_path="$TMP_DIR/dedicated-entrypoint.health"
+  local marker="$TMP_DIR/dedicated-entrypoint.marker"
+  local output="$TMP_DIR/dedicated-entrypoint.out"
+  local status=0
+
+  # The named entrypoint is the durable workload declaration. At 0% CPU idle
+  # it must retain telemetry-only semantics without weakening any other gate.
+  {
+    printf 'cpu-0\n'
+    printf 'healthy\n'
+    printf 'healthy\n'
+  } >"$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_DEDICATED_WRAPPER" \
+      --label "dedicated-entrypoint" \
+      -- bash -c 'touch "$1"; [[ "$2" = "--cpu-policy" ]]' _ "$marker" --cpu-policy \
+      >"$output" 2>&1
+  [[ -f "$marker" && ! -e "$lock_path" ]] ||
+    fail "dedicated entrypoint restored standard CPU gates or leaked its lease"
+  grep -Fq \
+    'HEAVY_LOCAL_CPU_TELEMETRY cpu_policy=dedicated-agent phase=preflight status=observed enforcement=telemetry_only metric=cpu_idle_percent observed=0 threshold=none unit=percent' \
+    "$output" || fail "dedicated entrypoint lost 0% idle telemetry-only semantics"
+  grep -Fq 'HEAVY_LOCAL_SLOT_RECEIPT status=granted policy=standard cpu_policy=dedicated-agent' \
+    "$output" || fail "dedicated entrypoint omitted its explicit CPU policy receipt"
+  /bin/rm -f "$marker"
+
+  # Callers cannot accidentally paste a standard override into this path. The
+  # mismatch fails before admission with a stable, actionable policy receipt.
+  set +e
+  "$FIXTURE_DEDICATED_WRAPPER" \
+    --cpu-policy standard \
+    --label "dedicated-entrypoint-conflict" \
+    --check >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] ||
+    fail "dedicated entrypoint policy conflict returned $status instead of 75"
+  [[ ! -e "$lock_path" ]] || fail "dedicated entrypoint conflict acquired the lease"
+  grep -Fq \
+    'class=guard_internal code=wrong_cpu_policy declared=dedicated-agent observed=caller_override phase=admission outcome=refused next_action=remove_cpu_policy_override_and_use_dedicated_agent_entrypoint' \
+    "$output" || fail "dedicated entrypoint conflict omitted its actionable receipt"
+  grep -Fq \
+    'the dedicated-agent entrypoint owns CPU policy and does not accept a caller override' \
+    "$output" || fail "dedicated entrypoint conflict omitted its human root cause"
+
+  pass "dedicated entrypoint cannot silently fall back to standard CPU gates"
 }
 
 test_reachable_http_errors_keep_their_status() {
@@ -3158,6 +3211,7 @@ if [[ "${1:-}" == "--cpu-policy-only" ]]; then
   create_sigint_reset_launcher
   run_suite_test test_production_has_no_ambient_test_bypass
   run_suite_test test_cpu_policy_is_explicit_narrow_and_receipted
+  run_suite_test test_dedicated_entrypoint_cannot_fall_back_to_standard_cpu_gates
   run_suite_test test_dedicated_cpu_policy_preserves_signal_cleanup
   SUITE_PHASE="complete"
   echo "Heavy-local slot CPU policy tests passed."
@@ -3203,6 +3257,7 @@ SUITE_PHASE="create_term_attribution_holder"
 create_term_attribution_holder
 run_suite_test test_production_has_no_ambient_test_bypass
 run_suite_test test_cpu_policy_is_explicit_narrow_and_receipted
+run_suite_test test_dedicated_entrypoint_cannot_fall_back_to_standard_cpu_gates
 run_suite_test test_reachable_http_errors_keep_their_status
 run_suite_test test_dedicated_resource_guardrails_are_fail_safe_and_observable
 run_suite_test test_owner_publish_failure_is_actionable

@@ -27,6 +27,7 @@ usage() {
 Usage:
   scripts/with-heavy-local-slot.sh --label <owner> --check
   scripts/with-heavy-local-slot.sh --cpu-policy dedicated-agent --label <owner> --check
+  scripts/with-dedicated-agent-slot.sh --label <owner> --check
   scripts/with-heavy-local-slot.sh --label <owner> --wait-seconds <seconds> -- <command> [args...]
   scripts/with-heavy-local-slot.sh --label <owner> -- <command> [args...]
 
@@ -41,7 +42,10 @@ guarded command exactly once after admission.
 --cpu-policy dedicated-agent is an explicit per-transaction mode for Macs
 reserved for agent workloads. It records CPU-idle telemetry but does not use
 CPU idle to refuse admission or stop work. Every non-CPU safety gate remains
-enforced. The default CPU policy retains the 35%/20% idle floors.
+enforced. Dedicated agent lanes should use the named
+scripts/with-dedicated-agent-slot.sh entrypoint so the declaration cannot
+silently fall back to standard CPU gates. The default CPU policy retains the
+35%/20% idle floors.
 EOF
   exit 2
 }

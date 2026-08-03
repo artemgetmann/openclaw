@@ -118,16 +118,23 @@ metadata, an incomplete spawn handshake, unreadable process identity, PID or
 group reuse, or mismatched start/session identity fails closed instead of
 guessing that the lease is stale or signaling an unverified group.
 
-On a Mac intentionally reserved for agents, one transaction may explicitly
-allow CPU saturation without bypassing the guard:
+On a Mac intentionally reserved for agents, use the dedicated entrypoint. It
+selects the explicit dedicated CPU policy without requiring every caller to
+remember the lower-level flag:
 
 ```bash
-scripts/with-heavy-local-slot.sh \
-  --cpu-policy dedicated-agent \
+scripts/with-dedicated-agent-slot.sh \
   --label "<thread-id>:capacity-ramp" \
   --wait-seconds 900 \
   -- pnpm vitest run path/to/focused.test.ts --maxWorkers 1
 ```
+
+The named entrypoint owns CPU policy. Passing a second `--cpu-policy` fails
+before admission with `code=wrong_cpu_policy` and directs the caller to remove
+the override. Direct `scripts/with-heavy-local-slot.sh --cpu-policy
+dedicated-agent` remains supported for lower-level integrations, while an
+unflagged call to that general wrapper intentionally stays on the shared-machine
+default.
 
 This named mode allows 0% CPU idle while adding dedicated-host observations and
 platform safety signals. Preflight and runtime samples emit
@@ -230,9 +237,10 @@ The 25% memory threshold, standard-policy 35% admission CPU-idle threshold,
 standard-policy 20% runtime CPU-idle threshold, 25 GiB disk floor, 35 GiB
 disk-report threshold, 15-second interval, two-strike stop rule, and three-second
 health timeout remain fixed product policy in this revision. Environment
-variables cannot lower, disable, corrupt, or stretch them. Only the exact
-per-transaction `--cpu-policy dedicated-agent` flag makes CPU idle telemetry-only;
-unknown values fail closed.
+variables cannot lower, disable, corrupt, or stretch them. Only the named
+dedicated entrypoint (or its exact lower-level `--cpu-policy dedicated-agent`
+equivalent) makes CPU idle telemetry-only; unknown or conflicting values fail
+closed.
 
 ## Task-owned disk receipts
 
