@@ -183,6 +183,7 @@ EOF
 set -euo pipefail
 root="${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}"
 app="$1"
+next_info=""
 count_file="$root/control/launch-count"
 count=0
 [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
@@ -197,7 +198,14 @@ printf 'staged\n' >"$root/live/Caches/ai.jarvis.mac/org.sparkle-project.Sparkle/
 
 if [[ "$count" == "1" && ! -e "$root/control/no-transition" ]]; then
   new="$root/apps/new/Jarvis.app"
-  cp "$new/Contents/Info.plist" "$app/Contents/Info.plist"
+  next_info="$app/Contents/Info.plist.fixture-next"
+
+  # wait_for_disposable_update treats the target version/build in Info.plist as
+  # the completed-update signal. Stage that signal first, but publish it only
+  # after every payload and signing fixture has reached its final state. This
+  # models Sparkle's completed bundle replacement and prevents the harness from
+  # observing a new version paired with stale signer metadata.
+  cp "$new/Contents/Info.plist" "$next_info"
   cp "$new/Contents/Resources/OpenClawRuntime/manifest.json" "$app/Contents/Resources/OpenClawRuntime/manifest.json"
   cp "$new/Contents/Resources/OpenClawRuntime/openclaw/package.json" "$app/Contents/Resources/OpenClawRuntime/openclaw/package.json"
   cp "$new/.fixture-codesign" "$app/.fixture-codesign"
@@ -210,6 +218,7 @@ if [[ "$count" == "1" && ! -e "$root/control/no-transition" ]]; then
   if [[ -e "$root/control/post-update-cdhash-drift" ]]; then
     printf '8888888888888888888888888888888888888888\n' >"$app/.fixture-cdhash"
   fi
+
 fi
 
 if [[ "$count" -ge "2" ]]; then
@@ -230,6 +239,13 @@ if [[ "$count" -ge "2" && ! -e "$root/control/no-reseed" ]]; then
   cp "$app/Contents/Resources/OpenClawRuntime/manifest.json" \
     "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json"
   printf 'managed manifest reseeded\n' >>"$root/logs/actions"
+fi
+
+if [[ -n "$next_info" ]]; then
+  # Publish the completion marker after every first-launch side effect,
+  # including intentionally foreign cache residue. Readers therefore see
+  # either the old marker or a fully settled synthetic Sparkle transaction.
+  mv "$next_info" "$app/Contents/Info.plist"
 fi
 EOF
 
