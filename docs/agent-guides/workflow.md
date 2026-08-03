@@ -202,6 +202,8 @@ or the PR cannot merge normally, it does not merge.
 `handoff-release` refreshes the PR body and acceptance receipt after tester
 closure, even when the immutable head, base, and diff are unchanged. The fresh
 release prompt must not embed the pre-test PR contract or stale pending fields.
+The same refresh applies when a definitely uncreated tester reservation is
+cancelled and recreated on the unchanged source candidate.
 
 Before that review begins, the release worker proves its recorded thread and
 host identity, archives the exact builder task, verifies `archived=true`, and

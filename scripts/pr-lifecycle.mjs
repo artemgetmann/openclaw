@@ -429,6 +429,11 @@ function handoffTest(pr, options) {
       fail("builder identity differs from the recorded candidate owner");
     }
 
+    // A canceled or replayed reservation may keep the same source identity
+    // while the builder refreshes the durable PR receipt. Always compose the
+    // next tester prompt from current GitHub metadata, not cached body text.
+    state.candidate = candidate;
+
     // Capacity recovery grants one replacement for this immutable candidate,
     // not one replacement per failed tester. The attempt ledger is therefore
     // the durable retry budget: once it contains a recovery receipt, a later

@@ -317,6 +317,26 @@ describe("scripts/pr-lifecycle", () => {
     expect(fs.existsSync(path.join(fixture.root, "state", "pr-42.json"))).toBe(false);
   });
 
+  it("refreshes the PR receipt before recreating a cancelled tester handoff", () => {
+    const fixture = makeFixture();
+    const first = beginLiveTester(fixture);
+    run(fixture, [
+      "cancel-pending",
+      "42",
+      "--role",
+      "tester",
+      "--contract-id",
+      first.contractId,
+      "--confirm-no-thread-created",
+    ]);
+    fixture.metadata.body = "Observable claim + acceptance criteria: current tester receipt text";
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+
+    const replacement = beginLiveTester(fixture);
+    expect(replacement.action).toBe("create_thread");
+    expect(replacement.prompt).toContain("current tester receipt text");
+  });
+
   it("reserves one tester handoff and refuses duplicate active ownership", () => {
     const fixture = makeFixture();
     const first = beginLiveTester(fixture);
