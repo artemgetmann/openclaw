@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigValidationIssue, LegacyConfigIssue } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
@@ -16,8 +17,8 @@ function makeSnapshot() {
   return {
     exists: false,
     valid: true,
-    issues: [],
-    legacyIssues: [],
+    issues: [] as ConfigValidationIssue[],
+    legacyIssues: [] as LegacyConfigIssue[],
     path: "/tmp/openclaw.json",
   };
 }
