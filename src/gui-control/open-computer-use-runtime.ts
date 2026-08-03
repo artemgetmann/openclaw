@@ -242,6 +242,9 @@ export function resolveOpenComputerUseCommand(
   }),
 ): string {
   if (packageRoot) {
+    // In a packaged consumer runtime the embedded production app is the
+    // authoritative identity. Caller overrides remain available to source and
+    // engineering runs, but must never displace a valid packaged helper.
     const packagedNativeRoot = path.join(packageRoot, "native");
     const packagedAppCommand = path.join(
       packagedNativeRoot,

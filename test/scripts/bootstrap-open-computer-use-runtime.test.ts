@@ -73,7 +73,11 @@ function createHarness(): {
       "      fi",
       "    fi",
       '    if [[ "${OPENCLAW_TEST_DOCTOR_HANG:-0}" == "1" ]]; then',
-      "      trap 'exit 143' TERM INT",
+      '      if [[ "${OPENCLAW_TEST_DOCTOR_IGNORE_TERM:-0}" == "1" ]]; then',
+      "        trap '' TERM",
+      "      else",
+      "        trap 'exit 143' TERM INT",
+      "      fi",
       "      while true; do sleep 1; done",
       "    fi",
       '    exit "${OPENCLAW_TEST_DOCTOR_EXIT:-0}"',
@@ -148,7 +152,7 @@ function processExists(pidPath: string): boolean {
 }
 
 async function waitForProcessExit(pidPath: string): Promise<boolean> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     if (!processExists(pidPath)) {
       return true;
     }
@@ -217,6 +221,26 @@ describe.runIf(process.platform === "darwin")("bootstrap Open Computer Use lifec
         OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR: "1",
         OPENCLAW_OPEN_COMPUTER_USE_DOCTOR_TIMEOUT_SECONDS: "1",
         OPENCLAW_TEST_DOCTOR_HANG: "1",
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(124);
+    expect(fs.readFileSync(harness.callsPath, "utf8")).toContain(
+      "__open-computer-use-stop-owned-app-agent",
+    );
+    expect(await waitForProcessExit(harness.agentPidPath)).toBe(true);
+  });
+
+  it("kills a doctor that ignores TERM after the timeout grace period", async () => {
+    const harness = createHarness();
+    const result = spawnSync("/bin/bash", [harness.scriptPath], {
+      env: {
+        ...harness.env,
+        OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR: "1",
+        OPENCLAW_OPEN_COMPUTER_USE_DOCTOR_TIMEOUT_SECONDS: "1",
+        OPENCLAW_TEST_DOCTOR_HANG: "1",
+        OPENCLAW_TEST_DOCTOR_IGNORE_TERM: "1",
       },
       encoding: "utf8",
     });

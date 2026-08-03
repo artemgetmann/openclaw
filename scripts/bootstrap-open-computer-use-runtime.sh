@@ -44,6 +44,7 @@ OCU_DOCTOR_PID=""
 OCU_DOCTOR_WATCHDOG_PID=""
 OCU_DOCTOR_TIMEOUT_MARKER=""
 OCU_DOCTOR_OWNER_TOKEN=""
+OCU_DOCTOR_KILL_GRACE_SECONDS=1
 
 usage() {
   cat <<'EOF'
@@ -115,6 +116,7 @@ build_runtime_app() {
 
 cleanup_doctor_processes() {
   local bin_path="${OCU_APP_PATH}/Contents/MacOS/OpenComputerUse"
+  local doctor_killer_pid=""
 
   if [[ -n "${OCU_DOCTOR_WATCHDOG_PID}" ]]; then
     kill "${OCU_DOCTOR_WATCHDOG_PID}" 2>/dev/null || true
@@ -124,7 +126,17 @@ cleanup_doctor_processes() {
 
   if [[ -n "${OCU_DOCTOR_PID}" ]]; then
     kill -TERM "${OCU_DOCTOR_PID}" 2>/dev/null || true
+    # EXIT/signal cleanup must not block forever on an unresponsive doctor.
+    # The killer is cancelled as soon as wait reaps the intended child, so it
+    # cannot later signal an unrelated process after PID reuse.
+    (
+      sleep "${OCU_DOCTOR_KILL_GRACE_SECONDS}"
+      kill -KILL "${OCU_DOCTOR_PID}" 2>/dev/null || true
+    ) &
+    doctor_killer_pid=$!
     wait "${OCU_DOCTOR_PID}" 2>/dev/null || true
+    kill "${doctor_killer_pid}" 2>/dev/null || true
+    wait "${doctor_killer_pid}" 2>/dev/null || true
     OCU_DOCTOR_PID=""
   fi
 
@@ -167,6 +179,13 @@ run_doctor_with_cleanup() {
     if kill -0 "${OCU_DOCTOR_PID}" 2>/dev/null; then
       : > "${OCU_DOCTOR_TIMEOUT_MARKER}"
       kill -TERM "${OCU_DOCTOR_PID}" 2>/dev/null || true
+      # Reuse the trap-managed sleep PID so parent cleanup can cancel this
+      # escalation immediately when TERM succeeds and wait reaps the child.
+      sleep "${OCU_DOCTOR_KILL_GRACE_SECONDS}" &
+      watchdog_sleep_pid=$!
+      wait "${watchdog_sleep_pid}"
+      watchdog_sleep_pid=""
+      kill -KILL "${OCU_DOCTOR_PID}" 2>/dev/null || true
     fi
   ) &
   OCU_DOCTOR_WATCHDOG_PID=$!
