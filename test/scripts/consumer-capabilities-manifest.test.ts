@@ -177,7 +177,7 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
     expect(artifact).toMatchObject({
       skillName: "jarvis-computer-use",
       sourceRepo: "https://github.com/artemgetmann/open-codex-computer-use.git",
-      sourceRef: "658d72ad5cfbab60bfb477a8b54fcac9dd659121",
+      sourceRef: "803935f8ca2af6cfcf6e2fd5666bb0459ba78301",
     });
   });
 
