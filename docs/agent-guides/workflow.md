@@ -115,6 +115,12 @@ terminal `PASS` or `FAIL` receipt with its exact worker identity, tested head an
 diff identity, the unchanged dispatcher/routing object, evidence, cleanup state,
 and unresolved limitations.
 
+The lifecycle diff fingerprint is SHA-256 over the exact raw stdout bytes from
+`gh pr diff <PR> --patch`. A plain `gh pr diff` renders a different format and
+must not be used to recompute candidate identity. The emitted tester prompt
+records this algorithm so independent validation fails closed for real drift,
+not a formatting mismatch.
+
 A user-visible live tester additionally proves exact immutable source and
 runtime provenance, uses stable isolated identities, and runs exactly one bounded
 scenario when the acceptance contract says one. Its handoff must grant the exact
@@ -164,12 +170,40 @@ receipt, cleanup receipt, review/check state, dependencies and overlap, risks,
 rollback, remaining proof, and the validated task-authority packet. Builders
 and testers never merge or deploy.
 
+Release-task model selection is risk-based and executable:
+
+- For `normal-merge` authority only, `handoff-release` emits
+  `model=gpt-5.6-luna` and `thinking=max`. Use those exact `create_thread`
+  settings for the fresh release task. Immutable-head tester proof has already
+  removed the difficult source-discovery work; the remaining job is bounded
+  review, CI monitoring, expected-head merge, and receipts.
+- If the validated authority packet includes `deploy`, it emits
+  `model=gpt-5.6-terra` and `thinking=high` because the task may cross into live
+  state. This changes compute selection, not authority: every deployment,
+  restart, install, runtime mutation, or external proof boundary still applies.
+- Luna or Terra must fail closed and return the exact finding when source repair,
+  a real merge conflict, changed behavior, unclear production state, security
+  judgment, or an unmodeled irreversible action appears. Resume the exact
+  builder for source work. Escalate the same release task to Sol only when the
+  concrete finding needs stronger reasoning; never create a recursive release
+  worker or a second owner.
+
+The emitted model profile is the default for that handoff, not evidence that a
+model completed the work safely. The release receipt and independent state
+checks remain the proof.
+
 The release worker independently refreshes and verifies the PR head, current
 base, effective diff, required checks, review conversations, approvals,
 dependencies, and overlap. It may perform only a normal non-admin merge: no
 bypass, admin override, force, or weakened branch protection. If the reviewed
 head or diff changed, proof is stale, approval is missing, checks are not green,
 or the PR cannot merge normally, it does not merge.
+
+`handoff-release` refreshes the PR body and acceptance receipt after tester
+closure, even when the immutable head, base, and diff are unchanged. The fresh
+release prompt must not embed the pre-test PR contract or stale pending fields.
+The same refresh applies when a definitely uncreated tester reservation is
+cancelled and recreated on the unchanged source candidate.
 
 Before that review begins, the release worker proves its recorded thread and
 host identity, archives the exact builder task, verifies `archived=true`, and

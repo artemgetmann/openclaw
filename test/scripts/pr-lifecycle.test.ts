@@ -17,7 +17,10 @@ type LifecycleOutput = {
     diffFingerprint: string;
   };
   contractId: string;
-  nativeTool?: { sequence: string[] };
+  nativeTool?: {
+    sequence: string[];
+    createThread?: { model: string; thinking: string };
+  };
   owner?: { threadId: string; hostId: string } | null;
   prompt?: string;
   retryOfContractId?: string | null;
@@ -314,6 +317,26 @@ describe("scripts/pr-lifecycle", () => {
     expect(fs.existsSync(path.join(fixture.root, "state", "pr-42.json"))).toBe(false);
   });
 
+  it("refreshes the PR receipt before recreating a cancelled tester handoff", () => {
+    const fixture = makeFixture();
+    const first = beginLiveTester(fixture);
+    run(fixture, [
+      "cancel-pending",
+      "42",
+      "--role",
+      "tester",
+      "--contract-id",
+      first.contractId,
+      "--confirm-no-thread-created",
+    ]);
+    fixture.metadata.body = "Observable claim + acceptance criteria: current tester receipt text";
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+
+    const replacement = beginLiveTester(fixture);
+    expect(replacement.action).toBe("create_thread");
+    expect(replacement.prompt).toContain("current tester receipt text");
+  });
+
   it("reserves one tester handoff and refuses duplicate active ownership", () => {
     const fixture = makeFixture();
     const first = beginLiveTester(fixture);
@@ -327,6 +350,7 @@ describe("scripts/pr-lifecycle", () => {
     expect(first.prompt).toContain(
       "Never route live/external testing or release through a nested sub-agent",
     );
+    expect(first.prompt).toContain("gh pr diff 42 --patch");
 
     // The crash window between contract emission and native task acceptance is
     // deliberately one-shot. A compacted builder sees the pending claim and
@@ -528,6 +552,10 @@ describe("scripts/pr-lifecycle", () => {
       "archived",
     ]);
 
+    fixture.metadata.body =
+      "Observable claim + acceptance criteria: refreshed exact-head release receipt";
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+
     const illegalRelease = runFailure(fixture, [
       "handoff-release",
       "42",
@@ -564,8 +592,13 @@ describe("scripts/pr-lifecycle", () => {
       "set_thread_archived",
       "accept-release-handoff",
     ]);
+    expect(release.nativeTool?.createThread).toEqual({
+      model: "gpt-5.6-luna",
+      thinking: "max",
+    });
     expect(release.prompt).toContain("archive the exact builder thread");
     expect(release.prompt).toContain("Builder archival belongs to acceptance");
+    expect(release.prompt).toContain("refreshed exact-head release receipt");
 
     const repeated = run(fixture, [
       "handoff-release",
@@ -774,6 +807,10 @@ describe("scripts/pr-lifecycle", () => {
     expect(release.taskAuthority).toMatchObject({
       source: "direct-user-task",
       allowedActions: ["normal-merge", "deploy"],
+    });
+    expect(release.nativeTool?.createThread).toEqual({
+      model: "gpt-5.6-terra",
+      thinking: "high",
     });
     expect(release.prompt).toContain('"allowedActions":["normal-merge","deploy"]');
 

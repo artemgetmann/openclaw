@@ -10,6 +10,21 @@ const SCHEMA_VERSION = 1;
 const GH_BIN = process.env.OPENCLAW_PR_LIFECYCLE_GH ?? "gh";
 const RELEASE_ACTIONS = new Set(["normal-merge", "deploy"]);
 
+// Release work begins only after independent exact-head proof, so routine
+// merge mechanics should use the cheapest capable model. Deployment retains a
+// stronger default because it crosses from repository state into a live
+// environment and may need more judgment before the first mutation.
+const RELEASE_MODEL_PROFILES = Object.freeze({
+  mergeOnly: Object.freeze({ model: "gpt-5.6-luna", thinking: "max" }),
+  deploy: Object.freeze({ model: "gpt-5.6-terra", thinking: "high" }),
+});
+
+function releaseModelProfile(taskAuthority) {
+  return taskAuthority.allowedActions.includes("deploy")
+    ? RELEASE_MODEL_PROFILES.deploy
+    : RELEASE_MODEL_PROFILES.mergeOnly;
+}
+
 class LifecycleError extends Error {
   constructor(message, exitCode = 1) {
     super(message);
@@ -317,6 +332,9 @@ function ownerPrompt(role, state) {
       ? `Scope: falsify the fixed acceptance criteria on this exact head; do not edit source, merge, deploy, or expand scope.`
       : `Tester: ${testerReceipt.status}; thread=${testerReceipt.owner.threadId} host=${testerReceipt.owner.hostId}; evidence=${testerReceipt.evidence.join(" | ")}`,
     role === "tester"
+      ? `Diff identity: if independently recomputing the fingerprint, hash the exact raw stdout bytes from gh pr diff ${candidate.number} --patch with SHA-256. A plain gh pr diff uses a different format and is not the lifecycle fingerprint.`
+      : null,
+    role === "tester"
       ? `Constraints: return one terminal receipt; preserve source/runtime/live proof boundaries; perform external or live actions only when explicitly granted in this task.`
       : `Authority packet: ${JSON.stringify(releaseAuthority)}. Treat only allowedActions as durable authority. Never infer credentials, OTP, admin/bypass, irreversible/public-release, or new-scope authority.`,
     role === "tester"
@@ -410,6 +428,11 @@ function handoffTest(pr, options) {
     if (state.builder.threadId !== builder.threadId || state.builder.hostId !== builder.hostId) {
       fail("builder identity differs from the recorded candidate owner");
     }
+
+    // A canceled or replayed reservation may keep the same source identity
+    // while the builder refreshes the durable PR receipt. Always compose the
+    // next tester prompt from current GitHub metadata, not cached body text.
+    state.candidate = candidate;
 
     // Capacity recovery grants one replacement for this immutable candidate,
     // not one replacement per failed tester. The attempt ledger is therefore
@@ -888,6 +911,11 @@ function handoffRelease(pr, options) {
         "release handoff requires an exact-head PASS and the transport's exact tester lifecycle closure",
       );
     }
+    // The PR body is the durable receipt surface and normally advances after
+    // tester closure without changing the immutable source candidate. Refresh
+    // that mutable contract before composing the release prompt so the cheaper
+    // release model never receives stale "tester pending" or old-head claims.
+    state.candidate = candidate;
     if (state.release?.phase === "awaiting-retest") {
       // The same release owner resumes, but it cannot resume release work until
       // it re-archives the repaired builder and records acceptance again.
@@ -929,6 +957,7 @@ function handoffRelease(pr, options) {
     }
 
     const contractId = randomUUID();
+    const modelProfile = releaseModelProfile(taskAuthority);
     state.release = {
       phase: "handoff-pending",
       contractId,
@@ -959,10 +988,11 @@ function handoffRelease(pr, options) {
             "accept-release-handoff",
           ],
           target: { type: "project", environment: { type: "worktree" } },
+          createThread: modelProfile,
         },
         prompt: ownerPrompt("release", state),
         warning:
-          "Consume this action once. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
+          "Consume this action once with the emitted createThread model settings. Prevent recursive handoffs. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
       },
     };
   });
