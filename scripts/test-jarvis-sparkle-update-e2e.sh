@@ -14,10 +14,12 @@ trap 'rm -rf "$TEST_TMP"' EXIT HUP INT TERM
 
 OLD_COMMIT="1111111111111111111111111111111111111111"
 NEW_COMMIT="2222222222222222222222222222222222222222"
+PROTECTED_COMMIT="4444444444444444444444444444444444444444"
 OLD_VERSION="2026.7.14.1"
 NEW_VERSION="2026.7.15.1"
 OLD_BUILD="2026071401"
 NEW_BUILD="2026071501"
+PROTECTED_BUILD="2026071402"
 CANONICAL_FEED="https://github.com/artemgetmann/openclaw/releases/latest/download/jarvis-appcast.xml"
 
 fail() {
@@ -45,6 +47,7 @@ write_app() {
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$build</string>
   <key>SUFeedURL</key><string>$CANONICAL_FEED</string>
+  <key>SUPublicEDKey</key><string>FIXTURESPARKLEPUBLICKEY</string>
 </dict></plist>
 EOF
   cat >"$app/Contents/Resources/OpenClawRuntime/manifest.json" <<EOF
@@ -54,6 +57,7 @@ EOF
   printf 'strict-valid\n' >"$app/.fixture-codesign"
   printf 'strict-valid\n' >"$app/.fixture-gatekeeper"
   printf 'FIXTURETEAM\n' >"$app/.fixture-team"
+  printf '%s\n' "$commit" >"$app/.fixture-cdhash"
 
   cat >"$app/Contents/MacOS/OpenClaw" <<'EOF'
 #!/usr/bin/env bash
@@ -102,7 +106,10 @@ app="${!#}"
 grep -qx 'strict-valid' "$app/.fixture-codesign" || exit 1
 team="$(cat "$app/.fixture-team")"
 case "$*" in
-  *'-dv'*) printf 'TeamIdentifier=%s\n' "$team" >&2 ;;
+  *'-dv'*)
+    printf 'TeamIdentifier=%s\n' "$team" >&2
+    printf 'CDHash=%s\n' "$(cat "$app/.fixture-cdhash")" >&2
+    ;;
   *'-r-'*) printf 'designated => identifier "ai.jarvis.mac" and anchor apple generic and certificate leaf[subject.OU] = "%s"\n' "$team" >&2 ;;
 esac
 EOF
@@ -176,6 +183,7 @@ EOF
 set -euo pipefail
 root="${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}"
 app="$1"
+next_info=""
 count_file="$root/control/launch-count"
 count=0
 [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
@@ -190,15 +198,27 @@ printf 'staged\n' >"$root/live/Caches/ai.jarvis.mac/org.sparkle-project.Sparkle/
 
 if [[ "$count" == "1" && ! -e "$root/control/no-transition" ]]; then
   new="$root/apps/new/Jarvis.app"
-  cp "$new/Contents/Info.plist" "$app/Contents/Info.plist"
+  next_info="$app/Contents/Info.plist.fixture-next"
+
+  # wait_for_disposable_update treats the target version/build in Info.plist as
+  # the completed-update signal. Stage that signal first, but publish it only
+  # after every payload and signing fixture has reached its final state. This
+  # models Sparkle's completed bundle replacement and prevents the harness from
+  # observing a new version paired with stale signer metadata.
+  cp "$new/Contents/Info.plist" "$next_info"
   cp "$new/Contents/Resources/OpenClawRuntime/manifest.json" "$app/Contents/Resources/OpenClawRuntime/manifest.json"
   cp "$new/Contents/Resources/OpenClawRuntime/openclaw/package.json" "$app/Contents/Resources/OpenClawRuntime/openclaw/package.json"
   cp "$new/.fixture-codesign" "$app/.fixture-codesign"
   cp "$new/.fixture-gatekeeper" "$app/.fixture-gatekeeper"
   cp "$new/.fixture-team" "$app/.fixture-team"
+  cp "$new/.fixture-cdhash" "$app/.fixture-cdhash"
   if [[ -e "$root/control/post-update-foreign-team" ]]; then
     printf 'OTHERTEAM\n' >"$app/.fixture-team"
   fi
+  if [[ -e "$root/control/post-update-cdhash-drift" ]]; then
+    printf '8888888888888888888888888888888888888888\n' >"$app/.fixture-cdhash"
+  fi
+
 fi
 
 if [[ "$count" -ge "2" ]]; then
@@ -219,6 +239,13 @@ if [[ "$count" -ge "2" && ! -e "$root/control/no-reseed" ]]; then
   cp "$app/Contents/Resources/OpenClawRuntime/manifest.json" \
     "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json"
   printf 'managed manifest reseeded\n' >>"$root/logs/actions"
+fi
+
+if [[ -n "$next_info" ]]; then
+  # Publish the completion marker after every first-launch side effect,
+  # including intentionally foreign cache residue. Readers therefore see
+  # either the old marker or a fully settled synthetic Sparkle transaction.
+  mv "$next_info" "$app/Contents/Info.plist"
 fi
 EOF
 
@@ -253,10 +280,17 @@ EOF
 set -e
 root="${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}"
 [[ ! -e "$root/control/prove-fail" ]] || exit 31
-commit="$(jq -r '.gitCommit' "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json")"
+if [[ "$*" == *'--runtime-source jarvis-break-glass-hotfix'* ]]; then
+  commit="$(jq -r '.protectedRuntimeGitCommit' "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.protection.json")"
+  source='jarvis-break-glass-hotfix'
+  [[ ! -e "$root/control/protected-proof-drift" ]] || commit='7777777777777777777777777777777777777777'
+else
+  commit="$(jq -r '.gitCommit' "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json")"
+  source='jarvis-managed-bundle'
+fi
 printf '[prove-jarvis-runtime] jarvis_runtime_proof=true\n'
 printf '[prove-jarvis-runtime] service_label=ai.jarvis.gateway\n'
-printf '[prove-jarvis-runtime] runtime_source=jarvis-managed-bundle\n'
+printf '[prove-jarvis-runtime] runtime_source=%s\n' "$source"
 printf '[prove-jarvis-runtime] runtime_commit=%s\n' "$commit"
 EOF
 
@@ -307,10 +341,103 @@ make_fixture() {
   printf 'loaded=1\npid=101\n' >"$fixture/control/gateway-state"
   cat >"$fixture/feed.xml" <<EOF
 <?xml version="1.0"?><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel>
-<item><title>Jarvis $NEW_VERSION</title><sparkle:version>$NEW_BUILD</sparkle:version><sparkle:shortVersionString>$NEW_VERSION</sparkle:shortVersionString><enclosure url="https://github.com/artemgetmann/openclaw/releases/download/v-fixture/Jarvis.zip" /></item>
+<item><title>Jarvis $NEW_VERSION</title><sparkle:version>$NEW_BUILD</sparkle:version><sparkle:shortVersionString>$NEW_VERSION</sparkle:shortVersionString><enclosure url="https://github.com/artemgetmann/openclaw/releases/download/v-fixture/Jarvis.zip" length="123456789" sparkle:edSignature="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==" /></item>
 <item><title>Jarvis $OLD_VERSION</title><sparkle:version>$OLD_BUILD</sparkle:version><sparkle:shortVersionString>$OLD_VERSION</sparkle:shortVersionString><enclosure url="https://example.invalid/Jarvis.zip" /></item>
 </channel></rss>
 EOF
+}
+
+write_protected_receipt() {
+  local fixture="$1"
+  local state="$fixture/live/Jarvis/.jarvis"
+  local marker="$state/.consumer-bundled-runtime.protection.json"
+  local backup="$state/.consumer-bundled-runtime.json.backup.fixture"
+  local requirement='identifier "ai.jarvis.mac" and anchor apple generic and certificate leaf[subject.OU] = "FIXTURETEAM"'
+  local requirement_hash
+  local issued_at
+  local expires_at
+  local protected_build
+  local protected_commit
+  requirement_hash="$(printf '%s' "$requirement" | shasum -a 256 | awk '{print $1}')"
+  issued_at="$(node -e 'process.stdout.write(new Date(Date.now() - 60000).toISOString())')"
+  expires_at="$(node -e 'process.stdout.write(new Date(Date.now() + 3600000).toISOString())')"
+  protected_build="$(jq -r '.bundleVersion' "$backup")"
+  protected_commit="$(jq -r '.gitCommit' "$backup")"
+
+  jq -n \
+    --arg issuedAt "$issued_at" \
+    --arg expiresAt "$expires_at" \
+    --arg installedCommit "$OLD_COMMIT" \
+    --arg installedCdHash "$OLD_COMMIT" \
+    --arg requirementHash "$requirement_hash" \
+    --arg compatibilityManifestSha256 "$(shasum -a 256 "$state/.consumer-bundled-runtime.json" | awk '{print $1}')" \
+    --arg backupManifestSha256 "$(shasum -a 256 "$backup" | awk '{print $1}')" \
+    --arg protectionMarkerSha256 "$(shasum -a 256 "$marker" | awk '{print $1}')" \
+    --arg markerSource "$fixture/apps/installed/Jarvis.app" \
+    --arg protectedBuild "$protected_build" \
+    --arg protectedCommit "$protected_commit" \
+    --arg targetCommit "$NEW_COMMIT" \
+    --arg feedURL "$CANONICAL_FEED" \
+    --arg targetCdHash "$NEW_COMMIT" \
+    --arg sparkleKeyHash "$(printf '%s' 'FIXTURESPARKLEPUBLICKEY' | shasum -a 256 | awk '{print $1}')" \
+    --arg enclosureURL "https://github.com/artemgetmann/openclaw/releases/download/v-fixture/Jarvis.zip" \
+    --arg enclosureLength "123456789" \
+    --arg enclosureSignatureHash "$(printf '%s' 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==' | shasum -a 256 | awk '{print $1}')" \
+    '{
+      schemaVersion: 1,
+      kind: "jarvis-sparkle-protected-hotfix-baseline-compatibility",
+      receiptId: "fixture-protected-hotfix-transition",
+      issuedAt: $issuedAt,
+      expiresAt: $expiresAt,
+      intent: {operation: "sparkle-n-to-n-plus-1", oneTimeUse: true, feedURL: $feedURL},
+      installedApp: {
+        bundleIdentifier: "ai.jarvis.mac",
+        version: "2026.7.14.1",
+        build: "2026071401",
+        gitCommit: $installedCommit,
+        teamIdentifier: "FIXTURETEAM",
+        designatedRequirementSha256: $requirementHash,
+        codeDirectoryHash: $installedCdHash
+      },
+      protectedRuntime: {
+        runtimeSource: "jarvis-break-glass-hotfix",
+        gitCommit: $protectedCommit,
+        bundleVersion: $protectedBuild,
+        compatibilityManifestGitCommit: $installedCommit,
+        compatibilityManifestBundleVersion: "2026071401",
+        compatibilityManifestSource: $markerSource,
+        compatibilityManifestSha256: $compatibilityManifestSha256,
+        backupManifestSha256: $backupManifestSha256,
+        protectionMarkerSha256: $protectionMarkerSha256
+      },
+      targetRelease: {
+        bundleIdentifier: "ai.jarvis.mac",
+        version: "2026.7.15.1",
+        build: "2026071501",
+        gitCommit: $targetCommit,
+        feedURL: $feedURL,
+        teamIdentifier: "FIXTURETEAM",
+        designatedRequirementSha256: $requirementHash,
+        codeDirectoryHash: $targetCdHash,
+        sparklePublicEdKeySha256: $sparkleKeyHash,
+        enclosureURL: $enclosureURL,
+        enclosureLength: $enclosureLength,
+        enclosureEdSignatureSha256: $enclosureSignatureHash
+      }
+    }' >"$fixture/protected-hotfix-receipt.json"
+}
+
+protect_fixture() {
+  local fixture="$1"
+  local state="$fixture/live/Jarvis/.jarvis"
+  local backup="$state/.consumer-bundled-runtime.json.backup.fixture"
+  printf 'gatekeeper-rejected\n' >"$fixture/apps/old/Jarvis.app/.fixture-gatekeeper"
+  printf 'gatekeeper-rejected\n' >"$fixture/apps/installed/Jarvis.app/.fixture-gatekeeper"
+  printf '{"format":1,"bundleVersion":"%s","gitCommit":"%s"}\n' "$PROTECTED_BUILD" "$PROTECTED_COMMIT" >"$backup"
+  cat >"$state/.consumer-bundled-runtime.protection.json" <<EOF
+{"format":1,"protectedRuntimeGitCommit":"$PROTECTED_COMMIT","compatibilityManifestGitCommit":"$OLD_COMMIT","compatibilityManifestBundleVersion":"$OLD_BUILD","compatibilityManifestSource":"$fixture/apps/installed/Jarvis.app","backupPath":"$backup","createdAt":"2026-08-02T00:00:00Z"}
+EOF
+  write_protected_receipt "$fixture"
 }
 
 harness_env() {
@@ -390,6 +517,8 @@ grep -q '^PATH="/usr/bin:/bin:/usr/sbin:/sbin"$' "$HARNESS" || fail "production 
 grep -q '^DF_BIN="/bin/df"$' "$HARNESS" || fail "production df binary is not pinned"
 grep -q 'NODE_BIN="/opt/homebrew/bin/node"' "$HARNESS" || fail "Node proof binary is not allowlisted"
 grep -q 'BASH_BIN="/bin/bash"' "$HARNESS" || fail "runtime proof shell is not pinned"
+grep -q 'env -i HOME="$HOME" PATH="$PATH" "$BASH_BIN" "$PROVE_RUNTIME_SCRIPT"' "$HARNESS" || \
+  fail "production protected-runtime proof does not strip ambient overrides"
 pass "production PATH and proof interpreters are pinned"
 
 before="$(fixture_hashes "$TEST_TMP/base")"
@@ -408,6 +537,149 @@ copy_case() {
   write_gateway_plist "$TEST_TMP/$name"
   printf '%s\n' "$TEST_TMP/$name"
 }
+
+case_root="$(copy_case protected-exact)"
+protect_fixture "$case_root"
+before="$(fixture_hashes "$case_root")"
+protected_output="$(harness_env "$case_root" --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json")"
+after="$(fixture_hashes "$case_root")"
+[[ "$before" == "$after" ]] || fail "accepted protected-hotfix preflight wrote fixture state"
+[[ "$protected_output" == *"baseline_mode=accepted_protected_hotfix_compatibility_receipt"* ]] || \
+  fail "exact protected-hotfix receipt was not distinguished in proof output"
+[[ "$protected_output" == *"proof.protected_runtime=receipt_and_live_bound commit=$PROTECTED_COMMIT"* ]] || \
+  fail "accepted receipt omitted protected runtime identity"
+pass "exact protected-hotfix compatibility receipt is accepted read-only"
+
+case_root="$(copy_case protected-target-older-than-runtime)"
+protect_fixture "$case_root"
+printf '{"format":1,"bundleVersion":"2026071601","gitCommit":"%s"}\n' "$PROTECTED_COMMIT" \
+  >"$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json.backup.fixture"
+write_protected_receipt "$case_root"
+run_expect_fail "target older than protected runtime blocks" "$case_root" "target release build is not newer than protected runtime build" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-live-runtime-drift)"
+protect_fixture "$case_root"
+: >"$case_root/control/protected-proof-drift"
+run_expect_fail "live protected runtime drift blocks" "$case_root" "live protected runtime proof did not return the exact receipt identity" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-missing-receipt)"
+protect_fixture "$case_root"
+run_expect_fail "Gatekeeper failure without receipt blocks" "$case_root" "failed Gatekeeper without a valid protected-hotfix compatibility receipt"
+
+case_root="$(copy_case protected-unsigned)"
+protect_fixture "$case_root"
+printf 'invalid\n' >"$case_root/apps/installed/Jarvis.app/.fixture-codesign"
+run_expect_fail "receipt cannot authorize unsigned installed app" "$case_root" "installed app failed strict codesign" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-unrelated-private-build)"
+protect_fixture "$case_root"
+sed -i.bak "s/$OLD_COMMIT/5555555555555555555555555555555555555555/" \
+  "$case_root/apps/installed/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json"
+rm -f "$case_root/apps/installed/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json.bak"
+run_expect_fail "receipt rejects unrelated private build" "$case_root" "installed/live mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-signing-drift)"
+protect_fixture "$case_root"
+printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' >"$case_root/apps/installed/Jarvis.app/.fixture-cdhash"
+run_expect_fail "receipt rejects private signing identity drift" "$case_root" "signing identities differ" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-target-signing-incompatible)"
+protect_fixture "$case_root"
+printf 'OTHERTEAM\n' >"$case_root/apps/old/Jarvis.app/.fixture-team"
+printf 'OTHERTEAM\n' >"$case_root/apps/installed/Jarvis.app/.fixture-team"
+run_expect_fail "receipt rejects Sparkle-incompatible private signing identity" "$case_root" "incompatible with the signed public target" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-missing-sparkle-key)"
+protect_fixture "$case_root"
+/usr/libexec/PlistBuddy -c 'Delete :SUPublicEDKey' "$case_root/apps/installed/Jarvis.app/Contents/Info.plist"
+run_expect_fail "receipt rejects missing private Sparkle public key" "$case_root" "Sparkle public key is missing or incompatible" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-mismatched-sparkle-key)"
+protect_fixture "$case_root"
+/usr/libexec/PlistBuddy -c 'Set :SUPublicEDKey OTHERFIXTURESPARKLEKEY' "$case_root/apps/old/Jarvis.app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :SUPublicEDKey OTHERFIXTURESPARKLEKEY' "$case_root/apps/installed/Jarvis.app/Contents/Info.plist"
+run_expect_fail "receipt rejects private Sparkle public key mismatch" "$case_root" "Sparkle public key is missing or incompatible" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-target-code-directory-drift)"
+protect_fixture "$case_root"
+printf '7777777777777777777777777777777777777777\n' >"$case_root/apps/new/Jarvis.app/.fixture-cdhash"
+run_expect_fail "receipt rejects target CodeDirectory drift" "$case_root" "targetRelease.codeDirectoryHash mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-feed-length-drift)"
+protect_fixture "$case_root"
+sed -i.bak 's/length="123456789"/length="987654321"/' "$case_root/feed.xml"
+rm -f "$case_root/feed.xml.bak"
+run_expect_fail "receipt rejects appcast enclosure length drift" "$case_root" "targetRelease.enclosureLength mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-feed-signature-drift)"
+protect_fixture "$case_root"
+sed -i.bak 's/YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==/YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYg==/' "$case_root/feed.xml"
+rm -f "$case_root/feed.xml.bak"
+run_expect_fail "receipt rejects appcast EdDSA signature drift" "$case_root" "targetRelease.enclosureEdSignatureSha256 mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-feed-url-drift)"
+protect_fixture "$case_root"
+sed -i.bak 's#releases/download/v-fixture/Jarvis.zip#releases/download/v-other/Jarvis.zip#' "$case_root/feed.xml"
+rm -f "$case_root/feed.xml.bak"
+run_expect_fail "receipt rejects appcast enclosure URL drift" "$case_root" "targetRelease.enclosureURL mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-stale)"
+protect_fixture "$case_root"
+jq '.expiresAt = "2000-01-01T00:00:00.000Z"' "$case_root/protected-hotfix-receipt.json" >"$case_root/receipt.tmp"
+mv "$case_root/receipt.tmp" "$case_root/protected-hotfix-receipt.json"
+run_expect_fail "stale protected receipt blocks" "$case_root" "receipt is stale" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-target-drift)"
+protect_fixture "$case_root"
+jq '.targetRelease.build = "9999999999"' "$case_root/protected-hotfix-receipt.json" >"$case_root/receipt.tmp"
+mv "$case_root/receipt.tmp" "$case_root/protected-hotfix-receipt.json"
+run_expect_fail "protected receipt target drift blocks" "$case_root" "targetRelease.build mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-ambiguous-schema)"
+protect_fixture "$case_root"
+jq '.allowAnyUnsignedApp = true' "$case_root/protected-hotfix-receipt.json" >"$case_root/receipt.tmp"
+mv "$case_root/receipt.tmp" "$case_root/protected-hotfix-receipt.json"
+run_expect_fail "ambiguous protected receipt schema blocks" "$case_root" "receipt has missing or ambiguous fields" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-missing-marker)"
+protect_fixture "$case_root"
+rm -f "$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.protection.json"
+run_expect_fail "missing protected provenance blocks" "$case_root" "protected-hotfix protection marker" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-backup-drift)"
+protect_fixture "$case_root"
+printf '{"format":1,"bundleVersion":"%s","gitCommit":"%s"}\n' "$PROTECTED_BUILD" \
+  "6666666666666666666666666666666666666666" >"$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json.backup.fixture"
+run_expect_fail "protected backup drift blocks" "$case_root" "backupManifestSha256 mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-replay)"
+protect_fixture "$case_root"
+harness_env "$case_root" --apply --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json" >/dev/null
+run_expect_fail "protected receipt replay after transition blocks" "$case_root" "protectedRuntime.compatibilityManifestGitCommit mismatch" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case protected-post-update-target-drift)"
+protect_fixture "$case_root"
+: >"$case_root/control/post-update-cdhash-drift"
+run_expect_fail "protected apply rejects a downloaded target with CodeDirectory drift" "$case_root" "updated disposable CodeDirectory hash does not match" \
+  --apply --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
 
 case_root="$(copy_case test-mode-fail-shut)"
 set +e
@@ -495,7 +767,7 @@ run_expect_fail "wrong candidate bundle id blocks" "$case_root" "NEW app bundle 
 
 case_root="$(copy_case bad-installed)"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 2026071400' "$case_root/apps/installed/Jarvis.app/Contents/Info.plist"
-run_expect_fail "installed app version/build mismatch blocks" "$case_root" "installed app is not the declared old baseline"
+run_expect_fail "installed app version/build mismatch blocks" "$case_root" "INSTALLED manifest bundleVersion does not match app build"
 
 case_root="$(copy_case bad-candidate-commit)"
 sed -i.bak "s/$NEW_COMMIT/3333333333333333333333333333333333333333/" "$case_root/apps/new/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json"
@@ -567,7 +839,7 @@ plist_after="$(shasum -a 256 "$case_root/live/LaunchAgents/ai.jarvis.gateway.pli
 [[ ! -e "$case_root/live/Caches/ai.jarvis.mac/org.sparkle-project.Sparkle/run-created" ]] || fail "apply left run-created Sparkle staging"
 [[ "$(jq -r '.gitCommit' "$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json")" == "$NEW_COMMIT" ]] || fail "apply did not poll/reach live managed receipt"
 [[ "$apply_output" == *"proof.public_feed=ok"* ]] || fail "apply omitted public_feed proof"
-[[ "$apply_output" == *"proof.installed_app=ok"* ]] || fail "apply omitted installed_app proof"
+[[ "$apply_output" == *"proof.installed_app=normal_signed_baseline"* ]] || fail "apply omitted installed_app proof"
 [[ "$apply_output" == *"proof.sparkle_transition=ok"* ]] || fail "apply omitted sparkle_transition proof"
 [[ "$apply_output" == *"proof.managed_runtime=ok"* ]] || fail "apply omitted managed_runtime proof"
 [[ "$apply_output" == *"proof.gateway=ok"* ]] || fail "apply omitted gateway proof"

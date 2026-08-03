@@ -41,6 +41,69 @@ Preflight verifies, without creating a run directory:
 Do not continue when preflight blocks. Fix the named owner, disk, baseline,
 signature, feed, or runtime mismatch and rerun the same read-only command.
 
+### Protected private-hotfix baseline
+
+A protected break-glass installation is not a normal signed public baseline.
+Never disable Gatekeeper or substitute an older public app to make it look like
+one. Instead, the release owner may supply one short-lived compatibility receipt:
+
+```bash
+bash scripts/jarvis-sparkle-update-e2e.sh \
+  --old-app /absolute/path/to/the-exact-private-hotfix/Jarvis.app \
+  --new-app /absolute/path/to/the-signed-public-target/Jarvis.app \
+  --expected-commit <target-package-commit> \
+  --protected-hotfix-compatibility-receipt /absolute/path/to/receipt.json
+```
+
+The versioned JSON contract uses these exact top-level fields:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "jarvis-sparkle-protected-hotfix-baseline-compatibility",
+  "receiptId": "one-auditable-transition-id",
+  "issuedAt": "2026-08-02T00:00:00.000Z",
+  "expiresAt": "2026-08-03T00:00:00.000Z",
+  "intent": {},
+  "installedApp": {},
+  "protectedRuntime": {},
+  "targetRelease": {}
+}
+```
+
+Use the synthetic fixture in `scripts/test-jarvis-sparkle-update-e2e.sh` as the
+canonical complete field example. The receipt must be a readable regular file,
+not a symlink. Its validity window may not exceed seven days. It binds:
+
+- `intent`: exactly one `sparkle-n-to-n-plus-1` transition on the canonical feed;
+- `installedApp`: bundle id, version, build, full commit, signing Team ID,
+  CodeDirectory hash, and designated-requirement hash for the exact private app;
+- `protectedRuntime`: break-glass source, full protected commit/build, exact
+  compatibility manifest, protection marker, backup receipt hashes, and source;
+- `targetRelease`: bundle id, version, build, full commit, signing Team ID,
+  designated-requirement hash, CodeDirectory hash, Sparkle public-key hash,
+  canonical feed, and the exact enclosure URL, length, and EdDSA-signature hash.
+
+This path still requires strict code-signature integrity for the private old and
+installed apps, and their Team ID plus designated requirement must match the
+signed public target. The old and installed apps must also carry the exact
+nonblank Sparkle public key from that receipt-bound signed target so the running
+host can authenticate and replace itself. It excuses only
+their Gatekeeper rejection. The target still
+must pass strict codesign, Gatekeeper, pinned Jarvis Team ID, designated
+requirement, package-commit, and public-appcast checks. Missing, stale, unknown,
+or extra receipt fields fail closed. The target build must be newer than both
+the private app and the protected runtime backup. The canonical read-only
+runtime proof must also match the receipt's exact protected commit and
+break-glass source. Installed/live, protection/backup, signing, or target drift
+therefore fails before any run directory is created. After a
+successful transition changes the managed manifest, replaying the old receipt
+fails the same exact-state binding.
+
+Output distinguishes `baseline_mode=normal_signed` from
+`baseline_mode=accepted_protected_hotfix_compatibility_receipt`. A Gatekeeper
+failure without the receipt names that missing authorization directly.
+
 ## Explicit apply
 
 After reviewing preflight, repeat the command with `--apply`:
@@ -101,6 +164,7 @@ Keep these claims separate in the output:
 
 - `proof.public_feed`
 - `proof.installed_app`
+- `proof.protected_runtime` (receipt path only)
 - `proof.sparkle_transition`
 - `proof.managed_runtime`
 - `proof.gateway`
