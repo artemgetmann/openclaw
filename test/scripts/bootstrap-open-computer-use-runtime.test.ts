@@ -159,6 +159,17 @@ async function waitForProcessExit(pidPath: string): Promise<boolean> {
 
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
+    // Failed assertions must not leak the fixture's fake agent. The PID file is
+    // created only by this isolated harness, so targeted teardown is safe.
+    const agentPidPath = path.join(root, "agent.pid");
+    if (fs.existsSync(agentPidPath)) {
+      const agentPid = Number(fs.readFileSync(agentPidPath, "utf8").trim());
+      try {
+        process.kill(agentPid, "SIGTERM");
+      } catch {
+        // The lifecycle path may already have completed cleanup successfully.
+      }
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -245,10 +256,16 @@ describe.runIf(process.platform === "darwin")("bootstrap Open Computer Use lifec
       stdio: "ignore",
     });
 
-    for (let attempt = 0; attempt < 100 && !fs.existsSync(harness.agentPidPath); attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt < 100 &&
+      (!fs.existsSync(harness.agentPidPath) || !fs.existsSync(harness.agentOwnerPath));
+      attempt += 1
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     expect(fs.existsSync(harness.agentPidPath)).toBe(true);
+    expect(fs.existsSync(harness.agentOwnerPath)).toBe(true);
     child.kill("SIGTERM");
     const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
 
