@@ -17,7 +17,10 @@ type LifecycleOutput = {
     diffFingerprint: string;
   };
   contractId: string;
-  nativeTool?: { sequence: string[] };
+  nativeTool?: {
+    sequence: string[];
+    createThread?: { model: string; thinking: string };
+  };
   owner?: { threadId: string; hostId: string } | null;
   prompt?: string;
   retryOfContractId?: string | null;
@@ -564,6 +567,10 @@ describe("scripts/pr-lifecycle", () => {
       "set_thread_archived",
       "accept-release-handoff",
     ]);
+    expect(release.nativeTool?.createThread).toEqual({
+      model: "gpt-5.6-luna",
+      thinking: "max",
+    });
     expect(release.prompt).toContain("archive the exact builder thread");
     expect(release.prompt).toContain("Builder archival belongs to acceptance");
 
@@ -774,6 +781,10 @@ describe("scripts/pr-lifecycle", () => {
     expect(release.taskAuthority).toMatchObject({
       source: "direct-user-task",
       allowedActions: ["normal-merge", "deploy"],
+    });
+    expect(release.nativeTool?.createThread).toEqual({
+      model: "gpt-5.6-terra",
+      thinking: "high",
     });
     expect(release.prompt).toContain('"allowedActions":["normal-merge","deploy"]');
 

@@ -164,6 +164,28 @@ receipt, cleanup receipt, review/check state, dependencies and overlap, risks,
 rollback, remaining proof, and the validated task-authority packet. Builders
 and testers never merge or deploy.
 
+Release-task model selection is risk-based and executable:
+
+- For `normal-merge` authority only, `handoff-release` emits
+  `model=gpt-5.6-luna` and `thinking=max`. Use those exact `create_thread`
+  settings for the fresh release task. Immutable-head tester proof has already
+  removed the difficult source-discovery work; the remaining job is bounded
+  review, CI monitoring, expected-head merge, and receipts.
+- If the validated authority packet includes `deploy`, it emits
+  `model=gpt-5.6-terra` and `thinking=high` because the task may cross into live
+  state. This changes compute selection, not authority: every deployment,
+  restart, install, runtime mutation, or external proof boundary still applies.
+- Luna or Terra must fail closed and return the exact finding when source repair,
+  a real merge conflict, changed behavior, unclear production state, security
+  judgment, or an unmodeled irreversible action appears. Resume the exact
+  builder for source work. Escalate the same release task to Sol only when the
+  concrete finding needs stronger reasoning; never create a recursive release
+  worker or a second owner.
+
+The emitted model profile is the default for that handoff, not evidence that a
+model completed the work safely. The release receipt and independent state
+checks remain the proof.
+
 The release worker independently refreshes and verifies the PR head, current
 base, effective diff, required checks, review conversations, approvals,
 dependencies, and overlap. It may perform only a normal non-admin merge: no

@@ -10,6 +10,21 @@ const SCHEMA_VERSION = 1;
 const GH_BIN = process.env.OPENCLAW_PR_LIFECYCLE_GH ?? "gh";
 const RELEASE_ACTIONS = new Set(["normal-merge", "deploy"]);
 
+// Release work begins only after independent exact-head proof, so routine
+// merge mechanics should use the cheapest capable model. Deployment retains a
+// stronger default because it crosses from repository state into a live
+// environment and may need more judgment before the first mutation.
+const RELEASE_MODEL_PROFILES = Object.freeze({
+  mergeOnly: Object.freeze({ model: "gpt-5.6-luna", thinking: "max" }),
+  deploy: Object.freeze({ model: "gpt-5.6-terra", thinking: "high" }),
+});
+
+function releaseModelProfile(taskAuthority) {
+  return taskAuthority.allowedActions.includes("deploy")
+    ? RELEASE_MODEL_PROFILES.deploy
+    : RELEASE_MODEL_PROFILES.mergeOnly;
+}
+
 class LifecycleError extends Error {
   constructor(message, exitCode = 1) {
     super(message);
@@ -929,6 +944,7 @@ function handoffRelease(pr, options) {
     }
 
     const contractId = randomUUID();
+    const modelProfile = releaseModelProfile(taskAuthority);
     state.release = {
       phase: "handoff-pending",
       contractId,
@@ -959,10 +975,11 @@ function handoffRelease(pr, options) {
             "accept-release-handoff",
           ],
           target: { type: "project", environment: { type: "worktree" } },
+          createThread: modelProfile,
         },
         prompt: ownerPrompt("release", state),
         warning:
-          "Consume this action once. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
+          "Consume this action once with the emitted createThread model settings. Prevent recursive handoffs. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
       },
     };
   });
