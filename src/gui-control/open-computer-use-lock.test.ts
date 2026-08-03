@@ -75,6 +75,49 @@ describe("withOpenComputerUseLock", () => {
     expect(events).toEqual(["first:start", "first:end", "second:start", "second:end"]);
   });
 
+  it("serializes separate executable copies that share one app-agent bundle identity", async () => {
+    const directory = await temporaryDirectory();
+    const firstCommand = path.join(directory, "copy-a", "OpenComputerUse");
+    const secondCommand = path.join(directory, "copy-b", "OpenComputerUse");
+    const appAgentIdentity = "bundle:com.ifuryst.opencomputeruse";
+    const target = await resolveOpenComputerUseLockTarget(firstCommand, appAgentIdentity);
+    cleanupPaths.add(`${target}.lock`);
+    const events: string[] = [];
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    let releaseFirst!: () => void;
+    const firstCanFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = withOpenComputerUseLock({
+      appAgentIdentity,
+      command: firstCommand,
+      timeoutMs: 1_000,
+      run: async () => {
+        events.push("first:start");
+        markFirstStarted();
+        await firstCanFinish;
+      },
+    });
+    await firstStarted;
+    const second = withOpenComputerUseLock({
+      appAgentIdentity,
+      command: secondCommand,
+      timeoutMs: 1_000,
+      run: async () => {
+        events.push("second:start");
+      },
+    });
+
+    expect(events).toEqual(["first:start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first:start", "second:start"]);
+  });
+
   it("reclaims a lock left by a dead OpenClaw caller", async () => {
     const directory = await temporaryDirectory();
     const command = path.join(directory, "OpenComputerUse");
