@@ -869,6 +869,10 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   local health_path="$TMP_DIR/dedicated-resource.health"
   local marker="$TMP_DIR/dedicated-resource.marker"
   local output="$TMP_DIR/dedicated-resource.out"
+  local fanout_fixture=""
+  local fanout_child_pid_file="$TMP_DIR/dedicated-resource-fanout.child"
+  local fanout_grandchild_pid_file="$TMP_DIR/dedicated-resource-fanout.grandchild"
+  local fanout_child_pid=0 fanout_grandchild_pid=0
   local secret_argument="must-not-appear-in-resource-telemetry"
   local sample="" expected_class="" expected_code="" expected_action=""
   local status=0
@@ -1077,25 +1081,35 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
     "$output" || fail "repeated thermal stop omitted actionable human output"
 
   # Fanout measurement starts only after the committed process group exists.
-  # Two unreadable samples therefore stop at runtime and still prove cleanup.
+  # Use the suite's blocking process-tree fixture instead of racing a one-second
+  # completion marker against the monitor. The ready file proves both processes
+  # exist before samples are consumed; their PIDs then prove exact tree cleanup.
+  fanout_fixture="$(create_process_tree_fixture)"
   {
-    printf 'healthy\n'
     printf 'fanout-unavailable\n'
     printf 'fanout-unavailable\n'
   } >"$health_path"
   set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_READY_FILE="$fanout_grandchild_pid_file" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
     "$FIXTURE_WRAPPER" \
       --cpu-policy dedicated-agent \
       --label "resource-fanout-unavailable" \
-      -- bash -c 'sleep 1; touch "$1"' _ "$marker" >"$output" 2>&1
+      -- "$fanout_fixture" "$fanout_child_pid_file" "$fanout_grandchild_pid_file" \
+      >"$output" 2>&1
   status=$?
   set -e
   [[ "$status" -eq 75 ]] ||
     fail "unavailable fanout telemetry returned $status instead of 75"
-  [[ ! -e "$marker" && ! -e "$lock_path" ]] ||
-    fail "unavailable fanout telemetry failed cleanup or leaked the lease"
+  wait_for_file "$fanout_child_pid_file"
+  wait_for_file "$fanout_grandchild_pid_file"
+  fanout_child_pid="$(<"$fanout_child_pid_file")"
+  fanout_grandchild_pid="$(<"$fanout_grandchild_pid_file")"
+  wait_for_dead_pid "$fanout_child_pid"
+  wait_for_dead_pid "$fanout_grandchild_pid"
+  [[ ! -e "$lock_path" ]] ||
+    fail "unavailable fanout telemetry leaked the machine lease"
   grep -Fq 'class=guard_internal code=fanout_measurement_failed' "$output" ||
     fail "fanout measurement failure lost its structured reason"
   grep -Fq \
