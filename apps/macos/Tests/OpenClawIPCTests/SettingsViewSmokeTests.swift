@@ -291,6 +291,18 @@ struct SettingsViewSmokeTests {
             didLaunchFromFinder: true))
     }
 
+    @Test func `delayed initial launch never resets an existing settings surface`() {
+        #expect(AppDelegate.shouldRevealScheduledInitialSurface(
+            hasVisibleContentWindow: false,
+            hasVisibleOnboardingWindow: false))
+        #expect(!AppDelegate.shouldRevealScheduledInitialSurface(
+            hasVisibleContentWindow: true,
+            hasVisibleOnboardingWindow: false))
+        #expect(!AppDelegate.shouldRevealScheduledInitialSurface(
+            hasVisibleContentWindow: false,
+            hasVisibleOnboardingWindow: true))
+    }
+
     @Test func `consumer foreground reopen preserves dock and finder reveal`() {
         #expect(AppDelegate.reopenSurfaceDecision(
             isConsumer: true,

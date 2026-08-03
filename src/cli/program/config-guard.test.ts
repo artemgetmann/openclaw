@@ -114,6 +114,29 @@ describe("ensureConfigReady", () => {
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
   });
 
+  it("lets gateway run own auto-migration before startup validation", async () => {
+    setInvalidSnapshot({
+      issues: [
+        {
+          path: "agents.defaults",
+          message: "stale Jarvis consumer model defaults",
+        },
+      ],
+      legacyIssues: [
+        {
+          path: "agents.defaults",
+          message: "stale Jarvis consumer model defaults",
+        },
+      ],
+    });
+
+    const runtime = await runEnsureConfigReady(["gateway", "run"]);
+
+    // Gateway startup has a dedicated migrate -> persist -> reread -> validate
+    // transaction. The generic CLI guard must not abort before that path runs.
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("runs doctor migration flow only once per module instance", async () => {
     const runtimeA = makeRuntime();
     const runtimeB = makeRuntime();

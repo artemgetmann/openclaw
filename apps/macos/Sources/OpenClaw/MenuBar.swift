@@ -420,6 +420,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            // The user can open Settings during this delay. Replaying the initial
+            // surface request would then replace their selected tab with General.
+            guard Self.shouldRevealScheduledInitialSurface(
+                hasVisibleContentWindow: SettingsWindowOpener.hasVisibleContentWindow(),
+                hasVisibleOnboardingWindow: Self.hasVisibleOnboardingWindow())
+            else {
+                Self.logger.info("initial consumer surface already visible; preserving current selection")
+                return
+            }
             self.requestVisibleSurface(reason: .initialLaunch)
         }
     }
@@ -538,6 +547,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         didLaunchFromFinder: Bool) -> Bool
     {
         isConsumer && (onboardingPending || didLaunchFromFinder)
+    }
+
+    static func shouldRevealScheduledInitialSurface(
+        hasVisibleContentWindow: Bool,
+        hasVisibleOnboardingWindow: Bool) -> Bool
+    {
+        // This delayed request is only a fallback for a launch that still has no
+        // consumer UI. Existing windows own their current navigation state.
+        !self.hasVisibleConsumerSurface(
+            hasVisibleContentWindow: hasVisibleContentWindow,
+            hasVisibleOnboardingWindow: hasVisibleOnboardingWindow)
     }
 
     static func reopenSurfaceDecision(

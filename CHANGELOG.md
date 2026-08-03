@@ -62,6 +62,7 @@ Docs: https://docs.openclaw.ai
 - Docs/Zalo: clarify the Marketplace-bot support matrix and config guidance so the Zalo channel docs match current Bot Creator behavior more closely. (#47552) Thanks @No898.
 - secrets: harden read-only SecretRef command paths and diagnostics. (#47794) Thanks @joshavant.
 - Browser/existing-session: support `browser.profiles.<name>.userDataDir` so Chrome DevTools MCP can attach to Brave, Edge, and other Chromium-based browsers through their own user data directories. (#48170) thanks @velvet-shark.
+- Jarvis/startup: let packaged gateway startup apply known consumer config migrations before validation and preserve an already-open settings page when delayed launch recovery runs, so existing GPT-5.5 installs upgrade to GPT-5.6 Sol without a launchd restart loop, manual `doctor --fix`, or an unexpected return to General.
 
 ### Breaking
 

@@ -205,10 +205,9 @@ describe("runGatewayStartupConfigPreflight", () => {
       },
       agents: {
         defaults: {
-          model: { primary: "openai-codex/gpt-5.4" },
+          model: { primary: "openai-codex/gpt-5.5" },
           models: {
-            "openai-codex/gpt-5.3-codex": {},
-            "openai-codex/gpt-5.4": {},
+            "openai-codex/gpt-5.5": {},
           },
         },
       },
@@ -222,8 +221,6 @@ describe("runGatewayStartupConfigPreflight", () => {
             fallbacks: ["openai-codex/gpt-5.5"],
           },
           models: {
-            "openai-codex/gpt-5.3-codex": {},
-            "openai-codex/gpt-5.4": {},
             "openai-codex/gpt-5.5": {},
             "openai-codex/gpt-5.6-sol": {},
           },

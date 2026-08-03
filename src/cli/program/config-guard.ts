@@ -9,6 +9,11 @@ import { formatCliCommand } from "../command-format.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
+  // `gateway run` owns a stricter startup transaction that migrates, persists,
+  // rereads, and then validates config before opening any runtime surface. Let
+  // it reach that boundary so an auto-migratable config cannot be rejected by
+  // this generic guard first. Truly invalid config still fails in startup.
+  "run",
   "status",
   "probe",
   "health",
