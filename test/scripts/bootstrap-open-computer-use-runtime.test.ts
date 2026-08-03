@@ -15,6 +15,7 @@ function writeExecutable(filePath: string, contents: string): void {
 
 function createHarness(): {
   env: NodeJS.ProcessEnv;
+  scriptPath: string;
   callsPath: string;
   agentPidPath: string;
   agentOwnerPath: string;
@@ -34,6 +35,22 @@ function createHarness(): {
   const agentPidPath = path.join(root, "agent.pid");
   const agentOwnerPath = path.join(root, "agent.owner");
   const fakeBin = path.join(root, "bin");
+  const bootstrapRoot = path.join(root, "bootstrap-root");
+  const scriptPath = path.join(bootstrapRoot, "scripts", "bootstrap-open-computer-use-runtime.sh");
+
+  // Lifecycle behavior is the contract under test here. Install the production
+  // script in an isolated fixture root with a narrow guard stub so unit tests
+  // never contend for, inherit, or re-exec through the host-wide heavy lease.
+  writeExecutable(scriptPath, fs.readFileSync(SCRIPT_PATH, "utf8"));
+  writeExecutable(
+    path.join(bootstrapRoot, "scripts", "lib", "heavy-local-slot.sh"),
+    [
+      "#!/usr/bin/env bash",
+      "openclaw_heavy_local_slot_require_or_reexec() {",
+      "  return 0",
+      "}",
+    ].join("\n"),
+  );
 
   writeExecutable(
     appExecutable,
@@ -98,6 +115,7 @@ function createHarness(): {
   writeExecutable(path.join(fakeBin, "swift"), "exit 0");
 
   return {
+    scriptPath,
     callsPath,
     agentPidPath,
     agentOwnerPath,
@@ -148,7 +166,7 @@ afterEach(() => {
 describe.runIf(process.platform === "darwin")("bootstrap Open Computer Use lifecycle", () => {
   it("does not run doctor without explicit developer intent", () => {
     const harness = createHarness();
-    const result = spawnSync("/bin/bash", [SCRIPT_PATH], {
+    const result = spawnSync("/bin/bash", [harness.scriptPath], {
       env: harness.env,
       encoding: "utf8",
     });
@@ -163,7 +181,7 @@ describe.runIf(process.platform === "darwin")("bootstrap Open Computer Use lifec
     ["failure", "7", 7],
   ])("stops the Dev agent after doctor %s", async (_label, doctorExit, expectedStatus) => {
     const harness = createHarness();
-    const result = spawnSync("/bin/bash", [SCRIPT_PATH], {
+    const result = spawnSync("/bin/bash", [harness.scriptPath], {
       env: {
         ...harness.env,
         OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR: "1",
@@ -182,7 +200,7 @@ describe.runIf(process.platform === "darwin")("bootstrap Open Computer Use lifec
 
   it("stops the Dev agent when doctor times out", async () => {
     const harness = createHarness();
-    const result = spawnSync("/bin/bash", [SCRIPT_PATH], {
+    const result = spawnSync("/bin/bash", [harness.scriptPath], {
       env: {
         ...harness.env,
         OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR: "1",
@@ -201,7 +219,7 @@ describe.runIf(process.platform === "darwin")("bootstrap Open Computer Use lifec
 
   it("stops an owned Dev agent whose launch binding completes after doctor exits", async () => {
     const harness = createHarness();
-    const result = spawnSync("/bin/bash", [SCRIPT_PATH], {
+    const result = spawnSync("/bin/bash", [harness.scriptPath], {
       env: {
         ...harness.env,
         OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR: "1",
@@ -217,7 +235,7 @@ describe.runIf(process.platform === "darwin")("bootstrap Open Computer Use lifec
 
   it("stops the Dev agent when bootstrap receives SIGTERM", async () => {
     const harness = createHarness();
-    const child = spawn("/bin/bash", [SCRIPT_PATH], {
+    const child = spawn("/bin/bash", [harness.scriptPath], {
       env: {
         ...harness.env,
         OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR: "1",
@@ -247,7 +265,7 @@ describe.runIf(process.platform === "darwin")("bootstrap Open Computer Use lifec
     fs.writeFileSync(harness.agentPidPath, `${preExistingAgent.pid}\n`);
     fs.writeFileSync(harness.agentOwnerPath, "pre-existing-owner\n");
 
-    const result = spawnSync("/bin/bash", [SCRIPT_PATH], {
+    const result = spawnSync("/bin/bash", [harness.scriptPath], {
       env: {
         ...harness.env,
         OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR: "1",
