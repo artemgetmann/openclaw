@@ -332,6 +332,9 @@ function ownerPrompt(role, state) {
       ? `Scope: falsify the fixed acceptance criteria on this exact head; do not edit source, merge, deploy, or expand scope.`
       : `Tester: ${testerReceipt.status}; thread=${testerReceipt.owner.threadId} host=${testerReceipt.owner.hostId}; evidence=${testerReceipt.evidence.join(" | ")}`,
     role === "tester"
+      ? `Diff identity: if independently recomputing the fingerprint, hash the exact raw stdout bytes from gh pr diff ${candidate.number} --patch with SHA-256. A plain gh pr diff uses a different format and is not the lifecycle fingerprint.`
+      : null,
+    role === "tester"
       ? `Constraints: return one terminal receipt; preserve source/runtime/live proof boundaries; perform external or live actions only when explicitly granted in this task.`
       : `Authority packet: ${JSON.stringify(releaseAuthority)}. Treat only allowedActions as durable authority. Never infer credentials, OTP, admin/bypass, irreversible/public-release, or new-scope authority.`,
     role === "tester"

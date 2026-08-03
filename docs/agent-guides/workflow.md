@@ -115,6 +115,12 @@ terminal `PASS` or `FAIL` receipt with its exact worker identity, tested head an
 diff identity, the unchanged dispatcher/routing object, evidence, cleanup state,
 and unresolved limitations.
 
+The lifecycle diff fingerprint is SHA-256 over the exact raw stdout bytes from
+`gh pr diff <PR> --patch`. A plain `gh pr diff` renders a different format and
+must not be used to recompute candidate identity. The emitted tester prompt
+records this algorithm so independent validation fails closed for real drift,
+not a formatting mismatch.
+
 A user-visible live tester additionally proves exact immutable source and
 runtime provenance, uses stable isolated identities, and runs exactly one bounded
 scenario when the acceptance contract says one. Its handoff must grant the exact

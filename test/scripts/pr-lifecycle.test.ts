@@ -330,6 +330,7 @@ describe("scripts/pr-lifecycle", () => {
     expect(first.prompt).toContain(
       "Never route live/external testing or release through a nested sub-agent",
     );
+    expect(first.prompt).toContain("gh pr diff 42 --patch");
 
     // The crash window between contract emission and native task acceptance is
     // deliberately one-shot. A compacted builder sees the pending claim and
