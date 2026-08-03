@@ -60,11 +60,16 @@ async function canonicalCommand(command: string): Promise<string> {
   return `PATH:${command}`;
 }
 
-export async function resolveOpenComputerUseLockTarget(command: string): Promise<string> {
+export async function resolveOpenComputerUseLockTarget(
+  command: string,
+  appAgentIdentity?: string,
+): Promise<string> {
   // Arguments select an OCU operation, not an app-agent identity. Callers that
   // reach the same executable with different arguments must still serialize
-  // because they ultimately share that executable's app-scoped socket.
-  const identity = await canonicalCommand(command);
+  // because they ultimately share that executable's app-scoped socket. Known
+  // app bundles use their bundle identifier because OCU derives its socket from
+  // that identity; two copies of the same bundle must therefore share a lock.
+  const identity = appAgentIdentity?.trim() || (await canonicalCommand(command));
   const digest = createHash("sha256").update(identity).digest("hex").slice(0, 24);
   return path.join(os.tmpdir(), "openclaw-gui-control", `open-computer-use-${digest}`);
 }
@@ -117,13 +122,14 @@ async function acquireProcessTurn(key: string, deadlineMs: number): Promise<() =
  * app agent can accept multiple socket clients.
  */
 export async function withOpenComputerUseLock<T>(input: {
+  appAgentIdentity?: string;
   command: string;
   timeoutMs: number;
   run: (remainingTimeoutMs: number) => Promise<T>;
 }): Promise<T> {
   const startedAtMs = Date.now();
   const deadlineMs = startedAtMs + input.timeoutMs;
-  const lockTarget = await resolveOpenComputerUseLockTarget(input.command);
+  const lockTarget = await resolveOpenComputerUseLockTarget(input.command, input.appAgentIdentity);
   const releaseProcessTurn = await acquireProcessTurn(lockTarget, deadlineMs);
 
   try {
