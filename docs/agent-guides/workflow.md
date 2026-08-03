@@ -199,6 +199,10 @@ bypass, admin override, force, or weakened branch protection. If the reviewed
 head or diff changed, proof is stale, approval is missing, checks are not green,
 or the PR cannot merge normally, it does not merge.
 
+`handoff-release` refreshes the PR body and acceptance receipt after tester
+closure, even when the immutable head, base, and diff are unchanged. The fresh
+release prompt must not embed the pre-test PR contract or stale pending fields.
+
 Before that review begins, the release worker proves its recorded thread and
 host identity, archives the exact builder task, verifies `archived=true`, and
 runs `accept-release-handoff` with both exact identities. The transition is

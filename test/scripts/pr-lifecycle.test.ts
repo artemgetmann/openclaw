@@ -532,6 +532,10 @@ describe("scripts/pr-lifecycle", () => {
       "archived",
     ]);
 
+    fixture.metadata.body =
+      "Observable claim + acceptance criteria: refreshed exact-head release receipt";
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+
     const illegalRelease = runFailure(fixture, [
       "handoff-release",
       "42",
@@ -574,6 +578,7 @@ describe("scripts/pr-lifecycle", () => {
     });
     expect(release.prompt).toContain("archive the exact builder thread");
     expect(release.prompt).toContain("Builder archival belongs to acceptance");
+    expect(release.prompt).toContain("refreshed exact-head release receipt");
 
     const repeated = run(fixture, [
       "handoff-release",

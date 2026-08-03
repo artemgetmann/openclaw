@@ -906,6 +906,11 @@ function handoffRelease(pr, options) {
         "release handoff requires an exact-head PASS and the transport's exact tester lifecycle closure",
       );
     }
+    // The PR body is the durable receipt surface and normally advances after
+    // tester closure without changing the immutable source candidate. Refresh
+    // that mutable contract before composing the release prompt so the cheaper
+    // release model never receives stale "tester pending" or old-head claims.
+    state.candidate = candidate;
     if (state.release?.phase === "awaiting-retest") {
       // The same release owner resumes, but it cannot resume release work until
       // it re-archives the repaired builder and records acceptance again.
