@@ -790,6 +790,21 @@ test_dedicated_entrypoint_cannot_fall_back_to_standard_cpu_gates() {
     'the dedicated-agent entrypoint owns CPU policy and does not accept a caller override' \
     "$output" || fail "dedicated entrypoint conflict omitted its human root cause"
 
+  # A literal `--` is valid option data (for example, a label) and must not be
+  # confused with the guarded-command delimiter. Keep scanning after the value
+  # so the same conflicting override still fails before host admission.
+  set +e
+  "$FIXTURE_DEDICATED_WRAPPER" \
+    --label -- \
+    --cpu-policy standard \
+    --check >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] ||
+    fail "dedicated entrypoint literal-delimiter value bypass returned $status instead of 75"
+  grep -Fq 'code=wrong_cpu_policy' "$output" ||
+    fail "dedicated entrypoint mistook a literal option value for the command delimiter"
+
   pass "dedicated entrypoint cannot silently fall back to standard CPU gates"
 }
 
