@@ -319,9 +319,10 @@ host_health_reason() {
   elif [[ "$test_health_sample" == "jarvis-latency-timeout" ]]; then
     printf '%s' \
       'host_unhealthy|jarvis_http_failed|managed Jarvis health check failed|metric=jarvis_http_health observed=request_failed expected=http_200'
-  elif [[ "$test_health_sample" == "jarvis-http-non200" ]]; then
-    printf '%s' \
-      'host_unhealthy|jarvis_http_failed|managed Jarvis health endpoint returned HTTP 204|metric=jarvis_http_status observed=204 expected=200'
+  elif [[ "$test_health_sample" =~ ^jarvis-http-(404|503)$ ]]; then
+    printf 'host_unhealthy|jarvis_http_failed|managed Jarvis health endpoint returned HTTP %s|metric=jarvis_http_status observed=%s expected=200' \
+      "${BASH_REMATCH[1]}" \
+      "${BASH_REMATCH[1]}"
   elif [[ "$test_health_sample" == "resource-unavailable" ]]; then
     printf '%s' \
       'guard_internal|paging_measurement_failed|could not measure swap and pageout counters|metric=paging_trend status=unavailable'
@@ -739,6 +740,62 @@ test_cpu_policy_is_explicit_narrow_and_receipted() {
   pass "CPU policy is explicit, telemetry-only when dedicated, and narrow"
 }
 
+test_reachable_http_errors_keep_their_status() {
+  local port_path="$TMP_DIR/jarvis-http-error.port"
+  local server_output="$TMP_DIR/jarvis-http-error-server.out"
+  local server_pid="" port="" path="" expected_status=""
+  local http_sample="" http_status="" latency_seconds=""
+
+  # Exercise the exact curl contract used by production against a real local
+  # HTTP server. A fixture-only classifier test cannot catch curl --fail
+  # discarding 4xx/5xx responses before their status reaches that classifier.
+  node -e '
+    const fs = require("fs");
+    const http = require("http");
+    const portPath = process.argv[1];
+    const server = http.createServer((request, response) => {
+      const status = request.url === "/client-error" ? 404 : 503;
+      response.writeHead(status, { "content-type": "text/plain" });
+      response.end("fixture\n");
+    });
+    server.listen(0, "127.0.0.1", () => {
+      fs.writeFileSync(portPath, String(server.address().port));
+    });
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+      process.on(signal, () => server.close(() => process.exit(0)));
+    }
+  ' "$port_path" >"$server_output" 2>&1 &
+  server_pid=$!
+  wait_for_file "$port_path"
+  port="$(<"$port_path")"
+  [[ "$port" =~ ^[1-9][0-9]*$ ]] || fail "HTTP error fixture published an invalid port"
+
+  for path in client-error server-error; do
+    if [ "$path" = "client-error" ]; then
+      expected_status=404
+    else
+      expected_status=503
+    fi
+    if ! http_sample="$(
+      curl -sS -o /dev/null \
+        --max-time 3 \
+        -w '%{http_code}|%{time_total}' \
+        "http://127.0.0.1:${port}/${path}" 2>/dev/null
+    )"; then
+      fail "reachable HTTP ${expected_status} was reduced to a request failure"
+    fi
+    IFS='|' read -r http_status latency_seconds <<<"$http_sample"
+    [[ "$http_status" == "$expected_status" ]] ||
+      fail "reachable HTTP ${expected_status} was reported as ${http_status:-missing}"
+    [[ "$latency_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+      fail "reachable HTTP ${expected_status} lost latency telemetry"
+  done
+
+  kill -TERM "$server_pid"
+  wait "$server_pid"
+  pass "reachable HTTP 4xx/5xx responses preserve their decisive status"
+}
+
 test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   local lock_path="$TMP_DIR/dedicated-resource.lock"
   local health_path="$TMP_DIR/dedicated-resource.health"
@@ -760,6 +817,13 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   grep -Fq 'managed Jarvis health endpoint returned HTTP %s' \
     "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
     fail "reachable non-200 Jarvis health response is not a concrete health failure"
+  grep -Fq 'curl -sS -o /dev/null \' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "dedicated Jarvis probe does not preserve reachable HTTP error status"
+  if grep -Fq 'curl -fsS -o /dev/null \' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh"; then
+    fail "dedicated Jarvis probe still discards reachable HTTP error status"
+  fi
 
   # Every platform or identity hazard refuses before the command starts. An
   # unavailable required backend is guard_internal rather than a retryable host
@@ -771,7 +835,8 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
     jarvis-identity-mismatch \
     jarvis-identity-changed \
     jarvis-latency-timeout \
-    jarvis-http-non200 \
+    jarvis-http-404 \
+    jarvis-http-503 \
     disk-unavailable \
     resource-unavailable; do
     case "$sample" in
@@ -800,7 +865,7 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
         expected_code=jarvis_http_failed
         expected_action=restore_jarvis_healthz_http_200
         ;;
-      jarvis-http-non200)
+      jarvis-http-404 | jarvis-http-503)
         expected_class=host_unhealthy
         expected_code=jarvis_http_failed
         expected_action=restore_jarvis_healthz_http_200
@@ -836,10 +901,10 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
       fail "$sample omitted admission outcome or next safe action"
     grep -Fq "Next safe action: ${expected_action}." "$output" ||
       fail "$sample omitted its actionable human explanation"
-    if [ "$sample" = "jarvis-http-non200" ]; then
-      grep -Fq 'metric=jarvis_http_status observed=204 expected=200' "$output" ||
+    if [[ "$sample" =~ ^jarvis-http-(404|503)$ ]]; then
+      grep -Fq "metric=jarvis_http_status observed=${BASH_REMATCH[1]} expected=200" "$output" ||
         fail "reachable non-200 Jarvis response omitted its decisive HTTP status"
-      grep -Fq 'managed Jarvis health endpoint returned HTTP 204' "$output" ||
+      grep -Fq "managed Jarvis health endpoint returned HTTP ${BASH_REMATCH[1]}" "$output" ||
         fail "reachable non-200 Jarvis response omitted its human root cause"
     fi
   done
@@ -3103,6 +3168,7 @@ if [[ "${1:-}" == "--resource-policy-only" ]]; then
   SUITE_PHASE="create_instrumented_runtime"
   create_instrumented_runtime
   run_suite_test test_production_has_no_ambient_test_bypass
+  run_suite_test test_reachable_http_errors_keep_their_status
   run_suite_test test_dedicated_resource_guardrails_are_fail_safe_and_observable
   SUITE_PHASE="complete"
   echo "Heavy-local slot dedicated resource tests passed."
@@ -3137,6 +3203,7 @@ SUITE_PHASE="create_term_attribution_holder"
 create_term_attribution_holder
 run_suite_test test_production_has_no_ambient_test_bypass
 run_suite_test test_cpu_policy_is_explicit_narrow_and_receipted
+run_suite_test test_reachable_http_errors_keep_their_status
 run_suite_test test_dedicated_resource_guardrails_are_fail_safe_and_observable
 run_suite_test test_owner_publish_failure_is_actionable
 run_suite_test test_large_generated_state_emits_owner_receipt

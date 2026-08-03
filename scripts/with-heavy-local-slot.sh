@@ -851,8 +851,11 @@ probe_dedicated_jarvis() {
     return 0
   fi
 
+  # Do not use curl's --fail mode here. A reachable 4xx/5xx response is a
+  # decisive Jarvis health observation, and --fail would turn that status into
+  # a generic transport failure before the classifier below can preserve it.
   if ! http_sample="$(
-    curl -fsS -o /dev/null \
+    curl -sS -o /dev/null \
       --max-time "$HOST_HEALTH_HTTP_TIMEOUT_SECONDS" \
       -w '%{http_code}|%{time_total}' \
       http://127.0.0.1:18789/healthz 2>/dev/null
