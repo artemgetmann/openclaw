@@ -171,7 +171,7 @@ describe.runIf(process.platform === "darwin")("bootstrap Open Computer Use lifec
       encoding: "utf8",
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("skipping permission check");
     expect(fs.existsSync(harness.callsPath)).toBe(false);
   });

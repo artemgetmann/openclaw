@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck source=scripts/lib/heavy-local-slot.sh
 source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
-ORIGINAL_ARGS=("$@")
 
 read_declared_open_computer_use_field() {
   local field="$1"
@@ -250,7 +249,7 @@ openclaw_heavy_local_slot_require_or_reexec \
   "bootstrap-open-computer-use-runtime" \
   "$ROOT_DIR" \
   "$ROOT_DIR/scripts/bootstrap-open-computer-use-runtime.sh" \
-  "${ORIGINAL_ARGS[@]}"
+  "$@"
 
 if [[ "${OCU_RUN_DOCTOR}" != "0" && "${OCU_RUN_DOCTOR}" != "1" ]]; then
   echo "Error: OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR must be 0 or 1" >&2
