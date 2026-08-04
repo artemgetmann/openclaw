@@ -1541,7 +1541,9 @@ function delegateRequest(raw: ToolParams): {
 } {
   return {
     text: required(raw.text, "text"),
-    taskMode: raw.task_mode ?? "analysis",
+    // An explicit request to launch Codex delegates real work by default. Keep
+    // the restricted analysis profile as an opt-in for owners who ask for it.
+    taskMode: raw.task_mode ?? "implementation",
     projectDir: raw.project_dir,
     workspaceDir: raw.workspace_dir,
     workspaceMode: raw.workspace_mode,
@@ -1601,8 +1603,8 @@ const CODEX_DELEGATION_GUIDANCE = [
   "Native Codex delegation:",
   "- When the owner explicitly asks Jarvis in ordinary language to create, start, resume, or delegate work to a native Codex thread, use the owner-only `codex_threads` tool with action `delegate_async`.",
   "- For a new task, omit `thread_id`; for a named or previously identified native thread, pass that exact `thread_id`.",
-  "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. For investigation or review, set `task_mode: analysis` and pass `project_dir` when known.",
-  "- For a fix, implementation, or build request, set `task_mode: implementation` and pass `project_dir` when known. Omit `workspace_mode`: Jarvis creates an isolated worktree automatically, then Codex reads that repository's policy and setup.",
+  "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. Omit `task_mode` for an ordinary launch: it defaults to a full implementation worker in an isolated worktree with workspace-write, network access, and on-request Auto-Review.",
+  "- Set `task_mode: analysis` only when the owner explicitly asks for read-only or analysis mode. Pass `project_dir` when known. Explicit owner choices override the full-worker default.",
   "- Use `workspace_mode: direct` only when the owner explicitly requests the saved project directly. It is limited to clean named branches and protected checkouts fail closed.",
   "- The async launcher wraps that task in a return contract containing a durable `openclaw codex-callback` route. It lets the same native thread send natural progress, blocker, decision-needed, or completion messages even after the launch turn ends; the terminal listener remains fallback.",
   "- Do not ask Codex to call `send_message_to_thread` or Telegram back to Jarvis. A Jarvis session is not a Codex thread address; the durable callback route and launcher-owned listener are the return transports.",
