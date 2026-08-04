@@ -137,10 +137,19 @@ function resolveSendTarget(opts: Record<string, unknown>): {
   const topicAnchor =
     readRequiredNumberOpt(opts, "topicAnchor", "--topic-anchor") ??
     readRequiredNumberOpt(opts, "topicId", "--topic-id");
+  if (topicAnchor !== undefined && (!Number.isInteger(topicAnchor) || topicAnchor <= 0)) {
+    throw new Error("Telegram user send requires --topic-anchor to be a positive integer.");
+  }
   if (replyTo !== undefined && topicAnchor !== undefined && replyTo !== topicAnchor) {
     throw new Error("Telegram user send cannot combine --reply-to with a different topic anchor.");
   }
   const topicTitle = readStringOpt(opts, "topicTitle");
+  const rawTopicTitle = opts.topicTitle;
+  // A title is an assertion, not a search query. Reject invisible normalization
+  // at the CLI boundary so the backend compares the caller's exact title.
+  if (typeof rawTopicTitle === "string" && rawTopicTitle !== rawTopicTitle.trim()) {
+    throw new Error("Telegram user send requires --topic-title without surrounding whitespace.");
+  }
   // A numeric topic id is not durable identity: titles and ids can be confused
   // across agent handoffs. Force callers onto a title+anchor pair so the
   // backend can revalidate both under the same session lock as the send.

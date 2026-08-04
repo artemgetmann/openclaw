@@ -1348,10 +1348,19 @@ async def run_send(args: argparse.Namespace) -> int:
   message_text = str(args.message or "").strip()
   media = str(args.media or "").strip()
   caption = str(args.caption or "").strip()
-  topic_anchor = int(getattr(args, "topic_anchor", 0) or 0)
-  topic_title = str(getattr(args, "topic_title", "") or "").strip()
+  topic_anchor_raw = getattr(args, "topic_anchor", None)
+  topic_anchor = int(topic_anchor_raw or 0)
+  topic_title_raw = getattr(args, "topic_title", None)
+  topic_title = str(topic_title_raw or "")
   if not message_text and not media:
     return fail("E_USAGE", "Telegram send requires --message or --media.")
+  # Named-topic sends are a paired assertion. Fail before acquiring a client so
+  # direct backend callers cannot bypass the TypeScript CLI's safety contract.
+  if topic_anchor_raw is not None or topic_title_raw is not None:
+    if topic_anchor <= 0:
+      return fail("E_USAGE", "Telegram send requires --topic-anchor to be a positive integer.")
+    if not topic_title:
+      return fail("E_USAGE", "Telegram send requires --topic-title with --topic-anchor.")
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
@@ -1363,8 +1372,8 @@ async def run_send(args: argparse.Namespace) -> int:
         topic = await fetch_topic_by_anchor(client, chat = chat, topic_anchor = topic_anchor)
         if topic is None:
           return fail("E_TOPIC_NOT_FOUND", "The requested forum topic anchor does not belong to the target chat.")
-        actual_title = str(getattr(topic, "title", "") or "").strip()
-        if actual_title.casefold() != topic_title.casefold():
+        actual_title = str(getattr(topic, "title", "") or "")
+        if actual_title != topic_title:
           return fail(
             "E_TOPIC_TITLE_MISMATCH",
             "The forum topic anchor no longer matches the expected title; nothing was sent.",
