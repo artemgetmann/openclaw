@@ -1503,6 +1503,47 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual([type(request) for request in fake_client.requests], [FakeGetForumTopicsByIDRequest])
     self.assertEqual(fake_client.get_messages_calls, [])
 
+  async def test_run_topic_list_returns_server_search_candidates_without_selecting_one(self) -> None:
+    topics = [
+      SimpleNamespace(
+        closed = False,
+        hidden = False,
+        id = 5335,
+        title = "Jarvis Outreach",
+        top_message = 5335,
+      )
+    ]
+    fake_client = FakeTopicReadClient(replies = [], root = None, topics = topics)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_topic_list(
+          argparse.Namespace(
+            chat = "-1003783709877",
+            limit = 20,
+            query = "outreach",
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(emitted["query"], "outreach")
+    self.assertEqual(emitted["topics"][0]["topic_anchor"], 5335)
+    request = fake_client.requests[0]
+    self.assertEqual(request.q, "outreach")
+    self.assertEqual(request.limit, 20)
+
   async def test_run_topic_resolve_finds_one_exact_title_across_short_pages(self) -> None:
     first_page_date = datetime(2026, 7, 27, 10, 0, tzinfo = timezone.utc)
     topic_pages = [
