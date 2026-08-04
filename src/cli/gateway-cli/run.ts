@@ -5,14 +5,18 @@ import { readSecretFromFile } from "../../acp/secret-file.js";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
 import {
   CONFIG_PATH,
-  loadConfig,
+  isNixMode,
   readConfigFileSnapshot,
   resolveStateDir,
   resolveGatewayPort,
+  writeConfigFile,
 } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
-import { formatGatewayStartupPreflightFailure } from "../../gateway/server-startup-preflight.js";
+import {
+  formatGatewayStartupPreflightFailure,
+  runGatewayStartupConfigPreflight,
+} from "../../gateway/server-startup-preflight.js";
 import {
   prepareGatewayServerRestart,
   startGatewayServer,
@@ -206,7 +210,24 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
 
-  const cfg = loadConfig();
+  // Gateway startup owns legacy migration because it is the only path that can
+  // safely persist, reread, and validate config before runtime side effects.
+  // Use that validated result for CLI defaults too: a strict load here would
+  // reject an auto-migratable packaged config before startup can repair it.
+  let cfg;
+  try {
+    ({ config: cfg } = await runGatewayStartupConfigPreflight({
+      readSnapshot: readConfigFileSnapshot,
+      writeConfig: writeConfigFile,
+      log: gatewayLog,
+      isNixMode,
+    }));
+  } catch (err) {
+    const startupPreflightFailure = formatGatewayStartupPreflightFailure(err);
+    defaultRuntime.error(startupPreflightFailure ?? `Gateway failed to start: ${String(err)}`);
+    defaultRuntime.exit(1);
+    return;
+  }
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");

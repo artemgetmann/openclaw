@@ -15,6 +15,9 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
 }));
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
+const runGatewayStartupConfigPreflight = vi.fn(async () => ({
+  config: configState.cfg,
+}));
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
@@ -27,10 +30,11 @@ const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeC
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
-  loadConfig: () => configState.cfg,
+  isNixMode: false,
   readConfigFileSnapshot: async () => configState.snapshot,
   resolveStateDir: () => "/tmp",
-  resolveGatewayPort: () => 18789,
+  resolveGatewayPort: (cfg: { gateway?: { port?: number } }) => cfg.gateway?.port ?? 18789,
+  writeConfigFile: async () => undefined,
 }));
 
 vi.mock("../../gateway/auth.js", () => ({
@@ -57,6 +61,16 @@ vi.mock("../../gateway/auth.js", () => ({
       allowTailscale: false,
     };
   },
+}));
+
+vi.mock("../../gateway/server-startup-preflight.js", () => ({
+  formatGatewayStartupPreflightFailure: (err: unknown) => {
+    const candidate = err as { name?: string; phase?: string; message?: string };
+    return candidate?.name === "GatewayStartupPreflightError"
+      ? `Gateway startup phase failed (${candidate.phase}): ${candidate.message}`
+      : null;
+  },
+  runGatewayStartupConfigPreflight: () => runGatewayStartupConfigPreflight(),
 }));
 
 vi.mock("../../gateway/server.js", () => ({
@@ -140,6 +154,10 @@ describe("gateway run option collisions", () => {
     forceFreePortAndWait.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
+    runGatewayStartupConfigPreflight.mockClear();
+    runGatewayStartupConfigPreflight.mockImplementation(async () => ({
+      config: configState.cfg,
+    }));
     runGatewayLoop.mockClear();
   });
 
@@ -195,6 +213,75 @@ describe("gateway run option collisions", () => {
         bind: "loopback",
       }),
     );
+  });
+
+  it("migrates legacy consumer model config before resolving gateway defaults", async () => {
+    const legacyConfig = {
+      jarvis: { managedServices: { mode: "managed" } },
+      gateway: { mode: "local", port: 18888, bind: "lan" },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          models: { "openai-codex/gpt-5.5": {} },
+        },
+      },
+    };
+    const migratedConfig = {
+      gateway: { mode: "local", port: 19991, bind: "loopback" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.6-sol",
+            fallbacks: ["openai-codex/gpt-5.5"],
+          },
+          models: {
+            "openai-codex/gpt-5.5": {},
+            "openai-codex/gpt-5.6-sol": {},
+          },
+        },
+      },
+    };
+    configState.cfg = legacyConfig;
+    configState.snapshot = { exists: true, parsed: legacyConfig };
+    runGatewayStartupConfigPreflight.mockImplementationOnce(async () => {
+      // This mock marks the exact CLI seam under test: startup preflight sees
+      // the persisted GPT-5.5 config and returns its validated migration before
+      // gateway run resolves any config-backed option defaults.
+      expect((configState.cfg as typeof legacyConfig).agents.defaults.model.primary).toBe(
+        "openai-codex/gpt-5.5",
+      );
+      configState.cfg = migratedConfig;
+      configState.snapshot = { exists: true, parsed: migratedConfig };
+      return { config: migratedConfig };
+    });
+
+    await runGatewayCli(["gateway", "run"]);
+
+    expect(runGatewayStartupConfigPreflight).toHaveBeenCalledTimes(1);
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      19991,
+      expect.objectContaining({ bind: "loopback" }),
+    );
+    expect(migratedConfig.agents.defaults.model).toEqual({
+      primary: "openai-codex/gpt-5.6-sol",
+      fallbacks: ["openai-codex/gpt-5.5"],
+    });
+  });
+
+  it("fails residual invalid config before gateway startup side effects", async () => {
+    runGatewayStartupConfigPreflight.mockRejectedValueOnce({
+      name: "GatewayStartupPreflightError",
+      phase: "config_validation",
+      message: "Invalid config at /tmp/openclaw.json",
+    });
+
+    await expect(runGatewayCli(["gateway", "run", "--force"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      "Gateway startup phase failed (config_validation): Invalid config at /tmp/openclaw.json",
+    );
+    expect(forceFreePortAndWait).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
   });
 
   it("surfaces startup preflight phase classification on startup failure", async () => {
