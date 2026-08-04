@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 from datetime import datetime, timedelta, timezone
 import os
 import stat
@@ -109,6 +110,29 @@ class FakeExpiredCodeClient:
   async def sign_in(self, **kwargs):
     error_cls = type("PhoneCodeExpiredError", (Exception,), {})
     raise error_cls("expired")
+
+
+class FakeInvalidCodeClient(FakeExpiredCodeClient):
+  async def sign_in(self, **kwargs):
+    error_cls = type("PhoneCodeInvalidError", (Exception,), {})
+    raise error_cls("invalid")
+
+
+class FakeFloodedCodeRequestClient:
+  async def connect(self) -> None:
+    return None
+
+  async def disconnect(self) -> None:
+    return None
+
+  async def is_user_authorized(self) -> bool:
+    return False
+
+  async def send_code_request(self, _phone: str):
+    error_cls = type("FloodWaitError", (Exception,), {})
+    error = error_cls("wait")
+    error.seconds = 37
+    raise error
 
 
 class FakeInboxClient:
@@ -779,7 +803,7 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       self.assertEqual(session_path.read_bytes(), b"")
       self.assertEqual(stat.S_IMODE(session_path.stat().st_mode), 0o600)
 
-  async def test_run_login_reads_password_from_env_instead_of_args(self) -> None:
+  async def test_run_login_reads_password_from_local_stdin(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
       session_path = Path(temp_dir) / "userbot.session"
       session_path.touch()
@@ -793,7 +817,7 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       emitted: dict[str, object] = {}
 
       with (
-        patch.dict(os.environ, {telethon_cli.LOGIN_PASSWORD_ENV: "super-secret"}, clear = False),
+        patch.object(sys, "stdin", io.StringIO("super-secret\n")),
         patch.object(telethon_cli, "create_telegram_client", return_value = fake_client),
         patch.object(telethon_cli, "resolve_api_credentials", return_value = (123, "hash")),
         patch.object(
@@ -803,13 +827,50 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
         ),
       ):
         exit_code = await telethon_cli.run_login(
-          argparse.Namespace(code = None, phone = "+15551234567", session = str(session_path))
+          argparse.Namespace(
+            phone = "+15551234567",
+            secret_stdin = "password",
+            session = str(session_path),
+          )
         )
 
       self.assertEqual(exit_code, 0)
       self.assertEqual(fake_client.sign_in_calls, [{"password": "super-secret"}])
       self.assertEqual(emitted["state"], "ready")
       self.assertFalse(telethon_cli.resolve_pending_auth_path(session_path).exists())
+
+  async def test_run_login_without_pending_code_routes_back_to_settings(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      emitted: dict[str, object] = {}
+
+      with (
+        patch.object(sys, "stdin", io.StringIO("12345\n")),
+        patch.object(
+          telethon_cli,
+          "create_telegram_client",
+          return_value = FakePasswordLoginClient(),
+        ),
+        patch.object(telethon_cli, "resolve_api_credentials", return_value = (123, "hash")),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **kwargs: emitted.update(payload) or 1,
+        ),
+      ):
+        exit_code = await telethon_cli.run_login(
+          argparse.Namespace(
+            phone = "+15551234567",
+            secret_stdin = "code",
+            session = str(session_path),
+          )
+        )
+
+      self.assertEqual(exit_code, 1)
+      self.assertEqual(emitted["error"]["code"], "E_LOGIN_CODE_NOT_REQUESTED")
+      self.assertIn("Jarvis Settings", emitted["error"]["message"])
+      self.assertNotIn("--code", emitted["error"]["message"])
 
   async def test_run_login_refreshes_pending_state_after_expired_code(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -825,6 +886,7 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       emitted: dict[str, object] = {}
 
       with (
+        patch.object(sys, "stdin", io.StringIO("12345\n")),
         patch.object(telethon_cli, "create_telegram_client", return_value = fake_client),
         patch.object(telethon_cli, "resolve_api_credentials", return_value = (123, "hash")),
         patch.object(
@@ -835,8 +897,8 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       ):
         exit_code = await telethon_cli.run_login(
           argparse.Namespace(
-            code = "12345",
             phone = "+15551234567",
+            secret_stdin = "code",
             session = str(session_path),
           )
         )
@@ -844,10 +906,77 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       self.assertEqual(exit_code, 0)
       self.assertEqual(fake_client.send_code_request_calls, ["+15551234567"])
       self.assertEqual(emitted["state"], "awaiting_code")
+      self.assertEqual(emitted["auth_error"], "code_expired")
       refreshed = telethon_cli.read_pending_auth_state(session_path)
       self.assertIsNotNone(refreshed)
       assert refreshed is not None
       self.assertEqual(refreshed["phone_code_hash"], "fresh-hash")
+
+  async def test_run_login_reports_initial_code_request_cooldown_without_looping(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      fake_client = FakeFloodedCodeRequestClient()
+      emitted: dict[str, object] = {}
+
+      with (
+        patch.object(telethon_cli, "create_telegram_client", return_value = fake_client),
+        patch.object(telethon_cli, "resolve_api_credentials", return_value = (123, "hash")),
+        patch.object(
+          telethon_cli,
+          "emit_auth_status",
+          side_effect = lambda **payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_login(
+          argparse.Namespace(
+            phone = "+15551234567",
+            secret_stdin = None,
+            session = str(session_path),
+          )
+        )
+
+      self.assertEqual(exit_code, 0)
+      self.assertEqual(emitted["auth_error"], "cooldown")
+      self.assertEqual(emitted["retry_after_seconds"], 37)
+      self.assertEqual(emitted["state"], "awaiting_code")
+      self.assertIsNone(emitted["pending_auth"])
+
+  async def test_run_login_preserves_pending_hash_after_invalid_code(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      telethon_cli.write_pending_auth_state(
+        session_path,
+        phone = "+15551234567",
+        phone_code_hash = "same-hash",
+        state = "awaiting_code",
+      )
+      fake_client = FakeInvalidCodeClient()
+      emitted: dict[str, object] = {}
+
+      with (
+        patch.object(sys, "stdin", io.StringIO("11111\n")),
+        patch.object(telethon_cli, "create_telegram_client", return_value = fake_client),
+        patch.object(telethon_cli, "resolve_api_credentials", return_value = (123, "hash")),
+        patch.object(
+          telethon_cli,
+          "emit_auth_status",
+          side_effect = lambda **payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_login(
+          argparse.Namespace(
+            phone = "+15551234567",
+            secret_stdin = "code",
+            session = str(session_path),
+          )
+        )
+
+      self.assertEqual(exit_code, 0)
+      self.assertEqual(emitted["auth_error"], "code_invalid")
+      self.assertEqual(fake_client.send_code_request_calls, [])
+      pending = telethon_cli.read_pending_auth_state(session_path)
+      self.assertEqual(pending["phone_code_hash"], "same-hash")
 
   async def test_run_inbox_scans_past_initial_noise_for_unread_dm_filters(self) -> None:
     noisy_dialogs = [

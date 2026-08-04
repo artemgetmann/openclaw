@@ -351,6 +351,7 @@ type PythonInvocation = {
 type BackendCallOptions = TelegramUserBackendOptions & {
   args: string[];
   envOverrides?: Record<string, string | undefined>;
+  stdinSecret?: string;
 };
 
 type BackendEnvBuild = {
@@ -896,13 +897,68 @@ async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
   const { env: baseEnv, meta } = await buildBackendEnv(options);
   const env = applyEnvOverrides(baseEnv, options.envOverrides);
   try {
-    const { stdout } = await execFileAsync(python, [backendScriptPath, ...options.args], {
+    const child = execFile(python, [backendScriptPath, ...options.args], {
       cwd: toolingRoot,
       env,
       timeout: telegramUserBackendTimeoutMs,
       maxBuffer: 4 * 1024 * 1024,
     });
-    const sanitizedStdout = sanitizeBackendText(stdout, env);
+    // Login secrets deliberately use a private pipe. They must never be placed
+    // in argv, environment variables, command logs, or an agent tool payload.
+    const completed = new Promise<{ stdout: string }>((resolve, reject) => {
+      let stdout = "";
+      let stderr = "";
+      const appendBounded = (current: string, chunk: string) => {
+        const next = current + chunk;
+        if (Buffer.byteLength(next, "utf8") > 4 * 1024 * 1024) {
+          child.kill("SIGTERM");
+          throw new Error("Telegram user backend output exceeded the local limit.");
+        }
+        return next;
+      };
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk: string) => {
+        try {
+          stdout = appendBounded(stdout, chunk);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      child.stderr?.on("data", (chunk: string) => {
+        try {
+          stderr = appendBounded(stderr, chunk);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      child.once("error", reject);
+      child.once("close", (code, signal) => {
+        if (code === 0) {
+          resolve({ stdout });
+          return;
+        }
+        // Defensive redaction covers an unexpected dependency error that
+        // echoes submitted input. The secret is still never added to env.
+        const safeStderr = options.stdinSecret
+          ? stderr.split(options.stdinSecret).join("<redacted>")
+          : stderr;
+        const error = new Error(
+          safeStderr || `Telegram user backend exited with ${code ?? signal}.`,
+        );
+        Object.assign(error, { code, signal, stderr: safeStderr });
+        reject(error);
+      });
+    });
+    if (options.stdinSecret !== undefined) {
+      child.stdin?.end(`${options.stdinSecret}\n`);
+    } else {
+      child.stdin?.end();
+    }
+    const { stdout } = await completed;
+    const sanitizedStdout = options.stdinSecret
+      ? sanitizeBackendText(stdout, env).split(options.stdinSecret).join("<redacted>")
+      : sanitizeBackendText(stdout, env);
     const parsed = parseBackendJson<T & { backend_meta?: TelegramUserBackendMeta }>(
       sanitizedStdout,
       "Telegram user backend returned invalid JSON output.",
@@ -1073,13 +1129,21 @@ export async function runTelegramUserLogin(
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserLoginResult> {
   const args = ["login", "--phone", params.phone];
-  pushOptionalStringArg(args, "--code", params.code);
+  const code = readNonEmpty(params.code);
+  const password =
+    typeof params.password === "string" && params.password.length > 0 ? params.password : undefined;
+  if (code && password) {
+    throw new Error("Telegram user login accepts one local secret step at a time.");
+  }
+  if (code) {
+    args.push("--secret-stdin", "code");
+  } else if (password) {
+    args.push("--secret-stdin", "password");
+  }
   return runBackendCommand<TelegramUserLoginResult>({
     ...params,
     args,
-    envOverrides: {
-      [loginPasswordEnvKey]: params.password ?? undefined,
-    },
+    stdinSecret: code ?? password,
   });
 }
 

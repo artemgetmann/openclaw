@@ -53,7 +53,6 @@ import type {
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 
-const loginPasswordEnvKey = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD";
 const telegramReadFormats = new Set(["table", "compact"]);
 
 type TelegramUserReadFormat = "table" | "compact";
@@ -148,9 +147,31 @@ function resolveBackendOptions(opts: Record<string, unknown>): TelegramUserBacke
   };
 }
 
-function readLoginPasswordFromEnv(): string | undefined {
-  const raw = process.env[loginPasswordEnvKey];
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+async function readLoginSecretFromStdin(kind: string | undefined): Promise<{
+  code?: string;
+  password?: string;
+}> {
+  if (!kind) {
+    return {};
+  }
+  if (kind !== "code" && kind !== "password") {
+    throw new Error("Telegram user login --secret-stdin must be code or password.");
+  }
+  if (process.stdin.isTTY) {
+    throw new Error("Telegram user login --secret-stdin requires a local pipe, not a terminal.");
+  }
+  let secret = "";
+  for await (const chunk of process.stdin) {
+    secret += chunk.toString();
+    if (secret.length > 16_384) {
+      throw new Error("Telegram user login secret input exceeded the local limit.");
+    }
+  }
+  const value = secret.replace(/[\r\n]+$/, "");
+  if (!value) {
+    throw new Error("Telegram user login received an empty local secret.");
+  }
+  return kind === "code" ? { code: value } : { password: value };
 }
 
 function assertNever(value: never, context: string): never {
@@ -870,37 +891,27 @@ async function completeInteractiveTelegramUserLogin(
   opts: Record<string, unknown>,
 ): Promise<TelegramUserLoginResult> {
   const phone = readStringOpt(opts, "phone") ?? (await promptForValue("Telegram phone number: "));
-  let currentOpts: Record<string, unknown> = {
-    ...opts,
-    phone,
-  };
-
-  while (true) {
-    const result = await runTelegramUserLogin({
-      ...resolveBackendOptions(currentOpts),
-      code: readStringOpt(currentOpts, "code"),
-      password: readStringOpt(currentOpts, "password"),
+  const initial = await runTelegramUserLogin({ ...resolveBackendOptions(opts), phone });
+  if (initial.state === "ready") {
+    return initial;
+  }
+  // One invocation submits at most one secret. Invalid, expired, and cooldown
+  // results return to the caller instead of creating an unbounded prompt loop.
+  if (initial.state === "awaiting_code") {
+    return runTelegramUserLogin({
+      ...resolveBackendOptions(opts),
+      code: await promptForSecret("Telegram login code: "),
       phone,
     });
-    if (result.state === "ready") {
-      return result;
-    }
-    if (result.state === "awaiting_code") {
-      currentOpts = {
-        ...currentOpts,
-        code: await promptForValue("Telegram login code: "),
-      };
-      continue;
-    }
-    if (result.state === "awaiting_password") {
-      currentOpts = {
-        ...currentOpts,
-        password: await promptForSecret("Telegram 2FA password: "),
-      };
-      continue;
-    }
-    assertNever(result.state, "Unsupported Telegram login state");
   }
+  if (initial.state === "awaiting_password") {
+    return runTelegramUserLogin({
+      ...resolveBackendOptions(opts),
+      password: await promptForSecret("Telegram 2FA password: "),
+      phone,
+    });
+  }
+  return assertNever(initial.state, "Unsupported Telegram login state");
 }
 
 export async function telegramUserPrecheckCommand(
@@ -952,9 +963,8 @@ export async function telegramUserDoctorCommand(
 export async function telegramUserLoginCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
   const json = readBooleanOpt(opts, "json");
   const phone = readStringOpt(opts, "phone");
-  const code = readStringOpt(opts, "code");
-  const password = readLoginPasswordFromEnv();
-  const interactive = !json && !code && !password;
+  const localSecret = await readLoginSecretFromStdin(readStringOpt(opts, "secretStdin"));
+  const interactive = !json && !localSecret.code && !localSecret.password;
   if (json && !phone) {
     throw new Error("Telegram user login requires --phone when --json is enabled.");
   }
@@ -962,8 +972,7 @@ export async function telegramUserLoginCommand(opts: Record<string, unknown>, ru
     ? await completeInteractiveTelegramUserLogin(opts)
     : await runTelegramUserLogin({
         ...resolveBackendOptions(opts),
-        code,
-        password,
+        ...localSecret,
         phone: phone ?? (await promptForValue("Telegram phone number: ")),
       });
   if (json) {

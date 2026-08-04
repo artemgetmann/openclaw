@@ -15,7 +15,8 @@ enum ShellExecutor {
         command: [String],
         cwd: String?,
         env: [String: String]?,
-        timeout: Double?) async -> ShellResult
+        timeout: Double?,
+        standardInput: Data? = nil) async -> ShellResult
     {
         guard !command.isEmpty else {
             return ShellResult(
@@ -37,9 +38,17 @@ enum ShellExecutor {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        let stdinPipe = standardInput == nil ? nil : Pipe()
+        process.standardInput = stdinPipe
 
         do {
             try process.run()
+            if let standardInput, let stdinPipe {
+                // Sensitive callers use this private pipe so the value never
+                // appears in argv, environment, process listings, or logs.
+                stdinPipe.fileHandleForWriting.write(standardInput)
+                try? stdinPipe.fileHandleForWriting.close()
+            }
         } catch {
             return ShellResult(
                 stdout: "",

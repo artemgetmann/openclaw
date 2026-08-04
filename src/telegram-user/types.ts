@@ -84,10 +84,12 @@ export type TelegramUserDoctorResult = {
 };
 
 export type TelegramUserLoginResult = {
+  auth_error?: "code_expired" | "code_invalid" | "cooldown";
   backend_meta?: TelegramUserBackendMeta;
   pending_login: TelegramUserAuthStatus["pending_login"];
   session_path: string;
   state: Extract<TelegramUserAuthState, "awaiting_code" | "awaiting_password" | "ready">;
+  retry_after_seconds?: number;
   user: TelegramUserPrecheck["user"] | null;
 };
 

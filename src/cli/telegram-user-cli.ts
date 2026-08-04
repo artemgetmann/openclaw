@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { discoverTelegramUserRuntimeEnv } from "../telegram-user/runtime-env.js";
@@ -41,10 +41,6 @@ export function registerTelegramUserCli(program: Command) {
           [
             'openclaw telegram-user login --phone "+15551234567"',
             "Start login, prompt for OTP/2FA when needed, and store the session locally.",
-          ],
-          [
-            'OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" openclaw telegram-user login --phone "+15551234567" --code 12345 --json',
-            "Finish a 2FA step non-interactively without exposing the password in process arguments.",
           ],
           [
             "openclaw telegram-user status --json",
@@ -192,7 +188,9 @@ export function registerTelegramUserCli(program: Command) {
       .description("Connect a real Telegram account and persist the local user session"),
   )
     .option("--phone <e164>", "Telegram phone number in international format")
-    .option("--code <otp>", "Telegram login code from Telegram")
+    // Internal bridge for the macOS SecureField. Hiding this prevents the
+    // product from advertising a generic agent/tool secret-submission surface.
+    .addOption(new Option("--secret-stdin <kind>").hideHelp())
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {
         const { telegramUserLoginCommand } = await import("../commands/telegram-user.js");

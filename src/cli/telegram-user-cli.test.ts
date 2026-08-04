@@ -85,6 +85,8 @@ describe("telegram-user cli", () => {
       "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof",
     );
     expect(help).toContain("--format compact");
+    expect(help).not.toContain("--code");
+    expect(help).not.toContain("--secret-stdin");
     expect(help).toContain("openclaw telegram-user mark-read --chat @jarvis_tester_1_bot --json");
     expect(help).toContain("openclaw telegram-user mark-unread --chat @jarvis_tester_1_bot --json");
     expect(help).toContain(
