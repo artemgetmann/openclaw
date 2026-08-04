@@ -1349,7 +1349,15 @@ async def run_send(args: argparse.Namespace) -> int:
   media = str(args.media or "").strip()
   caption = str(args.caption or "").strip()
   topic_anchor_raw = getattr(args, "topic_anchor", None)
-  topic_anchor = int(topic_anchor_raw or 0)
+  topic_anchor = 0
+  if topic_anchor_raw is not None:
+    # argparse normally supplies an int, but the backend is also callable from
+    # tests and wrappers. Parse the assertion as digits instead of coercing a
+    # float such as 1.5 into a different, valid topic anchor.
+    topic_anchor_text = str(topic_anchor_raw).strip()
+    if not topic_anchor_text.isdigit():
+      return fail("E_USAGE", "Telegram send requires --topic-anchor to be a positive integer.")
+    topic_anchor = int(topic_anchor_text)
   topic_title_raw = getattr(args, "topic_title", None)
   topic_title = str(topic_title_raw or "")
   if not message_text and not media:
