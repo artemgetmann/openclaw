@@ -1,3 +1,4 @@
+import MarkdownIt from "markdown-it";
 import type { MarkdownTableMode } from "../../../src/config/types.base.js";
 import {
   chunkMarkdownIR,
@@ -147,8 +148,70 @@ function buildSafeMarkdownFence(text: string): string {
   return fenceChar.repeat(fenceLength);
 }
 
+function parseTelegramMarkdownTokens(markdown: string) {
+  const parser = new MarkdownIt({
+    html: false,
+    linkify: true,
+    breaks: false,
+    typographer: false,
+  });
+  parser.enable(["strikethrough", "table"]);
+  return parser.parse(markdown, {});
+}
+
+function findMarkdownLiteralCodeLines(markdown: string): Set<number> {
+  const codeLines = new Set<number>();
+  let blockquoteDepth = 0;
+  for (const token of parseTelegramMarkdownTokens(markdown)) {
+    if (token.type === "blockquote_open") {
+      blockquoteDepth += 1;
+      continue;
+    }
+    if (token.type === "blockquote_close") {
+      blockquoteDepth = Math.max(0, blockquoteDepth - 1);
+      continue;
+    }
+    // A fenced Markdown sample inside a recipient blockquote belongs to that
+    // same copyable draft block. Only code outside blockquotes masks literal
+    // greater-than lines from draft conversion.
+    if (blockquoteDepth > 0) {
+      continue;
+    }
+    if ((token.type !== "fence" && token.type !== "code_block") || !token.map) {
+      continue;
+    }
+    const [startLine, endLineExclusive] = token.map;
+    // Markdown-it already owns CommonMark list, blockquote, tab-stop, and
+    // implicit-closure semantics. Reuse its exact source map instead of
+    // maintaining a second, inevitably divergent fence state machine.
+    for (let line = startLine; line < endLineExclusive; line += 1) {
+      codeLines.add(line);
+    }
+  }
+  return codeLines;
+}
+
+function findMarkdownBlockquoteLines(markdown: string): Set<number> {
+  const blockquoteLines = new Set<number>();
+  for (const token of parseTelegramMarkdownTokens(markdown)) {
+    if (token.type !== "blockquote_open" || !token.map) {
+      continue;
+    }
+    const [startLine, endLineExclusive] = token.map;
+    // Parser ranges include list same-line and continuation blockquotes that
+    // raw `^>` matching misses. Mark the complete source-owned draft range.
+    for (let line = startLine; line < endLineExclusive; line += 1) {
+      blockquoteLines.add(line);
+    }
+  }
+  return blockquoteLines;
+}
+
 export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string {
   const normalized = (markdown ?? "").replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  const literalCodeLines = findMarkdownLiteralCodeLines(normalized);
+  const blockquoteLines = findMarkdownBlockquoteLines(normalized);
   const output: string[] = [];
   let quoteLines: string[] = [];
 
@@ -168,10 +231,21 @@ export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string
     output.push(`${fence}\n${quoteText}\n${fence}`);
   };
 
-  for (const line of normalized.split("\n")) {
-    const quoteMatch = /^(?: {0,3}>\s?)(.*)$/.exec(line);
-    if (quoteMatch) {
-      quoteLines.push(quoteMatch[1] ?? "");
+  for (const [lineIndex, line] of lines.entries()) {
+    // A greater-than sign inside a fenced code body is literal source text,
+    // never a recipient draft marker. Parser-owned source maps keep this
+    // correct across list containers, blockquotes, tabs, and implicit closes.
+    if (literalCodeLines.has(lineIndex)) {
+      flushQuote();
+      output.push(line);
+      continue;
+    }
+    if (blockquoteLines.has(lineIndex)) {
+      // Once the canonical parser identifies this source line as blockquote
+      // content, remove only its actual list/indent/quote container prefix.
+      // Lazy continuation text has no marker and is kept after indentation.
+      const quoteMatch = /^(?:[ \t]*(?:[*+-]|\d{1,9}[.)])[ \t]+)*[ \t]*>\s?(.*)$/.exec(line);
+      quoteLines.push(quoteMatch?.[1] ?? line.trimStart());
       continue;
     }
     flushQuote();
@@ -361,46 +435,6 @@ type MarkdownTableBlock = {
   rows: string[][];
 };
 
-function splitMarkdownTableRow(line: string): string[] {
-  const trimmed = line.trim();
-  const body = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
-  const withoutTrailingPipe = body.endsWith("|") ? body.slice(0, -1) : body;
-  const cells: string[] = [];
-  let current = "";
-  let escaped = false;
-  for (const char of withoutTrailingPipe) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === "|") {
-      cells.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  cells.push(current.trim());
-  return cells;
-}
-
-function isMarkdownTableDelimiter(line: string): boolean {
-  if (!line.includes("|")) {
-    return false;
-  }
-  const cells = splitMarkdownTableRow(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
-}
-
-function isMarkdownTableRow(line: string): boolean {
-  return line.includes("|") && splitMarkdownTableRow(line).length > 1;
-}
-
 function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
   const lines = markdown.split("\n");
   const lineStarts: number[] = [];
@@ -411,42 +445,61 @@ function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
   }
 
   const blocks: MarkdownTableBlock[] = [];
-  let index = 0;
-  let inFence = false;
-  while (index + 1 < lines.length) {
-    const headerLine = lines[index] ?? "";
-    if (/^[ \t]*(?:```|~~~)/.test(headerLine)) {
-      inFence = !inFence;
-      index += 1;
+  const tokens = parseTelegramMarkdownTokens(markdown);
+  let blockquoteDepth = 0;
+  for (const [tokenIndex, token] of tokens.entries()) {
+    if (token.type === "blockquote_open") {
+      blockquoteDepth += 1;
       continue;
     }
-    if (inFence) {
-      index += 1;
+    if (token.type === "blockquote_close") {
+      blockquoteDepth = Math.max(0, blockquoteDepth - 1);
       continue;
     }
-
-    const delimiterLine = lines[index + 1] ?? "";
-    if (!isMarkdownTableRow(headerLine) || !isMarkdownTableDelimiter(delimiterLine)) {
-      index += 1;
+    // A quoted table is part of the quoted document structure. Lifting it into
+    // a top-level native table would silently discard the surrounding quote.
+    if (blockquoteDepth > 0 || token.type !== "table_open" || !token.map) {
       continue;
     }
-
-    const headers = splitMarkdownTableRow(headerLine);
+    const [startLine, endLineExclusive] = token.map;
+    if (endLineExclusive <= startLine + 1) {
+      continue;
+    }
+    const headers: string[] = [];
     const rows: string[][] = [];
-    let endLine = index + 1;
-    for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
-      const rowLine = lines[rowIndex] ?? "";
-      if (!isMarkdownTableRow(rowLine)) {
+    let currentRow: string[] = [];
+    let currentCell: string | undefined;
+    let inHeader = false;
+    for (let index = tokenIndex + 1; index < tokens.length; index += 1) {
+      const tableToken = tokens[index];
+      if (!tableToken || tableToken.type === "table_close") {
         break;
       }
-      rows.push(splitMarkdownTableRow(rowLine));
-      endLine = rowIndex;
+      if (tableToken.type === "thead_open") {
+        inHeader = true;
+      } else if (tableToken.type === "thead_close") {
+        inHeader = false;
+      } else if (tableToken.type === "tr_open") {
+        currentRow = [];
+      } else if (tableToken.type === "th_open" || tableToken.type === "td_open") {
+        currentCell = "";
+      } else if (tableToken.type === "inline" && currentCell !== undefined) {
+        currentCell = tableToken.content;
+      } else if (tableToken.type === "th_close" || tableToken.type === "td_close") {
+        currentRow.push(currentCell ?? "");
+        currentCell = undefined;
+      } else if (tableToken.type === "tr_close") {
+        if (inHeader) {
+          headers.push(...currentRow);
+        } else {
+          rows.push(currentRow);
+        }
+      }
     }
-
-    const start = lineStarts[index] ?? 0;
+    const endLine = endLineExclusive - 1;
+    const start = lineStarts[startLine] ?? 0;
     const end = (lineStarts[endLine] ?? start) + (lines[endLine] ?? "").length;
     blocks.push({ start, end, headers, rows });
-    index = endLine + 1;
   }
   return blocks;
 }
@@ -613,10 +666,20 @@ function renderTelegramRichTableFallback(table: MarkdownTableBlock): string {
 }
 
 function renderTelegramRichCell(markdown: string): string {
-  return markdownToTelegramHtml(markdown.trim(), {
+  const cellMarkdown = markdown.trim();
+  if (!cellMarkdown) {
+    return "";
+  }
+  // Markdown-it table cells are inline contexts, but the legacy renderer parses
+  // an isolated string as a whole block. Prefix a private sentinel plus a space:
+  // the sentinel blocks `>`, `#`, `---`, and ``` from becoming block syntax,
+  // while the whitespace preserves normal inline emphasis delimiter boundaries.
+  const sentinel = "\uE000 ";
+  const html = markdownToTelegramHtml(`${sentinel}${cellMarkdown}`, {
     tableMode: "off",
     wrapFileRefs: false,
   });
+  return html.startsWith(sentinel) ? html.slice(sentinel.length) : html;
 }
 
 function renderTelegramRichTable(table: MarkdownTableBlock): string {

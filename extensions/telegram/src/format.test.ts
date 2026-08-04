@@ -133,6 +133,327 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toContain("```\nDraft link (https://e.com)\n```");
   });
 
+  it("does not rewrite quote-prefixed lines inside fenced code", () => {
+    const markdown = [
+      "```text",
+      "> ~~~",
+      "```not-a-close",
+      "> keep this literal",
+      "```",
+      "",
+      "> Hi Sveta, please confirm.",
+    ].join("\n");
+
+    const res = rewriteMarkdownBlockquotesAsCopyBlocks(markdown);
+
+    expect(res).toContain("```text\n> ~~~\n```not-a-close\n> keep this literal\n```");
+    expect(res).toContain("```\nHi Sveta, please confirm.\n```");
+  });
+
+  it("keeps fenced Markdown tables inside copy-safe drafts", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Plan | Owner |",
+        "| --- | --- |",
+        "| Ship | Jarvis |",
+        "",
+        "> Paste this Markdown:",
+        "> ```",
+        "> | A | B |",
+        "> | --- | --- |",
+        "> | x | y |",
+        "> ```",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
+  });
+
+  it("keeps indented Markdown tables inside literal code blocks", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Plan | Owner |",
+        "| --- | --- |",
+        "| Ship | Jarvis |",
+        "",
+        "    ```",
+        "    | A | B |",
+        "    | --- | --- |",
+        "    | x | y |",
+        "    ```",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
+  });
+
+  it("does not absorb indented delimiters or rows into native tables", () => {
+    const indentedDelimiterHtml = markdownToTelegramRichHtml(
+      ["| Literal header | Literal owner |", "    | --- | --- |"].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+    const indentedRowHtml = markdownToTelegramRichHtml(
+      ["| Second | Table |", "| --- | --- |", "    | literal | indented row |"].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    // CommonMark indented code stays literal even when it resembles a table
+    // delimiter or data row next to an otherwise valid table candidate.
+    expect(indentedDelimiterHtml).not.toContain("<table bordered striped>");
+    expect(indentedDelimiterHtml).toContain("| Literal header | Literal owner |");
+    expect(indentedDelimiterHtml).toContain("| --- | --- |");
+    expect(indentedRowHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(indentedRowHtml).toContain("<pre><code>| literal | indented row |");
+    expect(indentedRowHtml).not.toContain("<td>literal</td>");
+  });
+
+  it("keeps list-nested fenced tables literal beside native tables", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "- ```md",
+        "  | A | B |",
+        "  | --- | --- |",
+        "  | x | y |",
+        "  ```",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
+  });
+
+  it("ends an unclosed list fence when its container deindents", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "- ```md",
+        "  | literal | code |",
+        "  | --- | --- |",
+        "",
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "> Send this draft.",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(2);
+    expect(richHtml).toContain("| literal | code |");
+    expect(richHtml).toContain("Send this draft.");
+    expect(richHtml).not.toContain("<blockquote>");
+  });
+
+  it("reopens a deindented top-level fence after a list fence", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "- ```md",
+        "  literal list code",
+        "```",
+        "| fenced | code |",
+        "| --- | --- |",
+        "```",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(2);
+    expect(richHtml).toContain("| fenced | code |");
+    expect(richHtml).not.toContain("<th>fenced</th>");
+  });
+
+  it("preserves tab overshoot inside a list-contained fence", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "- ```md",
+        "\t  ```",
+        "  | fenced | code |",
+        "  | --- | --- |",
+        "  > keep literal",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| fenced | code |");
+    expect(richHtml).toContain("&gt; keep literal");
+    expect(richHtml).not.toContain("<th>fenced</th>");
+  });
+
+  it("keeps four-space list-continuation fences literal", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "- item",
+        "    ```md",
+        "  | fenced | code |",
+        "  | --- | --- |",
+        "    ```",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| fenced | code |");
+    expect(richHtml).not.toContain("<th>fenced</th>");
+  });
+
+  it("ends unclosed list-continuation fences at container deindent", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "- item",
+        "  ```md",
+        "  | literal | code |",
+        "  | --- | --- |",
+        "",
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        "> Send this draft.",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(2);
+    expect(richHtml).toContain("| literal | code |");
+    expect(richHtml).toContain("Send this draft.");
+    expect(richHtml).not.toContain("<blockquote>");
+  });
+
+  it("uses parser-owned cells for list tables and pipe-less rows", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      ["- | H1 | H2 |", "  | --- | --- |", "  solo"].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml).toContain("<th>H1</th><th>H2</th>");
+    expect(richHtml).toContain("<td>solo</td><td></td>");
+    expect(richHtml).not.toContain("<th>•</th>");
+  });
+
+  it("rewrites parser-owned list blockquotes as copy blocks", () => {
+    const drafts = [
+      "- > Send this draft.",
+      "1. - > Send this draft.",
+      "-\t-\t> Send this draft.",
+      ["- item", "    > Send this draft."].join("\n"),
+      ["- item", "\t> Send this draft."].join("\n"),
+    ];
+
+    for (const draft of drafts) {
+      const richHtml = markdownToTelegramRichHtml(draft, {
+        tableMode: "block",
+        copySafeBlockquotes: true,
+      });
+      expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+      expect(richHtml).toContain("Send this draft.");
+      expect(richHtml).not.toContain("1. -");
+      expect(richHtml).not.toContain("-\t-");
+      expect(richHtml).not.toContain("<blockquote>");
+    }
+  });
+
+  it("renders table cell contents as inline Markdown", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Quote | Heading | Rule | Fence | Italic | Bold |",
+        "| --- | --- | --- | --- | --- | --- |",
+        "| > literal | # literal | --- | ```literal | _italic_ | __bold__ |",
+      ].join("\n"),
+      { tableMode: "block" },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml).toContain("<td>&gt; literal</td>");
+    expect(richHtml).toContain("<td># literal</td>");
+    expect(richHtml).toContain("<td>---</td>");
+    expect(richHtml).toContain("<td>```literal</td>");
+    expect(richHtml).toContain("<td><i>italic</i></td>");
+    expect(richHtml).toContain("<td><b>bold</b></td>");
+    expect(richHtml).not.toContain("<blockquote>");
+    expect(richHtml).not.toContain("<pre><code>");
+    expect(richHtml).not.toContain("───");
+  });
+
+  it("preserves quoted tables when copy-safe rewriting is disabled", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      ["> | A | B |", "> | --- | --- |", "> | x | y |"].join("\n"),
+      { tableMode: "block" },
+    );
+
+    expect(richHtml).toContain("<blockquote>");
+    expect(richHtml).not.toContain("<table bordered striped>");
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
+  });
+
+  it("keeps list-blockquote fenced samples in one copy block", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      ["- > Paste this Markdown:", "  > ```", "  > | A | B |", "  > | --- | --- |", "  > ```"].join(
+        "\n",
+      ),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("Paste this Markdown:");
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).not.toContain("<blockquote>");
+  });
+
+  it("keeps space-tab-indented table-like code literal", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "| Real | Table |",
+        "| --- | --- |",
+        "| yes | now |",
+        "",
+        " \t| A | B |",
+        " \t| --- | --- |",
+        " \t| x | y |",
+      ].join("\n"),
+      { tableMode: "block", copySafeBlockquotes: true },
+    );
+
+    expect(richHtml.match(/<table bordered striped>/g)).toHaveLength(1);
+    expect(richHtml.match(/<pre><code>/g)).toHaveLength(1);
+    expect(richHtml).toContain("| A | B |");
+    expect(richHtml).toContain("| x | y |");
+  });
+
   it("renders fenced code blocks", () => {
     const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
     expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
@@ -268,6 +589,30 @@ describe("markdownToTelegramHtml", () => {
 
     expect(chunk?.text).toContain("<table bordered striped>");
     expect(chunk?.plainText).toBe("Name | Score\nAda | 9");
+  });
+
+  it("accounts for escaped fenced-code bytes before splitting rich chunks", () => {
+    const chunks = splitTelegramRichMessageTextChunks({
+      text: [
+        "| Plan | Owner |",
+        "| --- | --- |",
+        "| Ship | Jarvis |",
+        "",
+        "```text",
+        `> ${">".repeat(90)}`,
+        "```",
+        "",
+        "> Hi Sveta, please confirm.",
+      ].join("\n"),
+      textLimit: 160,
+      textMode: "markdown",
+      tableMode: "block",
+      copySafeBlockquotes: true,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.text.length <= 160)).toBe(true);
+    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("&gt;");
   });
 
   it("keeps list markers readable in rich-message plain-text fallback", () => {

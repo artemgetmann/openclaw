@@ -112,10 +112,10 @@ function buildChunkTextResolver(params: {
             textLimit: params.textLimit,
             textMode: "markdown",
             tableMode: params.tableMode,
-          }).map((richChunk) => ({
-            html: richChunk.text,
-            text: richChunk.plainText,
-          })),
+            // Mixed comparison + draft replies need both native table blocks
+            // and one-tap-copy pre blocks in the same rich message.
+            copySafeBlockquotes: params.copySafeBlockquotes,
+          }).map((richChunk) => ({ html: richChunk.text, text: richChunk.plainText })),
         );
         continue;
       }
