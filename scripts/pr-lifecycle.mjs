@@ -224,6 +224,21 @@ function hasUnclosedOwner(state) {
   );
 }
 
+// Pending tester ownership may be retired only through cancel-pending, which
+// records that native task creation definitely did not happen. Keep the owner
+// check explicit so corrupted or future cancelled shapes cannot be mistaken
+// for a safe candidate-replacement boundary.
+function isOwnerlessCancelledTester(tester) {
+  return tester?.phase === "cancelled" && Object.hasOwn(tester, "owner") && tester.owner === null;
+}
+
+function testerAllowsCandidateRefresh(state) {
+  return (
+    state.tester?.phase === "closed" ||
+    (state.release?.phase === "awaiting-source" && isOwnerlessCancelledTester(state.tester))
+  );
+}
+
 function makeBaseState(pr, candidate, builder, previous) {
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -402,7 +417,7 @@ function handoffTest(pr, options) {
       const returningFromRelease =
         ["awaiting-source", "awaiting-retest"].includes(state.release?.phase) &&
         state.release.contractId === returningReleaseContract &&
-        state.tester?.phase === "closed";
+        testerAllowsCandidateRefresh(state);
       if (!returningFromRelease && hasUnclosedOwner(state)) {
         fail(
           "PR head/diff changed while an owner may still be active; resolve that exact owner first",
@@ -699,9 +714,20 @@ function returnSource(pr, options) {
         },
       };
     }
-    if (release.phase !== "active" || release.builderArchiveReceipt?.archived !== true) {
+    const archiveReceiptMatches =
+      release.builderArchiveReceipt?.archived === true &&
+      release.builderArchiveReceipt.builder?.threadId === builder.threadId &&
+      release.builderArchiveReceipt.builder?.hostId === builder.hostId &&
+      release.builderArchiveReceipt.verifiedBy?.threadId === releaseOwner.threadId &&
+      release.builderArchiveReceipt.verifiedBy?.hostId === releaseOwner.hostId;
+    if (!archiveReceiptMatches || !["active", "awaiting-retest"].includes(release.phase)) {
       fail(
         `source return requires an active accepted release handoff with builder archive proof, not ${release.phase}`,
+      );
+    }
+    if (release.phase === "awaiting-retest" && !isOwnerlessCancelledTester(state.tester)) {
+      fail(
+        "repeated source return from awaiting-retest requires the exact ownerless cancelled tester reservation",
       );
     }
     if (requireOption(options, "builderUnarchived") !== "true") {
