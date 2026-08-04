@@ -231,8 +231,8 @@ function acceptReleaseHandoff(fixture: ReturnType<typeof makeFixture>, contractI
   ]);
 }
 
-function returnSource(fixture: ReturnType<typeof makeFixture>, contractId: string) {
-  return run(fixture, [
+function returnSourceArgs(contractId: string, finding: string, builderThread = "builder-thread") {
+  return [
     "return-source",
     "42",
     "--contract-id",
@@ -242,14 +242,18 @@ function returnSource(fixture: ReturnType<typeof makeFixture>, contractId: strin
     "--host-id",
     "release-host",
     "--builder-thread",
-    "builder-thread",
+    builderThread,
     "--builder-host",
     "builder-host",
     "--builder-unarchived",
     "true",
     "--finding",
-    "archive receipt must gate review",
-  ]);
+    finding,
+  ];
+}
+
+function returnSource(fixture: ReturnType<typeof makeFixture>, contractId: string) {
+  return run(fixture, returnSourceArgs(contractId, "archive receipt must gate review"));
 }
 
 function completeTesterPass(fixture: ReturnType<typeof makeFixture>) {
@@ -990,41 +994,156 @@ describe("scripts/pr-lifecycle", () => {
     ];
     const repairedTester = run(fixture, returningTestArgs(release.contractId));
     expect(repairedTester.action).toBe("create_thread");
+
+    // A reservation that definitely never acquired an owner must not strand
+    // the accepted release contract when main advances again. The release
+    // owner reopens the same builder, and the replacement candidate retires
+    // the cancelled fingerprint without creating another release owner.
+    run(fixture, [
+      "cancel-pending",
+      "42",
+      "--role",
+      "tester",
+      "--contract-id",
+      repairedTester.contractId,
+      "--confirm-no-thread-created",
+    ]);
+    fixture.metadata.baseRefOid = "f".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    fixture.env.TEST_PR_PATCH =
+      "diff --git a/AGENTS.md b/AGENTS.md\n+repaired policy after second main advance\n";
+
+    const directRefreshWithoutReturn = runFailure(fixture, returningTestArgs(release.contractId));
+    expect(directRefreshWithoutReturn.status).toBe(1);
+    expect(directRefreshWithoutReturn.stderr).toContain("owner may still be active");
+
+    const wrongContractReturn = runFailure(
+      fixture,
+      returnSourceArgs("wrong-release-contract", "must preserve the release contract identity"),
+    );
+    expect(wrongContractReturn.status).toBe(1);
+    expect(wrongContractReturn.stderr).toContain("no matching release handoff contract");
+
+    const wrongBuilderReturn = runFailure(
+      fixture,
+      returnSourceArgs(release.contractId, "must preserve the builder identity", "wrong-builder"),
+    );
+    expect(wrongBuilderReturn.status).toBe(1);
+    expect(wrongBuilderReturn.stderr).toContain("exact recorded builder");
+
+    const statePath = path.join(fixture.root, "state", "pr-42.json");
+    const malformedCancelledState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    delete malformedCancelledState.tester.owner;
+    fs.writeFileSync(statePath, JSON.stringify(malformedCancelledState));
+    const missingOwnerReturn = runFailure(
+      fixture,
+      returnSourceArgs(release.contractId, "must reject an ambiguous cancelled owner"),
+    );
+    expect(missingOwnerReturn.status).toBe(1);
+    expect(missingOwnerReturn.stderr).toContain("ownerless cancelled tester reservation");
+
+    // Restore the explicit null written by cancel-pending. The preceding shape
+    // is intentionally malformed test state, not a supported lifecycle edit.
+    malformedCancelledState.tester.owner = null;
+    fs.writeFileSync(statePath, JSON.stringify(malformedCancelledState));
+
+    const repeatedReturn = run(
+      fixture,
+      returnSourceArgs(
+        release.contractId,
+        "main advanced again after the tester reservation was cancelled",
+      ),
+    );
+    expect(repeatedReturn).toMatchObject({
+      action: "source-returned",
+      contractId: release.contractId,
+      owner: { threadId: "release-thread", hostId: "release-host" },
+      builder: { threadId: "builder-thread", hostId: "builder-host" },
+    });
+
+    const replacementTester = run(fixture, returningTestArgs(release.contractId));
+    expect(replacementTester.action).toBe("create_thread");
+    expect(replacementTester.contractId).not.toBe(repairedTester.contractId);
+    expect(replacementTester.candidate).toMatchObject({
+      headSha: "c".repeat(40),
+    });
+    expect(replacementTester.candidate?.diffFingerprint).not.toBe(
+      repairedTester.candidate?.diffFingerprint,
+    );
+    const replacementState = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(replacementState.history.at(-1)).toMatchObject({
+      candidate: {
+        baseSha: "b".repeat(40),
+        diffFingerprint: repairedTester.candidate?.diffFingerprint,
+      },
+      tester: {
+        phase: "cancelled",
+        contractId: repairedTester.contractId,
+        owner: null,
+      },
+      release: {
+        contractId: release.contractId,
+        owner: { threadId: "release-thread", hostId: "release-host" },
+      },
+    });
+    expect(replacementState.release).toMatchObject({
+      phase: "awaiting-retest",
+      contractId: release.contractId,
+      owner: { threadId: "release-thread", hostId: "release-host" },
+    });
+
     run(fixture, [
       "accept-test-owner",
       "42",
       "--contract-id",
-      repairedTester.contractId,
+      replacementTester.contractId,
       "--thread-id",
-      "repaired-tester",
+      "replacement-tester",
       "--host-id",
       "tester-host",
     ]);
-    const repairedReceiptPath = path.join(fixture.root, "repaired-receipt.json");
+    fixture.metadata.baseRefOid = "1".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    const ownedTesterBlocksRepeatedReturn = runFailure(
+      fixture,
+      returnSourceArgs(release.contractId, "must not replace an owned tester"),
+    );
+    expect(ownedTesterBlocksRepeatedReturn.status).toBe(1);
+    expect(ownedTesterBlocksRepeatedReturn.stderr).toContain(
+      "ownerless cancelled tester reservation",
+    );
+
+    // Restore the first repaired-candidate setup used by the existing
+    // repeated-repair proof below.
+    fixture.metadata.baseRefOid = "f".repeat(40);
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    const replacementReceiptPath = path.join(fixture.root, "replacement-receipt.json");
     fs.writeFileSync(
-      repairedReceiptPath,
+      replacementReceiptPath,
       JSON.stringify({
         schemaVersion: 1,
         role: "tester",
-        routing: repairedTester.routing,
-        contractId: repairedTester.contractId,
+        routing: replacementTester.routing,
+        contractId: replacementTester.contractId,
         status: "FAIL",
-        headSha: repairedTester.candidate?.headSha,
-        diffFingerprint: repairedTester.candidate?.diffFingerprint,
-        owner: { threadId: "repaired-tester", hostId: "tester-host" },
+        headSha: replacementTester.candidate?.headSha,
+        diffFingerprint: replacementTester.candidate?.diffFingerprint,
+        owner: { threadId: "replacement-tester", hostId: "tester-host" },
         evidence: ["tester found a second source repair"],
         cleanup: { status: "complete" },
         limitations: [],
       }),
     );
-    run(fixture, ["record-test-receipt", "42", "--receipt", repairedReceiptPath]);
+    run(fixture, ["record-test-receipt", "42", "--receipt", replacementReceiptPath]);
     run(fixture, [
       "close-test",
       "42",
       "--contract-id",
-      repairedTester.contractId,
+      replacementTester.contractId,
       "--thread-id",
-      "repaired-tester",
+      "replacement-tester",
       "--host-id",
       "tester-host",
       "--closure",
@@ -1034,13 +1153,9 @@ describe("scripts/pr-lifecycle", () => {
     fixture.metadata.headRefOid = "d".repeat(40);
     fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
     fixture.env.TEST_PR_PATCH = "diff --git a/AGENTS.md b/AGENTS.md\n+second repaired policy\n";
-    const mismatchedReturn = runFailure(fixture, returningTestArgs("wrong-release-contract"));
-    expect(mismatchedReturn.status).toBe(1);
-    expect(mismatchedReturn.stderr).toContain("owner may still be active");
-
     const secondRepairedTester = run(fixture, returningTestArgs(release.contractId));
     expect(secondRepairedTester.action).toBe("create_thread");
-    expect(secondRepairedTester.contractId).not.toBe(repairedTester.contractId);
+    expect(secondRepairedTester.contractId).not.toBe(replacementTester.contractId);
     expect(run(fixture, returningTestArgs(release.contractId))).toMatchObject({
       action: "do-not-create",
       contractId: secondRepairedTester.contractId,
@@ -1050,12 +1165,12 @@ describe("scripts/pr-lifecycle", () => {
     const repeatedState = JSON.parse(
       fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
     );
-    expect(repeatedState.history).toHaveLength(2);
+    expect(repeatedState.history).toHaveLength(3);
     expect(
       repeatedState.history.map(
         (entry: { release: { contractId: string } }) => entry.release.contractId,
       ),
-    ).toEqual([release.contractId, release.contractId]);
+    ).toEqual([release.contractId, release.contractId, release.contractId]);
     expect(repeatedState.release).toMatchObject({
       phase: "awaiting-retest",
       contractId: release.contractId,

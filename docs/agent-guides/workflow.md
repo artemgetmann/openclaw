@@ -236,6 +236,13 @@ may repeat this cycle from `awaiting-retest` with that exact release contract an
 a closed tester. Every retired candidate stays in lifecycle history; tester and
 release identities are never reused or duplicated.
 
+If main advances again after a tester reservation was definitely cancelled
+before owner creation, the same accepted release contract may return source from
+`awaiting-retest` and replace that candidate. This exception requires the exact
+release and builder identities, the original builder-archive proof, and an
+ownerless `cancelled` tester record; any live, owned, or ambiguous tester still
+fails closed.
+
 After a successful merge, the release worker records and sends the merge receipt.
 The builder was already archived at accepted handoff. The receipt proves the
 reviewed head tree equals the landed merge tree and that the merge commit is an
