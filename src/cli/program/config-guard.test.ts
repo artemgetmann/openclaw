@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigValidationIssue, LegacyConfigIssue } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
@@ -16,8 +17,8 @@ function makeSnapshot() {
   return {
     exists: false,
     valid: true,
-    issues: [],
-    legacyIssues: [],
+    issues: [] as ConfigValidationIssue[],
+    legacyIssues: [] as LegacyConfigIssue[],
     path: "/tmp/openclaw.json",
   };
 }
@@ -112,6 +113,29 @@ describe("ensureConfigReady", () => {
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("lets gateway run own auto-migration before startup validation", async () => {
+    setInvalidSnapshot({
+      issues: [
+        {
+          path: "agents.defaults",
+          message: "stale Jarvis consumer model defaults",
+        },
+      ],
+      legacyIssues: [
+        {
+          path: "agents.defaults",
+          message: "stale Jarvis consumer model defaults",
+        },
+      ],
+    });
+
+    const runtime = await runEnsureConfigReady(["gateway", "run"]);
+
+    // Gateway startup has a dedicated migrate -> persist -> reread -> validate
+    // transaction. The generic CLI guard must not abort before that path runs.
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("runs doctor migration flow only once per module instance", async () => {

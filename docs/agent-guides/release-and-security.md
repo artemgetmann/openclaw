@@ -19,6 +19,12 @@
 - Do not run publish or release steps without explicit approval.
 - Core `openclaw` publishes use GitHub trusted publishing.
 - `@openclaw/*` plugins use a separate maintainer-only auth flow.
+- A Jarvis release that makes previously valid persisted consumer state require
+  migration must prove the exact prior public config through the packaged
+  `gateway run` startup path before publication. Unit proof of the migration
+  helper and a clean install are insufficient: the release gate must show that
+  preflight permits migration, the canonical config is rewritten, and the
+  gateway reaches healthy startup without a manual `doctor --fix` step.
 
 ## Version locations
 
