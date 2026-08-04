@@ -2416,6 +2416,47 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(fake_client.send_file_calls, [])
     self.assertTrue(fake_client.disconnected)
 
+  async def test_run_send_requires_exact_topic_title_case_before_mutation(self) -> None:
+    fake_client = FakeSendClient(topic = SimpleNamespace(id = 5335, title = "Jarvis Outreach"))
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(telethon_cli, "emit", side_effect = lambda payload, **_: emitted.update(payload) or 0),
+      ):
+        exit_code = await telethon_cli.run_send(argparse.Namespace(
+          caption = None, chat = "-1003783709877", media = None, message = "handoff",
+          reply_to = 0, session = str(session_path), topic_anchor = 5335,
+          topic_title = "jarvis outreach", voice = False,
+        ))
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(emitted["error"]["code"], "E_TOPIC_TITLE_MISMATCH")
+    self.assertEqual(fake_client.send_message_calls, [])
+
+  async def test_run_send_rejects_non_positive_topic_anchor_before_connection(self) -> None:
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", side_effect = AssertionError("must not connect")),
+        patch.object(telethon_cli, "emit", side_effect = lambda payload, **_: emitted.update(payload) or 0),
+      ):
+        exit_code = await telethon_cli.run_send(argparse.Namespace(
+          caption = None, chat = "-1003783709877", media = None, message = "handoff",
+          reply_to = 0, session = str(session_path), topic_anchor = 0,
+          topic_title = "Jarvis Outreach", voice = False,
+        ))
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(emitted["error"]["code"], "E_USAGE")
+
   async def test_run_topic_create_returns_stable_topic_anchor_payload(self) -> None:
     fake_client = FakeTopicClient()
     emitted: dict[str, object] = {}

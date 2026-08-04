@@ -632,6 +632,39 @@ describe("telegram-user commands", () => {
     expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
   });
 
+  it.each(["0", "-1", "1.5"])(
+    "rejects non-positive or fractional topic anchor %s",
+    async (anchor) => {
+      await expect(
+        telegramUserSendCommand(
+          {
+            chat: "-1003783709877",
+            message: "seed prompt",
+            topicAnchor: anchor,
+            topicTitle: "Jarvis Outreach",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(/topic-anchor to be a positive integer/i);
+      expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects surrounding whitespace in an asserted topic title", async () => {
+    await expect(
+      telegramUserSendCommand(
+        {
+          chat: "-1003783709877",
+          message: "seed prompt",
+          topicAnchor: "5335",
+          topicTitle: " Jarvis Outreach ",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/topic-title without surrounding whitespace/i);
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
+  });
+
   it("uses message text as the media caption when caption is omitted", async () => {
     backendMocks.runTelegramUserSend.mockResolvedValueOnce({
       backend_meta: backendMeta,
