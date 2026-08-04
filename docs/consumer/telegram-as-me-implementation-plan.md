@@ -72,6 +72,12 @@ Mac/app surface required:
 - session healthy / expired / needs reauth
 - reconnect / logout
 - explicit warning that this uses the user's real Telegram account
+- screenshot-first OTP entry: ask for a fresh screenshot, never pasted text or
+  a forwarded Telegram code message; OCR may enter model context, but the OTP
+  must be submitted once and never echoed in the reply or placed in argv/env
+- one local secure field for the long-lived Telegram 2FA password, plus OTP
+  fallback when image understanding is unavailable
+- explicit invalid-code, expired-code, and cooldown outcomes with no automatic retry loop
 
 ## Parallel Spike
 

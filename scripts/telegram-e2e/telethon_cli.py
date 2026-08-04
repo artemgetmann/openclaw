@@ -187,6 +187,8 @@ def emit_auth_status(
   session_path: Path,
   state: str,
   user_payload: dict[str, object | None] | None,
+  auth_error: str | None = None,
+  retry_after_seconds: int | None = None,
 ) -> int:
   return emit(
     {
@@ -195,6 +197,8 @@ def emit_auth_status(
       "session_path": str(session_path),
       "state": state,
       "user": user_payload,
+      **({"auth_error": auth_error} if auth_error else {}),
+      **({"retry_after_seconds": retry_after_seconds} if retry_after_seconds is not None else {}),
     }
   )
 
@@ -263,10 +267,6 @@ async def refresh_pending_code_request(
     phone_code_hash = str(getattr(sent, "phone_code_hash", "") or ""),
     state = "awaiting_code",
   )
-
-
-def read_login_password() -> str:
-  return str(os.environ.get(LOGIN_PASSWORD_ENV) or "").strip()
 
 
 def classify_login_error(error: Exception) -> str:
@@ -757,7 +757,11 @@ def build_parser() -> argparse.ArgumentParser:
 
   login = subparsers.add_parser("login", help = "Log in a real Telegram account")
   login.add_argument("--phone", required = True, help = "Telegram phone number")
-  login.add_argument("--code", help = "Telegram login code")
+  login.add_argument(
+    "--secret-stdin",
+    choices = ["code", "password"],
+    help = "Read exactly one login secret from local stdin",
+  )
 
   precheck = subparsers.add_parser("precheck", help = "Validate the Telegram user session")
   precheck.add_argument("--chat", help = "Optional chat target to resolve")
@@ -961,8 +965,9 @@ async def run_status(args: argparse.Namespace) -> int:
 async def run_login(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   phone = str(args.phone or "").strip()
-  code = str(args.code or "").strip()
-  password = read_login_password()
+  secret = sys.stdin.readline().rstrip("\r\n") if args.secret_stdin else ""
+  code = secret if args.secret_stdin == "code" else ""
+  password = secret if args.secret_stdin == "password" else ""
   if not phone:
     return fail("E_USAGE", "Telegram login requires --phone.")
 
@@ -1010,7 +1015,20 @@ async def run_login(args: argparse.Namespace) -> int:
         )
 
       if not code and not password:
-        stored = await refresh_pending_code_request(client, session_path, phone = phone)
+        try:
+          stored = await refresh_pending_code_request(client, session_path, phone = phone)
+        except Exception as err:
+          if classify_login_error(err) != "FloodWaitError":
+            raise
+          return emit_auth_status(
+            chat_payload = None,
+            pending_auth = pending_auth,
+            session_path = session_path,
+            state = pending_state if is_valid_pending_auth_state(pending_state) else "awaiting_code",
+            user_payload = None,
+            auth_error = "cooldown",
+            retry_after_seconds = max(1, int(getattr(err, "seconds", 1) or 1)),
+          )
         return emit_auth_status(
           chat_payload = None,
           pending_auth = stored,
@@ -1022,7 +1040,7 @@ async def run_login(args: argparse.Namespace) -> int:
       if not pending_hash or pending_phone != phone:
         return fail(
           "E_LOGIN_CODE_NOT_REQUESTED",
-          "No pending Telegram login code was found for this phone. Start login without --code first.",
+          "No pending Telegram login code was found for this phone. Start login from Jarvis Settings first.",
         )
 
       try:
@@ -1046,20 +1064,51 @@ async def run_login(args: argparse.Namespace) -> int:
             state = "awaiting_password",
             user_payload = None,
           )
+        if error_name in {"PhoneCodeEmptyError", "PhoneCodeInvalidError"}:
+          return emit_auth_status(
+            chat_payload = None,
+            pending_auth = pending_auth,
+            session_path = session_path,
+            state = "awaiting_code",
+            user_payload = None,
+            auth_error = "code_invalid",
+          )
         if error_name in {
-          "PhoneCodeEmptyError",
           "PhoneCodeExpiredError",
           "PhoneCodeHashEmptyError",
           "PhoneCodeHashExpiredError",
-          "PhoneCodeInvalidError",
         }:
-          stored = await refresh_pending_code_request(client, session_path, phone = phone)
+          try:
+            stored = await refresh_pending_code_request(client, session_path, phone = phone)
+          except Exception as refresh_err:
+            if classify_login_error(refresh_err) != "FloodWaitError":
+              raise
+            return emit_auth_status(
+              chat_payload = None,
+              pending_auth = pending_auth,
+              session_path = session_path,
+              state = "awaiting_code",
+              user_payload = None,
+              auth_error = "cooldown",
+              retry_after_seconds = max(1, int(getattr(refresh_err, "seconds", 1) or 1)),
+            )
           return emit_auth_status(
             chat_payload = None,
             pending_auth = stored,
             session_path = session_path,
             state = "awaiting_code",
             user_payload = None,
+            auth_error = "code_expired",
+          )
+        if error_name == "FloodWaitError":
+          return emit_auth_status(
+            chat_payload = None,
+            pending_auth = pending_auth,
+            session_path = session_path,
+            state = pending_state,
+            user_payload = None,
+            auth_error = "cooldown",
+            retry_after_seconds = max(1, int(getattr(err, "seconds", 1) or 1)),
           )
         raise
 

@@ -108,6 +108,9 @@ extension ChannelsSettings {
             self.formSection(title) {
                 ConsumerTelegramSetupCardContent(store: self.store, presentation: .settings)
             }
+            self.formSection("Telegram as you") {
+                TelegramUserSecureLoginCard()
+            }
         }
     }
 

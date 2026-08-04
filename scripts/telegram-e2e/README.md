@@ -186,12 +186,6 @@ openclaw telegram-user status --json
 openclaw telegram-user login \
   --phone "+15551234567"
 
-OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" \
-  openclaw telegram-user login \
-    --phone "+15551234567" \
-    --code 12345 \
-    --json
-
 openclaw telegram-user precheck --chat @jarvis_tester_1_bot
 
 openclaw telegram-user send \
@@ -278,14 +272,17 @@ Session states returned by `telegram-user status`:
 5. `missing_session`: no persisted Telethon session exists yet.
 6. `needs_reauth`: session file exists but Telegram no longer authorizes it.
 
-For Telegram 2FA, use the interactive password prompt or set `OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD` in the environment for automation. Do not pass account passwords on argv.
+For consumer setup, use Jarvis Settings → Telegram → Telegram as you. OTP and
+2FA are submitted through a local secure field and anonymous stdin pipe. Do not
+put them in argv, environment variables, chat, screenshots, logs, or automation
+parameters. Invalid, expired, and cooldown results stop after one submission.
 
 Why this is the preferred path:
 
 1. one command surface for login/status/send/read/wait/logout instead of scattered scripts
 2. shared thread matching for `reply_to_top_id`, `reply_to_msg_id`, and DM topic ids
 3. session locking so parallel probes fail loudly instead of corrupting Telethon state
-4. secrets stay in env and env-files, not process arguments
+4. login secrets stay in a local stdin pipe, not argv or environment variables
 5. pending login state is stored next to the session file so callers do not manage MTProto `phone_code_hash` details by hand
 6. `openclaw telegram smoke dm-reply` writes stable run artifacts into `.artifacts/telegram-smoke/`
 

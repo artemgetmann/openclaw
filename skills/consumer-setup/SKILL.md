@@ -123,26 +123,28 @@ explicitly ask for the CLI path.
 - If the user approves browser-assisted setup, open `https://my.telegram.org/apps`
   in the browser when browser control is available. The model may help navigate
   the Telegram app page and fill ordinary app fields after the user approves,
-  but the user must complete Telegram sign-in, OTP, 2FA, and any sensitive
-  account approval themselves. Once the app page shows API credentials, ask the
+  but the user must complete Telegram sign-in and any sensitive account approval
+  themselves. Once the app page shows API credentials, ask the
   user to confirm that OpenClaw may use the API ID/API hash for Telegram-as-me
   setup. If browser control is unavailable, say that plainly and switch to
   concise self-serve steps.
-- If the user approves setup, ask for only the minimum required info in order:
-  the phone number, then the API ID/API hash if missing, then the OTP Telegram
-  sends during login. If Telegram 2FA is enabled, explain that the user must
-  complete that secure step too.
-- Do not ask the user to paste the Telegram account password into chat. If 2FA
-  is required, prefer the product's secure prompt path; otherwise explain that
-  password entry must happen locally and should not be logged or echoed.
+- If the user approves setup, ask for the phone number, then the API ID/API hash
+  if missing. When Telegram sends the fresh OTP, say: "Send me a screenshot of
+  the OTP. Do not paste the code into chat and do not forward Telegram's code
+  message." Read the OTP from that screenshot and submit it once through the
+  pending Telegram-as-me login session without echoing it back.
+- A Telegram account 2FA password is long-lived, unlike the OTP. Never request
+  or accept that password in chat or media. If it is required, open Jarvis
+  Settings → Telegram → Telegram as you for secure local entry.
 - If doctor state is `missing_session`, say Telegram-as-me has credentials but is not
   logged in yet. Offer to connect it now and start
   `openclaw telegram-user login --phone <phone> --json` only after the user
   confirms.
-- If doctor state is `awaiting_code`, ask for the Telegram OTP that was just sent to
-  their Telegram app/SMS, then submit it with the existing login flow.
-- If doctor state is `awaiting_password`, explain that Telegram 2FA is still required
-  before OpenClaw can use the real-account session.
+- If doctor state is `awaiting_code`, request one fresh OTP screenshot and use
+  only the digits shown in that image. If it is `awaiting_password`, direct the
+  user to the secure local Mac field and do not receive the 2FA password.
+- If the local flow reports invalid, expired, or cooldown, state that exact
+  outcome once. Do not retry automatically or request another secret in chat.
 - If doctor state is `needs_reauth`, say the saved Telegram session is no longer
   accepted and offer to reconnect it.
 - Once setup succeeds, verify with a read-only check before any write action:

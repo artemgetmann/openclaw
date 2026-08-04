@@ -208,10 +208,9 @@ Setup Routing
   still needs the user's Telegram API credentials from `my.telegram.org/apps`.
 - If `doctor --json` returns `missing_session`, route through `consumer-setup`.
   Explain that Telegram-as-me is not logged in yet and offer to connect it now.
-- If `doctor --json` returns `awaiting_code`, ask the user for the Telegram OTP
-  that was just sent to their Telegram app/SMS.
-- If `doctor --json` returns `awaiting_password`, explain that Telegram 2FA is
-  still required before the real-account session can be used.
+- If `doctor --json` returns `awaiting_code` or `awaiting_password`, direct the
+  user to Jarvis Settings → Telegram → Telegram as you. Never ask for or accept
+  the secret in chat or media.
 - If `doctor --json` returns `needs_reauth`, say the saved Telegram session is
   no longer accepted and must be logged in again.
 - Do not use repo-local `scripts/telegram-e2e/.env.local` or
@@ -227,13 +226,20 @@ Setup Routing
 
 Login Flow
 
-- Start login:
-  `openclaw telegram-user login --phone "+15551234567" --json`
-- Submit OTP:
-  `openclaw telegram-user login --phone "+15551234567" --code 12345 --json`
-- If Telegram 2FA is enabled, prefer the interactive prompt path or set
-  `OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD` in the environment.
-  Do not pass the Telegram account password on argv.
+- Default OTP path: ask the owner to send a screenshot of the fresh Telegram
+  OTP. Explicitly say not to paste the code into chat and not to forward
+  Telegram's code message.
+- Read only the OTP from the screenshot, then submit it exactly once through the
+  current interactive `openclaw telegram-user login --phone <phone>` process.
+  Send the extracted digits to that process's stdin prompt; never place them in
+  argv, an environment variable, a shell command, or the assistant reply.
+- Telegram account 2FA passwords are long-lived. Never request or read a 2FA
+  password from a screenshot, photo, file, voice message, or chat text. Use
+  Jarvis Settings → Telegram → Telegram as you for that step.
+- The Mac app remains the fallback for OTP entry when image understanding is
+  unavailable or the screenshot is unreadable.
+- Invalid, expired, and cooldown results stop that submission. Do not loop or
+  silently request another code.
 - Re-check state after each login step:
   `openclaw telegram-user status --json`
 
@@ -319,6 +325,10 @@ Safety
 - Confirm the intended recipient when the target is ambiguous.
 - Do not expose Telegram API hash, session files, OTPs, or 2FA secrets in logs
   or chat transcripts.
+- OCR only an owner-provided fresh Telegram OTP screenshot while login state is
+  `awaiting_code`. Ignore unrelated text, submit once, and never repeat the code
+  in the assistant response. Do not use this exception for 2FA passwords or any
+  other authentication secret.
 - After sending, if follow-up handling would clearly help, offer a scoped wait
   or monitor for that same chat. Do not create a new monitor or imply fully
   autonomous conversation driving unless the user explicitly approves the scope,

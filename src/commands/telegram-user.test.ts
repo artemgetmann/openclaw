@@ -277,7 +277,7 @@ describe("telegram-user commands", () => {
     expect(payload.next_step).toContain("secure local login prompt");
   });
 
-  it("renders login output when a code was sent", async () => {
+  it("renders login output when a local code is still awaited", async () => {
     backendMocks.runTelegramUserLogin.mockResolvedValueOnce({
       backend_meta: backendMeta,
       pending_login: { phone: "+15551234567", state: "awaiting_code" },
@@ -286,20 +286,19 @@ describe("telegram-user commands", () => {
       user: null,
     });
 
-    await telegramUserLoginCommand({ phone: "+15551234567", code: "12345" }, runtime);
+    await telegramUserLoginCommand({ phone: "+15551234567", json: true }, runtime);
 
     expect(backendMocks.runTelegramUserLogin).toHaveBeenCalledWith({
-      code: "12345",
+      code: undefined,
       envFile: undefined,
       password: undefined,
       phone: "+15551234567",
       session: undefined,
     });
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("login pending"));
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("state=awaiting_code"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"state": "awaiting_code"'));
   });
 
-  it("keeps login JSON mode non-interactive and reads 2FA from env", async () => {
+  it("does not read Telegram 2FA from the process environment", async () => {
     vi.stubEnv("OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD", "super-secret");
     backendMocks.runTelegramUserLogin.mockResolvedValueOnce({
       backend_meta: backendMeta,
@@ -314,7 +313,7 @@ describe("telegram-user commands", () => {
     expect(backendMocks.runTelegramUserLogin).toHaveBeenCalledWith({
       code: undefined,
       envFile: undefined,
-      password: "super-secret",
+      password: undefined,
       phone: "+15551234567",
       session: undefined,
     });

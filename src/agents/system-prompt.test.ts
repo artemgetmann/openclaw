@@ -529,11 +529,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("checking what is already authorized");
     expect(prompt).toContain("available capability inventory");
     expect(prompt).toContain("non-content read-only health or auth probe");
-    expect(prompt).toContain("Do not open, read, or search OTP messages with ordinary");
-    expect(prompt).toContain("first-class secret-safe path");
-    expect(prompt).toContain("keep the value out of the model context, transcript, logs");
-    expect(prompt).toContain("ask the user to enter the code locally without pasting it into chat");
-    expect(prompt).toContain("Never echo, persist, enter, or submit a code");
+    expect(prompt).toContain("ask the owner to send a screenshot of the fresh Telegram OTP");
+    expect(prompt).toContain("not to paste the code into chat");
+    expect(prompt).toContain("not to forward Telegram's code message");
+    expect(prompt).toContain("Read only the OTP from that image");
+    expect(prompt).toContain("submit it once");
+    expect(prompt).toContain("long-lived 2FA password");
+    expect(prompt).toContain("Invalid, expired, and cooldown results are terminal");
   });
 
   it("describes heartbeat as ambient awareness rather than the default monitor engine", () => {
