@@ -55,7 +55,9 @@ unsafe:
 
 ## Required wrapper
 
-Run every heavy command through the shared slot:
+Run every heavy command through the shared slot. Agent-owned transactions use
+the dedicated-agent CPU policy by default, so CPU saturation remains visible
+telemetry but does not block or terminate work:
 
 ```bash
 scripts/with-heavy-local-slot.sh --label "<thread-id>:<purpose>" -- \
@@ -118,9 +120,10 @@ metadata, an incomplete spawn handshake, unreadable process identity, PID or
 group reuse, or mismatched start/session identity fails closed instead of
 guessing that the lease is stale or signaling an unverified group.
 
-On a Mac intentionally reserved for agents, use the dedicated entrypoint. It
-selects the explicit dedicated CPU policy without requiring every caller to
-remember the lower-level flag:
+The general wrapper and all canonical self-guarded build, package, release, and
+deployment entrypoints now default to dedicated-agent CPU semantics on this
+agent-owned Mac. The named dedicated entrypoint remains useful when a caller
+wants its declaration to reject any conflicting CPU override:
 
 ```bash
 scripts/with-dedicated-agent-slot.sh \
@@ -132,11 +135,12 @@ scripts/with-dedicated-agent-slot.sh \
 The named entrypoint owns CPU policy. Passing a second `--cpu-policy` fails
 before admission with `code=wrong_cpu_policy` and directs the caller to remove
 the override. Direct `scripts/with-heavy-local-slot.sh --cpu-policy
-dedicated-agent` remains supported for lower-level integrations, while an
-unflagged call to that general wrapper intentionally stays on the shared-machine
-default.
+dedicated-agent` remains supported for lower-level integrations. An unflagged
+call uses the same dedicated-agent CPU semantics, which prevents canonical
+checks, Swift builds, typechecks, tests, release builds, and protected
+deployments from treating 0% CPU idle as a host failure.
 
-This named mode allows 0% CPU idle while adding dedicated-host observations and
+Dedicated mode allows 0% CPU idle while adding dedicated-host observations and
 platform safety signals. Preflight and runtime samples emit
 `HEAVY_LOCAL_CPU_TELEMETRY`; the grant receipt records
 `cpu_policy=dedicated-agent`; and resource receipts report macOS memory-pressure
@@ -152,18 +156,34 @@ memory warning/critical or thermal/performance pressure. It pins the healthy
 managed Jarvis LaunchAgent PID before launch, requires that PID to be the only
 listener on port 18789, and treats listener takeover, restart, HTTP failure, or
 the existing three-second timeout as health failures. Missing required resource
-telemetry fails closed as `guard_internal`. Use the mode only for a dedicated
-agent transaction; omitting the flag (or selecting `standard`) retains the
-conservative shared/personal-machine behavior without these additional probes.
+telemetry fails closed as `guard_internal`.
 
-On macOS the default policy currently refuses admission when:
+When Artem is actively using the Mac and needs interactive CPU headroom, opt
+into the shared/interactive policy explicitly:
+
+```bash
+scripts/with-heavy-local-slot.sh \
+  --cpu-policy standard \
+  --label "<thread-id>:interactive-proof" \
+  --wait-seconds 900 \
+  -- pnpm check
+```
+
+`standard` is the compatibility name for shared/interactive mode. It retains
+the conservative 35% admission and 20% runtime CPU-idle floors. It does not
+weaken or replace any memory, disk, remote-access, Jarvis, lock, signal, or
+cleanup protection.
+
+On macOS the dedicated-agent default currently refuses admission when:
 
 - another heavy command owns the slot;
 - system memory headroom is below 25%;
-- CPU idle capacity is below 35%;
 - Data-volume free space is below 25 GiB;
 - configured Tailscale is disconnected; or
 - the managed Jarvis gateway is installed but unhealthy.
+
+Only explicit shared/interactive mode additionally refuses admission when CPU
+idle capacity is below 35% and stops after two runtime samples below 20%.
 
 Between 25 GiB and 35 GiB free, admission remains honest but prints one
 `HEAVY_LOCAL_DISK_REPORT` warning with the exact available KiB, report
@@ -238,9 +258,10 @@ standard-policy 20% runtime CPU-idle threshold, 25 GiB disk floor, 35 GiB
 disk-report threshold, 15-second interval, two-strike stop rule, and three-second
 health timeout remain fixed product policy in this revision. Environment
 variables cannot lower, disable, corrupt, or stretch them. Only the named
-dedicated entrypoint (or its exact lower-level `--cpu-policy dedicated-agent`
-equivalent) makes CPU idle telemetry-only; unknown or conflicting values fail
-closed.
+dedicated entrypoint, the unflagged agent-host default, or the exact lower-level
+`--cpu-policy dedicated-agent` equivalent makes CPU idle telemetry-only.
+Explicit `--cpu-policy standard` restores the fixed CPU floors for an
+interactive session; unknown or conflicting values fail closed.
 
 ## Task-owned disk receipts
 
@@ -265,10 +286,10 @@ policy. It remains machine-wide for every profile.
 
 Current protection separates platform danger signals from capacity evidence:
 
-- CPU: the default retains admission and runtime CPU-idle checks; the explicit
-  dedicated-agent transaction records CPU idle without enforcing a floor. Both
-  modes retain background scheduling and reduced priority. Dedicated mode also
-  refuses/stops on macOS thermal or performance pressure.
+- CPU: the agent-host default records CPU idle without enforcing a floor.
+  Explicit shared/interactive mode retains admission and runtime CPU-idle
+  checks. Both modes retain background scheduling and reduced priority.
+  Dedicated mode also refuses/stops on macOS thermal or performance pressure.
 - Memory: the fixed 25% headroom floor remains. Dedicated mode also consumes the
   macOS normal/warn/critical pressure state and reports swap allocation plus
   cumulative pageout/swapout counters. It deliberately has no absolute swap or
@@ -294,8 +315,8 @@ limits remain deferred until a bounded experiment measures a failure boundary:
 2. Establish stop limits from the first observed paging, latency, fanout, disk,
    or availability degradation, then apply an explicit safety margin. A threshold
    change is invalid if no failure boundary was observed.
-3. Repeat deterministic guard tests and a bounded host soak before
-   considering any default change or broader dedicated-host profile.
+3. Repeat deterministic guard tests and a bounded host soak before adding any
+   numeric trend limit or broader dedicated-host capacity profile.
 
 Until that experiment is complete, describe swap/pageout, latency, and group
 size as trend telemetry—not numeric enforcement. Direct platform memory and

@@ -576,6 +576,11 @@ test_production_has_no_ambient_test_bypass() {
     fail "production stop rule is not fixed at two unhealthy samples"
   grep -Fq 'readonly HOST_HEALTH_HTTP_TIMEOUT_SECONDS=3' "$WRAPPER" ||
     fail "production health timeout is not fixed at three seconds"
+  grep -Fq "cpu_policy='dedicated-agent'" "$WRAPPER" ||
+    fail "canonical heavy transactions do not default to dedicated-agent CPU policy"
+  if grep -Fq -- '--cpu-policy standard' "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"; then
+    fail "self-guarded build or release callers silently force shared CPU policy"
+  fi
   grep -Fq '/usr/sbin/sysctl -n kern.memorystatus_vm_pressure_level' "$WRAPPER" ||
     fail "dedicated resource policy does not read the macOS memory-pressure state"
   grep -Fq '/usr/sbin/sysctl -n vm.swapusage' "$WRAPPER" ||
@@ -598,6 +603,7 @@ test_production_has_no_ambient_test_bypass() {
 
 test_cpu_policy_is_explicit_narrow_and_receipted() {
   local default_lock="$TMP_DIR/cpu-policy-default.lock"
+  local shared_lock="$TMP_DIR/cpu-policy-shared.lock"
   local dedicated_lock="$TMP_DIR/cpu-policy-dedicated.lock"
   local runtime_lock="$TMP_DIR/cpu-policy-runtime.lock"
   local unknown_lock="$TMP_DIR/cpu-policy-unknown.lock"
@@ -608,22 +614,42 @@ test_cpu_policy_is_explicit_narrow_and_receipted() {
   local output="$TMP_DIR/cpu-policy.out"
   local status=0
 
-  # No flag retains the conservative 35% admission floor. An ambient value with
-  # the dedicated spelling is intentionally inert.
-  printf 'cpu-33\n' >"$health_path"
-  set +e
+  # Agent-owned work is the host default. Even at 0% idle, an unflagged
+  # canonical transaction must run while keeping CPU telemetry visible. An
+  # ambient value remains inert so callers cannot change policy implicitly.
+  printf 'cpu-0\n' >"$health_path"
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$default_lock" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
-  OPENCLAW_HEAVY_LOCAL_CPU_POLICY=dedicated-agent \
+  OPENCLAW_HEAVY_LOCAL_CPU_POLICY=standard \
     "$FIXTURE_WRAPPER" --label "cpu-default" -- touch "$marker" >"$output" 2>&1
+  [[ -e "$marker" ]] || fail "default dedicated CPU policy stopped work at 0% idle"
+  grep -Fq \
+    'HEAVY_LOCAL_SLOT_RECEIPT status=granted policy=standard cpu_policy=dedicated-agent owner=cpu-default' \
+    "$output" || fail "default grant omitted dedicated-agent CPU policy"
+  grep -Fq \
+    'cpu_policy=dedicated-agent phase=preflight status=observed enforcement=telemetry_only metric=cpu_idle_percent observed=0 threshold=none' \
+    "$output" || fail "default CPU policy omitted zero-idle telemetry"
+  [[ ! -e "$default_lock" ]] || fail "default dedicated CPU policy leaked its lease"
+  /bin/rm -f "$marker"
+
+  # Artem can explicitly restore shared/interactive headroom. The compatibility
+  # name `standard` retains the established 35% admission and 20% runtime floors.
+  printf 'cpu-33\n' >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$shared_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy standard \
+      --label "cpu-shared-interactive" \
+      -- touch "$marker" >"$output" 2>&1
   status=$?
   set -e
-  [[ "$status" -eq 75 ]] || fail "default CPU policy admitted 33% idle with status $status"
-  [[ ! -e "$marker" ]] || fail "default CPU policy ran work below its admission floor"
+  [[ "$status" -eq 75 ]] || fail "shared CPU policy admitted 33% idle with status $status"
+  [[ ! -e "$marker" ]] || fail "shared CPU policy ran work below its admission floor"
   grep -Fq 'code=cpu_pressure metric=cpu_idle_percent observed=33 threshold=35' "$output" ||
-    fail "default CPU refusal lost its 35% threshold receipt"
+    fail "shared CPU refusal lost its 35% threshold receipt"
   grep -Fq 'cpu_policy=standard phase=preflight status=pressure enforcement=threshold' "$output" ||
-    fail "default CPU policy omitted its structured sample"
+    fail "shared CPU policy omitted its structured sample"
 
   # The explicit dedicated transaction admits 0% idle and continues sampling at
   # runtime. The command must complete even after repeated zero-idle samples.
@@ -662,6 +688,7 @@ test_cpu_policy_is_explicit_narrow_and_receipted() {
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$runtime_lock" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
     "$FIXTURE_WRAPPER" \
+      --cpu-policy standard \
       --label "cpu-standard-runtime" \
       -- bash -c 'sleep 1; touch "$1"' _ "$marker" >"$output" 2>&1
   status=$?
@@ -739,7 +766,7 @@ test_cpu_policy_is_explicit_narrow_and_receipted() {
     fail "dedicated CPU runtime failed memory cleanup or leaked its lease"
   grep -Fq 'code=memory_pressure metric=memory_free_percent observed=10 threshold=25' "$output" ||
     fail "dedicated CPU runtime lost its memory stop receipt"
-  pass "CPU policy is explicit, telemetry-only when dedicated, and narrow"
+  pass "CPU policy defaults dedicated, keeps shared headroom explicit, and remains narrow"
 }
 
 test_dedicated_entrypoint_cannot_fall_back_to_standard_cpu_gates() {
@@ -2502,6 +2529,10 @@ run_signal_cleanup_case() {
 
   if [[ "$selected_cpu_policy" == "dedicated-agent" ]]; then
     cpu_policy_args=(--cpu-policy dedicated-agent)
+  else
+    # The production default is dedicated-agent. Signal fixtures that exercise
+    # the shared policy must opt into its CPU floors explicitly.
+    cpu_policy_args=(--cpu-policy standard)
   fi
 
   write_healthy_samples "$health_path"

@@ -26,7 +26,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   scripts/with-heavy-local-slot.sh --label <owner> --check
-  scripts/with-heavy-local-slot.sh --cpu-policy dedicated-agent --label <owner> --check
+  scripts/with-heavy-local-slot.sh --cpu-policy standard --label <owner> --check
   scripts/with-dedicated-agent-slot.sh --label <owner> --check
   scripts/with-heavy-local-slot.sh --label <owner> --wait-seconds <seconds> -- <command> [args...]
   scripts/with-heavy-local-slot.sh --label <owner> -- <command> [args...]
@@ -39,13 +39,12 @@ headroom, Tailscale, or the managed Jarvis gateway are unhealthy.
 without holding the lease, prints at most one queue notice, and executes the
 guarded command exactly once after admission.
 
---cpu-policy dedicated-agent is an explicit per-transaction mode for Macs
-reserved for agent workloads. It records CPU-idle telemetry but does not use
-CPU idle to refuse admission or stop work. Every non-CPU safety gate remains
-enforced. Dedicated agent lanes should use the named
-scripts/with-dedicated-agent-slot.sh entrypoint so the declaration cannot
-silently fall back to standard CPU gates. The default CPU policy retains the
-35%/20% idle floors.
+The default dedicated-agent CPU policy records CPU-idle telemetry but does not
+use CPU idle to refuse admission or stop work. Every non-CPU safety gate
+remains enforced. Use --cpu-policy standard only for a shared or interactive
+session that needs the conservative 35% admission and 20% runtime idle floors.
+The named scripts/with-dedicated-agent-slot.sh entrypoint remains available for
+callers that want an explicit, non-overridable dedicated-work declaration.
 EOF
   exit 2
 }
@@ -53,7 +52,7 @@ EOF
 label=''
 check_only=false
 policy='standard'
-cpu_policy='standard'
+cpu_policy='dedicated-agent'
 wait_seconds=0
 display_label=''
 telemetry_label=''
