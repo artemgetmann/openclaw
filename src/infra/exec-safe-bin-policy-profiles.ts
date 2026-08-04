@@ -348,6 +348,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["telegram-user", "topic-create"],
       ["telegram-user", "topic-delete"],
       ["telegram-user", "topic-resolve"],
+      ["telegram-user", "topic-list"],
       ["telegram-user", "read"],
       // Telegram read-state commands remain target-scoped through --chat and
       // do not open the rest of the OpenClaw command tree.
@@ -394,6 +395,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--max-runs",
       "--phone",
       "--poll-interval-ms",
+      "--query",
       "--reply-to",
       "--sender-id",
       "--session",
@@ -402,6 +404,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--title",
       "--topic-anchor",
       "--topic-id",
+      "--topic-title",
     ],
     guardedValueFlags: {
       "--cron-store": "pathOrSafeLiteral",

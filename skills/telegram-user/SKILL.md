@@ -265,6 +265,8 @@ Default Commands
   `openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --format compact`
 - Resolve one exact forum-topic title to its authoritative anchor:
   `openclaw telegram-user topic-resolve --chat -1003783709877 --title "Gmail Keychain Auth RCA" --json`
+- List or search authoritative forum-topic candidates when the user's wording is approximate:
+  `openclaw telegram-user topic-list --chat -1003783709877 --query "gmail keychain" --json`
 - Read only one validated forum topic:
   `openclaw telegram-user read --chat -1003783709877 --topic-anchor 12345 --limit 20 --format compact`
 - Mark one resolved chat read:
@@ -282,7 +284,7 @@ Default Commands
 - Create a forum topic:
   `openclaw telegram-user topic-create --chat -1003783709877 --title "strategy follow-up" --json`
 - Send into a forum topic:
-  `openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message "seed prompt" --json`
+  `openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --topic-title "strategy follow-up" --message "seed prompt" --json`
 - Delete a temporary forum topic:
   `openclaw telegram-user topic-delete --chat -1003783709877 --topic-anchor 12345 --json`
 - Select an exact callback button:
@@ -317,8 +319,9 @@ Behavior Notes
   observed value with `button-click`; never infer a hidden value from its label.
 - `wait` is thread-aware through the existing backend semantics around
   `reply_to_msg_id`, `reply_to_top_id`, and DM topic metadata.
-- `topic-create` returns `topic_anchor`. Use that value as `--topic-anchor`
-  (or `--reply-to`) when sending into the newly created Telegram forum topic.
+- `topic-create` returns `topic_anchor` and `topic_title`. Send with both as
+  `--topic-anchor` and `--topic-title`; the backend validates the pair under the
+  send lock. Never use raw `--reply-to` for a named forum topic.
 - `topic-delete` deletes a forum topic by explicit `topic_anchor`. Use it only
   for temporary test topics you created or topics the user explicitly asks you
   to remove.

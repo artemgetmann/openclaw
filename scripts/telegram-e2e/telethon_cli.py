@@ -869,6 +869,8 @@ def build_parser() -> argparse.ArgumentParser:
   send.add_argument("--media", help = "Media path or URL to upload")
   send.add_argument("--caption", help = "Caption for --media; overrides --message")
   send.add_argument("--reply-to", type = int, default = 0, help = "Reply-to message id")
+  send.add_argument("--topic-anchor", type = int, default = 0, help = "Forum topic anchor to validate")
+  send.add_argument("--topic-title", default = "", help = "Expected exact forum topic title")
   send.add_argument(
     "--voice",
     "--audio-as-voice",
@@ -888,6 +890,11 @@ def build_parser() -> argparse.ArgumentParser:
   topic_resolve = subparsers.add_parser("topic-resolve", help = "Resolve an exact forum topic title")
   topic_resolve.add_argument("--chat", required = True, help = "Target forum chat username or id")
   topic_resolve.add_argument("--title", required = True, help = "Exact forum topic title")
+
+  topic_list = subparsers.add_parser("topic-list", help = "List or search forum topics")
+  topic_list.add_argument("--chat", required = True, help = "Target forum chat username or id")
+  topic_list.add_argument("--query", default = "", help = "Optional Telegram topic search text")
+  topic_list.add_argument("--limit", type = int, default = 50, help = "Maximum topics to return")
 
   read = subparsers.add_parser("read", help = "Read recent messages and metadata")
   read.add_argument("--chat", required = True, help = "Target chat username or id")
@@ -1341,24 +1348,46 @@ async def run_send(args: argparse.Namespace) -> int:
   message_text = str(args.message or "").strip()
   media = str(args.media or "").strip()
   caption = str(args.caption or "").strip()
+  topic_anchor = int(getattr(args, "topic_anchor", 0) or 0)
+  topic_title = str(getattr(args, "topic_title", "") or "").strip()
   if not message_text and not media:
     return fail("E_USAGE", "Telegram send requires --message or --media.")
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
+      chat = resolve_chat(args.chat)
+      # Validate the human-readable destination and numeric anchor together
+      # immediately before mutation. This prevents stale agent memory from
+      # turning a valid id for a sibling topic into a successful wrong send.
+      if topic_anchor > 0:
+        topic = await fetch_topic_by_anchor(client, chat = chat, topic_anchor = topic_anchor)
+        if topic is None:
+          return fail("E_TOPIC_NOT_FOUND", "The requested forum topic anchor does not belong to the target chat.")
+        actual_title = str(getattr(topic, "title", "") or "").strip()
+        if actual_title.casefold() != topic_title.casefold():
+          return fail(
+            "E_TOPIC_TITLE_MISMATCH",
+            "The forum topic anchor no longer matches the expected title; nothing was sent.",
+            details = {
+              "actual_title": actual_title,
+              "expected_title": topic_title,
+              "topic_anchor": topic_anchor,
+            },
+          )
+      reply_to = topic_anchor or args.reply_to or None
       if media:
         sent = await client.send_file(
-          entity = resolve_chat(args.chat),
+          entity = chat,
           file = media,
           caption = caption or message_text or None,
-          reply_to = args.reply_to or None,
+          reply_to = reply_to,
           voice_note = bool(args.voice),
         )
       else:
         sent = await client.send_message(
-          entity = resolve_chat(args.chat),
+          entity = chat,
           message = message_text,
-          reply_to = args.reply_to or None,
+          reply_to = reply_to,
         )
       sent = coerce_single_message(sent)
       if sent is None:
@@ -1520,6 +1549,39 @@ async def run_topic_resolve(args: argparse.Namespace) -> int:
           details = {"topic_anchors": [int(getattr(topic, "id", 0) or 0) for topic in matches]},
         )
       return emit({"chat": args.chat, "topic": build_topic_payload(matches[0])})
+    finally:
+      await client.disconnect()
+
+
+async def run_topic_list(args: argparse.Namespace) -> int:
+  if functions is None:
+    return fail("E_TELETHON_IMPORT", "Telethon forum topic functions are unavailable.")
+  session_path = resolve_session_path(args.session)
+  query = str(args.query or "").strip()
+  limit = max(1, min(int(args.limit or 50), 100))
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
+    client, _ = await connect_client(session_path)
+    try:
+      # Telegram performs the query against its authoritative topic index. The
+      # command intentionally returns candidates instead of picking one: an
+      # agent may reason over titles, but only an exact title+anchor pair can
+      # authorize the later mutating send.
+      result = await client(
+        functions.messages.GetForumTopicsRequest(
+          peer = resolve_chat(args.chat),
+          offset_date = None,
+          offset_id = 0,
+          offset_topic = 0,
+          limit = limit,
+          q = query,
+        )
+      )
+      topics = [
+        build_topic_payload(topic)
+        for topic in list(getattr(result, "topics", []) or [])[:limit]
+        if int(getattr(topic, "id", 0) or 0) > 0
+      ]
+      return emit({"chat": args.chat, "query": query or None, "topics": topics})
     finally:
       await client.disconnect()
 
@@ -1928,6 +1990,8 @@ async def run() -> int:
       return await run_topic_delete(args)
     if args.command == "topic-resolve":
       return await run_topic_resolve(args)
+    if args.command == "topic-list":
+      return await run_topic_list(args)
     if args.command == "read":
       return await run_read(args)
     if args.command == "mark-read":
