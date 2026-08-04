@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -413,6 +414,9 @@ describe("Codex natural-language delegation", () => {
     await expect(beforePromptBuild?.({}, {})).resolves.toMatchObject({
       prependSystemContext: expect.stringContaining("ordinary language"),
     });
+    await expect(beforePromptBuild?.({}, {})).resolves.toMatchObject({
+      prependSystemContext: expect.stringContaining("defaults to a full implementation worker"),
+    });
     // The production agent must receive this tool without a separate
     // allowlist; owner and sandbox checks live in the factory below.
     expect(toolOptions).toEqual({ name: "codex_threads" });
@@ -443,6 +447,99 @@ describe("Codex natural-language delegation", () => {
         }),
       }),
     ]);
+  });
+
+  it("defaults an unqualified launch to an isolated full-capability worker", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.serverRequestHandlers = new Set();
+    appServer.autoComplete = true;
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-default-"));
+    const projectDir = path.join(temp, "project");
+    const worktreesRoot = path.join(temp, "worktrees");
+    let factory: OpenClawPluginToolFactory | undefined;
+
+    try {
+      // A real Git repository exercises the public delegation boundary through
+      // the same isolated-worktree manager used by Jarvis in production.
+      await fs.mkdir(projectDir);
+      await fs.writeFile(path.join(projectDir, "README.md"), "test project\n");
+      execFileSync("git", ["init", "-b", "main"], { cwd: projectDir });
+      execFileSync("git", ["add", "README.md"], { cwd: projectDir });
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "user.name=Codex Test",
+          "-c",
+          "user.email=codex-test@example.invalid",
+          "commit",
+          "-m",
+          "test: initialize fixture",
+        ],
+        { cwd: projectDir },
+      );
+      const canonicalProjectDir = await fs.realpath(projectDir);
+
+      registerCodex(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            command: "fake-codex",
+            defaultWorkspaceDir: projectDir,
+            worktreesRoot,
+          },
+          runtime: {} as never,
+          registerTool(next) {
+            if (typeof next === "function") {
+              factory = next;
+            }
+          },
+        }),
+      );
+
+      const tool = factory?.({ senderIsOwner: true, sandboxed: false }) as AnyAgentTool;
+      const result = await tool.execute("delegate-default-implementation", {
+        action: "delegate",
+        text: "Inspect this project and implement the requested change.",
+        project_dir: projectDir,
+      });
+
+      expect(result).toMatchObject({
+        details: {
+          execution: {
+            taskMode: "implementation",
+            workspaceMode: "isolated",
+            projectDir: canonicalProjectDir,
+            worktreeCreated: true,
+          },
+        },
+      });
+      const threadStart = appServer.requests.find((request) => request.method === "thread/start");
+      expect(threadStart).toMatchObject({
+        params: {
+          sandbox: "workspace-write",
+          approvalPolicy: "on-request",
+          approvalsReviewer: "auto_review",
+        },
+      });
+      const turnStart = appServer.requests.find((request) => request.method === "turn/start");
+      expect(turnStart).toMatchObject({
+        params: {
+          sandboxPolicy: expect.objectContaining({
+            type: "workspaceWrite",
+            networkAccess: true,
+          }),
+          approvalPolicy: "on-request",
+          approvalsReviewer: "auto_review",
+        },
+      });
+    } finally {
+      await fs.rm(temp, { recursive: true, force: true });
+    }
   });
 
   it("returns immediately and wakes the exact Jarvis session when Codex completes", async () => {
@@ -628,6 +725,7 @@ describe("Codex natural-language delegation", () => {
     const accepted = await tool.execute("delegate-async-pending-delivery", {
       action: "delegate_async",
       text: "Finish, then hand back through the exact Jarvis run.",
+      task_mode: "analysis",
     });
     const delegationId = (accepted as { details?: { delegationId?: string } }).details
       ?.delegationId;
@@ -694,6 +792,7 @@ describe("Codex natural-language delegation", () => {
     const accepted = await tool.execute("delegate-async-heartbeat-window", {
       action: "delegate_async",
       text: "Finish, then exercise the volatile heartbeat fallback.",
+      task_mode: "analysis",
     });
     const delegationId = (accepted as { details?: { delegationId?: string } }).details
       ?.delegationId;
@@ -1018,6 +1117,7 @@ describe("Codex natural-language delegation", () => {
     const accepted = await tool.execute("delegate-async-complete", {
       action: "delegate_async",
       text: "Complete the bounded task.",
+      task_mode: "analysis",
     });
     expect(accepted).toMatchObject({ details: { status: "accepted" } });
     const delegatedTurn = appServer.requests.find((request) => request.method === "turn/start");
