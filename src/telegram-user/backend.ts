@@ -30,6 +30,7 @@ import type {
   TelegramUserSendResult,
   TelegramUserTopicCreateResult,
   TelegramUserTopicDeleteResult,
+  TelegramUserTopicListResult,
   TelegramUserTopicResolveResult,
 } from "./types.js";
 
@@ -41,6 +42,7 @@ const telegramUserReadOnlyBackendCommands = new Set([
   "read",
   "inbox",
   "topic-resolve",
+  "topic-list",
 ]);
 
 const telegramUserToolingFiles = [
@@ -1164,6 +1166,8 @@ export async function runTelegramUserSend(
     media?: string | null;
     message?: string | null;
     replyTo?: number | null;
+    topicAnchor?: number | null;
+    topicTitle?: string | null;
     voice?: boolean | null;
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserSendResult> {
@@ -1172,6 +1176,8 @@ export async function runTelegramUserSend(
   pushOptionalStringArg(args, "--media", params.media);
   pushOptionalStringArg(args, "--caption", params.caption);
   pushOptionalNumberArg(args, "--reply-to", params.replyTo);
+  pushOptionalNumberArg(args, "--topic-anchor", params.topicAnchor);
+  pushOptionalStringArg(args, "--topic-title", params.topicTitle);
   if (params.voice) {
     args.push("--voice");
   }
@@ -1179,6 +1185,19 @@ export async function runTelegramUserSend(
     ...params,
     args,
   });
+}
+
+export async function runTelegramUserTopicList(
+  params: {
+    chat: string;
+    limit?: number | null;
+    query?: string | null;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserTopicListResult> {
+  const args = ["topic-list", "--chat", params.chat];
+  pushOptionalStringArg(args, "--query", params.query);
+  pushOptionalNumberArg(args, "--limit", params.limit);
+  return runBackendCommand<TelegramUserTopicListResult>({ ...params, args });
 }
 
 export async function runTelegramUserButtonClick(

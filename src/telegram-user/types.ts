@@ -178,6 +178,13 @@ export type TelegramUserTopicResolveResult = {
   topic: TelegramUserTopic;
 };
 
+export type TelegramUserTopicListResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  chat: string;
+  query: string | null;
+  topics: TelegramUserTopic[];
+};
+
 export type TelegramUserReadResult = {
   backend_meta?: TelegramUserBackendMeta;
   messages: TelegramUserMessage[];

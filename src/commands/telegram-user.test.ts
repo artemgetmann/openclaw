@@ -20,6 +20,7 @@ const backendMocks = vi.hoisted(() => ({
   runTelegramUserStatus: vi.fn(),
   runTelegramUserTopicCreate: vi.fn(),
   runTelegramUserTopicDelete: vi.fn(),
+  runTelegramUserTopicList: vi.fn(),
   runTelegramUserTopicResolve: vi.fn(),
   sleep: vi.fn(async () => {}),
 }));
@@ -498,6 +499,8 @@ describe("telegram-user commands", () => {
       session: undefined,
       voice: false,
       replyTo: undefined,
+      topicAnchor: undefined,
+      topicTitle: undefined,
     });
   });
 
@@ -542,6 +545,8 @@ describe("telegram-user commands", () => {
       session: undefined,
       voice: true,
       replyTo: 120,
+      topicAnchor: undefined,
+      topicTitle: undefined,
     });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("message_id=125"));
   });
@@ -572,6 +577,7 @@ describe("telegram-user commands", () => {
         chat: "-1003783709877",
         message: "seed prompt",
         topicAnchor: "18327",
+        topicTitle: "Jarvis Warm Discovery Calls",
       },
       runtime,
     );
@@ -580,9 +586,21 @@ describe("telegram-user commands", () => {
       expect.objectContaining({
         chat: "-1003783709877",
         message: "seed prompt",
-        replyTo: 18327,
+        replyTo: undefined,
+        topicAnchor: 18327,
+        topicTitle: "Jarvis Warm Discovery Calls",
       }),
     );
+  });
+
+  it("rejects an unlabelled topic anchor before calling the backend", async () => {
+    await expect(
+      telegramUserSendCommand(
+        { chat: "-1003783709877", message: "seed prompt", topicAnchor: "28340" },
+        runtime,
+      ),
+    ).rejects.toThrow(/requires --topic-title with --topic-anchor/i);
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
   });
 
   it("rejects conflicting reply and topic targets", async () => {
