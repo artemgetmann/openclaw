@@ -82,6 +82,24 @@ authorizes a replacement owner. If native task creation definitely failed, use
 created. Ambiguous creation fails closed. The command stores local transition
 state under ignored `.local/pr-lifecycle/`; the PR contract remains the durable
 cross-task receipt surface.
+
+Every lifecycle result emits the absolute `stateDirectory`, and every generated
+tester or release prompt carries the matching
+`OPENCLAW_PR_LIFECYCLE_STATE_DIR` assignment. Fresh project tasks run in fresh
+worktrees, so they must use that exact directory for every lifecycle command;
+their own `.local/pr-lifecycle/` is a different empty ledger. A missing or
+different state directory is an unresolved ownership gate, not evidence that a
+contract is absent. Reconcile the emitted directory and existing native owner
+before any create, cancel, archive, unarchive, or replacement action.
+
+Native thread-control failures remain outside this script's transaction
+boundary. `create_thread`, `send_message_to_thread`, `read_thread`, and thread
+archive operations do not expose repository-controlled idempotency keys. After
+a timeout or generic transport error, classify the result as ambiguous, inspect
+exact thread inventory and readback once after a recovery interval, and do not
+repeat a state-changing action unless unchanged state proves the retry safe.
+Compaction timing is a hypothesis until the target or caller transcript records
+it; temporal proximity alone is not causality.
 The wrapper first runs the canonical secret-silent GitHub preflight. A
 restricted `status=indeterminate` result requires the same read-only lifecycle
 command to be rerun in authorized host context; it is not proof that the PR or

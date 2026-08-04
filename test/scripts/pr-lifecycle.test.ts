@@ -11,6 +11,7 @@ const SCRIPT = path.join(ROOT, "scripts", "pr-lifecycle.mjs");
 type LifecycleOutput = {
   action: string;
   authority?: string;
+  stateDirectory: string;
   taskAuthority?: { allowedActions: string[]; source: string };
   candidate?: {
     headSha: string;
@@ -95,6 +96,19 @@ function runFailure(fixture: ReturnType<typeof makeFixture>, args: string[]) {
     env: fixture.env,
     encoding: "utf8",
   });
+}
+
+function runFromFreshWorktree(
+  fixture: ReturnType<typeof makeFixture>,
+  cwd: string,
+  args: string[],
+) {
+  const output = execFileSync(process.execPath, [SCRIPT, ...args], {
+    cwd,
+    env: fixture.env,
+    encoding: "utf8",
+  });
+  return JSON.parse(output) as LifecycleOutput;
 }
 
 function beginLiveTester(fixture: ReturnType<typeof makeFixture>) {
@@ -587,6 +601,7 @@ describe("scripts/pr-lifecycle", () => {
       "builder-host",
     ]);
     expect(release.action).toBe("create_thread");
+    expect(release.stateDirectory).toBe(fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR);
     expect(release.authority).toBe("normal-merge");
     expect(release.taskAuthority?.allowedActions).toEqual(["normal-merge"]);
     expect(release.nativeTool?.sequence).toEqual([
@@ -601,6 +616,9 @@ describe("scripts/pr-lifecycle", () => {
       thinking: "max",
     });
     expect(release.prompt).toContain("archive the exact builder thread");
+    expect(release.prompt).toContain(
+      `OPENCLAW_PR_LIFECYCLE_STATE_DIR=${JSON.stringify(fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR)}`,
+    );
     expect(release.prompt).toContain("Builder archival belongs to acceptance");
     expect(release.prompt).toContain("refreshed exact-head release receipt");
 
@@ -617,6 +635,63 @@ describe("scripts/pr-lifecycle", () => {
       "builder-host",
     ]);
     expect(repeated).toMatchObject({ action: "do-not-create", contractId: release.contractId });
+    expect(repeated.stateDirectory).toBe(release.stateDirectory);
+  });
+
+  it("accepts a release handoff from a fresh worktree using emitted state provenance", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const release = run(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    run(fixture, [
+      "accept-release-owner",
+      "42",
+      "--contract-id",
+      release.contractId,
+      "--thread-id",
+      "release-thread",
+      "--host-id",
+      "release-host",
+    ]);
+
+    // Reproduce the native project-task topology: release work starts in a
+    // different checkout, but consumes the exact state directory emitted by
+    // the builder instead of looking under its own cwd.
+    const releaseWorktree = path.join(fixture.root, "fresh-release-worktree");
+    fs.mkdirSync(releaseWorktree);
+    const accepted = runFromFreshWorktree(fixture, releaseWorktree, [
+      "accept-release-handoff",
+      "42",
+      "--contract-id",
+      release.contractId,
+      "--thread-id",
+      "release-thread",
+      "--host-id",
+      "release-host",
+      "--builder-thread",
+      "builder-thread",
+      "--builder-host",
+      "builder-host",
+      "--builder-archived",
+      "true",
+    ]);
+
+    expect(accepted).toMatchObject({
+      action: "release-handoff-accepted",
+      contractId: release.contractId,
+      stateDirectory: release.stateDirectory,
+    });
+    expect(fs.existsSync(path.join(releaseWorktree, ".local", "pr-lifecycle"))).toBe(false);
   });
 
   it("rejects a stale tester receipt after the PR head changes", () => {
