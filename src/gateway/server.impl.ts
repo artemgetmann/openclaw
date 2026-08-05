@@ -308,6 +308,12 @@ export type GatewayServerOptions = {
    * Callers must obtain this from prepareGatewayServerRestart().
    */
   preparedRestart?: PreparedGatewayRestart;
+  /**
+   * Internal initial-start handoff from `gateway run` after its write-capable
+   * config preflight supplied CLI defaults. The server revalidates snapshot
+   * freshness before consuming it, preventing both duplicate writes and races.
+   */
+  startupContext?: GatewayStartupContext;
 };
 
 export type PreparedGatewayRestart = Readonly<{
@@ -464,6 +470,10 @@ export async function startGatewayServer(
   });
 
   const preparedRestart = opts.preparedRestart;
+  const suppliedStartupContext = opts.startupContext;
+  if (preparedRestart && suppliedStartupContext) {
+    throw new Error("Gateway startup accepts either preparedRestart or startupContext, not both.");
+  }
   if (preparedRestart) {
     if (consumedPreparedRestarts.has(preparedRestart)) {
       throw new Error("Prepared gateway restart context has already been consumed.");
@@ -481,19 +491,29 @@ export async function startGatewayServer(
         }),
     });
   }
-  let startupContext = preparedRestart
-    ? preparedRestart.startupContext
-    : await runLoggedGatewayStartupPhase({
-        phase: "config_preflight",
-        log: logStartup,
-        run: async () =>
-          await runGatewayStartupConfigPreflight({
-            readSnapshot: readConfigFileSnapshot,
-            writeConfig: writeConfigFile,
-            log,
-            isNixMode,
-          }),
-      });
+  if (suppliedStartupContext) {
+    // CLI option resolution happens after migration and before server start.
+    // Fail closed if config changed during that gap rather than repeating the
+    // write-capable preflight or activating defaults from a stale snapshot.
+    assertGatewayStagedRestartSnapshotFresh({
+      prepared: suppliedStartupContext.preflightSnapshot,
+      current: await readConfigFileSnapshot(),
+    });
+  }
+  let startupContext =
+    preparedRestart?.startupContext ??
+    suppliedStartupContext ??
+    (await runLoggedGatewayStartupPhase({
+      phase: "config_preflight",
+      log: logStartup,
+      run: async () =>
+        await runGatewayStartupConfigPreflight({
+          readSnapshot: readConfigFileSnapshot,
+          writeConfig: writeConfigFile,
+          log,
+          isNixMode,
+        }),
+    }));
 
   const emitSecretsStateEvent = (
     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
