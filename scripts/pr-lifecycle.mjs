@@ -303,9 +303,9 @@ function readCapacityRecovery(receiptPath, priorTester) {
     fail(`cannot read capacity recovery receipt: ${error.message}`);
   }
 
-  // Capacity retry is intentionally narrower than a generic tester retry. The
-  // packet must prove the old guard refusal happened before workload start and
-  // that the same resource floor is now satisfied without occupied heavy locks.
+  // Recovery is intentionally narrower than a generic tester retry. The packet
+  // must bind one measured guard refusal before workload start, prove the exact
+  // failed host gate recovered, and show that no protected lock remains owned.
   const availableKiB = receipt?.capacity?.availableKiB;
   const requiredKiB = receipt?.capacity?.requiredKiB;
   const validCapacity =
@@ -314,23 +314,29 @@ function readCapacityRecovery(receiptPath, priorTester) {
     availableKiB > 0 &&
     requiredKiB > 0 &&
     availableKiB >= requiredKiB;
+  const causeCode = receipt?.cause?.code;
+  const validRecoveredGate =
+    (causeCode === "disk_pressure" && validCapacity) ||
+    (causeCode === "jarvis_unhealthy" && receipt?.health?.jarvisHealthy === true);
+  const validLocks =
+    receipt?.capacity?.heavyLockDirectoriesEmpty === true &&
+    receipt?.capacity?.releaseLockDirectoriesEmpty === true;
   if (
     receipt?.schemaVersion !== SCHEMA_VERSION ||
     receipt?.role !== "capacity-recovery" ||
     receipt?.source !== "authorized-capacity-owner-receipt" ||
     receipt?.priorTesterContractId !== priorTester.contractId ||
     receipt?.cause?.class !== "host_unhealthy" ||
-    receipt?.cause?.code !== "disk_pressure" ||
+    !new Set(["disk_pressure", "jarvis_unhealthy"]).has(causeCode) ||
     receipt?.cause?.workloadStarted !== false ||
-    !validCapacity ||
-    receipt?.capacity?.heavyLockDirectoriesEmpty !== true ||
-    receipt?.capacity?.releaseLockDirectoriesEmpty !== true ||
+    !validRecoveredGate ||
+    !validLocks ||
     !Array.isArray(receipt?.evidence) ||
     receipt.evidence.length === 0 ||
     receipt.evidence.some((item) => typeof item !== "string" || item.trim() === "")
   ) {
     fail(
-      "capacity recovery receipt must bind the prior tester, prove disk-pressure refusal before workload start, satisfy the disk floor, and prove empty heavy/release locks",
+      "capacity recovery receipt must bind the prior tester, prove an allowed guard refusal before workload start, prove that exact host gate recovered, and prove empty heavy/release locks",
     );
   }
   return receipt;
@@ -525,12 +531,16 @@ function handoffTest(pr, options) {
         priorTester.transport !== transport ||
         priorTester.testKind !== testKind ||
         priorTester.receipt?.status !== "FAIL" ||
-        priorTester.receipt?.cleanup?.status !== "not-required" ||
+        !(
+          priorTester.receipt?.cleanup?.status === "not-required" ||
+          (priorTester.receipt?.cleanup?.status === "complete" &&
+            priorTester.receipt?.workloadStarted === false)
+        ) ||
         priorTester.closure?.type !== "archived" ||
         state.release !== null
       ) {
         fail(
-          "capacity retry requires the same test contract, one archived user-visible FAIL with no workload cleanup, and no release owner",
+          "capacity retry requires the same test contract, one archived user-visible pre-workload FAIL with complete or unnecessary cleanup, and no release owner",
         );
       }
 

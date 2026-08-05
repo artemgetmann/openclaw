@@ -190,6 +190,52 @@ function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
   return tester;
 }
 
+function completeJarvisHealthFailure(fixture: ReturnType<typeof makeFixture>) {
+  const tester = beginLiveTester(fixture);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "health-blocked-tester",
+    "--host-id",
+    "tester-host",
+  ]);
+  const receiptPath = path.join(fixture.root, "jarvis-health-fail.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "FAIL",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "health-blocked-tester", hostId: "tester-host" },
+      workloadStarted: false,
+      evidence: ["heavy guard refused unhealthy Jarvis before workload start"],
+      cleanup: { status: "complete", evidence: "partial dependency bootstrap removed" },
+      limitations: [],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "health-blocked-tester",
+    "--host-id",
+    "tester-host",
+    "--closure",
+    "archived",
+  ]);
+  return tester;
+}
+
 function writeCapacityRecovery(
   fixture: ReturnType<typeof makeFixture>,
   priorTesterContractId: string,
@@ -215,12 +261,28 @@ function writeCapacityRecovery(
   return receiptPath;
 }
 
-function capacityRetryArgs(priorTesterContractId: string, recoveryPath: string) {
+function writeJarvisHealthRecovery(
+  fixture: ReturnType<typeof makeFixture>,
+  priorTesterContractId: string,
+  jarvisHealthy = true,
+) {
+  return writeCapacityRecovery(fixture, priorTesterContractId, {
+    cause: { class: "host_unhealthy", code: "jarvis_unhealthy", workloadStarted: false },
+    health: { jarvisHealthy },
+    evidence: ["managed Jarvis health gate recovered and lock directories are empty"],
+  });
+}
+
+function capacityRetryArgs(
+  priorTesterContractId: string,
+  recoveryPath: string,
+  testKind: "read-only" | "live-external" = "read-only",
+) {
   return [
     "handoff-test",
     "42",
     "--test-kind",
-    "read-only",
+    testKind,
     "--transport",
     "user-visible-task",
     "--owner-thread",
@@ -435,6 +497,34 @@ describe("scripts/pr-lifecycle", () => {
     expect(state.tester.retryOfContractId).toBe(priorTester.contractId);
   });
 
+  it("reserves one fresh tester after pre-workload Jarvis health recovery", () => {
+    const fixture = makeFixture();
+    const priorTester = completeJarvisHealthFailure(fixture);
+    const recoveryPath = writeJarvisHealthRecovery(fixture, priorTester.contractId);
+
+    const retry = run(
+      fixture,
+      capacityRetryArgs(priorTester.contractId, recoveryPath, "live-external"),
+    );
+    expect(retry).toMatchObject({
+      action: "create_thread",
+      retryOfContractId: priorTester.contractId,
+    });
+  });
+
+  it("rejects Jarvis health retry until the exact health gate is recovered", () => {
+    const fixture = makeFixture();
+    const priorTester = completeJarvisHealthFailure(fixture);
+    const recoveryPath = writeJarvisHealthRecovery(fixture, priorTester.contractId, false);
+
+    const result = runFailure(
+      fixture,
+      capacityRetryArgs(priorTester.contractId, recoveryPath, "live-external"),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("prove that exact host gate recovered");
+  });
+
   it("refuses a recursive capacity retry after the one replacement also fails", () => {
     const fixture = makeFixture();
     const originalTester = completeCapacityOnlyFailure(fixture);
@@ -514,7 +604,7 @@ describe("scripts/pr-lifecycle", () => {
 
     const result = runFailure(fixture, capacityRetryArgs(priorTester.contractId, recoveryPath));
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("prove disk-pressure refusal before workload start");
+    expect(result.stderr).toContain("prove an allowed guard refusal before workload start");
   });
 
   it("consumes the exact tester receipt before routing one user-visible release worker", () => {
