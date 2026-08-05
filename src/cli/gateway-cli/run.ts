@@ -214,20 +214,21 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   // safely persist, reread, and validate config before runtime side effects.
   // Use that validated result for CLI defaults too: a strict load here would
   // reject an auto-migratable packaged config before startup can repair it.
-  let cfg;
+  let gatewayStartupContext;
   try {
-    ({ config: cfg } = await runGatewayStartupConfigPreflight({
+    gatewayStartupContext = await runGatewayStartupConfigPreflight({
       readSnapshot: readConfigFileSnapshot,
       writeConfig: writeConfigFile,
       log: gatewayLog,
       isNixMode,
-    }));
+    });
   } catch (err) {
     const startupPreflightFailure = formatGatewayStartupPreflightFailure(err);
     defaultRuntime.error(startupPreflightFailure ?? `Gateway failed to start: ${String(err)}`);
     defaultRuntime.exit(1);
     return;
   }
+  const cfg = gatewayStartupContext.config;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");
@@ -475,6 +476,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           auth: authOverride,
           tailscale: tailscaleOverride,
           preparedRestart,
+          // The initial CLI preflight already performed the write-capable
+          // migration transaction used for option defaults. Hand that exact
+          // context to the server so startup validates freshness instead of
+          // repeating migrations and other write-capable repairs.
+          startupContext: preparedRestart ? undefined : gatewayStartupContext,
         }),
     });
 

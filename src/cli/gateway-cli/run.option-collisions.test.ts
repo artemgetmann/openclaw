@@ -15,9 +15,14 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
 }));
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
-const runGatewayStartupConfigPreflight = vi.fn(async () => ({
-  config: configState.cfg,
-}));
+const createStartupContext = (config: Record<string, unknown>) => ({
+  config,
+  preflightSnapshot: configState.snapshot,
+  secretsPrechecked: false,
+  authBootstrap: { generatedToken: false, persistedGeneratedToken: false },
+  diagnosticsEnabled: false,
+});
+const runGatewayStartupConfigPreflight = vi.fn(async () => createStartupContext(configState.cfg));
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
@@ -155,9 +160,9 @@ describe("gateway run option collisions", () => {
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayStartupConfigPreflight.mockClear();
-    runGatewayStartupConfigPreflight.mockImplementation(async () => ({
-      config: configState.cfg,
-    }));
+    runGatewayStartupConfigPreflight.mockImplementation(async () =>
+      createStartupContext(configState.cfg),
+    );
     runGatewayLoop.mockClear();
   });
 
@@ -252,7 +257,7 @@ describe("gateway run option collisions", () => {
       );
       configState.cfg = migratedConfig;
       configState.snapshot = { exists: true, parsed: migratedConfig };
-      return { config: migratedConfig };
+      return createStartupContext(migratedConfig);
     });
 
     await runGatewayCli(["gateway", "run"]);
@@ -260,7 +265,10 @@ describe("gateway run option collisions", () => {
     expect(runGatewayStartupConfigPreflight).toHaveBeenCalledTimes(1);
     expect(startGatewayServer).toHaveBeenCalledWith(
       19991,
-      expect.objectContaining({ bind: "loopback" }),
+      expect.objectContaining({
+        bind: "loopback",
+        startupContext: expect.objectContaining({ config: migratedConfig }),
+      }),
     );
     expect(migratedConfig.agents.defaults.model).toEqual({
       primary: "openai-codex/gpt-5.6-sol",
