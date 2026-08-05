@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "sequence": 0,
+  "nextFence": 1,
+  "mergeLease": null,
+  "items": {},
+  "lastTransaction": {
+    "id": "init-release-queue-20260805",
+    "recordedAt": "2026-08-05T11:26:44.657Z"
+  },
+  "updatedAt": "2026-08-05T11:26:44.657Z"
+}
