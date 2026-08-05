@@ -1,11 +1,22 @@
 {
   "schemaVersion": 1,
-  "sequence": 1,
-  "nextFence": 1,
-  "mergeLease": null,
+  "sequence": 2,
+  "nextFence": 2,
+  "mergeLease": {
+    "leaseId": "ecb0d60d-021b-4d9f-9fc4-d1dd2269d74b",
+    "fence": 1,
+    "owner": {
+      "threadId": "019fd1ad-bfac-7361-b88c-86debfa822f6",
+      "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+    },
+    "claimedPr": 1354,
+    "claimedAt": "2026-08-05T11:29:16.104Z",
+    "heartbeatAt": "2026-08-05T11:29:16.104Z",
+    "expiresAt": "2026-08-05T11:49:16.104Z"
+  },
   "items": {
     "1354": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1354,
         "url": "https://github.com/artemgetmann/openclaw/pull/1354",
@@ -63,15 +74,28 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-05T11:26:48.441Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "ecb0d60d-021b-4d9f-9fc4-d1dd2269d74b",
+          "fence": 1,
+          "owner": {
+            "threadId": "019fd1ad-bfac-7361-b88c-86debfa822f6",
+            "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+          },
+          "claimedPr": 1354,
+          "claimedAt": "2026-08-05T11:29:16.104Z",
+          "heartbeatAt": "2026-08-05T11:29:16.104Z",
+          "expiresAt": "2026-08-05T11:49:16.104Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [],
       "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "enqueue-pr-1354-a6361bc204b",
-    "recordedAt": "2026-08-05T11:26:48.441Z"
+    "id": "release-pr-1354-019fd1ad-bfac-7361",
+    "recordedAt": "2026-08-05T11:29:16.104Z"
   },
-  "updatedAt": "2026-08-05T11:26:48.441Z"
+  "updatedAt": "2026-08-05T11:29:16.104Z"
 }
