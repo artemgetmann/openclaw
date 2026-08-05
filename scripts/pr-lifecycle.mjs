@@ -176,6 +176,13 @@ function resolveStateRoot() {
   return path.resolve(configured || path.join(process.cwd(), ".local", "pr-lifecycle"));
 }
 
+function lifecycleStateInstruction(root) {
+  // Native tester and release tasks run in fresh worktrees. Carry the exact
+  // builder-owned state directory in the transport contract so those workers
+  // cannot silently resolve an empty, worktree-local lifecycle ledger.
+  return `Set OPENCLAW_PR_LIFECYCLE_STATE_DIR=${JSON.stringify(root)} for every scripts/pr-lifecycle command in this handoff. Treat a missing or different state directory as an unresolved ownership gate; do not create, cancel, or replace an owner.`;
+}
+
 function withStateLock(pr, callback) {
   const root = resolveStateRoot();
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -204,7 +211,10 @@ function withStateLock(pr, callback) {
       });
       fs.renameSync(candidatePath, statePath);
     }
-    return result?.output;
+    // Every transition result carries its ledger provenance. This also makes
+    // do-not-create and resume receipts independently reconcilable after the
+    // caller compacts or hands work to a fresh project worktree.
+    return result?.output ? { ...result.output, stateDirectory: root } : result?.output;
   } finally {
     fs.rmdirSync(lockPath);
   }
@@ -326,7 +336,7 @@ function readCapacityRecovery(receiptPath, priorTester) {
   return receipt;
 }
 
-function ownerPrompt(role, state) {
+function ownerPrompt(role, state, stateDirectory) {
   const { candidate, builder } = state;
   const testerReceipt = role === "release" ? state.tester?.receipt : null;
   const releaseAuthority = role === "release" ? state.release?.taskAuthority : null;
@@ -339,6 +349,7 @@ function ownerPrompt(role, state) {
     `Diff: ${candidate.diffFingerprint}; ${candidate.changedPaths.join(", ")}`,
     `Claim / acceptance: ${candidate.acceptance}`,
     `Builder: thread=${builder.threadId} host=${builder.hostId}`,
+    `Lifecycle state: ${lifecycleStateInstruction(stateDirectory)}`,
     role === "tester"
       ? `Dispatch: role=${state.tester.routing.dispatcher.role}; decision=${state.tester.routing.decision}; rationale=${state.tester.routing.rationale.join(" | ")}`
       : `Tester dispatch: role=${state.tester.receipt.routing.dispatcher.role}; decision=${state.tester.receipt.routing.decision}; rationale=${state.tester.receipt.routing.rationale.join(" | ")}`,
@@ -579,7 +590,7 @@ function handoffTest(pr, options) {
                 },
               }
             : null,
-        prompt: ownerPrompt("tester", state),
+        prompt: ownerPrompt("tester", state, resolveStateRoot()),
         warning:
           "Consume this action once. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
       },
@@ -964,7 +975,7 @@ function handoffRelease(pr, options) {
           nativeTool: {
             sequence: ["send_message_to_thread", "set_thread_archived", "accept-release-handoff"],
           },
-          prompt: ownerPrompt("release", state),
+          prompt: ownerPrompt("release", state, resolveStateRoot()),
           warning: "Resume only the exact recorded release task; never create a replacement owner.",
         },
       };
@@ -1016,7 +1027,7 @@ function handoffRelease(pr, options) {
           target: { type: "project", environment: { type: "worktree" } },
           createThread: modelProfile,
         },
-        prompt: ownerPrompt("release", state),
+        prompt: ownerPrompt("release", state, resolveStateRoot()),
         warning:
           "Consume this action once with the emitted createThread model settings. Prevent recursive handoffs. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
       },
