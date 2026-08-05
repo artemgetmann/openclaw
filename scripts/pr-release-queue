@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/github-auth-preflight.sh
+source "$script_dir/lib/github-auth-preflight.sh"
+
+# Queue reads and writes use GitHub as durable coordination state. Fail before
+# invoking Node when host credentials are unavailable, so an auth problem is
+# never mistaken for an empty queue or a free release lease.
+export OPENCLAW_PR_RELEASE_QUEUE_GH="${OPENCLAW_PR_RELEASE_QUEUE_GH:-gh}"
+openclaw_github_preflight "${OPENCLAW_GITHUB_CONTEXT:-restricted}" host-gh
+
+exec node "$script_dir/pr-release-queue.mjs" "$@"
