@@ -101,6 +101,11 @@ the blocker and return source work through the canonical lifecycle. A mechanical
 conflict may be refreshed only by the builder under that lifecycle. Any conflict
 that can change behavior requires fresh review and exact-head testing.
 
+After the same builder supplies a repaired packet with fresh tester proof, use
+`scripts/pr-release-queue refresh --packet /path/to/new-packet.json`. The queue
+preserves the old candidate and blocker history, clears those old blockers, and
+returns the new immutable candidate to `queued`.
+
 A merge receipt must prove the reviewed head and diff, normal non-admin merge,
 expected-head protection, landed-tree equality, and ancestry. Source-only work
 then closes. Explicit deployment authority stops at a separate delivery barrier;

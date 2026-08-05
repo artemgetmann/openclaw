@@ -29,6 +29,7 @@ function usage() {
   scripts/pr-release-queue.mjs status
   scripts/pr-release-queue.mjs explain-order
   scripts/pr-release-queue.mjs enqueue --packet <FILE>
+  scripts/pr-release-queue.mjs refresh --packet <FILE>
   scripts/pr-release-queue.mjs claim --thread-id <ID> --host-id <ID> [--pr <NUMBER>] [--ttl-seconds <SECONDS>]
   scripts/pr-release-queue.mjs heartbeat --lease-id <ID> --fence <NUMBER> [--ttl-seconds <SECONDS>]
   scripts/pr-release-queue.mjs block --lease-id <ID> --fence <NUMBER> --kind <KIND> --details <TEXT>
@@ -353,9 +354,54 @@ function mutateEnqueue(state, packet, transactionId, now) {
       readyAt: now.toISOString(),
       ownerHistory: [],
       mutationIntent: null,
+      candidateHistory: [],
       terminalReceipts: [],
     };
     return { action: "enqueued", pr: packet.candidate.pr };
+  });
+}
+
+function mutateRefresh(state, packet, transactionId, now) {
+  return transition(state, transactionId, now, (next) => {
+    const item = next.items[String(packet.candidate.pr)];
+    if (!item || !["blocked", "awaiting-decision"].includes(item.state)) {
+      fail(`PR #${packet.candidate.pr} is not waiting for a repaired candidate`);
+    }
+    if (next.mergeLease?.claimedPr === packet.candidate.pr) {
+      fail(`PR #${packet.candidate.pr} still has an active release lease`);
+    }
+    if (
+      item.builder.threadId !== packet.builder.threadId ||
+      item.builder.hostId !== packet.builder.hostId
+    ) {
+      fail("refreshed packet must come from the same builder identity");
+    }
+    if (
+      item.candidate.headSha === packet.candidate.headSha &&
+      item.candidate.diffFingerprint === packet.candidate.diffFingerprint
+    ) {
+      fail("refreshed packet must bind a new candidate head or diff");
+    }
+
+    // Preserve the old immutable attempt and its release-time findings. The
+    // repaired packet becomes a fresh queued attempt only after its own exact
+    // tester PASS has already been validated by validatePacket.
+    item.candidateHistory ??= [];
+    item.candidateHistory.push({
+      candidate: item.candidate,
+      testerReceipt: item.testerReceipt,
+      discoveredBlockers: item.discoveredBlockers,
+      replacedAt: now.toISOString(),
+    });
+    item.candidate = packet.candidate;
+    item.builder = packet.builder;
+    item.testerReceipt = packet.testerReceipt;
+    item.authority = packet.authority;
+    item.declaredDependencies = packet.declaredDependencies ?? [];
+    item.discoveredBlockers = [];
+    item.readyAt = now.toISOString();
+    item.state = "queued";
+    return { action: "candidate-refreshed", pr: packet.candidate.pr };
   });
 }
 
@@ -749,6 +795,17 @@ function main() {
         transactionId,
         `chore(release-queue): enqueue PR #${packet.candidate.pr}`,
         (state) => mutateEnqueue(state, packet, transactionId, now),
+      );
+    }
+    case "refresh": {
+      const packet = validatePacket(
+        readJsonFile(requireOption(options, "packet"), "release packet"),
+      );
+      return performMutation(
+        store,
+        transactionId,
+        `chore(release-queue): refresh PR #${packet.candidate.pr}`,
+        (state) => mutateRefresh(state, packet, transactionId, now),
       );
     }
     case "claim":

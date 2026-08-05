@@ -287,6 +287,50 @@ describe("scripts/pr-release-queue", () => {
     expect(status.state?.items["40"]).toMatchObject({ state: "delivery-barrier" });
   });
 
+  it("accepts a newly tested candidate from the same builder after source return", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 45);
+    const owner = claim(fixture, "release-owner", 45);
+    run(fixture, [
+      "block",
+      "--lease-id",
+      owner.lease!.leaseId,
+      "--fence",
+      String(owner.lease!.fence),
+      "--kind",
+      "base-drift",
+      "--details",
+      "main advanced",
+      "--transaction-id",
+      "block-45",
+    ]);
+
+    const repairedPacketPath = writePacket(fixture, 45);
+    const repairedPacket = JSON.parse(fs.readFileSync(repairedPacketPath, "utf8"));
+    repairedPacket.candidate.headSha = "e".repeat(40);
+    repairedPacket.candidate.testedBaseSha = "f".repeat(40);
+    repairedPacket.candidate.diffFingerprint = `sha256:${"1".repeat(64)}`;
+    repairedPacket.testerReceipt.headSha = repairedPacket.candidate.headSha;
+    repairedPacket.testerReceipt.diffFingerprint = repairedPacket.candidate.diffFingerprint;
+    fs.writeFileSync(repairedPacketPath, JSON.stringify(repairedPacket));
+
+    const refreshed = run(fixture, [
+      "refresh",
+      "--packet",
+      repairedPacketPath,
+      "--transaction-id",
+      "refresh-45",
+    ]);
+    expect(refreshed).toMatchObject({ action: "candidate-refreshed", pr: 45 });
+
+    const status = run(fixture, ["status"]);
+    expect(status.state?.items["45"]).toMatchObject({ state: "queued" });
+    expect(claim(fixture, "replacement-owner", 45)).toMatchObject({
+      action: "claimed",
+      lease: { claimedPr: 45, fence: 2 },
+    });
+  });
+
   it("rejects stale tester identity and authority expansion", () => {
     const fixture = makeFixture();
     run(fixture, ["init", "--transaction-id", "init"]);
