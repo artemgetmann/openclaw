@@ -216,6 +216,13 @@ function terminalState(state) {
   return ["merged", "delivered", "closed", "cancelled", "superseded"].includes(state);
 }
 
+function dependencySatisfied(state) {
+  // Source dependencies care whether code landed, not whether separately
+  // authorized delivery work finished. Cancelled or superseded candidates did
+  // not land and therefore cannot satisfy a semantic `requires` edge.
+  return ["merged", "delivery-barrier", "delivered", "closed"].includes(state);
+}
+
 function leaseIsActive(lease, now) {
   return lease !== null && new Date(lease.expiresAt).valueOf() > now.valueOf();
 }
@@ -225,7 +232,7 @@ function dependencyBlockers(item, state) {
   for (const dependency of item.declaredDependencies) {
     const target = state.items[String(dependency.pr)];
     if (dependency.relation === "requires" || dependency.relation === "after") {
-      if (!target || !terminalState(target.state)) {
+      if (!target || !dependencySatisfied(target.state)) {
         blockers.push({ kind: "declared-dependency", dependency });
       }
     }

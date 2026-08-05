@@ -268,6 +268,9 @@ describe("scripts/pr-release-queue", () => {
   it("keeps an explicitly authorized deploy behind a delivery barrier", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 40, { actions: ["normal-merge", "deploy"] });
+    initAndEnqueue(fixture, 41, {
+      dependencies: [{ pr: 40, relation: "requires", reason: "uses its landed source" }],
+    });
     const owner = claim(fixture, "release-owner", 40);
     const receiptPath = writeMergeReceipt(fixture, 40);
 
@@ -285,6 +288,8 @@ describe("scripts/pr-release-queue", () => {
     expect(merged.action).toBe("merge-recorded-delivery-required");
     const status = run(fixture, ["status"]);
     expect(status.state?.items["40"]).toMatchObject({ state: "delivery-barrier" });
+    const explained = run(fixture, ["explain-order"]);
+    expect(explained.items?.find((item) => item.pr === 41)).toMatchObject({ ready: true });
   });
 
   it("accepts a newly tested candidate from the same builder after source return", () => {
