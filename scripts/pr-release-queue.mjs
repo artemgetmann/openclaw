@@ -659,7 +659,7 @@ class GitHubQueueStore {
         ref: `refs/heads/${this.branch}`,
         sha: commit.sha,
       });
-    } catch {
+    } catch (error) {
       const reconciled = this.read();
       if (reconciled) {
         return { action: "initialized-by-contender", branch: this.branch };
