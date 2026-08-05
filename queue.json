@@ -1,12 +1,77 @@
 {
   "schemaVersion": 1,
-  "sequence": 0,
+  "sequence": 1,
   "nextFence": 1,
   "mergeLease": null,
-  "items": {},
-  "lastTransaction": {
-    "id": "init-release-queue-20260805",
-    "recordedAt": "2026-08-05T11:26:44.657Z"
+  "items": {
+    "1354": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1354,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1354",
+        "headSha": "a6361bc204b149caf29f5f32751d488364f8078d",
+        "baseBranch": "main",
+        "testedBaseSha": "dc5ec8a6bad28b0023537ec65cd4896ceb781ff9",
+        "diffFingerprint": "sha256:17fd623de30d27308a2b448df93e4f44ea5246c53f5b16cd95cbccd281577c80",
+        "changedPaths": [
+          "docs/agent-guides/release-queue.md",
+          "docs/agent-guides/workflow.md",
+          "scripts/pr-lifecycle.mjs",
+          "scripts/pr-release-queue",
+          "scripts/pr-release-queue.mjs",
+          "test/scripts/pr-lifecycle.test.ts",
+          "test/scripts/pr-release-queue.test.ts"
+        ]
+      },
+      "builder": {
+        "threadId": "019fd04a-09c1-7ec1-9994-68eaee510812",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fd04a-09c1-7ec1-9994-68eaee510812",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "a6361bc204b149caf29f5f32751d488364f8078d",
+        "diffFingerprint": "sha256:17fd623de30d27308a2b448df93e4f44ea5246c53f5b16cd95cbccd281577c80",
+        "closure": "archived",
+        "contractId": "39f63cb8-5031-4819-be7c-f938f5514845",
+        "owner": {
+          "threadId": "019fd1a7-5717-7e61-a258-656c48787c46",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1354 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "2b6a0004-c8ca-4f80-a08c-4868888ecbd9",
+        "stateDirectory": "/Users/user/.codex/worktrees/7e8be9fc-a922-48c1-8c86-818667baff8f/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-05T11:26:48.441Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
+    }
   },
-  "updatedAt": "2026-08-05T11:26:44.657Z"
+  "lastTransaction": {
+    "id": "enqueue-pr-1354-a6361bc204b",
+    "recordedAt": "2026-08-05T11:26:48.441Z"
+  },
+  "updatedAt": "2026-08-05T11:26:48.441Z"
 }
