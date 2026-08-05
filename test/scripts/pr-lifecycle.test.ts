@@ -796,6 +796,21 @@ describe("scripts/pr-lifecycle", () => {
   it("emits a durable repo-backed packet instead of creating a release thread", () => {
     const fixture = makeFixture();
     completeTesterPass(fixture);
+    const queueState = path.join(fixture.root, "queue.json");
+    fs.writeFileSync(
+      queueState,
+      JSON.stringify({
+        schemaVersion: 1,
+        sequence: 0,
+        nextFence: 1,
+        mergeLease: null,
+        items: {},
+        rollout: { phase: "dogfood", threshold: 3, successfulPrs: [], pausedReason: null },
+        lastTransaction: null,
+        updatedAt: "2026-08-05T00:00:00.000Z",
+      }),
+    );
+    fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = queueState;
     const dependenciesPath = path.join(fixture.root, "dependencies.json");
     fs.writeFileSync(
       dependenciesPath,
@@ -937,6 +952,49 @@ describe("scripts/pr-lifecycle", () => {
       "direct",
     ]);
     expect(direct.action).toBe("create_thread");
+  });
+
+  it("rejects explicit repo-backed routing while authoritative rollout is paused", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const queueState = path.join(fixture.root, "queue.json");
+    fs.writeFileSync(
+      queueState,
+      JSON.stringify({
+        schemaVersion: 1,
+        sequence: 1,
+        nextFence: 1,
+        mergeLease: null,
+        items: {},
+        rollout: {
+          phase: "paused",
+          threshold: 3,
+          successfulPrs: [],
+          pausedReason: "receipt cache mismatch",
+          graduatedAt: null,
+          graduatedByPr: null,
+        },
+        lastTransaction: null,
+        updatedAt: "2026-08-05T00:00:00.000Z",
+      }),
+    );
+    fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = queueState;
+    const rejected = runFailure(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--queue",
+      "repo-backed",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("rollout is paused: receipt cache mismatch");
   });
 
   it("rejects a stale tester receipt after the PR head changes", () => {

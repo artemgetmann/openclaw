@@ -1002,7 +1002,10 @@ function handoffRelease(pr, options) {
     fail("--queue must be repo-backed or direct when provided", 2);
   }
   let queueMode = requestedQueueMode === "direct" ? null : requestedQueueMode;
-  if (!requestedQueueMode && process.env.OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE !== "disabled") {
+  const mustResolveQueue =
+    requestedQueueMode === "repo-backed" ||
+    (!requestedQueueMode && process.env.OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE !== "disabled");
+  if (mustResolveQueue) {
     try {
       const queueScript = path.join(
         path.dirname(fileURLToPath(import.meta.url)),
@@ -1018,6 +1021,8 @@ function handoffRelease(pr, options) {
         queueMode = "repo-backed";
       } else if (status?.rollout?.phase === "paused") {
         fail(`repo-backed release rollout is paused: ${status.rollout.pausedReason}`);
+      } else {
+        fail("authoritative release rollout returned an unknown phase");
       }
     } catch (error) {
       if (error instanceof LifecycleError) {
