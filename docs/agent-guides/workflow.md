@@ -163,18 +163,20 @@ or nested-agent resolution it returns, then run `close-test` with the same
 identity. `handoff-release` refuses a stale, failed, incomplete, or unclosed
 tester receipt.
 
-A capacity guard refusal before workload start is not source proof and is not a
-generic retry license. After the failed user-visible tester is archived, the
-same builder may pass its exact contract plus a typed capacity-owner recovery
-receipt to `handoff-test --capacity-retry-contract ...
+A capacity or managed-Jarvis health guard refusal before workload start is not
+source proof and is not a generic retry license. After the failed user-visible
+tester is archived, the same builder may pass its exact contract plus a typed
+capacity-owner recovery receipt to `handoff-test --capacity-retry-contract ...
 --capacity-recovery-receipt ...`. The receipt must bind that closed `FAIL`,
-record `workloadStarted=false`, prove the recovered disk floor and empty
-heavy/release lock directories, and preserve the same immutable candidate and
-test contract. The command moves the failed tester unchanged into the attempt
-ledger and atomically reserves exactly one fresh tester. Repeating the command
-returns the existing reservation; a source failure, completed workload, missing
-archive, insufficient capacity, occupied lock, release owner, or different
-candidate fails closed.
+record `workloadStarted=false`, prove the exact failed gate recovered (the disk
+floor or managed Jarvis health), prove empty heavy/release lock directories,
+and preserve the same immutable candidate and test contract. Cleanup may be
+`not-required`, or `complete` only when the terminal receipt also records that
+the workload never started. The command moves the failed tester unchanged into
+the attempt ledger and atomically reserves exactly one fresh tester. Repeating
+the command returns the existing reservation; a source failure, completed
+workload, missing archive, unrecovered host gate, occupied lock, release owner,
+or different candidate fails closed.
 
 ### 3. One release worker owns merge
 
