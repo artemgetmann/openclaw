@@ -83,6 +83,7 @@ if (args[0] === "pr" && args[1] === "view") {
       ...process.env,
       OPENCLAW_PR_LIFECYCLE_GH: gh,
       OPENCLAW_PR_LIFECYCLE_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE: "disabled",
       TEST_PR_METADATA: JSON.stringify(metadata),
       TEST_PR_PATCH: "diff --git a/AGENTS.md b/AGENTS.md\n+policy\n",
     },
@@ -838,6 +839,104 @@ describe("scripts/pr-lifecycle", () => {
         stateDirectory: fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
       },
     });
+  });
+
+  it("routes ordinary post-graduation handoff through the queue and preserves direct rollback", () => {
+    const makeGraduatedState = (statePath: string) => {
+      const items = Object.fromEntries(
+        [1, 2, 3].map((pr) => {
+          const headSha = pr.toString().repeat(40).slice(0, 40);
+          const diffFingerprint = `sha256:${pr.toString().repeat(64).slice(0, 64)}`;
+          return [
+            String(pr),
+            {
+              state: "closed",
+              candidate: { pr, headSha, diffFingerprint },
+              testerReceipt: { status: "PASS", headSha, diffFingerprint, closure: "archived" },
+              lifecycle: { contractId: `contract-${pr}` },
+              authority: { allowedActions: ["normal-merge"] },
+              ownerHistory: [{ leaseId: `lease-${pr}` }],
+              terminalReceipts: [
+                {
+                  schemaVersion: 1,
+                  kind: "source-merge",
+                  pr,
+                  reviewedHeadSha: headSha,
+                  diffFingerprint,
+                  mergeSha: pr.toString(16).repeat(40).slice(0, 40),
+                  normalNonAdmin: true,
+                  expectedHeadProtected: true,
+                  landedTreeMatchesReviewed: true,
+                  targetAncestryProven: true,
+                },
+              ],
+            },
+          ];
+        }),
+      );
+      fs.writeFileSync(
+        statePath,
+        JSON.stringify({
+          schemaVersion: 1,
+          sequence: 1,
+          nextFence: 1,
+          mergeLease: null,
+          items,
+          rollout: {
+            phase: "graduated",
+            threshold: 3,
+            successfulPrs: [1, 2, 3],
+            pausedReason: null,
+            graduatedAt: "2026-08-05T00:00:00.000Z",
+            graduatedByPr: 3,
+          },
+          lastTransaction: null,
+          updatedAt: "2026-08-05T00:00:00.000Z",
+        }),
+      );
+    };
+
+    const automatic = makeFixture();
+    completeTesterPass(automatic);
+    const automaticState = path.join(automatic.root, "queue.json");
+    makeGraduatedState(automaticState);
+    automatic.env.OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE = "enabled";
+    automatic.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = automaticState;
+    const routed = run(automatic, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(routed.action).toBe("enqueue-release-packet");
+
+    const rollback = makeFixture();
+    completeTesterPass(rollback);
+    const rollbackState = path.join(rollback.root, "queue.json");
+    makeGraduatedState(rollbackState);
+    rollback.env.OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE = "enabled";
+    rollback.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = rollbackState;
+    const direct = run(rollback, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--queue",
+      "direct",
+    ]);
+    expect(direct.action).toBe("create_thread");
   });
 
   it("rejects a stale tester receipt after the PR head changes", () => {
