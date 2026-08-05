@@ -180,13 +180,23 @@ candidate fails closed.
 
 Only after a terminal tester `PASS` is recorded and the exact tester lifecycle
 is closed does the builder confirm that no release worker already owns the PR.
-The builder invokes `scripts/pr-lifecycle handoff-release`; only its first
-`action=create_thread` contract may create exactly one fresh user-visible
-project-scoped release worker. The contract supplies the immutable PR, head,
-base, diff, builder identity, tester
-receipt, cleanup receipt, review/check state, dependencies and overlap, risks,
-rollback, remaining proof, and the validated task-authority packet. Builders
-and testers never merge or deploy.
+The builder invokes `scripts/pr-lifecycle handoff-release`. The existing direct
+mode permits only its first `action=create_thread` contract to create one fresh
+user-visible project-scoped release worker.
+
+The opt-in repo-backed mode uses `--queue repo-backed` and emits
+`action=enqueue-release-packet` instead. Persist that exact packet with
+`scripts/pr-release-queue enqueue` before waking a replaceable release operator.
+Structured semantic dependencies may be supplied with
+`--declared-dependencies <JSON-file>`; do not infer them from prose. A new
+operator reads and claims the durable queue rather than scanning Codex chats.
+An active fenced lease means `do-not-claim`; an expired lease is replaceable.
+Callbacks wake owners but never establish ownership or order. See
+`docs/agent-guides/release-queue.md` for the packet and recovery contract.
+
+Both modes carry the immutable PR, head, base, diff, builder identity, tester
+receipt and closure, dependencies, risks, rollback, remaining proof, and the
+validated task-authority packet. Builders and testers never merge or deploy.
 
 Release-task model selection is risk-based and executable:
 

@@ -97,6 +97,10 @@ function writePacket(
         allowedActions: options.actions ?? ["normal-merge"],
         constraints: ["no admin or bypass"],
       },
+      lifecycle: {
+        contractId: `release-contract-${pr}`,
+        stateDirectory: path.join(fixture.root, "lifecycle"),
+      },
       declaredDependencies: options.dependencies ?? [],
     }),
   );

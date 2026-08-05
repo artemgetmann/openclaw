@@ -44,7 +44,7 @@ function usage() {
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
-  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>]
+  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed] [--declared-dependencies <FILE>]
   scripts/pr-lifecycle accept-release-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle accept-release-handoff <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-archived true
   scripts/pr-lifecycle return-source <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-unarchived true --finding <TEXT>
@@ -825,6 +825,69 @@ function readTaskAuthority(authorityPath, pr) {
   return authority;
 }
 
+function readDeclaredDependencies(dependenciesPath, pr) {
+  if (!dependenciesPath) {
+    return [];
+  }
+  let dependencies;
+  try {
+    dependencies = JSON.parse(fs.readFileSync(path.resolve(dependenciesPath), "utf8"));
+  } catch (error) {
+    fail(`cannot read declared dependencies: ${error.message}`);
+  }
+  if (!Array.isArray(dependencies)) {
+    fail("declared dependencies must be a JSON array");
+  }
+  for (const dependency of dependencies) {
+    if (
+      !Number.isSafeInteger(dependency?.pr) ||
+      dependency.pr <= 0 ||
+      dependency.pr === pr ||
+      !["requires", "before", "after", "incompatible"].includes(dependency?.relation) ||
+      typeof dependency?.reason !== "string" ||
+      dependency.reason.trim() === ""
+    ) {
+      fail("each declared dependency requires another PR, relation, and reason");
+    }
+  }
+  return dependencies;
+}
+
+function makeReleasePacket(state, contractId) {
+  const { candidate, builder, tester, release } = state;
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    candidate: {
+      pr: candidate.number,
+      url: candidate.url,
+      headSha: candidate.headSha,
+      baseBranch: candidate.baseRefName,
+      testedBaseSha: candidate.baseSha,
+      diffFingerprint: candidate.diffFingerprint,
+      changedPaths: candidate.changedPaths,
+    },
+    builder: {
+      threadId: builder.threadId,
+      hostId: builder.hostId,
+      wakeRoute: { threadId: builder.threadId, hostId: builder.hostId },
+    },
+    testerReceipt: {
+      status: tester.receipt.status,
+      headSha: candidate.headSha,
+      diffFingerprint: candidate.diffFingerprint,
+      closure: tester.closure.type,
+      contractId: tester.contractId,
+      owner: tester.receipt.owner,
+    },
+    authority: release.taskAuthority,
+    declaredDependencies: release.declaredDependencies,
+    lifecycle: {
+      contractId,
+      stateDirectory: resolveStateRoot(),
+    },
+  };
+}
+
 function recordTestReceipt(pr, options) {
   const receipt = readReceipt(requireOption(options, "receipt"));
   const candidate = fetchCandidate(pr);
@@ -923,6 +986,11 @@ function handoffRelease(pr, options) {
     );
   }
   const taskAuthority = readTaskAuthority(options.taskAuthority, pr);
+  const queueMode = options.queue?.trim() || null;
+  if (queueMode && queueMode !== "repo-backed") {
+    fail("--queue must be repo-backed when provided", 2);
+  }
+  const declaredDependencies = readDeclaredDependencies(options.declaredDependencies, pr);
   const candidate = fetchCandidate(pr);
   if (candidate.isDraft) {
     fail("release handoff requires a ready-for-review PR, not a draft");
@@ -1001,10 +1069,29 @@ function handoffRelease(pr, options) {
       transport,
       authority,
       taskAuthority,
+      queueMode,
+      declaredDependencies,
       owner: null,
       createdAt: new Date().toISOString(),
     };
     state.updatedAt = new Date().toISOString();
+    if (queueMode === "repo-backed") {
+      return {
+        state,
+        output: {
+          schemaVersion: SCHEMA_VERSION,
+          action: "enqueue-release-packet",
+          contractId,
+          transport,
+          releasePacket: makeReleasePacket(state, contractId),
+          nativeTool: {
+            sequence: ["pr-release-queue enqueue", "create-or-wake-replaceable-operator"],
+          },
+          warning:
+            "Persist the packet before waking an operator. Callbacks are wake signals only; the repo-backed queue and GitHub remain authoritative.",
+        },
+      };
+    }
     return {
       state,
       output: {

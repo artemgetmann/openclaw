@@ -150,6 +150,7 @@ function validatePacket(packet) {
   const builder = packet?.builder;
   const tester = packet?.testerReceipt;
   const authority = packet?.authority;
+  const lifecycle = packet?.lifecycle;
   const dependencies = packet?.declaredDependencies ?? [];
   if (
     packet?.schemaVersion !== SCHEMA_VERSION ||
@@ -191,6 +192,14 @@ function validatePacket(packet) {
     !Array.isArray(authority?.constraints)
   ) {
     fail("release packet authority allows only normal-merge and optional deploy");
+  }
+  if (
+    typeof lifecycle?.contractId !== "string" ||
+    lifecycle.contractId.trim() === "" ||
+    typeof lifecycle?.stateDirectory !== "string" ||
+    !path.isAbsolute(lifecycle.stateDirectory)
+  ) {
+    fail("release packet requires lifecycle contract and absolute state provenance");
   }
   if (!Array.isArray(dependencies)) {
     fail("declaredDependencies must be an array");
@@ -356,6 +365,7 @@ function mutateEnqueue(state, packet, transactionId, now) {
       builder: packet.builder,
       testerReceipt: packet.testerReceipt,
       authority: packet.authority,
+      lifecycle: packet.lifecycle,
       declaredDependencies: packet.declaredDependencies ?? [],
       discoveredBlockers: [],
       readyAt: now.toISOString(),
@@ -404,6 +414,7 @@ function mutateRefresh(state, packet, transactionId, now) {
     item.builder = packet.builder;
     item.testerReceipt = packet.testerReceipt;
     item.authority = packet.authority;
+    item.lifecycle = packet.lifecycle;
     item.declaredDependencies = packet.declaredDependencies ?? [];
     item.discoveredBlockers = [];
     item.readyAt = now.toISOString();

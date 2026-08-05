@@ -30,6 +30,14 @@ type LifecycleOutput = {
     decision: string;
     rationale: string[];
   };
+  releasePacket?: {
+    candidate: { pr: number; headSha: string; diffFingerprint: string; changedPaths: string[] };
+    builder: { threadId: string; hostId: string; wakeRoute: { threadId: string; hostId: string } };
+    testerReceipt: { status: string; closure: string };
+    authority: { allowedActions: string[] };
+    declaredDependencies: Array<{ pr: number; relation: string; reason: string }>;
+    lifecycle: { contractId: string; stateDirectory: string };
+  };
 };
 
 function makeFixture() {
@@ -692,6 +700,54 @@ describe("scripts/pr-lifecycle", () => {
       stateDirectory: release.stateDirectory,
     });
     expect(fs.existsSync(path.join(releaseWorktree, ".local", "pr-lifecycle"))).toBe(false);
+  });
+
+  it("emits a durable repo-backed packet instead of creating a release thread", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const dependenciesPath = path.join(fixture.root, "dependencies.json");
+    fs.writeFileSync(
+      dependenciesPath,
+      JSON.stringify([{ pr: 41, relation: "requires", reason: "uses its landed contract" }]),
+    );
+
+    const release = run(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--queue",
+      "repo-backed",
+      "--declared-dependencies",
+      dependenciesPath,
+    ]);
+
+    expect(release.action).toBe("enqueue-release-packet");
+    expect(release.nativeTool?.sequence).toEqual([
+      "pr-release-queue enqueue",
+      "create-or-wake-replaceable-operator",
+    ]);
+    expect(release.releasePacket).toMatchObject({
+      candidate: { pr: 42, headSha: "a".repeat(40) },
+      builder: {
+        threadId: "builder-thread",
+        hostId: "builder-host",
+        wakeRoute: { threadId: "builder-thread", hostId: "builder-host" },
+      },
+      testerReceipt: { status: "PASS", closure: "archived" },
+      authority: { allowedActions: ["normal-merge"] },
+      declaredDependencies: [{ pr: 41, relation: "requires", reason: "uses its landed contract" }],
+      lifecycle: {
+        contractId: release.contractId,
+        stateDirectory: fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
+      },
+    });
   });
 
   it("rejects a stale tester receipt after the PR head changes", () => {
