@@ -146,10 +146,17 @@ describe("personal-tone-of-voice contract", () => {
     expect(canonicalSkill).toContain("Do not persist a decline or deferral");
   });
 
-  it("keeps owner profiles out of shared or ambiguous contexts", () => {
-    expect(canonicalSkill).toContain("verified private owner context");
-    expect(canonicalSkill).toContain("owner-created autonomous goal or monitor continuation");
-    expect(canonicalSkill).toContain("group, shared, delegated, non-owner, or ambiguous context");
+  it("permits verified personal owner contexts while rejecting shared or ambiguous ones", () => {
+    expect(canonicalSkill).toContain("verified personal owner context");
+    expect(canonicalSkill).toContain("direct/private owner session");
+    expect(canonicalSkill).toContain(
+      "owner-only group or topic the\nruntime classifies as personal",
+    );
+    expect(canonicalSkill).toMatch(/owner-created autonomous goal or monitor\s+continuation/);
+    expect(canonicalSkill).toContain("Do not\ninfer that a group or topic is personal");
+    expect(canonicalSkill).toContain(
+      "genuinely shared, delegated, non-owner, or ambiguous context",
+    );
     expect(canonicalSkill).toMatch(
       /do not read, quote, summarize, reveal, apply, create, or update the profile/,
     );

@@ -322,6 +322,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "begin",
+      nativeName: "begin",
+      description: "Help Jarvis learn about you.",
+      textAliases: ["/begin", "/init"],
+      category: "session",
+    }),
+    defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
       description: "List, kill, log, spawn, or steer subagent runs for this session.",
