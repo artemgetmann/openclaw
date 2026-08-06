@@ -55,7 +55,9 @@ unsafe:
 
 ## Required wrapper
 
-Run every heavy command through the shared slot:
+Run every heavy command through the shared slot. Agent-owned transactions use
+the dedicated-agent CPU policy by default, so CPU saturation remains visible
+telemetry but does not block or terminate work:
 
 ```bash
 scripts/with-heavy-local-slot.sh --label "<thread-id>:<purpose>" -- \
@@ -118,33 +120,70 @@ metadata, an incomplete spawn handshake, unreadable process identity, PID or
 group reuse, or mismatched start/session identity fails closed instead of
 guessing that the lease is stale or signaling an unverified group.
 
-On a Mac intentionally reserved for agents, one transaction may explicitly
-allow CPU saturation without bypassing the guard:
+The general wrapper and all canonical self-guarded build, package, release, and
+deployment entrypoints now default to dedicated-agent CPU semantics on this
+agent-owned Mac. The named dedicated entrypoint remains useful when a caller
+wants its declaration to reject any conflicting CPU override:
 
 ```bash
-scripts/with-heavy-local-slot.sh \
-  --cpu-policy dedicated-agent \
+scripts/with-dedicated-agent-slot.sh \
   --label "<thread-id>:capacity-ramp" \
   --wait-seconds 900 \
   -- pnpm vitest run path/to/focused.test.ts --maxWorkers 1
 ```
 
-This named mode changes only CPU-idle enforcement. Preflight and runtime samples
-still emit `HEAVY_LOCAL_CPU_TELEMETRY`, and the grant receipt records
-`cpu_policy=dedicated-agent`, but 0% CPU idle is allowed. The machine-wide lease,
-memory and disk floors, Tailscale and managed-Jarvis health, process identity,
-signal propagation, two-strike non-CPU runtime stops, and exact tree cleanup are
-unchanged. Use it only for a dedicated agent transaction; omitting the flag (or
-selecting `standard`) retains the conservative shared/personal-machine policy.
+The named entrypoint owns CPU policy. Passing a second `--cpu-policy` fails
+before admission with `code=wrong_cpu_policy` and directs the caller to remove
+the override. Direct `scripts/with-heavy-local-slot.sh --cpu-policy
+dedicated-agent` remains supported for lower-level integrations. An unflagged
+call uses the same dedicated-agent CPU semantics, which prevents canonical
+checks, Swift builds, typechecks, tests, release builds, and protected
+deployments from treating 0% CPU idle as a host failure.
 
-On macOS the default policy currently refuses admission when:
+Dedicated mode allows 0% CPU idle while adding dedicated-host observations and
+platform safety signals. Preflight and runtime samples emit
+`HEAVY_LOCAL_CPU_TELEMETRY`; the grant receipt records
+`cpu_policy=dedicated-agent`; and resource receipts report macOS memory-pressure
+state, swap allocation, pageout/swapout counters, thermal/performance pressure,
+managed-Jarvis identity and HTTP latency, plus guarded-group process count and
+RSS. Arguments, environment values, and unrelated process details are never
+recorded.
+
+The machine-wide lease, 25% memory floor, disk policy, Tailscale check, process
+identity, signal propagation, two-strike runtime stop, and exact cleanup remain
+unchanged. Dedicated mode additionally refuses admission while macOS reports
+memory warning/critical or thermal/performance pressure. It pins the healthy
+managed Jarvis LaunchAgent PID before launch, requires that PID to be the only
+listener on port 18789, and treats listener takeover, restart, HTTP failure, or
+the existing three-second timeout as health failures. Missing required resource
+telemetry fails closed as `guard_internal`.
+
+When Artem is actively using the Mac and needs interactive CPU headroom, opt
+into the shared/interactive policy explicitly:
+
+```bash
+scripts/with-heavy-local-slot.sh \
+  --cpu-policy standard \
+  --label "<thread-id>:interactive-proof" \
+  --wait-seconds 900 \
+  -- pnpm check
+```
+
+`standard` is the compatibility name for shared/interactive mode. It retains
+the conservative 35% admission and 20% runtime CPU-idle floors. It does not
+weaken or replace any memory, disk, remote-access, Jarvis, lock, signal, or
+cleanup protection.
+
+On macOS the dedicated-agent default currently refuses admission when:
 
 - another heavy command owns the slot;
 - system memory headroom is below 25%;
-- CPU idle capacity is below 35%;
 - Data-volume free space is below 25 GiB;
 - configured Tailscale is disconnected; or
 - the managed Jarvis gateway is installed but unhealthy.
+
+Only explicit shared/interactive mode additionally refuses admission when CPU
+idle capacity is below 35% and stops after two runtime samples below 20%.
 
 Between 25 GiB and 35 GiB free, admission remains honest but prints one
 `HEAVY_LOCAL_DISK_REPORT` warning with the exact available KiB, report
@@ -157,16 +196,36 @@ for CPU and memory pressure.
 Refusals retain exit code `75` for compatibility and also emit a stable line:
 
 ```text
-HEAVY_LOCAL_SLOT_REFUSAL class=<occupied|host_unhealthy|guard_internal> code=<reason> [measurement fields]
+HEAVY_LOCAL_SLOT_REFUSAL class=<occupied|host_unhealthy|guard_internal> code=<reason> [measurement fields] phase=<admission|runtime> outcome=<refused|terminated> next_action=<safe-action>
 ```
 
 The class separates normal serialization, measured host pressure, and failures
 inside the guard or its measurement backends. The following human line retains
-the useful owner, PID, measurement, or recovery detail. A bounded wait that
+the useful owner, PID, measurement, or recovery detail and names the same next
+safe action. Retryable admission pressure additionally emits
+`HEAVY_LOCAL_SLOT_PAUSED` with `phase=admission`, `outcome=paused`, the decisive
+observation, and the recovery condition before the bounded waiter sleeps. A bounded wait that
 expires emits the last retryable class with `code=wait_timeout`.
 Measured CPU, memory, Tailscale, and Jarvis refusals also expose stable
 `metric`, `observed`, `threshold`, `expected`, and `unit` fields when relevant.
 These are refusal telemetry, not a complete capacity profile.
+
+Dedicated transactions also emit three bounded telemetry lines:
+
+- `HEAVY_LOCAL_RESOURCE_TELEMETRY` records elapsed time, macOS memory-pressure
+  state, swap used/free KiB, cumulative pageouts/swapouts, thermal state, and
+  explicitly labels paging counters as observed telemetry with no kill limit;
+- `HEAVY_LOCAL_JARVIS_TELEMETRY` records the matching LaunchAgent/listener PID,
+  sample phase/time, HTTP status, and latency; and
+- `HEAVY_LOCAL_GROUP_TELEMETRY` records only the guarded PGID's process count and
+  aggregate RSS, explicitly labeled as observations under the single-group
+  enforcement boundary.
+
+Absolute swap use and process count are observations, not unevidenced kill
+thresholds. macOS can retain historical swap after pressure recovers, and the
+known workloads have different legitimate helper counts. Derive trends from
+successive monotonic samples; do not reinterpret a large absolute value as a
+failure when the platform still reports normal pressure.
 
 An owner-metadata publication failure also includes the exact atomic
 publication stage and owner path. Inspect that generated lease path and its
@@ -198,9 +257,11 @@ The 25% memory threshold, standard-policy 35% admission CPU-idle threshold,
 standard-policy 20% runtime CPU-idle threshold, 25 GiB disk floor, 35 GiB
 disk-report threshold, 15-second interval, two-strike stop rule, and three-second
 health timeout remain fixed product policy in this revision. Environment
-variables cannot lower, disable, corrupt, or stretch them. Only the exact
-per-transaction `--cpu-policy dedicated-agent` flag makes CPU idle telemetry-only;
-unknown values fail closed.
+variables cannot lower, disable, corrupt, or stretch them. Only the named
+dedicated entrypoint, the unflagged agent-host default, or the exact lower-level
+`--cpu-policy dedicated-agent` equivalent makes CPU idle telemetry-only.
+Explicit `--cpu-policy standard` restores the fixed CPU floors for an
+interactive session; unknown or conflicting values fail closed.
 
 ## Task-owned disk receipts
 
@@ -223,44 +284,44 @@ ambiguous state remains protected.
 The one-heavy lease is a failure-containment boundary, not interactive-headroom
 policy. It remains machine-wide for every profile.
 
-Current protection is narrower than the failure list:
+Current protection separates platform danger signals from capacity evidence:
 
-- CPU: the default retains admission and runtime CPU-idle checks; the explicit
-  dedicated-agent transaction records CPU idle without enforcing a floor. Both
-  modes retain background scheduling and reduced priority. There is no direct
-  thermal-pressure or shutdown-risk probe.
-- Memory: `memory_pressure` accounts for compression, but the guard does not
-  separately bound swap size or swap-growth rate.
+- CPU: the agent-host default records CPU idle without enforcing a floor.
+  Explicit shared/interactive mode retains admission and runtime CPU-idle
+  checks. Both modes retain background scheduling and reduced priority.
+  Dedicated mode also refuses/stops on macOS thermal or performance pressure.
+- Memory: the fixed 25% headroom floor remains. Dedicated mode also consumes the
+  macOS normal/warn/critical pressure state and reports swap allocation plus
+  cumulative pageout/swapout counters. It deliberately has no absolute swap or
+  paging-rate cutoff because no universal failure boundary has been measured.
 - Disk: admission reports below 35 GiB and refuses below 25 GiB; retention
   tooling still owns candidate classification and deletion.
-- Availability: configured Tailscale connectivity and managed Jarvis HTTP
-  health are checked. VNC or another remote-desktop path is not probed directly.
+- Availability: configured Tailscale connectivity remains required. Dedicated
+  mode additionally pins the managed Jarvis PID, matches it to the only listener,
+  and records HTTP latency under the existing three-second timeout. VNC or
+  another remote-desktop path is not probed directly.
 - Overlap: the machine-wide lease and process-group supervision prevent two
-  guarded heavy trees from running concurrently.
+  guarded heavy trees from running concurrently. Dedicated runtime samples also
+  expose the one guarded group's process count and aggregate RSS.
 
-The dedicated-agent CPU policy is deliberately narrower than a complete
-dedicated-host safety profile: it changes no memory, disk, availability,
-ownership, signal, or cleanup behavior. Direct thermal, swap-growth, latency,
-and fan-out enforcement remain deferred until this bounded experiment is
-completed in a separate PR:
+Dedicated-agent mode still does not pretend that observed capacity receipts are
+universal thresholds. Paging-rate, Jarvis-latency trend, and per-process fanout
+limits remain deferred until a bounded experiment measures a failure boundary:
 
-1. Add a read-only sampler that records monotonic time, CPU idle,
-   `memory_pressure`, `vm.swapusage`, Data-volume free space, macOS thermal
-   state, Tailscale state, Jarvis health, and the structured guard reason. It
-   must redact command arguments and environment values.
-2. Run representative Node, Swift/Xcode, browser, and package workloads one at
+1. Preserve the built-in redacted resource, Jarvis, and group telemetry for
+   representative Node, Swift/Xcode, browser, and package workloads run one at
    a time under the existing lease. Record admission, every 15-second runtime
    sample, workload exit, and any Jarvis or remote-access interruption.
-3. Establish stop limits from the first observed thermal, swap-growth, disk, or
-   availability degradation, then apply an explicit safety margin. A threshold
+2. Establish stop limits from the first observed paging, latency, fanout, disk,
+   or availability degradation, then apply an explicit safety margin. A threshold
    change is invalid if no failure boundary was observed.
-4. Use the named, non-ambient dedicated-agent CPU policy while external sampling
-   observes the still-unimplemented thermal, swap-growth, latency, and fan-out
-   boundaries. Repeat deterministic guard tests and a bounded host soak before
-   considering any default change or broader dedicated-host profile.
+3. Repeat deterministic guard tests and a bounded host soak before adding any
+   numeric trend limit or broader dedicated-host capacity profile.
 
-Until that experiment is complete, dedicated-agent mode is CPU-only. It must not
-be described as direct thermal, swap-trend, latency, or fan-out protection.
+Until that experiment is complete, describe swap/pageout, latency, and group
+size as trend telemetry—not numeric enforcement. Direct platform memory and
+thermal pressure, Jarvis identity/HTTP health, disk, Tailscale, serialization,
+signals, and cleanup are enforced safety boundaries.
 
 Live `scripts/ship-jarvis-hotfix.sh` is the one remediation exception. The
 helper requests an internal `jarvis-remediation` policy, and the wrapper accepts
