@@ -978,8 +978,8 @@ describe("scripts/pr-lifecycle", () => {
         rollout: {
           phase: "paused",
           threshold: 3,
-          successfulPrs: [],
-          pausedReason: "receipt cache mismatch",
+          successfulPrs: [999],
+          pausedReason: "cached successful PRs contain unverified successful PRs [999]",
           graduatedAt: null,
           graduatedByPr: null,
         },
@@ -1003,7 +1003,9 @@ describe("scripts/pr-lifecycle", () => {
       "repo-backed",
     ]);
     expect(rejected.status).toBe(1);
-    expect(rejected.stderr).toContain("rollout is paused: receipt cache mismatch");
+    expect(rejected.stderr).toContain(
+      "rollout is paused: cached successful PRs contain unverified successful PRs [999]",
+    );
   });
 
   it("does not let an ambient environment variable bypass paused automatic routing", () => {
@@ -1021,8 +1023,8 @@ describe("scripts/pr-lifecycle", () => {
         rollout: {
           phase: "paused",
           threshold: 3,
-          successfulPrs: [],
-          pausedReason: "receipt cache mismatch",
+          successfulPrs: [999],
+          pausedReason: "cached successful PRs contain unverified successful PRs [999]",
         },
         lastTransaction: null,
         updatedAt: "2026-08-05T00:00:00.000Z",
@@ -1043,7 +1045,9 @@ describe("scripts/pr-lifecycle", () => {
       "builder-host",
     ]);
     expect(rejected.status).toBe(1);
-    expect(rejected.stderr).toContain("rollout is paused: receipt cache mismatch");
+    expect(rejected.stderr).toContain(
+      "rollout is paused: cached successful PRs contain unverified successful PRs [999]",
+    );
   });
 
   it("rejects a stale tester receipt after the PR head changes", () => {

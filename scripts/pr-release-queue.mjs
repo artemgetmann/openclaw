@@ -185,19 +185,29 @@ function recomputeSuccessfulPrs(state) {
 function rolloutView(state) {
   const recomputed = recomputeSuccessfulPrs(state);
   const cached = state.rollout?.successfulPrs;
-  let pausedReason =
-    state.rollout?.phase === "paused" && state.rollout?.pausedReason
-      ? state.rollout.pausedReason
-      : recomputed.safetyFailure;
+  // The cache is a derived acceleration hint, never independent merge proof.
+  // Recompute every pause from current receipts so an obsolete pausedReason
+  // cannot keep the queue wedged after its underlying evidence is repaired.
+  let pausedReason = recomputed.safetyFailure;
   if (!pausedReason && state.rollout?.threshold && state.rollout.threshold !== ROLLOUT_THRESHOLD) {
     pausedReason = `rollout threshold ${state.rollout.threshold} does not match required ${ROLLOUT_THRESHOLD}`;
   }
-  if (
-    !pausedReason &&
-    cached &&
-    JSON.stringify(cached) !== JSON.stringify(recomputed.successfulPrs)
-  ) {
-    pausedReason = `cached successful PRs ${JSON.stringify(cached)} do not match recomputed ${JSON.stringify(recomputed.successfulPrs)}`;
+  if (!pausedReason && cached !== undefined) {
+    if (!Array.isArray(cached) || cached.some((pr) => !Number.isSafeInteger(pr) || pr < 1)) {
+      pausedReason = "cached successful PRs are malformed";
+    } else {
+      // Receipts extending a cache is the ordinary stale-write case: the next
+      // mutation safely rewrites the cache from those stronger receipts. A
+      // cached PR with no qualifying receipt would discard positive evidence,
+      // so preserve it and fail closed for an operator to investigate.
+      const authoritative = new Set(recomputed.successfulPrs);
+      const unverified = [...new Set(cached)]
+        .filter((pr) => !authoritative.has(pr))
+        .toSorted((left, right) => left - right);
+      if (unverified.length > 0) {
+        pausedReason = `cached successful PRs contain unverified successful PRs ${JSON.stringify(unverified)}`;
+      }
+    }
   }
   const count = recomputed.successfulPrs.length;
   const threshold = ROLLOUT_THRESHOLD;
