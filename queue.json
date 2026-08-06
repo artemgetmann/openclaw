@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 11,
+  "sequence": 12,
   "nextFence": 4,
-  "mergeLease": {
-    "leaseId": "731ea383-9633-4dc6-93e5-fc8a2ea712bf",
-    "fence": 3,
-    "owner": {
-      "threadId": "019fd68f-ce95-7560-a134-517834c0398f",
-      "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
-    },
-    "claimedPr": 1357,
-    "claimedAt": "2026-08-06T10:14:19.848Z",
-    "heartbeatAt": "2026-08-06T10:20:27.272Z",
-    "expiresAt": "2026-08-06T10:40:27.272Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -195,7 +184,7 @@
       ]
     },
     "1357": {
-      "state": "claimed",
+      "state": "blocked",
       "candidate": {
         "pr": 1357,
         "url": "https://github.com/artemgetmann/openclaw/pull/1357",
@@ -248,7 +237,13 @@
         "stateDirectory": "/Users/user/.codex/worktrees/eb451490-4878-4862-b637-f5d070952430/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [],
+      "discoveredBlockers": [
+        {
+          "kind": "lifecycle-archive-indeterminate",
+          "details": "Native thread control timed out on exact builder archive mutation and on independent list/read verification; archived=true cannot be proven, so accept-release-handoff and PR review/merge are forbidden until control recovers and exact state is reconciled.",
+          "observedAt": "2026-08-06T10:22:19.716Z"
+        }
+      ],
       "readyAt": "2026-08-06T07:39:50.079Z",
       "ownerHistory": [
         {
@@ -270,10 +265,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1357-heartbeat-019fd68f-1",
-    "recordedAt": "2026-08-06T10:20:27.272Z"
+    "id": "pr1357-block-archive-indeterminate-019fd68f-v1",
+    "recordedAt": "2026-08-06T10:22:19.716Z"
   },
-  "updatedAt": "2026-08-06T10:20:27.272Z",
+  "updatedAt": "2026-08-06T10:22:19.716Z",
   "rollout": {
     "phase": "dogfood",
     "threshold": 3,
