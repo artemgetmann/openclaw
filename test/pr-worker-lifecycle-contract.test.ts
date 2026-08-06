@@ -12,6 +12,7 @@ const ci = readRepoFile("docs/ci.md");
 const forkGuide = readRepoFile("FORK_CONTRIBUTING.md");
 const prTemplate = readRepoFile(".github/pull_request_template.md");
 const lifecycleCommand = readRepoFile("scripts/pr-lifecycle");
+const threadRecoverySkill = readRepoFile(".agents/skills/codex-thread-control-recovery/SKILL.md");
 const normalizedWorkflow = workflow.replace(/\s+/g, " ");
 
 describe("canonical PR worker lifecycle policy", () => {
@@ -115,5 +116,25 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(prTemplate).toContain("authenticated connector + expected head; exactly one");
     expect(lifecycleCommand).toContain('source "$script_dir/lib/github-auth-preflight.sh"');
     expect(lifecycleCommand).toContain("openclaw_github_preflight");
+  });
+
+  it("makes native thread recovery a verified bounded transaction", () => {
+    // Native control receipts prove API acceptance, not delivery, progress, or
+    // completion. The repo-local skill keeps those claims mechanically distinct.
+    expect(agents).toContain(".agents/skills/codex-thread-control-recovery/SKILL.md");
+    expect(normalizedWorkflow).toContain("successful send receipt is not delivery proof");
+    expect(normalizedWorkflow).toContain("delivered turn is not completion proof");
+    expect(normalizedWorkflow).toContain("Never retry an ambiguously accepted send");
+    expect(normalizedWorkflow).toContain("`notLoaded` alone is not archive proof");
+    expect(normalizedWorkflow).toContain("Do not keep the caller alive with shell sleep loops");
+    expect(threadRecoverySkill).toContain("set only that");
+    expect(threadRecoverySkill).toContain("target to `archived:false`");
+    expect(threadRecoverySkill).toContain("A successful send receipt alone is insufficient");
+    expect(threadRecoverySkill).toContain("Never repeat an ambiguously accepted send");
+    expect(threadRecoverySkill).toContain("`notLoaded` does not prove archival");
+    expect(threadRecoverySkill).toContain("unchanged archive state proves");
+    expect(threadRecoverySkill).toContain("require either a new running tool/action");
+    expect(threadRecoverySkill).toContain("After two bounded read-only reconciliation attempts");
+    expect(threadRecoverySkill).toContain("Do not fall back to the CLI");
   });
 });

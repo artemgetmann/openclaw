@@ -100,6 +100,18 @@ exact thread inventory and readback once after a recovery interval, and do not
 repeat a state-changing action unless unchanged state proves the retry safe.
 Compaction timing is a hypothesis until the target or caller transcript records
 it; temporal proximity alone is not causality.
+
+For any stale, failed, or ambiguous native thread transition, apply
+`.agents/skills/codex-thread-control-recovery/SKILL.md`. A resume is a verified
+transaction: resolve the exact thread and host, read current state, explicitly
+unarchive only when authoritative state says the target is archived, send one
+short prompt, then read back both message delivery and actual progress.
+`notLoaded` alone is not archive proof. A successful send receipt is not
+delivery proof; a delivered turn is not completion proof. Never retry an
+ambiguously accepted send. Do not keep the caller alive with shell sleep loops,
+fall back to a second transport, or create a replacement owner. After two
+bounded read-only reconciliations, preserve the owner and report the last
+proven state.
 The wrapper first runs the canonical secret-silent GitHub preflight. A
 restricted `status=indeterminate` result requires the same read-only lifecycle
 command to be rerun in authorized host context; it is not proof that the PR or

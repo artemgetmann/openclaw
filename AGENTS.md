@@ -113,5 +113,6 @@
 ## Repo-local skills
 
 - `.agents/skills/codex-control-tower-emergency/SKILL.md`
+- `.agents/skills/codex-thread-control-recovery/SKILL.md`
 - `.agents/skills/telegram-live-e2e/SKILL.md`
 - `.agents/skills/parallels-discord-roundtrip/SKILL.md`
