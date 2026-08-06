@@ -325,6 +325,23 @@ describe("scripts/pr-release-queue", () => {
     const status = run(fixture, ["status"]);
     expect(status.rollout?.phase).toBe("paused");
     expect(status.rollout?.pausedReason).toContain("unverified successful PRs [999]");
+
+    expect(
+      run(fixture, ["reconcile-rollout", "--transaction-id", "preserve-unsafe-cache"]),
+    ).toMatchObject({ action: "rollout-paused" });
+    expect(run(fixture, ["status"]).rollout).toMatchObject({
+      phase: "paused",
+      successfulPrs: [80],
+    });
+    const durable = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    expect(durable.rollout).toMatchObject({
+      phase: "paused",
+      successfulPrs: [80, 999],
+    });
+    expect(
+      run(fixture, ["reconcile-rollout", "--transaction-id", "preserve-unsafe-cache-again"]),
+    ).toMatchObject({ action: "rollout-paused" });
+    expect(run(fixture, ["status"]).rollout?.phase).toBe("paused");
   });
 
   it("keeps blocking contradictory or incomplete receipt evidence", () => {

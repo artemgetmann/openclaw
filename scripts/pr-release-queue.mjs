@@ -231,10 +231,18 @@ function rolloutView(state) {
 function reconcileRollout(state, now, graduatingPr = null) {
   const view = rolloutView(state);
   const wasGraduated = state.rollout?.phase === "graduated";
+  const cachedSuccessfulPrs = state.rollout?.successfulPrs;
   state.rollout = {
     phase: view.phase,
     threshold: view.threshold,
-    successfulPrs: view.successfulPrs,
+    // A pause means current evidence cannot be reconciled safely. Preserve the
+    // exact cached claim that triggered it instead of erasing the discrepancy;
+    // otherwise the next read could falsely appear healthy. Benign stale
+    // subsets take the non-paused path and are rebuilt from receipt truth.
+    successfulPrs:
+      view.phase === "paused" && cachedSuccessfulPrs !== undefined
+        ? cachedSuccessfulPrs
+        : view.successfulPrs,
     pausedReason: view.pausedReason,
     graduatedAt:
       view.phase === "graduated" ? (state.rollout?.graduatedAt ?? now.toISOString()) : null,
