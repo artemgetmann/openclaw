@@ -1,6 +1,6 @@
 ---
 name: personal-tone-of-voice
-description: "Set up, inspect, apply, or update the user's personal writing voice for recipient-facing external drafts. Use with every WhatsApp, Telegram, email, SMS/iMessage, outreach, follow-up, or reply draft when private owner context is verified; if the workspace tone profile is absent or unconfigured, offer one lightweight setup without blocking the draft."
+description: "Set up, inspect, apply, or update the user's personal writing voice for recipient-facing external drafts. Use with every WhatsApp, Telegram, email, SMS/iMessage, outreach, follow-up, or reply draft when a personal owner context is verified, including an owner-only group or topic the runtime classifies as personal; if the workspace tone profile is absent or unconfigured, offer one lightweight setup without blocking the draft."
 user-invocable: false
 metadata: { "openclaw": { "emoji": "✍️", "displayName": "Personal Tone of Voice" } }
 ---
@@ -31,11 +31,14 @@ or the user's current instructions.
 
 ## Owner And Privacy Gate
 
-Consult or change a personal profile only in a verified private owner context,
-or in an owner-created autonomous goal or monitor continuation whose workspace
-and user scope are already established.
+Consult or change a personal profile only in a verified personal owner context.
+This includes a direct/private owner session, an owner-only group or topic the
+runtime classifies as personal, or an owner-created autonomous goal or monitor
+continuation whose workspace and user scope are already established. Do not
+infer that a group or topic is personal; rely on the runtime classification and
+verified owner scope.
 
-In a group, shared, delegated, non-owner, or ambiguous context:
+In a genuinely shared, delegated, non-owner, or ambiguous context:
 
 - do not read, quote, summarize, reveal, apply, create, or update the profile;
 - use the explicit current-request tone or a neutral default;

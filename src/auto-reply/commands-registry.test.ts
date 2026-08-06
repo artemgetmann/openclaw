@@ -210,6 +210,27 @@ describe("commands registry", () => {
     expect(modeArg?.choices).toEqual(["status", "on", "off"]);
   });
 
+  it("registers one native personal setup command with text aliases", () => {
+    const begin = listChatCommands().find((command) => command.key === "begin");
+    expect(begin).toMatchObject({
+      nativeName: "begin",
+      description: "Help Jarvis learn about you.",
+      textAliases: ["/begin", "/init"],
+      acceptsArgs: false,
+      scope: "both",
+    });
+
+    const native = listNativeCommandSpecs();
+    expect(native.filter((command) => command.name === "begin")).toHaveLength(1);
+    expect(native.some((command) => command.name === "init")).toBe(false);
+
+    // /start has separate product semantics and must never become another setup alias.
+    expect(begin?.textAliases).not.toContain("/start");
+    expect(
+      listChatCommands().find((command) => command.textAliases.includes("/start")),
+    ).toBeFalsy();
+  });
+
   it("keeps permissions mode available as a text-only options command", () => {
     const permissions = listChatCommands().find((command) => command.key === "permissions");
     expect(permissions).toMatchObject({

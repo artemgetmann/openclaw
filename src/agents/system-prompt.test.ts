@@ -156,6 +156,23 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("keeps durable memory modular in the full memory-enabled prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "memory_get"],
+    });
+
+    expect(prompt).toContain("Keep MEMORY.md compact");
+    expect(prompt).toContain("short summaries and pointers to useful topic files under memory/");
+    expect(prompt).toContain("create modules only when they are useful");
+    expect(prompt).toContain("recent or raw conversation content in memory/YYYY-MM-DD.md");
+    expect(prompt).toContain(
+      "non-durable unless the owner explicitly approves promoting a stable fact",
+    );
+    expect(prompt).toContain("Preserve unrelated user-owned content");
+    expect(prompt).toContain("targeted, additive updates");
+  });
+
   it("routes clear Telegram read requests through the injected telegram-user skill before shell discovery", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

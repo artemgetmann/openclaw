@@ -63,6 +63,8 @@ function buildMemorySection(params: {
   const lines = [
     "## Memory Recall",
     "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    "Keep MEMORY.md compact: use it as a map with short summaries and pointers to useful topic files under memory/. Put detailed durable knowledge in those topic files, and create modules only when they are useful.",
+    "Put recent or raw conversation content in memory/YYYY-MM-DD.md by default. Treat it as non-durable unless the owner explicitly approves promoting a stable fact. Preserve unrelated user-owned content and make targeted, additive updates.",
   ];
   if (params.citationsMode === "off") {
     lines.push(
