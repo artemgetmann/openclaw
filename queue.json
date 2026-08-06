@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 8,
+  "sequence": 9,
   "nextFence": 3,
   "mergeLease": null,
   "items": {
@@ -182,18 +182,80 @@
           "targetAncestryProven": true
         }
       ]
+    },
+    "1357": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1357,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1357",
+        "headSha": "81614021a7fc0931fb9e4b8f741096148fcabbdc",
+        "baseBranch": "main",
+        "testedBaseSha": "7416a6f37feedfebc671c1c2d302e748364f94b9",
+        "diffFingerprint": "sha256:dfba2260ea333b21c7160c0521b623dff96261b4ba29728bd12214a6fcbe35f8",
+        "changedPaths": [
+          "docs/agent-guides/release-queue.md",
+          "scripts/pr-release-queue.mjs",
+          "test/scripts/pr-lifecycle.test.ts",
+          "test/scripts/pr-release-queue.test.ts"
+        ]
+      },
+      "builder": {
+        "threadId": "019fd5cd-d2f1-7733-9040-7545eb46cd74",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fd5cd-d2f1-7733-9040-7545eb46cd74",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "81614021a7fc0931fb9e4b8f741096148fcabbdc",
+        "diffFingerprint": "sha256:dfba2260ea333b21c7160c0521b623dff96261b4ba29728bd12214a6fcbe35f8",
+        "closure": "terminal-receipt",
+        "contractId": "ec753ce6-7871-405f-b04c-841d1aa77aaf",
+        "owner": {
+          "threadId": "/root/pr1357_repair_tester",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1357 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "6f5986e9-1720-44fe-bf6e-006a473284af",
+        "stateDirectory": "/Users/user/.codex/worktrees/eb451490-4878-4862-b637-f5d070952430/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-06T07:39:50.079Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "record-merge-pr1355-bdec949c",
-    "recordedAt": "2026-08-06T05:45:21.290Z"
+    "id": "enqueue-pr1357-81614021",
+    "recordedAt": "2026-08-06T07:39:50.079Z"
   },
-  "updatedAt": "2026-08-06T05:45:21.290Z",
+  "updatedAt": "2026-08-06T07:39:50.079Z",
   "rollout": {
     "phase": "dogfood",
     "threshold": 3,
     "successfulPrs": [
-      1354
+      1354,
+      1355
     ],
     "pausedReason": null,
     "graduatedAt": null,
