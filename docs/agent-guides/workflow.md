@@ -599,6 +599,22 @@ ready`.
 - Temporary worktrees are the default implementation surface now.
 - They are no longer optional parallel-only lanes.
 - Every non-hotfix task should start in a temp worktree created from the correct sacred home clone.
+- Native Codex task creation owns the task-to-checkout mapping; repository
+  scripts cannot make that closed control-plane transaction atomic. Repo-side
+  adoption owns the later Git branch attachment and bootstrap boundary. If a
+  task arrives in one detached checkout while its intended branch is already
+  attached elsewhere, `scripts/adopt-codex-worktree.sh` must fail before fetch,
+  branch mutation, Telegram-local copying, baseline setup, or dependencies. It
+  reports both canonical paths and never creates or steals a replacement lane.
+  Reconcile the native task owner instead.
+- Pass the exact native thread identity with
+  `scripts/adopt-codex-worktree.sh <feature> --thread-id <thread-id>`. A
+  successful `adoption_owner_receipt` binds that thread, canonical worktree,
+  and `codex/<feature>` branch. `thread:unavailable` preserves manual
+  compatibility but is not exact task-ownership proof.
+- An existing unattached `codex/<feature>` branch is adopted only when its tip
+  exactly matches the detached checkout. A different tip fails closed without
+  switching or resetting either ref.
 - Keep repo-owned temporary worktrees under `.worktrees/` when practical so they do not scatter across multiple ad-hoc locations.
 - Before creating a temporary worktree, fast-forward the chosen base branch locally so it exactly matches `origin/<base>`. `scripts/new-worktree.sh` fails if the named base branch is ahead of or behind its remote tracking branch.
 - `scripts/new-worktree.sh` only runs from a sacred home clone. The shell helper wrappers are the default task-spawn path because they refresh the right sacred home clone first, then call `scripts/new-worktree.sh` with the correct base.

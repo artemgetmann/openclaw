@@ -20,8 +20,22 @@ stale build output when the requested build first needs local dependencies.
 Run the repo script as the source of truth:
 
 ```bash
-bash scripts/adopt-codex-worktree.sh <feature-name> --mode warm
+bash scripts/adopt-codex-worktree.sh <feature-name> --mode warm --thread-id <thread-id>
 ```
+
+Adoption begins with a secret-free ownership preflight. If the intended
+`codex/<feature-name>` branch is attached to another worktree, the command
+names both the requested and owning paths and exits before fetch, branch
+mutation, Telegram-local copying, baseline setup, or dependency installation.
+Do not create, steal, switch, or reset a replacement branch after that refusal.
+Reconcile the native task owner first.
+
+When the branch exists but is unattached, adoption attaches it only when its
+commit exactly matches the detached checkout. A different commit fails closed.
+Successful attachment emits one `adoption_owner_receipt` binding the supplied
+native thread ID, canonical worktree path, and branch. Omitting `--thread-id`
+is supported for manual compatibility but records `thread:unavailable`; that
+is not an exact native task ownership receipt.
 
 Use `--mode warm` for normal coding, tests, local dependency setup, and packaging prep. Warm mode intentionally copies the canonical Telegram userbot files but does not claim a tester bot or start an isolated Telegram runtime.
 
