@@ -1002,9 +1002,10 @@ function handoffRelease(pr, options) {
     fail("--queue must be repo-backed or direct when provided", 2);
   }
   let queueMode = requestedQueueMode === "direct" ? null : requestedQueueMode;
-  const mustResolveQueue =
-    requestedQueueMode === "repo-backed" ||
-    (!requestedQueueMode && process.env.OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE !== "disabled");
+  // Direct routing is an explicit rollback, never an ambient environment
+  // escape hatch. Every ordinary or repo-backed handoff must consult the
+  // authoritative queue so paused or unreachable rollout state fails closed.
+  const mustResolveQueue = requestedQueueMode !== "direct";
   if (mustResolveQueue) {
     try {
       const queueScript = path.join(

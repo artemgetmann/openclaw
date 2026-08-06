@@ -83,7 +83,6 @@ if (args[0] === "pr" && args[1] === "view") {
       ...process.env,
       OPENCLAW_PR_LIFECYCLE_GH: gh,
       OPENCLAW_PR_LIFECYCLE_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE: "disabled",
       TEST_PR_METADATA: JSON.stringify(metadata),
       TEST_PR_PATCH: "diff --git a/AGENTS.md b/AGENTS.md\n+policy\n",
     },
@@ -91,7 +90,13 @@ if (args[0] === "pr" && args[1] === "view") {
 }
 
 function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
-  const output = execFileSync(process.execPath, [SCRIPT, ...args], {
+  const commandArgs =
+    args[0] === "handoff-release" &&
+    !args.includes("--queue") &&
+    !fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE
+      ? [...args, "--queue", "direct"]
+      : args;
+  const output = execFileSync(process.execPath, [SCRIPT, ...commandArgs], {
     cwd: ROOT,
     env: fixture.env,
     encoding: "utf8",
@@ -100,7 +105,13 @@ function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
 }
 
 function runFailure(fixture: ReturnType<typeof makeFixture>, args: string[]) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], {
+  const commandArgs =
+    args[0] === "handoff-release" &&
+    !args.includes("--queue") &&
+    !fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE
+      ? [...args, "--queue", "direct"]
+      : args;
+  return spawnSync(process.execPath, [SCRIPT, ...commandArgs], {
     cwd: ROOT,
     env: fixture.env,
     encoding: "utf8",
@@ -915,7 +926,6 @@ describe("scripts/pr-lifecycle", () => {
     completeTesterPass(automatic);
     const automaticState = path.join(automatic.root, "queue.json");
     makeGraduatedState(automaticState);
-    automatic.env.OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE = "enabled";
     automatic.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = automaticState;
     const routed = run(automatic, [
       "handoff-release",
@@ -935,7 +945,6 @@ describe("scripts/pr-lifecycle", () => {
     completeTesterPass(rollback);
     const rollbackState = path.join(rollback.root, "queue.json");
     makeGraduatedState(rollbackState);
-    rollback.env.OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE = "enabled";
     rollback.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = rollbackState;
     const direct = run(rollback, [
       "handoff-release",
@@ -992,6 +1001,46 @@ describe("scripts/pr-lifecycle", () => {
       "builder-host",
       "--queue",
       "repo-backed",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("rollout is paused: receipt cache mismatch");
+  });
+
+  it("does not let an ambient environment variable bypass paused automatic routing", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const queueState = path.join(fixture.root, "queue.json");
+    fs.writeFileSync(
+      queueState,
+      JSON.stringify({
+        schemaVersion: 1,
+        sequence: 1,
+        nextFence: 1,
+        mergeLease: null,
+        items: {},
+        rollout: {
+          phase: "paused",
+          threshold: 3,
+          successfulPrs: [],
+          pausedReason: "receipt cache mismatch",
+        },
+        lastTransaction: null,
+        updatedAt: "2026-08-05T00:00:00.000Z",
+      }),
+    );
+    fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = queueState;
+    fixture.env.OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE = "disabled";
+    const rejected = runFailure(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
     ]);
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toContain("rollout is paused: receipt cache mismatch");
