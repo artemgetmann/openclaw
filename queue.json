@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 12,
+  "sequence": 13,
   "nextFence": 4,
   "mergeLease": null,
   "items": {
@@ -262,13 +262,74 @@
       "mutationIntent": null,
       "candidateHistory": [],
       "terminalReceipts": []
+    },
+    "1358": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1358,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1358",
+        "headSha": "61390ba00773e468f67b6a976c0c64ad8446df4c",
+        "baseBranch": "main",
+        "testedBaseSha": "cd465d35852ece6c775562da8da47e8c4ce9eb44",
+        "diffFingerprint": "sha256:d575a5417179ba09991b5e1e35f65ada908696b18ca9fbd9585934ae3612975d",
+        "changedPaths": [
+          ".agents/skills/codex-thread-control-recovery/SKILL.md",
+          "AGENTS.md",
+          "docs/agent-guides/workflow.md",
+          "test/pr-worker-lifecycle-contract.test.ts"
+        ]
+      },
+      "builder": {
+        "threadId": "019fd71a-f854-72a1-bff4-a99b5a079526",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fd71a-f854-72a1-bff4-a99b5a079526",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "61390ba00773e468f67b6a976c0c64ad8446df4c",
+        "diffFingerprint": "sha256:d575a5417179ba09991b5e1e35f65ada908696b18ca9fbd9585934ae3612975d",
+        "closure": "terminal-receipt",
+        "contractId": "14e0e0fa-ebd0-4314-9a61-4eed153d0f94",
+        "owner": {
+          "threadId": "/root/pr1358_rebase_tester",
+          "hostId": "nested-agent"
+        }
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "direct-user-task",
+        "scope": "PR #1358 native Codex thread-control recovery source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or branch-protection bypass",
+          "no credentials or OTP",
+          "no deployment, restart, runtime mutation, or public release",
+          "no scope expansion"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "0f94596e-7fbe-4f0d-81ee-3917c1d682dc",
+        "stateDirectory": "/Users/user/.codex/worktrees/fd114f9b-9476-40be-ba80-41078ef4782d/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-06T13:41:15.219Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "pr1357-block-archive-indeterminate-019fd68f-v1",
-    "recordedAt": "2026-08-06T10:22:19.716Z"
+    "id": "68676240-5603-4790-bdfc-5e81c5d481cc",
+    "recordedAt": "2026-08-06T13:41:15.219Z"
   },
-  "updatedAt": "2026-08-06T10:22:19.716Z",
+  "updatedAt": "2026-08-06T13:41:15.219Z",
   "rollout": {
     "phase": "dogfood",
     "threshold": 3,
