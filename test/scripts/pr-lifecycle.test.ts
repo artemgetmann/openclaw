@@ -90,7 +90,13 @@ if (args[0] === "pr" && args[1] === "view") {
 }
 
 function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
-  const output = execFileSync(process.execPath, [SCRIPT, ...args], {
+  const commandArgs =
+    args[0] === "handoff-release" &&
+    !args.includes("--queue") &&
+    !fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE
+      ? [...args, "--queue", "direct"]
+      : args;
+  const output = execFileSync(process.execPath, [SCRIPT, ...commandArgs], {
     cwd: ROOT,
     env: fixture.env,
     encoding: "utf8",
@@ -99,7 +105,13 @@ function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
 }
 
 function runFailure(fixture: ReturnType<typeof makeFixture>, args: string[]) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], {
+  const commandArgs =
+    args[0] === "handoff-release" &&
+    !args.includes("--queue") &&
+    !fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE
+      ? [...args, "--queue", "direct"]
+      : args;
+  return spawnSync(process.execPath, [SCRIPT, ...commandArgs], {
     cwd: ROOT,
     env: fixture.env,
     encoding: "utf8",
@@ -795,6 +807,21 @@ describe("scripts/pr-lifecycle", () => {
   it("emits a durable repo-backed packet instead of creating a release thread", () => {
     const fixture = makeFixture();
     completeTesterPass(fixture);
+    const queueState = path.join(fixture.root, "queue.json");
+    fs.writeFileSync(
+      queueState,
+      JSON.stringify({
+        schemaVersion: 1,
+        sequence: 0,
+        nextFence: 1,
+        mergeLease: null,
+        items: {},
+        rollout: { phase: "dogfood", threshold: 3, successfulPrs: [], pausedReason: null },
+        lastTransaction: null,
+        updatedAt: "2026-08-05T00:00:00.000Z",
+      }),
+    );
+    fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = queueState;
     const dependenciesPath = path.join(fixture.root, "dependencies.json");
     fs.writeFileSync(
       dependenciesPath,
@@ -838,6 +865,185 @@ describe("scripts/pr-lifecycle", () => {
         stateDirectory: fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
       },
     });
+  });
+
+  it("routes ordinary post-graduation handoff through the queue and preserves direct rollback", () => {
+    const makeGraduatedState = (statePath: string) => {
+      const items = Object.fromEntries(
+        [1, 2, 3].map((pr) => {
+          const headSha = pr.toString().repeat(40).slice(0, 40);
+          const diffFingerprint = `sha256:${pr.toString().repeat(64).slice(0, 64)}`;
+          return [
+            String(pr),
+            {
+              state: "closed",
+              candidate: { pr, headSha, diffFingerprint },
+              testerReceipt: { status: "PASS", headSha, diffFingerprint, closure: "archived" },
+              lifecycle: { contractId: `contract-${pr}` },
+              authority: { allowedActions: ["normal-merge"] },
+              ownerHistory: [{ leaseId: `lease-${pr}` }],
+              terminalReceipts: [
+                {
+                  schemaVersion: 1,
+                  kind: "source-merge",
+                  pr,
+                  reviewedHeadSha: headSha,
+                  diffFingerprint,
+                  mergeSha: pr.toString(16).repeat(40).slice(0, 40),
+                  normalNonAdmin: true,
+                  expectedHeadProtected: true,
+                  landedTreeMatchesReviewed: true,
+                  targetAncestryProven: true,
+                },
+              ],
+            },
+          ];
+        }),
+      );
+      fs.writeFileSync(
+        statePath,
+        JSON.stringify({
+          schemaVersion: 1,
+          sequence: 1,
+          nextFence: 1,
+          mergeLease: null,
+          items,
+          rollout: {
+            phase: "graduated",
+            threshold: 3,
+            successfulPrs: [1, 2, 3],
+            pausedReason: null,
+            graduatedAt: "2026-08-05T00:00:00.000Z",
+            graduatedByPr: 3,
+          },
+          lastTransaction: null,
+          updatedAt: "2026-08-05T00:00:00.000Z",
+        }),
+      );
+    };
+
+    const automatic = makeFixture();
+    completeTesterPass(automatic);
+    const automaticState = path.join(automatic.root, "queue.json");
+    makeGraduatedState(automaticState);
+    automatic.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = automaticState;
+    const routed = run(automatic, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(routed.action).toBe("enqueue-release-packet");
+
+    const rollback = makeFixture();
+    completeTesterPass(rollback);
+    const rollbackState = path.join(rollback.root, "queue.json");
+    makeGraduatedState(rollbackState);
+    rollback.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = rollbackState;
+    const direct = run(rollback, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--queue",
+      "direct",
+    ]);
+    expect(direct.action).toBe("create_thread");
+  });
+
+  it("rejects explicit repo-backed routing while authoritative rollout is paused", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const queueState = path.join(fixture.root, "queue.json");
+    fs.writeFileSync(
+      queueState,
+      JSON.stringify({
+        schemaVersion: 1,
+        sequence: 1,
+        nextFence: 1,
+        mergeLease: null,
+        items: {},
+        rollout: {
+          phase: "paused",
+          threshold: 3,
+          successfulPrs: [],
+          pausedReason: "receipt cache mismatch",
+          graduatedAt: null,
+          graduatedByPr: null,
+        },
+        lastTransaction: null,
+        updatedAt: "2026-08-05T00:00:00.000Z",
+      }),
+    );
+    fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = queueState;
+    const rejected = runFailure(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--queue",
+      "repo-backed",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("rollout is paused: receipt cache mismatch");
+  });
+
+  it("does not let an ambient environment variable bypass paused automatic routing", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const queueState = path.join(fixture.root, "queue.json");
+    fs.writeFileSync(
+      queueState,
+      JSON.stringify({
+        schemaVersion: 1,
+        sequence: 1,
+        nextFence: 1,
+        mergeLease: null,
+        items: {},
+        rollout: {
+          phase: "paused",
+          threshold: 3,
+          successfulPrs: [],
+          pausedReason: "receipt cache mismatch",
+        },
+        lastTransaction: null,
+        updatedAt: "2026-08-05T00:00:00.000Z",
+      }),
+    );
+    fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = queueState;
+    fixture.env.OPENCLAW_PR_RELEASE_QUEUE_AUTO_ROUTE = "disabled";
+    const rejected = runFailure(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("rollout is paused: receipt cache mismatch");
   });
 
   it("rejects a stale tester receipt after the PR head changes", () => {

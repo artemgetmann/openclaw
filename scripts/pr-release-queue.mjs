@@ -10,6 +10,7 @@ const SCHEMA_VERSION = 1;
 const DEFAULT_BRANCH = "ops/release-state";
 const DEFAULT_QUEUE_PATH = "queue.json";
 const DEFAULT_LEASE_SECONDS = 20 * 60;
+const ROLLOUT_THRESHOLD = 3;
 const GH_BIN = process.env.OPENCLAW_PR_RELEASE_QUEUE_GH ?? "gh";
 
 class QueueError extends Error {
@@ -27,6 +28,7 @@ function usage() {
   process.stderr.write(`Usage:
   scripts/pr-release-queue.mjs init
   scripts/pr-release-queue.mjs status
+  scripts/pr-release-queue.mjs reconcile-rollout
   scripts/pr-release-queue.mjs explain-order
   scripts/pr-release-queue.mjs enqueue --packet <FILE>
   scripts/pr-release-queue.mjs refresh --packet <FILE>
@@ -108,8 +110,134 @@ function emptyState(timestamp) {
     nextFence: 1,
     mergeLease: null,
     items: {},
+    rollout: {
+      phase: "dogfood",
+      threshold: ROLLOUT_THRESHOLD,
+      successfulPrs: [],
+      pausedReason: null,
+      graduatedAt: null,
+      graduatedByPr: null,
+    },
     lastTransaction: null,
     updatedAt: timestamp,
+  };
+}
+
+function qualifyingMerge(item, receipt) {
+  return (
+    receipt?.schemaVersion === SCHEMA_VERSION &&
+    receipt?.kind === "source-merge" &&
+    receipt?.pr === item?.candidate?.pr &&
+    receipt?.reviewedHeadSha === item?.candidate?.headSha &&
+    receipt?.diffFingerprint === item?.candidate?.diffFingerprint &&
+    /^[0-9a-f]{40}$/i.test(receipt?.mergeSha ?? "") &&
+    receipt?.normalNonAdmin === true &&
+    receipt?.expectedHeadProtected === true &&
+    receipt?.landedTreeMatchesReviewed === true &&
+    receipt?.targetAncestryProven === true &&
+    item?.testerReceipt?.status === "PASS" &&
+    item?.testerReceipt?.headSha === item?.candidate?.headSha &&
+    item?.testerReceipt?.diffFingerprint === item?.candidate?.diffFingerprint &&
+    ["archived", "terminal-receipt"].includes(item?.testerReceipt?.closure) &&
+    typeof item?.lifecycle?.contractId === "string" &&
+    item.lifecycle.contractId.length > 0 &&
+    item?.authority?.allowedActions?.includes("normal-merge") &&
+    ["merged", "delivery-barrier", "delivered", "closed"].includes(item?.state) &&
+    Array.isArray(item?.ownerHistory) &&
+    item.ownerHistory.some(
+      (owner) => typeof owner?.leaseId === "string" && owner.leaseId.length > 0,
+    )
+  );
+}
+
+function recomputeSuccessfulPrs(state) {
+  const successful = [];
+  const mergeOwners = new Map();
+  for (const item of Object.values(state.items)) {
+    const receipts = Array.isArray(item.terminalReceipts) ? item.terminalReceipts : [];
+    const qualifying = receipts.filter((receipt) => qualifyingMerge(item, receipt));
+    if (qualifying.length === 0) {
+      continue;
+    }
+    // Replayed copies of the same receipt are idempotent. Conflicting terminal
+    // merge claims for one PR are ambiguous and must stop graduation.
+    const identities = new Set(qualifying.map((receipt) => `${receipt.pr}:${receipt.mergeSha}`));
+    if (identities.size !== 1) {
+      return {
+        successfulPrs: [],
+        safetyFailure: `PR #${item.candidate.pr} has conflicting qualifying merge receipts`,
+      };
+    }
+    const receipt = qualifying[0];
+    const priorPr = mergeOwners.get(receipt.mergeSha);
+    if (priorPr && priorPr !== receipt.pr) {
+      return {
+        successfulPrs: [],
+        safetyFailure: `merge ${receipt.mergeSha} is claimed by PR #${priorPr} and PR #${receipt.pr}`,
+      };
+    }
+    mergeOwners.set(receipt.mergeSha, receipt.pr);
+    successful.push(receipt.pr);
+  }
+  return { successfulPrs: successful.toSorted((left, right) => left - right), safetyFailure: null };
+}
+
+function rolloutView(state) {
+  const recomputed = recomputeSuccessfulPrs(state);
+  const cached = state.rollout?.successfulPrs;
+  let pausedReason =
+    state.rollout?.phase === "paused" && state.rollout?.pausedReason
+      ? state.rollout.pausedReason
+      : recomputed.safetyFailure;
+  if (!pausedReason && state.rollout?.threshold && state.rollout.threshold !== ROLLOUT_THRESHOLD) {
+    pausedReason = `rollout threshold ${state.rollout.threshold} does not match required ${ROLLOUT_THRESHOLD}`;
+  }
+  if (
+    !pausedReason &&
+    cached &&
+    JSON.stringify(cached) !== JSON.stringify(recomputed.successfulPrs)
+  ) {
+    pausedReason = `cached successful PRs ${JSON.stringify(cached)} do not match recomputed ${JSON.stringify(recomputed.successfulPrs)}`;
+  }
+  const count = recomputed.successfulPrs.length;
+  const threshold = ROLLOUT_THRESHOLD;
+  const graduated = !pausedReason && count >= threshold;
+  return {
+    phase: pausedReason ? "paused" : graduated ? "graduated" : "dogfood",
+    threshold,
+    successfulPrs: recomputed.successfulPrs,
+    successfulCount: count,
+    remaining: Math.max(0, threshold - count),
+    pausedReason,
+    graduatedAt: graduated ? (state.rollout?.graduatedAt ?? null) : null,
+    graduatedByPr: graduated
+      ? (state.rollout?.graduatedByPr ?? recomputed.successfulPrs.at(-1) ?? null)
+      : null,
+    defaultRouting: graduated ? "repo-backed" : "repo-backed-dogfood",
+    rollbackRouting: "direct",
+  };
+}
+
+function reconcileRollout(state, now, graduatingPr = null) {
+  const view = rolloutView(state);
+  const wasGraduated = state.rollout?.phase === "graduated";
+  state.rollout = {
+    phase: view.phase,
+    threshold: view.threshold,
+    successfulPrs: view.successfulPrs,
+    pausedReason: view.pausedReason,
+    graduatedAt:
+      view.phase === "graduated" ? (state.rollout?.graduatedAt ?? now.toISOString()) : null,
+    graduatedByPr:
+      view.phase === "graduated"
+        ? (state.rollout?.graduatedByPr ?? graduatingPr ?? view.successfulPrs.at(-1) ?? null)
+        : null,
+  };
+  return {
+    ...view,
+    graduatedAt: state.rollout.graduatedAt,
+    graduatedByPr: state.rollout.graduatedByPr,
+    newlyGraduated: !wasGraduated && view.phase === "graduated",
   };
 }
 
@@ -339,6 +467,16 @@ function requireLease(state, options, now) {
 
 function transition(state, transactionId, now, callback) {
   const next = structuredClone(assertState(state));
+  // Every write migrates legacy schema-1 queue state and verifies that cached
+  // rollout state is mechanically reproducible before changing queue truth.
+  const before = reconcileRollout(next, now);
+  if (before.phase === "paused") {
+    const output = { action: "rollout-paused", rollout: before };
+    next.sequence += 1;
+    next.lastTransaction = { id: transactionId, recordedAt: now.toISOString() };
+    next.updatedAt = now.toISOString();
+    return { state: next, output };
+  }
   const output = callback(next);
   next.sequence += 1;
   next.lastTransaction = { id: transactionId, recordedAt: now.toISOString() };
@@ -541,10 +679,19 @@ function mutateRecordMerge(state, options, receipt, transactionId, now) {
     const deployAuthorized = item.authority.allowedActions.includes("deploy");
     item.state = deployAuthorized ? "delivery-barrier" : "closed";
     next.mergeLease = null;
+    // The receipt appended above is the sole legitimate source of cache
+    // growth. Refresh the cache from receipts before the generic mismatch
+    // guard, which still pauses on any malformed or conflicting proof.
+    const recomputed = recomputeSuccessfulPrs(next);
+    if (!recomputed.safetyFailure) {
+      next.rollout.successfulPrs = recomputed.successfulPrs;
+    }
+    const rollout = reconcileRollout(next, now, item.candidate.pr);
     return {
       action: deployAuthorized ? "merge-recorded-delivery-required" : "merge-recorded-closed",
       pr: item.candidate.pr,
       mergeSha: receipt.mergeSha,
+      rollout,
     };
   });
 }
@@ -793,7 +940,12 @@ function main() {
       fail("release queue is not initialized; run init first");
     }
     return command === "status"
-      ? { action: "status", revision: snapshot.revision, state: snapshot.state }
+      ? {
+          action: "status",
+          revision: snapshot.revision,
+          rollout: rolloutView(snapshot.state),
+          state: snapshot.state,
+        }
       : {
           action: "order-explained",
           revision: snapshot.revision,
@@ -804,6 +956,17 @@ function main() {
 
   const transactionId = options.transactionId ?? randomUUID();
   switch (command) {
+    case "reconcile-rollout":
+      return performMutation(
+        store,
+        transactionId,
+        "chore(release-queue): reconcile rollout state",
+        (state) =>
+          transition(state, transactionId, now, (next) => ({
+            action: "rollout-reconciled",
+            rollout: reconcileRollout(next, now),
+          })),
+      );
     case "enqueue": {
       const packet = validatePacket(
         readJsonFile(requireOption(options, "packet"), "release packet"),

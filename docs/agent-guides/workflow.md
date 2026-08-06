@@ -186,8 +186,10 @@ The builder invokes `scripts/pr-lifecycle handoff-release`. The existing direct
 mode permits only its first `action=create_thread` contract to create one fresh
 user-visible project-scoped release worker.
 
-The opt-in repo-backed mode uses `--queue repo-backed` and emits
-`action=enqueue-release-packet` instead. Persist that exact packet with
+The repo-backed mode emits `action=enqueue-release-packet`. The lifecycle
+command reads authoritative rollout status and selects it automatically during
+dogfood and after graduation, so future builders need no founder reminder or
+rollout flag. Persist that exact packet with
 `scripts/pr-release-queue enqueue` before waking a replaceable release operator.
 Structured semantic dependencies may be supplied with
 `--declared-dependencies <JSON-file>`; do not infer them from prose. A new
@@ -195,6 +197,10 @@ operator reads and claims the durable queue rather than scanning Codex chats.
 An active fenced lease means `do-not-claim`; an expired lease is replaceable.
 Callbacks wake owners but never establish ownership or order. See
 `docs/agent-guides/release-queue.md` for the packet and recovery contract.
+
+The direct user-visible release-task path remains the explicit rollback: pass
+`--queue direct`. A paused or unreachable authoritative rollout fails closed
+unless the operator deliberately selects that documented rollback.
 
 Both modes carry the immutable PR, head, base, diff, builder identity, tester
 receipt and closure, dependencies, risks, rollback, remaining proof, and the

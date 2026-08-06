@@ -17,6 +17,14 @@ type CommandOutput = {
     mergeLease: null | { leaseId: string; fence: number; claimedPr: number };
     items: Record<string, { state: string; terminalReceipts: unknown[] }>;
   };
+  rollout?: {
+    phase: string;
+    successfulPrs: number[];
+    successfulCount: number;
+    remaining: number;
+    pausedReason: string | null;
+    newlyGraduated?: boolean;
+  };
 };
 
 function makeFixture() {
@@ -148,7 +156,7 @@ function writeMergeReceipt(fixture: ReturnType<typeof makeFixture>, pr: number) 
       pr,
       reviewedHeadSha: packet.candidate.headSha,
       diffFingerprint: packet.candidate.diffFingerprint,
-      mergeSha: "d".repeat(40),
+      mergeSha: pr.toString(16).padStart(40, "d").slice(-40),
       normalNonAdmin: true,
       expectedHeadProtected: true,
       landedTreeMatchesReviewed: true,
@@ -158,7 +166,113 @@ function writeMergeReceipt(fixture: ReturnType<typeof makeFixture>, pr: number) 
   return receiptPath;
 }
 
+function finishMerge(fixture: ReturnType<typeof makeFixture>, pr: number) {
+  const owner = claim(fixture, `release-${pr}`, pr);
+  return run(fixture, [
+    "record-merge",
+    "--lease-id",
+    owner.lease!.leaseId,
+    "--fence",
+    String(owner.lease!.fence),
+    "--receipt",
+    writeMergeReceipt(fixture, pr),
+    "--transaction-id",
+    `merge-${pr}`,
+  ]);
+}
+
 describe("scripts/pr-release-queue", () => {
+  it("migrates the current schema-1 receipt and derives dogfood progress", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 1354);
+    finishMerge(fixture, 1354);
+    const legacy = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    delete legacy.rollout;
+    fs.writeFileSync(fixture.statePath, JSON.stringify(legacy));
+
+    const status = run(fixture, ["status"]);
+    expect(status.rollout).toMatchObject({
+      phase: "dogfood",
+      successfulPrs: [1354],
+      successfulCount: 1,
+      remaining: 2,
+    });
+  });
+
+  it("counts only complete qualifying merges once and ignores failed terminal states", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 60);
+    finishMerge(fixture, 60);
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    state.items["60"].terminalReceipts.push(state.items["60"].terminalReceipts[0]);
+    for (const [pr, terminalState] of [
+      [61, "cancelled"],
+      [62, "superseded"],
+      [63, "closed"],
+    ] as const) {
+      const packetPath = writePacket(fixture, pr);
+      const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+      state.items[String(pr)] = {
+        ...packet,
+        state: terminalState,
+        terminalReceipts: pr === 63 ? [{ kind: "source-merge", pr }] : [],
+      };
+    }
+    state.rollout.successfulPrs = [60];
+    fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+
+    expect(run(fixture, ["status"]).rollout).toMatchObject({
+      phase: "dogfood",
+      successfulPrs: [60],
+      successfulCount: 1,
+    });
+  });
+
+  it("stays dogfood at two receipts and atomically graduates on the third", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 70);
+    expect(finishMerge(fixture, 70).rollout).toMatchObject({
+      phase: "dogfood",
+      successfulCount: 1,
+      remaining: 2,
+    });
+    initAndEnqueue(fixture, 71);
+    expect(finishMerge(fixture, 71).rollout).toMatchObject({
+      phase: "dogfood",
+      successfulCount: 2,
+      remaining: 1,
+      newlyGraduated: false,
+    });
+    initAndEnqueue(fixture, 72);
+    const third = finishMerge(fixture, 72);
+    expect(third.rollout).toMatchObject({
+      phase: "graduated",
+      successfulPrs: [70, 71, 72],
+      successfulCount: 3,
+      remaining: 0,
+      newlyGraduated: true,
+    });
+    expect(run(fixture, ["status"]).state?.items["72"].terminalReceipts).toHaveLength(1);
+  });
+
+  it("pauses on cached recomputation mismatch and records the exact reason", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 80);
+    finishMerge(fixture, 80);
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    state.rollout.successfulPrs = [80, 999];
+    fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+
+    const status = run(fixture, ["status"]);
+    expect(status.rollout?.phase).toBe("paused");
+    expect(status.rollout?.pausedReason).toContain("do not match recomputed [80]");
+    const reconciled = run(fixture, ["reconcile-rollout", "--transaction-id", "pause-mismatch"]);
+    expect(reconciled).toMatchObject({ action: "rollout-paused" });
+    const durable = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    expect(durable.rollout).toMatchObject({ phase: "paused" });
+    expect(durable.rollout.pausedReason).toContain("do not match recomputed [80]");
+  });
+
   it("orders declared dependencies and reports path overlap without inventing an order", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 10, { paths: ["src/shared.ts", "src/first.ts"] });
@@ -259,7 +373,7 @@ describe("scripts/pr-release-queue", () => {
     expect(merged).toMatchObject({
       action: "merge-recorded-closed",
       pr: 30,
-      mergeSha: "d".repeat(40),
+      mergeSha: (30).toString(16).padStart(40, "d"),
     });
 
     const explained = run(fixture, ["explain-order"]);

@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 const SCHEMA_VERSION = 1;
 const GH_BIN = process.env.OPENCLAW_PR_LIFECYCLE_GH ?? "gh";
@@ -44,7 +45,7 @@ function usage() {
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
-  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed] [--declared-dependencies <FILE>]
+  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed|direct] [--declared-dependencies <FILE>]
   scripts/pr-lifecycle accept-release-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle accept-release-handoff <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-archived true
   scripts/pr-lifecycle return-source <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-unarchived true --finding <TEXT>
@@ -996,9 +997,43 @@ function handoffRelease(pr, options) {
     );
   }
   const taskAuthority = readTaskAuthority(options.taskAuthority, pr);
-  const queueMode = options.queue?.trim() || null;
-  if (queueMode && queueMode !== "repo-backed") {
-    fail("--queue must be repo-backed when provided", 2);
+  const requestedQueueMode = options.queue?.trim() || null;
+  if (requestedQueueMode && !["repo-backed", "direct"].includes(requestedQueueMode)) {
+    fail("--queue must be repo-backed or direct when provided", 2);
+  }
+  let queueMode = requestedQueueMode === "direct" ? null : requestedQueueMode;
+  // Direct routing is an explicit rollback, never an ambient environment
+  // escape hatch. Every ordinary or repo-backed handoff must consult the
+  // authoritative queue so paused or unreachable rollout state fails closed.
+  const mustResolveQueue = requestedQueueMode !== "direct";
+  if (mustResolveQueue) {
+    try {
+      const queueScript = path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "pr-release-queue.mjs",
+      );
+      const status = JSON.parse(
+        execFileSync(process.execPath, [queueScript, "status"], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        }),
+      );
+      if (["dogfood", "graduated"].includes(status?.rollout?.phase)) {
+        queueMode = "repo-backed";
+      } else if (status?.rollout?.phase === "paused") {
+        fail(`repo-backed release rollout is paused: ${status.rollout.pausedReason}`);
+      } else {
+        fail("authoritative release rollout returned an unknown phase");
+      }
+    } catch (error) {
+      if (error instanceof LifecycleError) {
+        throw error;
+      }
+      fail(
+        `cannot resolve authoritative release routing; use --queue direct only for the documented rollback: ${error.message}`,
+        75,
+      );
+    }
   }
   const declaredDependencies = readDeclaredDependencies(options.declaredDependencies, pr);
   const candidate = fetchCandidate(pr);

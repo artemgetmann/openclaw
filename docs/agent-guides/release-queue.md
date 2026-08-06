@@ -13,6 +13,26 @@ only wake signals; a missing callback never changes ownership or merge order.
 - The lease expires, so a vanished operator is replaceable.
 - Each successful merge is recorded before the next PR is claimed.
 
+## Rollout and graduation
+
+The queue state owns rollout policy. `scripts/pr-release-queue status` reports
+`dogfood` progress, a concrete `paused` reason, or terminal `graduated` state.
+After graduation, agents stop carrying the temporary dogfood reminder.
+
+Graduation requires three unique real source merges. The count is recomputed
+from terminal receipts that bind the immutable candidate, closed tester PASS,
+accepted lifecycle contract, normal non-admin expected-head merge, landed-tree
+equality, and target ancestry. Failed, cancelled, superseded, simulated,
+incomplete, admin, or bypass work never counts. Duplicate copies of one receipt
+remain one success.
+
+`record-merge` first appends the complete merge receipt, then recomputes rollout
+in the same queue commit. The third release therefore finishes under dogfood
+semantics and only its durable terminal receipt makes graduation authoritative.
+The cached successful-PR list is mechanically checked against receipts; a
+mismatch pauses instead of promoting. `reconcile-rollout` migrates legacy
+schema-1 state and durably records a detected pause.
+
 Source work and read-only testing remain parallel. Merges serialize because
 `main` changes after each merge and the next candidate must be reconciled
 against that new truth.
@@ -123,9 +143,11 @@ The queue state, GitHub PR, and merge receipt remain the truth.
   unconfirmed mutation.
 - Queue outage: stop merging through this workflow. Existing PRs and lifecycle
   packets remain intact.
-- Rollback: stop using the state branch and wrapper. No PR branch or runtime is
-  modified merely by queue enrollment.
+- Rollback: pass `--queue direct` to `scripts/pr-lifecycle handoff-release` for
+  the existing direct release-task path. Do not delete or reset
+  `ops/release-state`; its receipts remain the audit trail. No PR branch or
+  runtime is modified merely by queue enrollment. Environment variables cannot
+  select this rollback or disable authoritative rollout checks.
 
-This is an MVP. It does not weaken GitHub's current strict up-to-date-branch
-rule. Dogfood it with several real PRs before considering a tested merge-group
-candidate that could safely reduce repeated rebases.
+Graduation does not weaken GitHub's strict up-to-date-branch rule or authorize
+admin action, deployment, runtime mutation, or public release.
