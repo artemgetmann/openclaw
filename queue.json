@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 9,
-  "nextFence": 3,
-  "mergeLease": null,
+  "sequence": 10,
+  "nextFence": 4,
+  "mergeLease": {
+    "leaseId": "731ea383-9633-4dc6-93e5-fc8a2ea712bf",
+    "fence": 3,
+    "owner": {
+      "threadId": "019fd68f-ce95-7560-a134-517834c0398f",
+      "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+    },
+    "claimedPr": 1357,
+    "claimedAt": "2026-08-06T10:14:19.848Z",
+    "heartbeatAt": "2026-08-06T10:14:19.848Z",
+    "expiresAt": "2026-08-06T10:34:19.848Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -184,7 +195,7 @@
       ]
     },
     "1357": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1357,
         "url": "https://github.com/artemgetmann/openclaw/pull/1357",
@@ -239,17 +250,30 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-06T07:39:50.079Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "731ea383-9633-4dc6-93e5-fc8a2ea712bf",
+          "fence": 3,
+          "owner": {
+            "threadId": "019fd68f-ce95-7560-a134-517834c0398f",
+            "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+          },
+          "claimedPr": 1357,
+          "claimedAt": "2026-08-06T10:14:19.848Z",
+          "heartbeatAt": "2026-08-06T10:14:19.848Z",
+          "expiresAt": "2026-08-06T10:34:19.848Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [],
       "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "enqueue-pr1357-81614021",
-    "recordedAt": "2026-08-06T07:39:50.079Z"
+    "id": "pr1357-claim-019fd68f-v1",
+    "recordedAt": "2026-08-06T10:14:19.848Z"
   },
-  "updatedAt": "2026-08-06T07:39:50.079Z",
+  "updatedAt": "2026-08-06T10:14:19.848Z",
   "rollout": {
     "phase": "dogfood",
     "threshold": 3,
