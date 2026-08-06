@@ -33,7 +33,7 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(workflow).toContain("builder is always a user-visible, project-scoped Codex task");
     expect(workflow).toContain("It never merges its own PR and never deploys");
     expect(normalizedWorkflow).toContain(
-      "release worker is always one fresh user-visible project-scoped codex task",
+      "the release worker is always one fresh user-visible project-scoped",
     );
     expect(normalizedWorkflow).toContain("never a nested sub-agent");
     expect(normalizedWorkflow).toContain("normal non-admin merge");
