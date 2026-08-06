@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 10,
+  "sequence": 11,
   "nextFence": 4,
   "mergeLease": {
     "leaseId": "731ea383-9633-4dc6-93e5-fc8a2ea712bf",
@@ -11,8 +11,8 @@
     },
     "claimedPr": 1357,
     "claimedAt": "2026-08-06T10:14:19.848Z",
-    "heartbeatAt": "2026-08-06T10:14:19.848Z",
-    "expiresAt": "2026-08-06T10:34:19.848Z"
+    "heartbeatAt": "2026-08-06T10:20:27.272Z",
+    "expiresAt": "2026-08-06T10:40:27.272Z"
   },
   "items": {
     "1354": {
@@ -270,10 +270,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1357-claim-019fd68f-v1",
-    "recordedAt": "2026-08-06T10:14:19.848Z"
+    "id": "pr1357-heartbeat-019fd68f-1",
+    "recordedAt": "2026-08-06T10:20:27.272Z"
   },
-  "updatedAt": "2026-08-06T10:14:19.848Z",
+  "updatedAt": "2026-08-06T10:20:27.272Z",
   "rollout": {
     "phase": "dogfood",
     "threshold": 3,
