@@ -81,7 +81,13 @@ const fixture = () => {
   return { root, home, detached };
 };
 
-const adopt = (home: string, detached: string, name: string, thread = "thread-fixture") =>
+const adopt = (
+  home: string,
+  detached: string,
+  name: string,
+  thread = "thread-fixture",
+  env?: NodeJS.ProcessEnv,
+) =>
   result(
     detached,
     "bash",
@@ -94,7 +100,7 @@ const adopt = (home: string, detached: string, name: string, thread = "thread-fi
       "--thread-id",
       thread,
     ],
-    { OPENCLAW_MAIN_HOME_CLONE: home },
+    { OPENCLAW_MAIN_HOME_CLONE: home, ...env },
   );
 
 describe("Codex worktree adoption ownership", () => {
@@ -118,11 +124,14 @@ describe("Codex worktree adoption ownership", () => {
     const canonicalDetached = realpathSync(detached);
     const canonicalOwner = realpathSync(owner);
 
-    const blocked = adopt(home, detached, "conflict");
+    const blocked = adopt(home, detached, "conflict", "thread-fixture", {
+      TEST_SECRET_SENTINEL: "must-not-appear",
+    });
     expect(blocked.status).not.toBe(0);
     expect(blocked.stderr).toContain(`Requested worktree: ${canonicalDetached}`);
     expect(blocked.stderr).toContain(`  ${canonicalOwner}`);
     expect(blocked.stderr).toContain("No branch was created, switched, or stolen");
+    expect(`${blocked.stdout}\n${blocked.stderr}`).not.toContain("must-not-appear");
     expect(existsSync(path.join(detached, "bootstrap-effect"))).toBe(false);
     expect(run(detached, "git", ["branch", "--show-current"])).toBe("");
   });
@@ -134,6 +143,17 @@ describe("Codex worktree adoption ownership", () => {
     const adopted = adopt(home, detached, "recovered");
     expect(adopted.status).toBe(0);
     expect(run(detached, "git", ["branch", "--show-current"])).toBe("codex/recovered");
+  });
+
+  it("does not switch or reset an unattached branch at a different commit", () => {
+    const { home, detached } = fixture();
+    run(home, "git", ["branch", "codex/mismatched", "HEAD~1"]);
+
+    const blocked = adopt(home, detached, "mismatched");
+    expect(blocked.status).not.toBe(0);
+    expect(blocked.stderr).toContain("unattached lane branch does not match");
+    expect(blocked.stderr).toContain("No branch was switched or reset");
+    expect(run(detached, "git", ["branch", "--show-current"])).toBe("");
   });
 
   it("preserves dirty, stale, and sacred-home fail-closed protections", () => {
