@@ -126,7 +126,12 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain("delivered turn is not completion proof");
     expect(normalizedWorkflow).toContain("Never retry an ambiguously accepted send");
     expect(normalizedWorkflow).toContain("`notLoaded` alone is not archive proof");
+    expect(normalizedWorkflow).toContain("do not vary starting-state forms as retries");
+    expect(normalizedWorkflow).toContain("allow at most one identical retry");
     expect(normalizedWorkflow).toContain("Do not keep the caller alive with shell sleep loops");
+    expect(threadRecoverySkill).toContain("Do not cycle");
+    expect(threadRecoverySkill).toContain("at most one identical create retry");
+    expect(threadRecoverySkill).toContain("preserve the pending lifecycle reservation");
     expect(threadRecoverySkill).toContain("set only that");
     expect(threadRecoverySkill).toContain("target to `archived:false`");
     expect(threadRecoverySkill).toContain("A successful send receipt alone is insufficient");

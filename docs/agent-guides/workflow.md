@@ -112,6 +112,13 @@ ambiguously accepted send. Do not keep the caller alive with shell sleep loops,
 fall back to a second transport, or create a replacement owner. After two
 bounded read-only reconciliations, preserve the owner and report the last
 proven state.
+
+For `create_thread`, do not vary starting-state forms as retries. After an
+ambiguous failure, search inventory for the unique intended task. If no task
+exists, allow at most one identical retry after the recovery interval. A second
+failure preserves the pending lifecycle reservation and blocks on the native
+control plane; it does not authorize cancellation, a same-directory substitute,
+or a replacement creator.
 The wrapper first runs the canonical secret-silent GitHub preflight. A
 restricted `status=indeterminate` result requires the same read-only lifecycle
 command to be rerun in authorized host context; it is not proof that the PR or

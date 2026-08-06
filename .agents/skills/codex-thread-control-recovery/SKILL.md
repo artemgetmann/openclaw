@@ -7,6 +7,20 @@ description: Recover or verify a native Codex task when read, send, archive, una
 
 Treat thread control as a verified transaction, not a single tool call.
 
+## Create transaction
+
+1. Resolve the exact project and one intended starting state. Do not cycle
+   through SHA, branch, and empty starting-state variants as speculative retries.
+2. After a generic failure or timeout, search fresh thread inventory for the
+   unique task identity. If a task exists, record that exact owner and do not
+   create again.
+3. If inventory proves no task was created, wait one to two minutes and allow at
+   most one identical create retry. A second failure is a control-plane blocker:
+   preserve the pending lifecycle reservation and stop. Do not cancel it, create
+   a same-directory substitute, or ask another owner to create the task.
+4. Read the new task before claiming creation succeeded. Project worktree setup
+   and a visible initial turn are separate proof from API acceptance.
+
 ## Identity gate
 
 1. Discover the current native thread tools before claiming they are unavailable.
