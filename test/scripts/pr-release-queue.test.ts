@@ -255,7 +255,66 @@ describe("scripts/pr-release-queue", () => {
     expect(run(fixture, ["status"]).state?.items["72"].terminalReceipts).toHaveLength(1);
   });
 
-  it("pauses on cached recomputation mismatch and records the exact reason", () => {
+  it("self-heals when authoritative receipts extend a stale successful-PR cache", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 80);
+    finishMerge(fixture, 80);
+    initAndEnqueue(fixture, 81);
+    finishMerge(fixture, 81);
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    state.rollout.successfulPrs = [80];
+    fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+
+    const status = run(fixture, ["status"]);
+    expect(status.rollout).toMatchObject({
+      phase: "dogfood",
+      successfulPrs: [80, 81],
+      successfulCount: 2,
+      pausedReason: null,
+    });
+    const reconciled = run(fixture, ["reconcile-rollout", "--transaction-id", "heal-stale-cache"]);
+    expect(reconciled).toMatchObject({ action: "rollout-reconciled" });
+    const durable = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    expect(durable.rollout).toMatchObject({
+      phase: "dogfood",
+      successfulPrs: [80, 81],
+      pausedReason: null,
+    });
+
+    const repeated = run(fixture, ["reconcile-rollout", "--transaction-id", "heal-stale-cache"]);
+    expect(repeated).toMatchObject({
+      action: "transaction-already-recorded",
+      transactionId: "heal-stale-cache",
+    });
+    expect(JSON.parse(fs.readFileSync(fixture.statePath, "utf8"))).toEqual(durable);
+  });
+
+  it("recomputes and clears an obsolete persisted cache-mismatch pause", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 82);
+    finishMerge(fixture, 82);
+    initAndEnqueue(fixture, 83);
+    finishMerge(fixture, 83);
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    state.rollout = {
+      ...state.rollout,
+      phase: "paused",
+      successfulPrs: [82],
+      pausedReason: "cached successful PRs [82] do not match recomputed [82,83]",
+    };
+    fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+
+    expect(run(fixture, ["status"]).rollout).toMatchObject({
+      phase: "dogfood",
+      successfulPrs: [82, 83],
+      pausedReason: null,
+    });
+    expect(
+      run(fixture, ["reconcile-rollout", "--transaction-id", "clear-obsolete-pause"]),
+    ).toMatchObject({ action: "rollout-reconciled", rollout: { phase: "dogfood" } });
+  });
+
+  it("keeps blocking when the cache claims success without an authoritative receipt", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 80);
     finishMerge(fixture, 80);
@@ -265,12 +324,62 @@ describe("scripts/pr-release-queue", () => {
 
     const status = run(fixture, ["status"]);
     expect(status.rollout?.phase).toBe("paused");
-    expect(status.rollout?.pausedReason).toContain("do not match recomputed [80]");
-    const reconciled = run(fixture, ["reconcile-rollout", "--transaction-id", "pause-mismatch"]);
-    expect(reconciled).toMatchObject({ action: "rollout-paused" });
+    expect(status.rollout?.pausedReason).toContain("unverified successful PRs [999]");
+
+    expect(
+      run(fixture, ["reconcile-rollout", "--transaction-id", "preserve-unsafe-cache"]),
+    ).toMatchObject({ action: "rollout-paused" });
+    expect(run(fixture, ["status"]).rollout).toMatchObject({
+      phase: "paused",
+      successfulPrs: [80],
+    });
     const durable = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
-    expect(durable.rollout).toMatchObject({ phase: "paused" });
-    expect(durable.rollout.pausedReason).toContain("do not match recomputed [80]");
+    expect(durable.rollout).toMatchObject({
+      phase: "paused",
+      successfulPrs: [80, 999],
+    });
+    expect(
+      run(fixture, ["reconcile-rollout", "--transaction-id", "preserve-unsafe-cache-again"]),
+    ).toMatchObject({ action: "rollout-paused" });
+    expect(run(fixture, ["status"]).rollout?.phase).toBe("paused");
+  });
+
+  it("keeps blocking contradictory or incomplete receipt evidence", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 84);
+    finishMerge(fixture, 84);
+    const contradictory = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    contradictory.items["84"].terminalReceipts.push({
+      ...contradictory.items["84"].terminalReceipts[0],
+      mergeSha: "f".repeat(40),
+    });
+    fs.writeFileSync(fixture.statePath, JSON.stringify(contradictory));
+
+    expect(run(fixture, ["status"]).rollout).toMatchObject({
+      phase: "paused",
+      pausedReason: "PR #84 has conflicting qualifying merge receipts",
+    });
+
+    const incompleteFixture = makeFixture();
+    initAndEnqueue(incompleteFixture, 85);
+    const incomplete = JSON.parse(fs.readFileSync(incompleteFixture.statePath, "utf8"));
+    incomplete.items["85"].state = "closed";
+    incomplete.items["85"].terminalReceipts = [
+      {
+        ...JSON.parse(fs.readFileSync(writeMergeReceipt(incompleteFixture, 85), "utf8")),
+        expectedHeadProtected: false,
+      },
+    ];
+    incomplete.rollout.successfulPrs = [85];
+    fs.writeFileSync(incompleteFixture.statePath, JSON.stringify(incomplete));
+
+    expect(run(incompleteFixture, ["status"]).rollout).toMatchObject({
+      phase: "paused",
+      successfulPrs: [],
+    });
+    expect(run(incompleteFixture, ["status"]).rollout?.pausedReason).toContain(
+      "unverified successful PRs [85]",
+    );
   });
 
   it("orders declared dependencies and reports path overlap without inventing an order", () => {

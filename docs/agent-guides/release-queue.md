@@ -29,9 +29,13 @@ remain one success.
 `record-merge` first appends the complete merge receipt, then recomputes rollout
 in the same queue commit. The third release therefore finishes under dogfood
 semantics and only its durable terminal receipt makes graduation authoritative.
-The cached successful-PR list is mechanically checked against receipts; a
-mismatch pauses instead of promoting. `reconcile-rollout` migrates legacy
-schema-1 state and durably records a detected pause.
+The cached successful-PR list is mechanically checked against receipts. When
+qualifying authoritative receipts extend a stale cache, the queue safely
+rebuilds that cache and continues; repeating reconciliation is idempotent. A
+cache that claims an unverified success, malformed cache state, conflicting
+receipt identity, or incomplete proof still pauses instead of promoting.
+`reconcile-rollout` migrates legacy schema-1 state, heals benign drift, and
+durably records a currently reproducible pause.
 
 Source work and read-only testing remain parallel. Merges serialize because
 `main` changes after each merge and the next candidate must be reconciled
