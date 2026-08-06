@@ -146,7 +146,8 @@ The queue state, GitHub PR, and merge receipt remain the truth.
 - Rollback: pass `--queue direct` to `scripts/pr-lifecycle handoff-release` for
   the existing direct release-task path. Do not delete or reset
   `ops/release-state`; its receipts remain the audit trail. No PR branch or
-  runtime is modified merely by queue enrollment.
+  runtime is modified merely by queue enrollment. Environment variables cannot
+  select this rollback or disable authoritative rollout checks.
 
 Graduation does not weaken GitHub's strict up-to-date-branch rule or authorize
 admin action, deployment, runtime mutation, or public release.
