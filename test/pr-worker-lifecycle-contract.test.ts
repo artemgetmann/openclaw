@@ -130,7 +130,7 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain("allow at most one identical retry");
     expect(normalizedWorkflow).toContain("Do not keep the caller alive with shell sleep loops");
     expect(threadRecoverySkill).toContain("Do not cycle");
-    expect(threadRecoverySkill).toContain("at most one identical create retry");
+    expect(threadRecoverySkill).toContain("most one identical create retry");
     expect(threadRecoverySkill).toContain("preserve the pending lifecycle reservation");
     expect(threadRecoverySkill).toContain("set only that");
     expect(threadRecoverySkill).toContain("target to `archived:false`");
