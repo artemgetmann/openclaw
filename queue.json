@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 16,
+  "sequence": 17,
   "nextFence": 5,
-  "mergeLease": {
-    "leaseId": "aac172ee-4684-42d6-b32d-5307c33e0b2e",
-    "fence": 4,
-    "owner": {
-      "threadId": "/root/pr1358_release_operator",
-      "hostId": "nested-agent"
-    },
-    "claimedPr": 1358,
-    "claimedAt": "2026-08-07T05:07:21.364Z",
-    "heartbeatAt": "2026-08-07T05:08:28.037Z",
-    "expiresAt": "2026-08-07T05:38:28.037Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -275,7 +264,7 @@
       "terminalReceipts": []
     },
     "1358": {
-      "state": "claimed",
+      "state": "blocked",
       "candidate": {
         "pr": 1358,
         "url": "https://github.com/artemgetmann/openclaw/pull/1358",
@@ -335,7 +324,13 @@
         "stateDirectory": "/Users/user/.codex/worktrees/fd114f9b-9476-40be-ba80-41078ef4782d/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [],
+      "discoveredBlockers": [
+        {
+          "kind": "base-drift",
+          "details": "PR #1358 exact candidate head 3e6fe39f3afad1214cd5d3f4a0f70b676cf2a4e8 and diff sha256:bd344faa4166d7f768a8148ebe5ead09fe00447a9169b06352f502b670dbf8c0 remain unchanged, and required checks pr-required/actionlint pass, but tested base 3e954f0510803729b5ba3415c79d270e4587e1ac is stale: current main is ecfe664b6ff3ba87c8d20d2c270ad23fce2aa42f after PR #1360, GitHub reports mergeable_state=behind under strict required-status policy. Builder refresh/rebase plus fresh exact-head review and tester closure are required; normal non-admin merge is forbidden on this lease.",
+          "observedAt": "2026-08-07T05:11:32.077Z"
+        }
+      ],
       "readyAt": "2026-08-07T05:06:29.324Z",
       "ownerHistory": [
         {
@@ -421,10 +416,10 @@
     }
   },
   "lastTransaction": {
-    "id": "d767d8bd-82e0-48c1-8228-d9033fb854ef",
-    "recordedAt": "2026-08-07T05:08:28.037Z"
+    "id": "0d111179-f45f-474b-b47b-32a51be93763",
+    "recordedAt": "2026-08-07T05:11:32.077Z"
   },
-  "updatedAt": "2026-08-07T05:08:28.037Z",
+  "updatedAt": "2026-08-07T05:11:32.077Z",
   "rollout": {
     "phase": "dogfood",
     "threshold": 3,
