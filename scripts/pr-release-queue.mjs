@@ -163,6 +163,19 @@ function qualifyingMerge(item, receipt) {
   );
 }
 
+function exactReviewQualifies(item) {
+  return (
+    item?.reviewReceipt?.role === "code-reviewer" &&
+    item.reviewReceipt.status === "PASS" &&
+    item.reviewReceipt.headSha === item?.candidate?.headSha &&
+    item.reviewReceipt.diffFingerprint === item?.candidate?.diffFingerprint &&
+    Array.isArray(item.reviewReceipt.unresolvedFindings) &&
+    !item.reviewReceipt.unresolvedFindings.some((finding) =>
+      ["high", "critical"].includes(finding?.severity),
+    )
+  );
+}
+
 function recomputeSuccessfulPrs(state) {
   const successful = [];
   const mergeOwners = new Map();
@@ -575,7 +588,18 @@ function mutateEnqueue(state, packet, transactionId, now) {
 function mutateRefresh(state, packet, transactionId, now) {
   return transition(state, transactionId, now, (next) => {
     const item = next.items[String(packet.candidate.pr)];
-    if (!item || !["blocked", "awaiting-decision"].includes(item.state)) {
+    // An unowned schema-1 packet queued before review receipts existed can be
+    // replaced directly by the same builder. It cannot be claimed or merged;
+    // forcing a fake release owner merely to block it would recreate the
+    // native-control dependency this migration removes.
+    const legacyUnreviewedQueued =
+      item?.state === "queued" &&
+      item.reviewReceipt === undefined &&
+      item.capabilityPolicy === undefined;
+    if (
+      !item ||
+      (!legacyUnreviewedQueued && !["blocked", "awaiting-decision"].includes(item.state))
+    ) {
       fail(`PR #${packet.candidate.pr} is not waiting for a repaired candidate`);
     }
     if (next.mergeLease?.claimedPr === packet.candidate.pr) {
@@ -666,6 +690,9 @@ function mutateClaim(state, options, transactionId, now) {
     }
 
     const item = next.items[String(selected.pr)];
+    if (!exactReviewQualifies(item)) {
+      fail("release claim requires a fresh exact-head review PASS with no serious findings");
+    }
     // Queue ownership must be independent from source ownership. Native task
     // creation is deliberately not required, but a builder cannot relabel
     // itself as the release executor and silently self-merge.
@@ -748,6 +775,9 @@ function mutateRecordMerge(state, options, receipt, transactionId, now) {
   return transition(state, transactionId, now, (next) => {
     const lease = requireLease(next, options, now);
     const item = next.items[String(lease.claimedPr)];
+    if (!exactReviewQualifies(item)) {
+      fail("merge requires a fresh exact-head review PASS with no serious findings");
+    }
     const ownership = item.ownershipReceipt;
     if (
       ownership?.mode !== "queue-lease" ||

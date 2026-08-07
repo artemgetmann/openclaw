@@ -1108,6 +1108,18 @@ function handoffRelease(pr, options) {
         "release handoff requires an exact-head PASS and the transport's exact tester lifecycle closure",
       );
     }
+    if (
+      state.reviewReceipt?.role !== "code-reviewer" ||
+      state.reviewReceipt?.status !== "PASS" ||
+      state.reviewReceipt?.headSha !== candidate.headSha ||
+      state.reviewReceipt?.diffFingerprint !== candidate.diffFingerprint ||
+      !Array.isArray(state.reviewReceipt?.unresolvedFindings) ||
+      state.reviewReceipt.unresolvedFindings.some((finding) =>
+        ["high", "critical"].includes(finding?.severity),
+      )
+    ) {
+      fail("release handoff requires a fresh exact-head review PASS with no serious findings");
+    }
     // The PR body is the durable receipt surface and normally advances after
     // tester closure without changing the immutable source candidate. Refresh
     // that mutable contract before composing the release prompt so the cheaper

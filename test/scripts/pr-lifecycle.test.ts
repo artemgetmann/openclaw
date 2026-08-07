@@ -1035,6 +1035,35 @@ describe("scripts/pr-lifecycle", () => {
     expect(direct.action).toBe("create_thread");
   });
 
+  it("rejects direct release when migrated state lacks the exact-head review receipt", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const stateFile = path.join(
+      fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
+      fs.readdirSync(fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR)[0],
+    );
+    const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    delete state.reviewReceipt;
+    fs.writeFileSync(stateFile, JSON.stringify(state));
+
+    const rejected = runFailure(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--queue",
+      "direct",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("fresh exact-head review PASS");
+  });
+
   it("rejects explicit repo-backed routing while authoritative rollout is paused", () => {
     const fixture = makeFixture();
     completeTesterPass(fixture);

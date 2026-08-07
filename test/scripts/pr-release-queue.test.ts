@@ -532,6 +532,29 @@ describe("scripts/pr-release-queue", () => {
     });
   });
 
+  it("cannot claim a legacy queued packet without the exact-head review gate", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 23);
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    delete state.items["23"].reviewReceipt;
+    delete state.items["23"].capabilityPolicy;
+    fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+
+    const rejected = runFailure(fixture, [
+      "claim",
+      "--thread-id",
+      "release-23",
+      "--host-id",
+      "release-host",
+      "--pr",
+      "23",
+      "--transaction-id",
+      "claim-unreviewed-23",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("fresh exact-head review PASS");
+  });
+
   it("rejects merge recording when the queue ownership receipt is missing", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 22);
