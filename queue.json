@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 14,
-  "nextFence": 4,
-  "mergeLease": null,
+  "sequence": 15,
+  "nextFence": 5,
+  "mergeLease": {
+    "leaseId": "aac172ee-4684-42d6-b32d-5307c33e0b2e",
+    "fence": 4,
+    "owner": {
+      "threadId": "/root/pr1358_release_operator",
+      "hostId": "nested-agent"
+    },
+    "claimedPr": 1358,
+    "claimedAt": "2026-08-07T05:07:21.364Z",
+    "heartbeatAt": "2026-08-07T05:07:21.364Z",
+    "expiresAt": "2026-08-07T05:37:21.364Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -264,7 +275,7 @@
       "terminalReceipts": []
     },
     "1358": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1358,
         "url": "https://github.com/artemgetmann/openclaw/pull/1358",
@@ -326,7 +337,20 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-07T05:06:29.324Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "aac172ee-4684-42d6-b32d-5307c33e0b2e",
+          "fence": 4,
+          "owner": {
+            "threadId": "/root/pr1358_release_operator",
+            "hostId": "nested-agent"
+          },
+          "claimedPr": 1358,
+          "claimedAt": "2026-08-07T05:07:21.364Z",
+          "heartbeatAt": "2026-08-07T05:07:21.364Z",
+          "expiresAt": "2026-08-07T05:37:21.364Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [
         {
@@ -378,14 +402,29 @@
       "capabilityPolicy": {
         "routine": "routine-release",
         "escalation": "reasoning-escalation"
+      },
+      "ownershipReceipt": {
+        "mode": "queue-lease",
+        "owner": {
+          "threadId": "/root/pr1358_release_operator",
+          "hostId": "nested-agent"
+        },
+        "builder": {
+          "threadId": "019fd71a-f854-72a1-bff4-a99b5a079526",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "builderSuspended": true,
+        "leaseId": "aac172ee-4684-42d6-b32d-5307c33e0b2e",
+        "fence": 4,
+        "recordedAt": "2026-08-07T05:07:21.364Z"
       }
     }
   },
   "lastTransaction": {
-    "id": "3b644f9f-83a1-4ef7-bdc8-91b513685220",
-    "recordedAt": "2026-08-07T05:06:29.324Z"
+    "id": "2e0100c8-3d76-4616-b9c1-e34f51d4fbc6",
+    "recordedAt": "2026-08-07T05:07:21.364Z"
   },
-  "updatedAt": "2026-08-07T05:06:29.324Z",
+  "updatedAt": "2026-08-07T05:07:21.364Z",
   "rollout": {
     "phase": "dogfood",
     "threshold": 3,
