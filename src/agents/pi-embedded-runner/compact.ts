@@ -139,7 +139,7 @@ export type CompactEmbeddedPiSessionParams = {
   customInstructions?: string;
   tokenBudget?: number;
   force?: boolean;
-  trigger?: "overflow" | "manual";
+  trigger?: "overflow" | "manual" | "proactive";
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -1158,7 +1158,7 @@ export async function compactEmbeddedPiSession(
           tokenBudget: ceCtxInfo.tokens,
           currentTokenCount: params.currentTokenCount,
           customInstructions: params.customInstructions,
-          force: params.trigger === "manual",
+          force: params.force === true || params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
         if (engineOwnsCompaction && result.ok && result.compacted) {

@@ -11,6 +11,10 @@ import { isControlCommandReplyPayload } from "../../../src/auto-reply/reply/cont
 import { isCopySafeDraftReplyPayload } from "../../../src/auto-reply/reply/copy-safe-reply.js";
 import { isCaptionlessFinalMediaSupplement } from "../../../src/auto-reply/reply/final-media-supplement.js";
 import { clearHistoryEntriesIfEnabled } from "../../../src/auto-reply/reply/history.js";
+import {
+  cancelProactiveCompactionForIncomingTurn,
+  scheduleProactiveCompactionAfterDelivery,
+} from "../../../src/auto-reply/reply/proactive-compaction.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
 import { completeDurableFollowup } from "../../../src/auto-reply/reply/queue/durable-store.js";
 import { buildFinalTtsCaptionPreview } from "../../../src/auto-reply/reply/tts-caption-preview.js";
@@ -541,6 +545,11 @@ export const dispatchTelegramMessage = async ({
     statusReactionController,
   } = context;
   const sessionId = typeof ctxPayload?.SessionKey === "string" ? ctxPayload.SessionKey : undefined;
+  // User work always outranks idle maintenance. Abort before entering the agent
+  // runner so a background compaction cannot hold the per-session lane first.
+  const interruptedProactiveCompaction = sessionId
+    ? cancelProactiveCompactionForIncomingTurn(sessionId)
+    : "none";
   const logPreviewLedger = (
     event: Omit<
       Parameters<typeof logTelegramPreviewLedger>[0],
@@ -1769,6 +1778,9 @@ export const dispatchTelegramMessage = async ({
     }
     return true;
   };
+  if (interruptedProactiveCompaction === "running") {
+    await updateAnswerProgressFromBlock("Pausing conversation cleanup for your message…");
+  }
   const scheduleSilentToolProgressFallback = (toolName?: string) => {
     if (
       sawExplicitProgress ||
@@ -3153,9 +3165,14 @@ export const dispatchTelegramMessage = async ({
           }
           await statusReactionController.setTool(payload.name);
         },
-        onCompactionStart: statusReactionController
-          ? () => statusReactionController.setCompacting()
-          : undefined,
+        onCompactionStart: async () => {
+          // Compaction can legitimately take minutes. A reaction alone looks
+          // indistinguishable from a hung bot, so expose the actual operation.
+          await updateAnswerProgressFromBlock(
+            "Compacting this conversation — this may take a few minutes.",
+          );
+          await statusReactionController?.setCompacting();
+        },
         onCompactionEnd: statusReactionController
           ? async () => {
               statusReactionController.cancelPending();
@@ -3415,6 +3432,17 @@ export const dispatchTelegramMessage = async ({
           error: err,
         });
       },
+    });
+  }
+  if (sessionId && (terminalDeliveryConfirmed || sentFallback)) {
+    // This call only arms an idle timer. The expensive work starts after the
+    // delivered final is readable and is cancelled by any subsequent message.
+    scheduleProactiveCompactionAfterDelivery({
+      cfg,
+      agentId: route.agentId,
+      sessionKey: sessionId,
+      messageChannel: "telegram",
+      messageProvider: "telegram",
     });
   }
   clearGroupHistory();
