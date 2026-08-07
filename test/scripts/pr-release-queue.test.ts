@@ -237,6 +237,24 @@ describe("scripts/pr-release-queue", () => {
     expect(result.stderr).toContain("exact-head review PASS");
   });
 
+  it("rejects an empty tester identity in a direct queue packet", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init-empty-tester"]);
+    const packetPath = writePacket(fixture, 17);
+    const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+    packet.testerReceipt.owner = { threadId: " ", hostId: "" };
+    fs.writeFileSync(packetPath, JSON.stringify(packet));
+    const result = runFailure(fixture, [
+      "enqueue",
+      "--packet",
+      packetPath,
+      "--transaction-id",
+      "enqueue-empty-tester",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("closed exact-candidate tester PASS");
+  });
+
   it("migrates the current schema-1 receipt and derives dogfood progress", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 1354);

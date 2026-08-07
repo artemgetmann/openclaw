@@ -361,7 +361,9 @@ function validatePacket(packet) {
   if (
     tester?.status !== "PASS" ||
     typeof tester?.owner?.threadId !== "string" ||
+    tester.owner.threadId.trim() === "" ||
     typeof tester?.owner?.hostId !== "string" ||
+    tester.owner.hostId.trim() === "" ||
     (tester.owner.threadId === builder.threadId && tester.owner.hostId === builder.hostId) ||
     tester?.headSha !== candidate.headSha ||
     tester?.diffFingerprint !== candidate.diffFingerprint ||
