@@ -6,13 +6,24 @@ only wake signals; a missing callback never changes ownership or merge order.
 
 ## The simple model
 
-- Builders own source changes, CI, review fixes, and independent testing.
-- A builder submits one immutable packet after an exact-head tester passes.
+- Builders own source changes and fixes but cannot approve or release their own work.
+- A distinct code reviewer records an exact-head review receipt before testing.
+- A fresh read-only tester records independent exact-head proof.
+- A constrained release executor performs only verified mechanical actions.
+- A builder submits one immutable packet after review and tester gates pass.
 - Any distinct release executor may inspect and claim the queue. A native Codex
   thread is optional visibility, not ownership or correctness.
 - Only one operator may hold the merge lease at a time.
 - The lease expires, so a vanished operator is replaceable.
 - Each successful merge is recorded before the next PR is claimed.
+
+These identities, receipts, terminal states, expiry, recovery, and duplicate
+prevention live in the queue. Executors may be subagents or other replaceable
+agents. Native Codex threads are optional visibility and steering only.
+
+Routine merge mechanics use the `routine-release` capability tier. Ambiguity,
+conflicts, serious findings, or source repair require `reasoning-escalation`.
+These are capability contracts, not hard-coded models.
 
 ## Rollout and graduation
 
@@ -82,6 +93,17 @@ Submit a JSON file with this shape:
     "diffFingerprint": "same candidate diff",
     "closure": "archived"
   },
+  "reviewReceipt": {
+    "role": "code-reviewer",
+    "status": "PASS",
+    "headSha": "same candidate head",
+    "diffFingerprint": "same candidate diff",
+    "unresolvedFindings": []
+  },
+  "capabilityPolicy": {
+    "routine": "routine-release",
+    "escalation": "reasoning-escalation"
+  },
   "authority": {
     "source": "builder-handoff",
     "scope": "PR #123 source merge only",
@@ -92,7 +114,8 @@ Submit a JSON file with this shape:
 }
 ```
 
-The queue rejects a stale tester receipt or authority beyond normal merge and
+The queue rejects a stale review or tester receipt, unresolved high or critical
+review findings, or authority beyond normal merge and
 an optional explicitly authorized deploy. Deploy authority never implies
 credentials, packaging, publication, restart, or another external action.
 
@@ -142,6 +165,10 @@ A merge receipt must prove the reviewed head and diff, normal non-admin merge,
 expected-head protection, landed-tree equality, and ancestry. Source-only work
 then closes. Explicit deployment authority stops at a separate delivery barrier;
 it does not silently become public-release authority.
+
+Automated checks, branch protection, signing/package verification, publication,
+and post-release proof remain independent gates whenever the authority packet
+includes those stages. Native thread creation is never evidence for any gate.
 
 Wake the packet's builder route after source return or terminal completion, and
 wake the next relevant coordinator if supplied. The callback is convenience.

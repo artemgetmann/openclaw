@@ -98,9 +98,22 @@ function writePacket(
       },
       testerReceipt: {
         status: "PASS",
+        owner: { threadId: `tester-${pr}`, hostId: "tester-host" },
         headSha,
         diffFingerprint,
         closure: "archived",
+      },
+      reviewReceipt: {
+        role: "code-reviewer",
+        status: "PASS",
+        owner: { threadId: `reviewer-${pr}`, hostId: "reviewer-host" },
+        headSha,
+        diffFingerprint,
+        unresolvedFindings: [],
+      },
+      capabilityPolicy: {
+        routine: "routine-release",
+        escalation: "reasoning-escalation",
       },
       authority: {
         source: "builder-handoff",
@@ -185,6 +198,26 @@ function finishMerge(fixture: ReturnType<typeof makeFixture>, pr: number) {
 }
 
 describe("scripts/pr-release-queue", () => {
+  it("rejects packets with unresolved serious code-review findings", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init-review-gate"]);
+    const packetPath = writePacket(fixture, 19);
+    const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+    packet.reviewReceipt.unresolvedFindings = [
+      { severity: "critical", summary: "merge gate can be bypassed" },
+    ];
+    fs.writeFileSync(packetPath, JSON.stringify(packet));
+    const result = runFailure(fixture, [
+      "enqueue",
+      "--packet",
+      packetPath,
+      "--transaction-id",
+      "enqueue-review-blocked",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("no serious unresolved findings");
+  });
+
   it("migrates the current schema-1 receipt and derives dogfood progress", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 1354);
@@ -607,6 +640,8 @@ describe("scripts/pr-release-queue", () => {
     repairedPacket.candidate.diffFingerprint = `sha256:${"1".repeat(64)}`;
     repairedPacket.testerReceipt.headSha = repairedPacket.candidate.headSha;
     repairedPacket.testerReceipt.diffFingerprint = repairedPacket.candidate.diffFingerprint;
+    repairedPacket.reviewReceipt.headSha = repairedPacket.candidate.headSha;
+    repairedPacket.reviewReceipt.diffFingerprint = repairedPacket.candidate.diffFingerprint;
     fs.writeFileSync(repairedPacketPath, JSON.stringify(repairedPacket));
 
     const refreshed = run(fixture, [

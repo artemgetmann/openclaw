@@ -29,20 +29,20 @@ describe("canonical PR worker lifecycle policy", () => {
   it("separates builder, tester, and release ownership without self-merge", () => {
     // The release role exists to keep default-branch writes and approvals out
     // of builder or tester transcripts and to prevent duplicate merge owners.
-    expect(workflow).toContain("`builder -> independent tester -> release worker`");
+    expect(workflow).toContain(
+      "`builder -> code reviewer -> independent tester -> release operator`",
+    );
     expect(workflow).toContain("builder is always a user-visible, project-scoped Codex task");
     expect(workflow).toContain("It never merges its own PR and never deploys");
-    expect(workflow).toContain(
-      "The release worker is always one fresh user-visible project-scoped Codex task",
-    );
+    expect(workflow).toContain("Repo-backed release ownership is one distinct fenced queue lease");
+    expect(normalizedWorkflow).toContain("exact builder identity cannot claim it");
+    expect(workflow).toContain("Native Codex tasks are optional coordination");
     expect(normalizedWorkflow).toContain("never a nested sub-agent");
     expect(normalizedWorkflow).toContain("normal non-admin merge");
     expect(normalizedWorkflow).toContain(
-      "must not create a duplicate builder, tester, or release owner",
+      "Neither path may create a duplicate builder, tester, or release owner",
     );
-    expect(normalizedWorkflow).toContain(
-      "builder therefore leaves the active Codex task list at accepted handoff, not after merge",
-    );
+    expect(normalizedWorkflow).toContain("Native archival is best-effort roster UX");
     expect(normalizedWorkflow).toContain(
       "records the exact finding and identities with `return-source`",
     );
@@ -63,6 +63,18 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain("does not retry after ambiguity, failure, refusal");
   });
 
+  it("requires exact-head review before independent testing and release", () => {
+    expect(normalizedWorkflow).toContain("distinct reviewer records the exact commit");
+    expect(normalizedWorkflow).toContain("unresolved finding severities before testing");
+    expect(normalizedWorkflow).toContain(
+      "source-head change invalidates both review and tester receipts",
+    );
+    expect(normalizedWorkflow).toContain("fresh review PASS with no serious finding left open");
+    expect(normalizedWorkflow).toContain("`routine-release` capability tier");
+    expect(normalizedWorkflow).toContain("`reasoning-escalation`");
+    expect(normalizedWorkflow).toContain("not hard-coded model names");
+  });
+
   it("invalidates stale-head proof and fails lifecycle operations closed", () => {
     // A changed head is a new candidate. Exact identity checks ensure archival
     // or repair steering cannot hit an adjacent user-visible task.
@@ -81,7 +93,7 @@ describe("canonical PR worker lifecycle policy", () => {
     // body captures the immutable packet needed to cross that boundary safely.
     expect(ci).toContain("canonical contract");
     expect(ci).toContain("the builder investigates");
-    expect(ci).toContain("one fresh user-visible release worker");
+    expect(ci).toContain("one distinct fenced queue lease");
     expect(forkGuide).toContain("lifecycle ownership");
     expect(prTemplate).toContain("Base branch + exact SHA");
     expect(prTemplate).toContain("Diff fingerprint + changed paths");
@@ -89,8 +101,8 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(prTemplate).toContain("exact worker identity/head/diff");
     expect(prTemplate).not.toContain("exact thread/head/diff");
     expect(prTemplate).toContain("Tester lifecycle closure");
-    expect(prTemplate).toContain("fresh user-visible project task ID");
-    expect(prTemplate).toContain("exact builder `archived=true` receipt");
+    expect(prTemplate).toContain("repo-backed lease ID + fence + distinct owner");
+    expect(prTemplate).toContain("queue `builderSuspended=true` ownership receipt");
     expect(prTemplate).toContain("same-builder `archived=false` receipt");
   });
 

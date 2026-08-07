@@ -11,20 +11,10 @@ const SCHEMA_VERSION = 1;
 const GH_BIN = process.env.OPENCLAW_PR_LIFECYCLE_GH ?? "gh";
 const RELEASE_ACTIONS = new Set(["normal-merge", "deploy"]);
 
-// Release work begins only after independent exact-head proof, so routine
-// merge mechanics should use the cheapest capable model. Deployment retains a
-// stronger default because it crosses from repository state into a live
-// environment and may need more judgment before the first mutation.
-const RELEASE_MODEL_PROFILES = Object.freeze({
-  mergeOnly: Object.freeze({ model: "gpt-5.6-luna", thinking: "max" }),
-  deploy: Object.freeze({ model: "gpt-5.6-terra", thinking: "high" }),
+const RELEASE_CAPABILITY_POLICY = Object.freeze({
+  routine: "routine-release",
+  escalation: "reasoning-escalation",
 });
-
-function releaseModelProfile(taskAuthority) {
-  return taskAuthority.allowedActions.includes("deploy")
-    ? RELEASE_MODEL_PROFILES.deploy
-    : RELEASE_MODEL_PROFILES.mergeOnly;
-}
 
 class LifecycleError extends Error {
   constructor(message, exitCode = 1) {
@@ -41,7 +31,7 @@ function fail(message, exitCode = 1) {
 
 function usage() {
   process.stderr.write(`Usage:
-  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>]
+  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> --review-receipt <FILE> [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>]
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
@@ -232,7 +222,18 @@ function sameCandidate(left, right) {
 
 function hasUnclosedOwner(state) {
   return [state?.tester, state?.release].some(
-    (owner) => owner && !["closed", "cancelled"].includes(owner.phase),
+    (owner) =>
+      owner &&
+      !["closed", "cancelled"].includes(owner.phase) &&
+      // Legacy repo-backed handoffs could attempt a native wake before queue
+      // ownership existed. Once the durable queue is authoritative, an
+      // ownerless pending wake is coordination state, not an execution owner.
+      !(
+        owner === state?.release &&
+        owner.queueMode === "repo-backed" &&
+        owner.phase === "handoff-pending" &&
+        owner.owner === null
+      ),
   );
 }
 
@@ -421,6 +422,11 @@ function handoffTest(pr, options) {
   }
 
   const candidate = fetchCandidate(pr);
+  const reviewReceipt = readReviewReceipt(
+    requireOption(options, "reviewReceipt"),
+    candidate,
+    builder,
+  );
   return withStateLock(pr, (existing) => {
     let state = existing;
     if (
@@ -467,6 +473,7 @@ function handoffTest(pr, options) {
     // while the builder refreshes the durable PR receipt. Always compose the
     // next tester prompt from current GitHub metadata, not cached body text.
     state.candidate = candidate;
+    state.reviewReceipt = reviewReceipt;
 
     // Capacity recovery grants one replacement for this immutable candidate,
     // not one replacement per failed tester. The attempt ledger is therefore
@@ -791,6 +798,37 @@ function readReceipt(receiptPath) {
   return receipt;
 }
 
+function readReviewReceipt(receiptPath, candidate, builder) {
+  let receipt;
+  try {
+    receipt = JSON.parse(fs.readFileSync(path.resolve(receiptPath), "utf8"));
+  } catch (error) {
+    fail(`cannot read code review receipt: ${error.message}`);
+  }
+  const serious = Array.isArray(receipt?.unresolvedFindings)
+    ? receipt.unresolvedFindings.filter((finding) =>
+        ["high", "critical"].includes(finding?.severity),
+      )
+    : null;
+  if (
+    receipt?.schemaVersion !== SCHEMA_VERSION ||
+    receipt?.role !== "code-reviewer" ||
+    receipt?.status !== "PASS" ||
+    receipt?.headSha !== candidate.headSha ||
+    receipt?.diffFingerprint !== candidate.diffFingerprint ||
+    typeof receipt?.owner?.threadId !== "string" ||
+    typeof receipt?.owner?.hostId !== "string" ||
+    (receipt.owner.threadId === builder.threadId && receipt.owner.hostId === builder.hostId) ||
+    serious === null ||
+    serious.length > 0
+  ) {
+    fail(
+      "tester handoff requires an exact-head independent code review PASS with no unresolved high or critical findings",
+    );
+  }
+  return receipt;
+}
+
 function readTaskAuthority(authorityPath, pr) {
   if (!authorityPath) {
     // Normal merge is the narrow default explicitly requested by the existing
@@ -891,6 +929,8 @@ function makeReleasePacket(state, contractId) {
       contractId: tester.contractId,
       owner: tester.receipt.owner,
     },
+    reviewReceipt: state.reviewReceipt,
+    capabilityPolicy: RELEASE_CAPABILITY_POLICY,
     authority: release.taskAuthority,
     declaredDependencies: release.declaredDependencies,
     lifecycle: {
@@ -1114,7 +1154,6 @@ function handoffRelease(pr, options) {
     }
 
     const contractId = randomUUID();
-    const modelProfile = releaseModelProfile(taskAuthority);
     state.release = {
       phase: "handoff-pending",
       contractId,
@@ -1141,6 +1180,7 @@ function handoffRelease(pr, options) {
             nativeThread: "create-or-wake-best-effort",
             establishesOwnership: false,
           },
+          capabilityPolicy: RELEASE_CAPABILITY_POLICY,
           warning:
             "Persist the packet before execution. Only a distinct active fenced queue lease establishes release ownership; native callbacks are optional wake signals.",
         },
@@ -1166,11 +1206,11 @@ function handoffRelease(pr, options) {
             "accept-release-handoff",
           ],
           target: { type: "project", environment: { type: "worktree" } },
-          createThread: modelProfile,
         },
+        capabilityPolicy: RELEASE_CAPABILITY_POLICY,
         prompt: ownerPrompt("release", state, resolveStateRoot()),
         warning:
-          "Consume this action once with the emitted createThread model settings. Prevent recursive handoffs. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
+          "Consume this direct rollback action once. Prevent recursive handoffs. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
       },
     };
   });

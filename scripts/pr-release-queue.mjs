@@ -139,6 +139,13 @@ function qualifyingMerge(item, receipt) {
     item?.testerReceipt?.headSha === item?.candidate?.headSha &&
     item?.testerReceipt?.diffFingerprint === item?.candidate?.diffFingerprint &&
     ["archived", "terminal-receipt"].includes(item?.testerReceipt?.closure) &&
+    item?.reviewReceipt?.status === "PASS" &&
+    item?.reviewReceipt?.headSha === item?.candidate?.headSha &&
+    item?.reviewReceipt?.diffFingerprint === item?.candidate?.diffFingerprint &&
+    Array.isArray(item?.reviewReceipt?.unresolvedFindings) &&
+    !item.reviewReceipt.unresolvedFindings.some((finding) =>
+      ["high", "critical"].includes(finding?.severity),
+    ) &&
     typeof item?.lifecycle?.contractId === "string" &&
     item.lifecycle.contractId.length > 0 &&
     item?.authority?.allowedActions?.includes("normal-merge") &&
@@ -295,6 +302,7 @@ function validatePacket(packet) {
   const candidate = packet?.candidate;
   const builder = packet?.builder;
   const tester = packet?.testerReceipt;
+  const review = packet?.reviewReceipt;
   const authority = packet?.authority;
   const lifecycle = packet?.lifecycle;
   const dependencies = packet?.declaredDependencies ?? [];
@@ -323,11 +331,33 @@ function validatePacket(packet) {
   }
   if (
     tester?.status !== "PASS" ||
+    typeof tester?.owner?.threadId !== "string" ||
+    typeof tester?.owner?.hostId !== "string" ||
+    (tester.owner.threadId === builder.threadId && tester.owner.hostId === builder.hostId) ||
     tester?.headSha !== candidate.headSha ||
     tester?.diffFingerprint !== candidate.diffFingerprint ||
     !["archived", "terminal-receipt"].includes(tester?.closure)
   ) {
     fail("release packet requires a closed exact-candidate tester PASS");
+  }
+  if (
+    review?.role !== "code-reviewer" ||
+    review?.status !== "PASS" ||
+    typeof review?.owner?.threadId !== "string" ||
+    typeof review?.owner?.hostId !== "string" ||
+    (review.owner.threadId === builder.threadId && review.owner.hostId === builder.hostId) ||
+    review?.headSha !== candidate.headSha ||
+    review?.diffFingerprint !== candidate.diffFingerprint ||
+    !Array.isArray(review?.unresolvedFindings) ||
+    review.unresolvedFindings.some((finding) => ["high", "critical"].includes(finding?.severity))
+  ) {
+    fail("release packet requires an exact-head review PASS with no serious unresolved findings");
+  }
+  if (
+    packet?.capabilityPolicy?.routine !== "routine-release" ||
+    packet?.capabilityPolicy?.escalation !== "reasoning-escalation"
+  ) {
+    fail("release packet requires the capability-tier execution policy");
   }
   if (
     !Array.isArray(authority?.allowedActions) ||
@@ -520,6 +550,8 @@ function mutateEnqueue(state, packet, transactionId, now) {
       candidate: packet.candidate,
       builder: packet.builder,
       testerReceipt: packet.testerReceipt,
+      reviewReceipt: packet.reviewReceipt,
+      capabilityPolicy: packet.capabilityPolicy,
       authority: packet.authority,
       lifecycle: packet.lifecycle,
       declaredDependencies: packet.declaredDependencies ?? [],
@@ -563,12 +595,15 @@ function mutateRefresh(state, packet, transactionId, now) {
     item.candidateHistory.push({
       candidate: item.candidate,
       testerReceipt: item.testerReceipt,
+      reviewReceipt: item.reviewReceipt,
       discoveredBlockers: item.discoveredBlockers,
       replacedAt: now.toISOString(),
     });
     item.candidate = packet.candidate;
     item.builder = packet.builder;
     item.testerReceipt = packet.testerReceipt;
+    item.reviewReceipt = packet.reviewReceipt;
+    item.capabilityPolicy = packet.capabilityPolicy;
     item.authority = packet.authority;
     item.lifecycle = packet.lifecycle;
     item.declaredDependencies = packet.declaredDependencies ?? [];
