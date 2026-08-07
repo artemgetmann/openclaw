@@ -223,6 +223,8 @@ describe("scripts/pr-release-queue", () => {
     initAndEnqueue(fixture, 1354);
     finishMerge(fixture, 1354);
     const legacy = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    delete legacy.items["1354"].reviewReceipt;
+    delete legacy.items["1354"].capabilityPolicy;
     delete legacy.rollout;
     fs.writeFileSync(fixture.statePath, JSON.stringify(legacy));
 

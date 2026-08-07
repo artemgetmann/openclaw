@@ -124,6 +124,18 @@ function emptyState(timestamp) {
 }
 
 function qualifyingMerge(item, receipt) {
+  // Schema-1 terminal receipts created before the exact-head review gate
+  // landed have neither field. Preserve their already-proven rollout credit;
+  // every newly enqueued or refreshed packet is validated to carry both.
+  const reviewQualifies =
+    (item?.reviewReceipt === undefined && item?.capabilityPolicy === undefined) ||
+    (item?.reviewReceipt?.status === "PASS" &&
+      item.reviewReceipt.headSha === item?.candidate?.headSha &&
+      item.reviewReceipt.diffFingerprint === item?.candidate?.diffFingerprint &&
+      Array.isArray(item.reviewReceipt.unresolvedFindings) &&
+      !item.reviewReceipt.unresolvedFindings.some((finding) =>
+        ["high", "critical"].includes(finding?.severity),
+      ));
   return (
     receipt?.schemaVersion === SCHEMA_VERSION &&
     receipt?.kind === "source-merge" &&
@@ -139,13 +151,7 @@ function qualifyingMerge(item, receipt) {
     item?.testerReceipt?.headSha === item?.candidate?.headSha &&
     item?.testerReceipt?.diffFingerprint === item?.candidate?.diffFingerprint &&
     ["archived", "terminal-receipt"].includes(item?.testerReceipt?.closure) &&
-    item?.reviewReceipt?.status === "PASS" &&
-    item?.reviewReceipt?.headSha === item?.candidate?.headSha &&
-    item?.reviewReceipt?.diffFingerprint === item?.candidate?.diffFingerprint &&
-    Array.isArray(item?.reviewReceipt?.unresolvedFindings) &&
-    !item.reviewReceipt.unresolvedFindings.some((finding) =>
-      ["high", "critical"].includes(finding?.severity),
-    ) &&
+    reviewQualifies &&
     typeof item?.lifecycle?.contractId === "string" &&
     item.lifecycle.contractId.length > 0 &&
     item?.authority?.allowedActions?.includes("normal-merge") &&
