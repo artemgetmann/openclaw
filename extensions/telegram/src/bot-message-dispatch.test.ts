@@ -3827,7 +3827,12 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({
-      context: createContext({ ctxPayload: { SessionKey: "agent:main:telegram:dm:123" } }),
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:dm:123",
+          CommandAuthorized: true,
+        } as TelegramMessageContext["ctxPayload"],
+      }),
     });
 
     expect(cancelProactiveCompactionForIncomingTurn).toHaveBeenCalledWith(

@@ -71,8 +71,12 @@ describe("proactive compaction", () => {
         totalTokensFresh: true,
         contextTokens: 100_000,
         systemPromptReport: {
-          systemPrompt: { chars: 240_000 },
-          tools: { schemaChars: 80_000 },
+          systemPrompt: {
+            chars: 240_000,
+            projectContextChars: 0,
+            nonProjectContextChars: 240_000,
+          },
+          tools: { listChars: 0, schemaChars: 80_000, entries: [] },
         },
       }),
     ).toMatchObject({ shouldCompact: false, reason: "insufficient-conversation-history" });
