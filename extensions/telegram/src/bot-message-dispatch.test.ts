@@ -23,6 +23,8 @@ const editMessageTelegram = vi.hoisted(() => vi.fn());
 const guardedTelegramDeleteMessage = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
+const cancelProactiveCompactionForIncomingTurn = vi.hoisted(() => vi.fn(() => "none"));
+const scheduleProactiveCompactionAfterDelivery = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -57,6 +59,11 @@ vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../../src/auto-reply/reply/proactive-compaction.js", () => ({
+  cancelProactiveCompactionForIncomingTurn,
+  scheduleProactiveCompactionAfterDelivery,
+}));
+
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
   describeStickerImage: vi.fn(),
@@ -85,6 +92,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
+    cancelProactiveCompactionForIncomingTurn.mockReset().mockReturnValue("none");
+    scheduleProactiveCompactionAfterDelivery.mockReset().mockReturnValue(false);
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -3807,6 +3816,31 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     expect(statusReactionController.cancelPending.mock.invocationCallOrder[0]).toBeLessThan(
       statusReactionController.setThinking.mock.invocationCallOrder[1],
+    );
+  });
+
+  it("arms proactive compaction only after a delivered final and cancels it on the next turn", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "done" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({ ctxPayload: { SessionKey: "agent:main:telegram:dm:123" } }),
+    });
+
+    expect(cancelProactiveCompactionForIncomingTurn).toHaveBeenCalledWith(
+      "agent:main:telegram:dm:123",
+    );
+    expect(scheduleProactiveCompactionAfterDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:dm:123",
+        messageChannel: "telegram",
+      }),
+    );
+    expect(cancelProactiveCompactionForIncomingTurn.mock.invocationCallOrder[0]).toBeLessThan(
+      scheduleProactiveCompactionAfterDelivery.mock.invocationCallOrder[0],
     );
   });
 });
