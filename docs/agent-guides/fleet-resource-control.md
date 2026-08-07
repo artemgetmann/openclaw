@@ -213,19 +213,23 @@ These are refusal telemetry, not a complete capacity profile.
 Dedicated transactions also emit three bounded telemetry lines:
 
 - `HEAVY_LOCAL_RESOURCE_TELEMETRY` records elapsed time, macOS memory-pressure
-  state, swap used/free KiB, cumulative pageouts/swapouts, thermal state, and
-  explicitly labels paging counters as observed telemetry with no kill limit;
+  state, swap used/free KiB, cumulative pageouts/swapouts, transaction-relative
+  and latest-interval swapout growth, thermal state, and the bounded
+  runtime-warn enforcement mode;
 - `HEAVY_LOCAL_JARVIS_TELEMETRY` records the matching LaunchAgent/listener PID,
   sample phase/time, HTTP status, and latency; and
 - `HEAVY_LOCAL_GROUP_TELEMETRY` records only the guarded PGID's process count and
   aggregate RSS, explicitly labeled as observations under the single-group
   enforcement boundary.
 
-Absolute swap use and process count are observations, not unevidenced kill
+Absolute swap use and process count remain observations, not unevidenced kill
 thresholds. macOS can retain historical swap after pressure recovers, and the
-known workloads have different legitimate helper counts. Derive trends from
-successive monotonic samples; do not reinterpret a large absolute value as a
-failure when the platform still reports normal pressure.
+known workloads have different legitimate helper counts. The runtime monitor
+instead bounds swap-free capacity and fresh swapout growth in each monitoring
+interval. Transaction-relative growth remains visible for attribution, but a
+burst followed by normal samples does not poison later warnings. Do not
+reinterpret a large historical allocation as a failure when the platform still
+reports normal pressure.
 
 An owner-metadata publication failure also includes the exact atomic
 publication stage and owner path. Inspect that generated lease path and its
@@ -253,11 +257,16 @@ release the lane, and diagnose the command's own resource behavior. Repeatedly
 restarting a deterministic offender is not autonomous completion; it is just a
 slower denial of service.
 
-The 25% memory threshold, standard-policy 35% admission CPU-idle threshold,
+The 25% memory threshold, 512 MiB runtime swap-free floor, 4,096-page runtime
+swapout-growth limit, standard-policy 35% admission CPU-idle threshold,
 standard-policy 20% runtime CPU-idle threshold, 25 GiB disk floor, 35 GiB
 disk-report threshold, 15-second interval, two-strike stop rule, and three-second
 health timeout remain fixed product policy in this revision. Environment
-variables cannot lower, disable, corrupt, or stretch them. Only the named
+variables cannot lower, disable, corrupt, or stretch them. Admission still
+requires the kernel memory-pressure state to be normal. During an admitted
+transaction, `critical` remains unhealthy; `warn` is allowed only while both
+the swap-free floor and latest-interval swapout-growth limit remain safe.
+Only the named
 dedicated entrypoint, the unflagged agent-host default, or the exact lower-level
 `--cpu-policy dedicated-agent` equivalent makes CPU idle telemetry-only.
 Explicit `--cpu-policy standard` restores the fixed CPU floors for an

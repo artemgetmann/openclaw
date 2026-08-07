@@ -114,19 +114,24 @@ const bundledPluginBuildEntries = listBundledPluginBuildEntries();
 
 export default defineConfig([
   nodeBuildConfig({
+    name: "core-index",
     entry: "src/index.ts",
   }),
   nodeBuildConfig({
+    name: "cli-entry",
     entry: "src/entry.ts",
   }),
   nodeBuildConfig({
+    name: "daemon-cli",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     entry: "src/cli/daemon-cli.ts",
   }),
   nodeBuildConfig({
+    name: "warning-filter",
     entry: "src/infra/warning-filter.ts",
   }),
   nodeBuildConfig({
+    name: "channel-lazy-entries",
     // Keep sync lazy-runtime channel modules as concrete dist files.
     entry: {
       "channels/plugins/agent-tools/whatsapp-login":
@@ -142,12 +147,14 @@ export default defineConfig([
     },
   }),
   nodeBuildConfig({
+    name: "plugin-sdk",
     // Bundle all plugin-sdk entries in a single build so the bundler can share
     // common chunks instead of duplicating them per entry (~712MB heap saved).
     entry: buildPluginSdkEntrySources(),
     outDir: "dist/plugin-sdk",
   }),
   nodeBuildConfig({
+    name: "bundled-plugins",
     // Bundle bundled plugin entrypoints so built gateway startup can load JS
     // directly from dist/extensions instead of transpiling extensions/*.ts via Jiti.
     entry: bundledPluginBuildEntries,
@@ -157,9 +164,11 @@ export default defineConfig([
     },
   }),
   nodeBuildConfig({
+    name: "extension-api",
     entry: "src/extensionAPI.ts",
   }),
   nodeBuildConfig({
+    name: "bundled-hooks",
     entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
   }),
 ]);
