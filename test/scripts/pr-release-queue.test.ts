@@ -15,7 +15,10 @@ type CommandOutput = {
   state?: {
     sequence: number;
     mergeLease: null | { leaseId: string; fence: number; claimedPr: number };
-    items: Record<string, { state: string; terminalReceipts: unknown[] }>;
+    items: Record<
+      string,
+      { state: string; terminalReceipts: unknown[]; ownershipReceipt?: Record<string, unknown> }
+    >;
   };
   rollout?: {
     phase: string;
@@ -457,6 +460,66 @@ describe("scripts/pr-release-queue", () => {
     ]);
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("fencing number is stale");
+  });
+
+  it("rejects builder self-claim and records a distinct queue ownership receipt", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 21);
+
+    const selfClaim = runFailure(fixture, [
+      "claim",
+      "--thread-id",
+      "builder-21",
+      "--host-id",
+      "builder-host",
+      "--pr",
+      "21",
+      "--transaction-id",
+      "self-claim-21",
+    ]);
+    expect(selfClaim.status).toBe(1);
+    expect(selfClaim.stderr).toContain(
+      "release queue owner must differ from the exact builder identity",
+    );
+
+    const owner = claim(fixture, "release-21", 21);
+    const status = run(fixture, ["status"]);
+    expect(status.state?.items["21"]).toMatchObject({
+      state: "claimed",
+      ownershipReceipt: {
+        mode: "queue-lease",
+        owner: { threadId: "release-21", hostId: "release-host" },
+        builder: { threadId: "builder-21", hostId: "builder-host" },
+        builderSuspended: true,
+        leaseId: owner.lease!.leaseId,
+        fence: owner.lease!.fence,
+      },
+    });
+  });
+
+  it("rejects merge recording when the queue ownership receipt is missing", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 22);
+    const owner = claim(fixture, "release-22", 22);
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    delete state.items["22"].ownershipReceipt;
+    fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+
+    const rejected = runFailure(fixture, [
+      "record-merge",
+      "--lease-id",
+      owner.lease!.leaseId,
+      "--fence",
+      String(owner.lease!.fence),
+      "--receipt",
+      writeMergeReceipt(fixture, 22),
+      "--transaction-id",
+      "merge-without-owner-22",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain(
+      "merge requires the active distinct-owner queue ownership receipt",
+    );
   });
 
   it("records source-only merge proof, closes the item, and unblocks its dependent", () => {

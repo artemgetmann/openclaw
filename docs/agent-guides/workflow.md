@@ -48,11 +48,11 @@ Worker transport is part of the ownership contract:
   approval, or any result needing a durable independently addressable transcript.
   Record its exact task and host identity, then archive that exact task only
   after its terminal receipt is recorded.
-- The release worker is always one fresh user-visible project-scoped Codex task,
-  never a nested sub-agent. A default-branch write and any just-in-time approval
-  must remain visible in that worker's own transcript. The worker must also be
-  independently addressable so it can archive or, for a concrete repair, revive
-  the exact builder task.
+- Repo-backed release ownership is one distinct fenced queue lease. The exact
+  builder identity cannot claim it. Native Codex tasks are optional coordination
+  UX and never establish, extend, or prove queue ownership.
+- The documented direct rollback still uses one fresh user-visible project-scoped
+  Codex release task, never a nested sub-agent.
 
 Transport selection is executable, not a memory decision. Immediately before
 tester or release delegation—including after context compaction—the builder
@@ -70,11 +70,11 @@ the transition a mandatory two-step gate:
    returned thread and host with `accept-test-owner` or
    `accept-release-owner`.
 
-Recording a release owner is not permission to begin release work. The fresh
-release task first archives the exact builder, verifies `archived=true`, and
-records that receipt with `accept-release-handoff`. Only the resulting
-`release-handoff-accepted` transition opens review, merge, or already-authorized
-deployment work.
+For direct rollback, recording a release owner is not permission to begin work:
+the fresh release task must still archive the exact builder and record
+`release-handoff-accepted`. For repo-backed execution, claim atomically records
+a distinct-owner queue receipt with `builderSuspended=true`; only that active
+fenced lease opens review or merge. Native archival is best-effort roster UX.
 
 Re-running a pending or active handoff returns `action=do-not-create`; it never
 authorizes a replacement owner. If native task creation definitely failed, use
@@ -205,11 +205,13 @@ The builder invokes `scripts/pr-lifecycle handoff-release`. The existing direct
 mode permits only its first `action=create_thread` contract to create one fresh
 user-visible project-scoped release worker.
 
-The repo-backed mode emits `action=enqueue-release-packet`. The lifecycle
+The repo-backed mode uses `--transport queue-lease` and emits
+`action=enqueue-release-packet`. The lifecycle
 command reads authoritative rollout status and selects it automatically during
 dogfood and after graduation, so future builders need no founder reminder or
 rollout flag. Persist that exact packet with
-`scripts/pr-release-queue enqueue` before waking a replaceable release operator.
+`scripts/pr-release-queue enqueue` before execution. A distinct agent identity
+claims the fenced lease; creating or waking a native Codex task is optional.
 Structured semantic dependencies may be supplied with
 `--declared-dependencies <JSON-file>`; do not infer them from prose. A new
 operator reads and claims the durable queue rather than scanning Codex chats.

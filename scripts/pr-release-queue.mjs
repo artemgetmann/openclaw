@@ -625,6 +625,12 @@ function mutateClaim(state, options, transactionId, now) {
     }
 
     const item = next.items[String(selected.pr)];
+    // Queue ownership must be independent from source ownership. Native task
+    // creation is deliberately not required, but a builder cannot relabel
+    // itself as the release executor and silently self-merge.
+    if (item.builder.threadId === threadId && item.builder.hostId === hostId) {
+      fail("release queue owner must differ from the exact builder identity");
+    }
     const lease = {
       leaseId: randomUUID(),
       fence: next.nextFence,
@@ -638,6 +644,15 @@ function mutateClaim(state, options, transactionId, now) {
     next.mergeLease = lease;
     item.state = "claimed";
     item.ownerHistory.push({ ...lease });
+    item.ownershipReceipt = {
+      mode: "queue-lease",
+      owner: { threadId, hostId },
+      builder: { threadId: item.builder.threadId, hostId: item.builder.hostId },
+      builderSuspended: true,
+      leaseId: lease.leaseId,
+      fence: lease.fence,
+      recordedAt: now.toISOString(),
+    };
     return { action: "claimed", lease, item: selected };
   });
 }
@@ -692,6 +707,19 @@ function mutateRecordMerge(state, options, receipt, transactionId, now) {
   return transition(state, transactionId, now, (next) => {
     const lease = requireLease(next, options, now);
     const item = next.items[String(lease.claimedPr)];
+    const ownership = item.ownershipReceipt;
+    if (
+      ownership?.mode !== "queue-lease" ||
+      ownership?.builderSuspended !== true ||
+      ownership?.leaseId !== lease.leaseId ||
+      ownership?.fence !== lease.fence ||
+      ownership?.owner?.threadId !== lease.owner.threadId ||
+      ownership?.owner?.hostId !== lease.owner.hostId ||
+      (ownership?.builder?.threadId === lease.owner.threadId &&
+        ownership?.builder?.hostId === lease.owner.hostId)
+    ) {
+      fail("merge requires the active distinct-owner queue ownership receipt");
+    }
     validateMergeReceipt(receipt, item);
     item.terminalReceipts.push(receipt);
     const deployAuthorized = item.authority.allowedActions.includes("deploy");

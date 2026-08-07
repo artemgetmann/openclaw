@@ -8,7 +8,8 @@ only wake signals; a missing callback never changes ownership or merge order.
 
 - Builders own source changes, CI, review fixes, and independent testing.
 - A builder submits one immutable packet after an exact-head tester passes.
-- Any fresh release operator may inspect the queue.
+- Any distinct release executor may inspect and claim the queue. A native Codex
+  thread is optional visibility, not ownership or correctness.
 - Only one operator may hold the merge lease at a time.
 - The lease expires, so a vanished operator is replaceable.
 - Each successful merge is recorded before the next PR is claimed.
@@ -116,6 +117,13 @@ that makes an old owner powerless]. Use both for heartbeat, blocker, merge, or
 release commands. A new operator must obey `do-not-claim` while a lease is
 active. After expiry, the item returns to the queue and the replacement receives
 a higher fencing number.
+
+Claim also atomically records an ownership receipt binding the lease owner, the
+exact builder, and `builderSuspended=true`. The queue rejects the exact builder
+identity as executor, and `record-merge` rejects a missing, stale, or mismatched
+ownership receipt. This replaces native builder archival for repo-backed
+execution. A callback or optional Codex task can show progress, but it cannot
+claim, extend, or prove release ownership.
 
 ## Merge and failure rules
 

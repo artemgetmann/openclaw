@@ -45,14 +45,15 @@ function usage() {
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
-  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed|direct] [--declared-dependencies <FILE>]
+  scripts/pr-lifecycle handoff-release <PR> --transport <queue-lease|user-visible-task> --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed|direct] [--declared-dependencies <FILE>]
   scripts/pr-lifecycle accept-release-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle accept-release-handoff <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-archived true
   scripts/pr-lifecycle return-source <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-unarchived true --finding <TEXT>
   scripts/pr-lifecycle cancel-pending <PR> --role <tester|release> --contract-id <ID> --confirm-no-thread-created
 
-The handoff commands emit JSON. A native agent must consume action=create_thread
-with list_projects/create_thread, then record the exact returned task identity.
+Direct handoffs emit action=create_thread and require native task acceptance.
+Repo-backed handoffs emit an immutable packet; a distinct fenced queue lease is
+the release owner, while native callbacks remain optional coordination.
 `);
 }
 
@@ -988,8 +989,8 @@ function handoffRelease(pr, options) {
     threadId: requireOption(options, "ownerThread"),
     hostId: requireOption(options, "ownerHost"),
   };
-  if (transport !== "user-visible-task") {
-    fail("release workers require transport=user-visible-task; nested sub-agents are forbidden");
+  if (!new Set(["queue-lease", "user-visible-task"]).has(transport)) {
+    fail("release transport must be queue-lease or user-visible-task");
   }
   if (authority !== "normal-merge") {
     fail(
@@ -1034,6 +1035,12 @@ function handoffRelease(pr, options) {
         75,
       );
     }
+  }
+  if (queueMode === "repo-backed" && transport !== "queue-lease") {
+    fail("repo-backed release execution requires transport=queue-lease");
+  }
+  if (queueMode === null && transport !== "user-visible-task") {
+    fail("direct release rollback requires transport=user-visible-task");
   }
   const declaredDependencies = readDeclaredDependencies(options.declaredDependencies, pr);
   const candidate = fetchCandidate(pr);
@@ -1129,11 +1136,13 @@ function handoffRelease(pr, options) {
           contractId,
           transport,
           releasePacket: makeReleasePacket(state, contractId),
-          nativeTool: {
-            sequence: ["pr-release-queue enqueue", "create-or-wake-replaceable-operator"],
+          queueTool: { sequence: ["pr-release-queue enqueue", "pr-release-queue claim"] },
+          optionalCoordination: {
+            nativeThread: "create-or-wake-best-effort",
+            establishesOwnership: false,
           },
           warning:
-            "Persist the packet before waking an operator. Callbacks are wake signals only; the repo-backed queue and GitHub remain authoritative.",
+            "Persist the packet before execution. Only a distinct active fenced queue lease establishes release ownership; native callbacks are optional wake signals.",
         },
       };
     }

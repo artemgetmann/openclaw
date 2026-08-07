@@ -22,6 +22,8 @@ type LifecycleOutput = {
     sequence: string[];
     createThread?: { model: string; thinking: string };
   };
+  queueTool?: { sequence: string[] };
+  optionalCoordination?: { nativeThread: string; establishesOwnership: boolean };
   owner?: { threadId: string; hostId: string } | null;
   prompt?: string;
   retryOfContractId?: string | null;
@@ -657,7 +659,7 @@ describe("scripts/pr-lifecycle", () => {
       "handoff-release",
       "42",
       "--transport",
-      "user-visible-task",
+      "queue-lease",
       "--authority",
       "normal-merge",
       "--owner-thread",
@@ -702,7 +704,7 @@ describe("scripts/pr-lifecycle", () => {
       "handoff-release",
       "42",
       "--transport",
-      "user-visible-task",
+      "queue-lease",
       "--authority",
       "normal-merge",
       "--owner-thread",
@@ -846,10 +848,14 @@ describe("scripts/pr-lifecycle", () => {
     ]);
 
     expect(release.action).toBe("enqueue-release-packet");
-    expect(release.nativeTool?.sequence).toEqual([
+    expect(release.queueTool?.sequence).toEqual([
       "pr-release-queue enqueue",
-      "create-or-wake-replaceable-operator",
+      "pr-release-queue claim",
     ]);
+    expect(release.optionalCoordination).toEqual({
+      nativeThread: "create-or-wake-best-effort",
+      establishesOwnership: false,
+    });
     expect(release.releasePacket).toMatchObject({
       candidate: { pr: 42, headSha: "a".repeat(40) },
       builder: {
@@ -931,7 +937,7 @@ describe("scripts/pr-lifecycle", () => {
       "handoff-release",
       "42",
       "--transport",
-      "user-visible-task",
+      "queue-lease",
       "--authority",
       "normal-merge",
       "--owner-thread",
@@ -992,7 +998,7 @@ describe("scripts/pr-lifecycle", () => {
       "handoff-release",
       "42",
       "--transport",
-      "user-visible-task",
+      "queue-lease",
       "--authority",
       "normal-merge",
       "--owner-thread",
