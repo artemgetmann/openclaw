@@ -627,6 +627,13 @@ function acceptOwner(pr, options, role) {
     if (!state?.[role] || state[role].contractId !== contractId) {
       fail(`no matching ${role} handoff contract`);
     }
+    if (
+      role === "tester" &&
+      state.builder.threadId === owner.threadId &&
+      state.builder.hostId === owner.hostId
+    ) {
+      fail("tester owner must differ from the exact builder identity");
+    }
     const record = state[role];
     const acceptedPhase = role === "release" ? "owner-recorded" : "active";
     if (record.phase === acceptedPhase || (role === "release" && record.phase === "active")) {
@@ -1102,6 +1109,8 @@ function handoffRelease(pr, options) {
       state.tester?.receipt?.status !== "PASS" ||
       state.tester?.receipt?.routing?.dispatcher?.role !== "builder" ||
       state.tester?.receipt?.routing?.decision !== state.tester?.routing?.decision ||
+      (state.tester?.owner?.threadId === state.builder.threadId &&
+        state.tester?.owner?.hostId === state.builder.hostId) ||
       state.tester?.closure?.type !== requiredClosure
     ) {
       fail(

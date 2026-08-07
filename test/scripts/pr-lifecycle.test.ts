@@ -546,6 +546,23 @@ describe("scripts/pr-lifecycle", () => {
     expect(duplicate.stderr).toContain("a different tester owner is already active");
   });
 
+  it("rejects the builder as its own tester owner", () => {
+    const fixture = makeFixture();
+    const tester = beginLiveTester(fixture);
+    const rejected = runFailure(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "builder-thread",
+      "--host-id",
+      "builder-host",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("tester owner must differ from the exact builder identity");
+  });
+
   it("atomically reserves one fresh tester after typed capacity recovery", () => {
     const fixture = makeFixture();
     const priorTester = completeCapacityOnlyFailure(fixture);
