@@ -320,7 +320,11 @@ function readCapacityRecovery(receiptPath, priorTester) {
   const causeCode = receipt?.cause?.code;
   const validRecoveredGate =
     (causeCode === "disk_pressure" && validCapacity) ||
-    (causeCode === "jarvis_unhealthy" && receipt?.health?.jarvisHealthy === true);
+    (causeCode === "jarvis_unhealthy" && receipt?.health?.jarvisHealthy === true) ||
+    // A bounded wait can fail solely because another healthy lane owns the
+    // shared heavy slot. Retry once only after that exact owner is gone and
+    // the same capacity/empty-lock proof used by other recovery paths exists.
+    (causeCode === "heavy_slot_occupied" && validCapacity);
   const validLocks =
     receipt?.capacity?.heavyLockDirectoriesEmpty === true &&
     receipt?.capacity?.releaseLockDirectoriesEmpty === true;
@@ -329,8 +333,10 @@ function readCapacityRecovery(receiptPath, priorTester) {
     receipt?.role !== "capacity-recovery" ||
     receipt?.source !== "authorized-capacity-owner-receipt" ||
     receipt?.priorTesterContractId !== priorTester.contractId ||
-    receipt?.cause?.class !== "host_unhealthy" ||
-    !new Set(["disk_pressure", "jarvis_unhealthy"]).has(causeCode) ||
+    !new Set(["host_unhealthy", "host_capacity"]).has(receipt?.cause?.class) ||
+    !new Set(["disk_pressure", "jarvis_unhealthy", "heavy_slot_occupied"]).has(causeCode) ||
+    (causeCode === "heavy_slot_occupied" && receipt.cause.class !== "host_capacity") ||
+    (causeCode !== "heavy_slot_occupied" && receipt.cause.class !== "host_unhealthy") ||
     receipt?.cause?.workloadStarted !== false ||
     !validRecoveredGate ||
     !validLocks ||

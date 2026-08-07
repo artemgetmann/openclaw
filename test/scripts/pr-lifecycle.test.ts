@@ -312,6 +312,16 @@ function writeJarvisHealthRecovery(
   });
 }
 
+function writeOccupiedSlotRecovery(
+  fixture: ReturnType<typeof makeFixture>,
+  priorTesterContractId: string,
+) {
+  return writeCapacityRecovery(fixture, priorTesterContractId, {
+    cause: { class: "host_capacity", code: "heavy_slot_occupied", workloadStarted: false },
+    evidence: ["prior heavy-slot owner exited and heavy/release lock directories are empty"],
+  });
+}
+
 function capacityRetryArgs(
   priorTesterContractId: string,
   recoveryPath: string,
@@ -584,6 +594,18 @@ describe("scripts/pr-lifecycle", () => {
     expect(state.testerHistory).toHaveLength(1);
     expect(state.testerHistory[0].tester.contractId).toBe(priorTester.contractId);
     expect(state.tester.retryOfContractId).toBe(priorTester.contractId);
+  });
+
+  it("permits one replacement after a bounded occupied-slot refusal is proven cleared", () => {
+    const fixture = makeFixture();
+    const priorTester = completeCapacityOnlyFailure(fixture);
+    const recoveryPath = writeOccupiedSlotRecovery(fixture, priorTester.contractId);
+
+    const retry = run(fixture, capacityRetryArgs(priorTester.contractId, recoveryPath));
+    expect(retry).toMatchObject({
+      action: "create_thread",
+      retryOfContractId: priorTester.contractId,
+    });
   });
 
   it("reserves one fresh tester after pre-workload Jarvis health recovery", () => {
