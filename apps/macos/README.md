@@ -387,6 +387,16 @@ ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1 \
 bash scripts/package-consumer-mac-app-fast.sh
 ```
 
+On a memory-constrained local tester, keep the same package semantics while
+limiting SwiftPM compile fanout:
+
+```bash
+SWIFT_BUILD_JOBS=1 bash scripts/package-consumer-mac-app-fast.sh
+```
+
+The variable accepts `1` through `64`; omitting it preserves SwiftPM's default
+scheduler. This is workload shaping, not permission to bypass the fleet guard.
+
 Strict release verification is explicit so normal smoke checks do not require
 Developer ID:
 

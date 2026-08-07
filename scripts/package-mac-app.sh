@@ -81,6 +81,7 @@ OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="${OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME
 OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS="${OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS:-0}"
 OPENCLAW_CONSUMER_ALLOW_CAPABILITY_DRIFT="${OPENCLAW_CONSUMER_ALLOW_CAPABILITY_DRIFT:-0}"
 PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
+SWIFT_BUILD_JOBS="${SWIFT_BUILD_JOBS:-}"
 BUNDLED_RUNTIME_CACHE_ROOT="${OPENCLAW_CONSUMER_RUNTIME_CACHE_ROOT:-$ROOT_DIR/.cache/consumer-runtime-packages}"
 REUSABLE_RUNTIME_STAGE_DIR=""
 CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
@@ -94,6 +95,19 @@ CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
   "BOOTSTRAP.md"
   "MEMORY.md"
 )
+
+SWIFT_BUILD_JOB_ARGS=()
+if [[ -n "$SWIFT_BUILD_JOBS" ]]; then
+  # Local acceptance on memory-constrained Macs needs a deliberate fanout cap,
+  # while release builders may keep SwiftPM's normal scheduler. Validate the
+  # value here so an accidental zero, negative, or huge ambient value cannot
+  # silently change package behavior.
+  if [[ ! "$SWIFT_BUILD_JOBS" =~ ^([1-9]|[1-5][0-9]|6[0-4])$ ]]; then
+    echo "ERROR: SWIFT_BUILD_JOBS must be an integer from 1 through 64." >&2
+    exit 1
+  fi
+  SWIFT_BUILD_JOB_ARGS=(--jobs "$SWIFT_BUILD_JOBS")
+fi
 
 resolve_app_icon_basename() {
   local explicit_icon="${APP_ICON_BASENAME:-}"
@@ -1658,10 +1672,10 @@ echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 swift_build_started_ms="$(phase_now_ms)"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  swift build "${SWIFT_BUILD_JOB_ARGS[@]}" -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   # The watchdog is a separate native process so a frozen Node event loop or
   # terminated Jarvis UI process cannot freeze the observer with it.
-  swift build -c "$BUILD_CONFIG" --product "$WATCHDOG_PRODUCT" --build-path "$BUILD_PATH" --arch "$arch"
+  swift build "${SWIFT_BUILD_JOB_ARGS[@]}" -c "$BUILD_CONFIG" --product "$WATCHDOG_PRODUCT" --build-path "$BUILD_PATH" --arch "$arch"
 done
 phase_log_elapsed "$swift_build_started_ms" "Swift app build"
 
