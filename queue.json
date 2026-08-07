@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 17,
+  "sequence": 18,
   "nextFence": 5,
   "mergeLease": null,
   "items": {
@@ -264,14 +264,14 @@
       "terminalReceipts": []
     },
     "1358": {
-      "state": "blocked",
+      "state": "queued",
       "candidate": {
         "pr": 1358,
         "url": "https://github.com/artemgetmann/openclaw/pull/1358",
-        "headSha": "3e6fe39f3afad1214cd5d3f4a0f70b676cf2a4e8",
+        "headSha": "ef2993bbc1bd7bd6a02fcd85965a8e7c7669ae70",
         "baseBranch": "main",
-        "testedBaseSha": "3e954f0510803729b5ba3415c79d270e4587e1ac",
-        "diffFingerprint": "sha256:bd344faa4166d7f768a8148ebe5ead09fe00447a9169b06352f502b670dbf8c0",
+        "testedBaseSha": "ecfe664b6ff3ba87c8d20d2c270ad23fce2aa42f",
+        "diffFingerprint": "sha256:68437e17e079b4aa2d421eca6d7363f5acfb4315fa37c2252f3e90d99f1af638",
         "changedPaths": [
           ".agents/skills/codex-thread-control-recovery/SKILL.md",
           ".github/pull_request_template.md",
@@ -296,12 +296,12 @@
       },
       "testerReceipt": {
         "status": "PASS",
-        "headSha": "3e6fe39f3afad1214cd5d3f4a0f70b676cf2a4e8",
-        "diffFingerprint": "sha256:bd344faa4166d7f768a8148ebe5ead09fe00447a9169b06352f502b670dbf8c0",
+        "headSha": "ef2993bbc1bd7bd6a02fcd85965a8e7c7669ae70",
+        "diffFingerprint": "sha256:68437e17e079b4aa2d421eca6d7363f5acfb4315fa37c2252f3e90d99f1af638",
         "closure": "terminal-receipt",
-        "contractId": "12d0ad07-b7b6-4cb3-8ec3-7a9df871c0b4",
+        "contractId": "6d20f5bb-4737-4f29-939c-3a8cf2da538f",
         "owner": {
-          "threadId": "/root/pr1358_queue_tester",
+          "threadId": "/root/pr1358_capacity_fix_tester",
           "hostId": "nested-agent"
         }
       },
@@ -320,18 +320,12 @@
         ]
       },
       "lifecycle": {
-        "contractId": "367dfd71-c261-4626-be8c-d143672b044c",
+        "contractId": "3f9fefd2-61be-437e-9c76-a2cd0f7d661b",
         "stateDirectory": "/Users/user/.codex/worktrees/fd114f9b-9476-40be-ba80-41078ef4782d/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [
-        {
-          "kind": "base-drift",
-          "details": "PR #1358 exact candidate head 3e6fe39f3afad1214cd5d3f4a0f70b676cf2a4e8 and diff sha256:bd344faa4166d7f768a8148ebe5ead09fe00447a9169b06352f502b670dbf8c0 remain unchanged, and required checks pr-required/actionlint pass, but tested base 3e954f0510803729b5ba3415c79d270e4587e1ac is stale: current main is ecfe664b6ff3ba87c8d20d2c270ad23fce2aa42f after PR #1360, GitHub reports mergeable_state=behind under strict required-status policy. Builder refresh/rebase plus fresh exact-head review and tester closure are required; normal non-admin merge is forbidden on this lease.",
-          "observedAt": "2026-08-07T05:11:32.077Z"
-        }
-      ],
-      "readyAt": "2026-08-07T05:06:29.324Z",
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-07T05:39:51.025Z",
       "ownerHistory": [
         {
           "leaseId": "aac172ee-4684-42d6-b32d-5307c33e0b2e",
@@ -376,6 +370,63 @@
           },
           "discoveredBlockers": [],
           "replacedAt": "2026-08-07T05:06:29.324Z"
+        },
+        {
+          "candidate": {
+            "pr": 1358,
+            "url": "https://github.com/artemgetmann/openclaw/pull/1358",
+            "headSha": "3e6fe39f3afad1214cd5d3f4a0f70b676cf2a4e8",
+            "baseBranch": "main",
+            "testedBaseSha": "3e954f0510803729b5ba3415c79d270e4587e1ac",
+            "diffFingerprint": "sha256:bd344faa4166d7f768a8148ebe5ead09fe00447a9169b06352f502b670dbf8c0",
+            "changedPaths": [
+              ".agents/skills/codex-thread-control-recovery/SKILL.md",
+              ".github/pull_request_template.md",
+              "AGENTS.md",
+              "docs/agent-guides/release-queue.md",
+              "docs/agent-guides/workflow.md",
+              "docs/ci.md",
+              "scripts/pr-lifecycle.mjs",
+              "scripts/pr-release-queue.mjs",
+              "test/pr-worker-lifecycle-contract.test.ts",
+              "test/scripts/pr-lifecycle.test.ts",
+              "test/scripts/pr-release-queue.test.ts"
+            ]
+          },
+          "testerReceipt": {
+            "status": "PASS",
+            "headSha": "3e6fe39f3afad1214cd5d3f4a0f70b676cf2a4e8",
+            "diffFingerprint": "sha256:bd344faa4166d7f768a8148ebe5ead09fe00447a9169b06352f502b670dbf8c0",
+            "closure": "terminal-receipt",
+            "contractId": "12d0ad07-b7b6-4cb3-8ec3-7a9df871c0b4",
+            "owner": {
+              "threadId": "/root/pr1358_queue_tester",
+              "hostId": "nested-agent"
+            }
+          },
+          "reviewReceipt": {
+            "schemaVersion": 1,
+            "role": "code-reviewer",
+            "status": "PASS",
+            "owner": {
+              "threadId": "/root/pr1358_exact_head_review",
+              "hostId": "local-subagent"
+            },
+            "headSha": "3e6fe39f3afad1214cd5d3f4a0f70b676cf2a4e8",
+            "diffFingerprint": "sha256:bd344faa4166d7f768a8148ebe5ead09fe00447a9169b06352f502b670dbf8c0",
+            "unresolvedFindings": [],
+            "evidence": [
+              "Exact-head independent review PASS with no unresolved findings."
+            ]
+          },
+          "discoveredBlockers": [
+            {
+              "kind": "base-drift",
+              "details": "PR #1358 exact candidate head 3e6fe39f3afad1214cd5d3f4a0f70b676cf2a4e8 and diff sha256:bd344faa4166d7f768a8148ebe5ead09fe00447a9169b06352f502b670dbf8c0 remain unchanged, and required checks pr-required/actionlint pass, but tested base 3e954f0510803729b5ba3415c79d270e4587e1ac is stale: current main is ecfe664b6ff3ba87c8d20d2c270ad23fce2aa42f after PR #1360, GitHub reports mergeable_state=behind under strict required-status policy. Builder refresh/rebase plus fresh exact-head review and tester closure are required; normal non-admin merge is forbidden on this lease.",
+              "observedAt": "2026-08-07T05:11:32.077Z"
+            }
+          ],
+          "replacedAt": "2026-08-07T05:39:51.025Z"
         }
       ],
       "terminalReceipts": [],
@@ -387,8 +438,8 @@
           "threadId": "/root/pr1358_exact_head_review",
           "hostId": "local-subagent"
         },
-        "headSha": "3e6fe39f3afad1214cd5d3f4a0f70b676cf2a4e8",
-        "diffFingerprint": "sha256:bd344faa4166d7f768a8148ebe5ead09fe00447a9169b06352f502b670dbf8c0",
+        "headSha": "ef2993bbc1bd7bd6a02fcd85965a8e7c7669ae70",
+        "diffFingerprint": "sha256:68437e17e079b4aa2d421eca6d7363f5acfb4315fa37c2252f3e90d99f1af638",
         "unresolvedFindings": [],
         "evidence": [
           "Exact-head independent review PASS with no unresolved findings."
@@ -416,10 +467,10 @@
     }
   },
   "lastTransaction": {
-    "id": "0d111179-f45f-474b-b47b-32a51be93763",
-    "recordedAt": "2026-08-07T05:11:32.077Z"
+    "id": "54ad06bd-11ce-4268-9e04-591400f134fe",
+    "recordedAt": "2026-08-07T05:39:51.025Z"
   },
-  "updatedAt": "2026-08-07T05:11:32.077Z",
+  "updatedAt": "2026-08-07T05:39:51.025Z",
   "rollout": {
     "phase": "dogfood",
     "threshold": 3,
