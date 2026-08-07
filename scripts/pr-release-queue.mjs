@@ -169,7 +169,17 @@ function exactReviewQualifies(item) {
     item.reviewReceipt.status === "PASS" &&
     item.reviewReceipt.headSha === item?.candidate?.headSha &&
     item.reviewReceipt.diffFingerprint === item?.candidate?.diffFingerprint &&
+    typeof item.reviewReceipt.owner?.threadId === "string" &&
+    item.reviewReceipt.owner.threadId.trim() !== "" &&
+    typeof item.reviewReceipt.owner?.hostId === "string" &&
+    item.reviewReceipt.owner.hostId.trim() !== "" &&
     Array.isArray(item.reviewReceipt.unresolvedFindings) &&
+    item.reviewReceipt.unresolvedFindings.every(
+      (finding) =>
+        finding &&
+        typeof finding === "object" &&
+        ["low", "medium", "high", "critical"].includes(finding.severity),
+    ) &&
     !item.reviewReceipt.unresolvedFindings.some((finding) =>
       ["high", "critical"].includes(finding?.severity),
     )
@@ -363,11 +373,19 @@ function validatePacket(packet) {
     review?.role !== "code-reviewer" ||
     review?.status !== "PASS" ||
     typeof review?.owner?.threadId !== "string" ||
+    review.owner.threadId.trim() === "" ||
     typeof review?.owner?.hostId !== "string" ||
+    review.owner.hostId.trim() === "" ||
     (review.owner.threadId === builder.threadId && review.owner.hostId === builder.hostId) ||
     review?.headSha !== candidate.headSha ||
     review?.diffFingerprint !== candidate.diffFingerprint ||
     !Array.isArray(review?.unresolvedFindings) ||
+    !review.unresolvedFindings.every(
+      (finding) =>
+        finding &&
+        typeof finding === "object" &&
+        ["low", "medium", "high", "critical"].includes(finding.severity),
+    ) ||
     review.unresolvedFindings.some((finding) => ["high", "critical"].includes(finding?.severity))
   ) {
     fail("release packet requires an exact-head review PASS with no serious unresolved findings");

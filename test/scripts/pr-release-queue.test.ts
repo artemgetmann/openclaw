@@ -218,6 +218,25 @@ describe("scripts/pr-release-queue", () => {
     expect(result.stderr).toContain("no serious unresolved findings");
   });
 
+  it("rejects malformed review identities and severity values", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init-malformed-review"]);
+    const packetPath = writePacket(fixture, 18);
+    const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+    packet.reviewReceipt.owner.threadId = "";
+    packet.reviewReceipt.unresolvedFindings = [{ severity: "HIGH", details: "not normalized" }];
+    fs.writeFileSync(packetPath, JSON.stringify(packet));
+    const result = runFailure(fixture, [
+      "enqueue",
+      "--packet",
+      packetPath,
+      "--transaction-id",
+      "enqueue-malformed-review",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("exact-head review PASS");
+  });
+
   it("migrates the current schema-1 receipt and derives dogfood progress", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 1354);

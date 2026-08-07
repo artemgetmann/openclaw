@@ -812,11 +812,14 @@ function readReviewReceipt(receiptPath, candidate, builder) {
   } catch (error) {
     fail(`cannot read code review receipt: ${error.message}`);
   }
-  const serious = Array.isArray(receipt?.unresolvedFindings)
-    ? receipt.unresolvedFindings.filter((finding) =>
-        ["high", "critical"].includes(finding?.severity),
-      )
-    : null;
+  const validFindings =
+    Array.isArray(receipt?.unresolvedFindings) &&
+    receipt.unresolvedFindings.every(
+      (finding) =>
+        finding &&
+        typeof finding === "object" &&
+        ["low", "medium", "high", "critical"].includes(finding.severity),
+    );
   if (
     receipt?.schemaVersion !== SCHEMA_VERSION ||
     receipt?.role !== "code-reviewer" ||
@@ -824,10 +827,12 @@ function readReviewReceipt(receiptPath, candidate, builder) {
     receipt?.headSha !== candidate.headSha ||
     receipt?.diffFingerprint !== candidate.diffFingerprint ||
     typeof receipt?.owner?.threadId !== "string" ||
+    receipt.owner.threadId.trim() === "" ||
     typeof receipt?.owner?.hostId !== "string" ||
+    receipt.owner.hostId.trim() === "" ||
     (receipt.owner.threadId === builder.threadId && receipt.owner.hostId === builder.hostId) ||
-    serious === null ||
-    serious.length > 0
+    !validFindings ||
+    receipt.unresolvedFindings.some((finding) => ["high", "critical"].includes(finding.severity))
   ) {
     fail(
       "tester handoff requires an exact-head independent code review PASS with no unresolved high or critical findings",
@@ -1122,7 +1127,19 @@ function handoffRelease(pr, options) {
       state.reviewReceipt?.status !== "PASS" ||
       state.reviewReceipt?.headSha !== candidate.headSha ||
       state.reviewReceipt?.diffFingerprint !== candidate.diffFingerprint ||
+      typeof state.reviewReceipt?.owner?.threadId !== "string" ||
+      state.reviewReceipt.owner.threadId.trim() === "" ||
+      typeof state.reviewReceipt?.owner?.hostId !== "string" ||
+      state.reviewReceipt.owner.hostId.trim() === "" ||
+      (state.reviewReceipt.owner.threadId === state.builder.threadId &&
+        state.reviewReceipt.owner.hostId === state.builder.hostId) ||
       !Array.isArray(state.reviewReceipt?.unresolvedFindings) ||
+      !state.reviewReceipt.unresolvedFindings.every(
+        (finding) =>
+          finding &&
+          typeof finding === "object" &&
+          ["low", "medium", "high", "critical"].includes(finding.severity),
+      ) ||
       state.reviewReceipt.unresolvedFindings.some((finding) =>
         ["high", "critical"].includes(finding?.severity),
       )
