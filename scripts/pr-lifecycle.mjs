@@ -11,20 +11,10 @@ const SCHEMA_VERSION = 1;
 const GH_BIN = process.env.OPENCLAW_PR_LIFECYCLE_GH ?? "gh";
 const RELEASE_ACTIONS = new Set(["normal-merge", "deploy"]);
 
-// Release work begins only after independent exact-head proof, so routine
-// merge mechanics should use the cheapest capable model. Deployment retains a
-// stronger default because it crosses from repository state into a live
-// environment and may need more judgment before the first mutation.
-const RELEASE_MODEL_PROFILES = Object.freeze({
-  mergeOnly: Object.freeze({ model: "gpt-5.6-luna", thinking: "max" }),
-  deploy: Object.freeze({ model: "gpt-5.6-terra", thinking: "high" }),
+const RELEASE_CAPABILITY_POLICY = Object.freeze({
+  routine: "routine-release",
+  escalation: "reasoning-escalation",
 });
-
-function releaseModelProfile(taskAuthority) {
-  return taskAuthority.allowedActions.includes("deploy")
-    ? RELEASE_MODEL_PROFILES.deploy
-    : RELEASE_MODEL_PROFILES.mergeOnly;
-}
 
 class LifecycleError extends Error {
   constructor(message, exitCode = 1) {
@@ -41,18 +31,19 @@ function fail(message, exitCode = 1) {
 
 function usage() {
   process.stderr.write(`Usage:
-  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>]
+  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> --review-receipt <FILE> [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>]
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
-  scripts/pr-lifecycle handoff-release <PR> --transport user-visible-task --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed|direct] [--declared-dependencies <FILE>]
+  scripts/pr-lifecycle handoff-release <PR> --transport <queue-lease|user-visible-task> --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed|direct] [--declared-dependencies <FILE>]
   scripts/pr-lifecycle accept-release-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle accept-release-handoff <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-archived true
   scripts/pr-lifecycle return-source <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-unarchived true --finding <TEXT>
   scripts/pr-lifecycle cancel-pending <PR> --role <tester|release> --contract-id <ID> --confirm-no-thread-created
 
-The handoff commands emit JSON. A native agent must consume action=create_thread
-with list_projects/create_thread, then record the exact returned task identity.
+Direct handoffs emit action=create_thread and require native task acceptance.
+Repo-backed handoffs emit an immutable packet; a distinct fenced queue lease is
+the release owner, while native callbacks remain optional coordination.
 `);
 }
 
@@ -231,7 +222,18 @@ function sameCandidate(left, right) {
 
 function hasUnclosedOwner(state) {
   return [state?.tester, state?.release].some(
-    (owner) => owner && !["closed", "cancelled"].includes(owner.phase),
+    (owner) =>
+      owner &&
+      !["closed", "cancelled"].includes(owner.phase) &&
+      // Legacy repo-backed handoffs could attempt a native wake before queue
+      // ownership existed. Once the durable queue is authoritative, an
+      // ownerless pending wake is coordination state, not an execution owner.
+      !(
+        owner === state?.release &&
+        owner.queueMode === "repo-backed" &&
+        owner.phase === "handoff-pending" &&
+        owner.owner === null
+      ),
   );
 }
 
@@ -318,7 +320,11 @@ function readCapacityRecovery(receiptPath, priorTester) {
   const causeCode = receipt?.cause?.code;
   const validRecoveredGate =
     (causeCode === "disk_pressure" && validCapacity) ||
-    (causeCode === "jarvis_unhealthy" && receipt?.health?.jarvisHealthy === true);
+    (causeCode === "jarvis_unhealthy" && receipt?.health?.jarvisHealthy === true) ||
+    // A bounded wait can fail solely because another healthy lane owns the
+    // shared heavy slot. Retry once only after that exact owner is gone and
+    // the same capacity/empty-lock proof used by other recovery paths exists.
+    (causeCode === "heavy_slot_occupied" && validCapacity);
   const validLocks =
     receipt?.capacity?.heavyLockDirectoriesEmpty === true &&
     receipt?.capacity?.releaseLockDirectoriesEmpty === true;
@@ -327,8 +333,10 @@ function readCapacityRecovery(receiptPath, priorTester) {
     receipt?.role !== "capacity-recovery" ||
     receipt?.source !== "authorized-capacity-owner-receipt" ||
     receipt?.priorTesterContractId !== priorTester.contractId ||
-    receipt?.cause?.class !== "host_unhealthy" ||
-    !new Set(["disk_pressure", "jarvis_unhealthy"]).has(causeCode) ||
+    !new Set(["host_unhealthy", "host_capacity"]).has(receipt?.cause?.class) ||
+    !new Set(["disk_pressure", "jarvis_unhealthy", "heavy_slot_occupied"]).has(causeCode) ||
+    (causeCode === "heavy_slot_occupied" && receipt.cause.class !== "host_capacity") ||
+    (causeCode !== "heavy_slot_occupied" && receipt.cause.class !== "host_unhealthy") ||
     receipt?.cause?.workloadStarted !== false ||
     !validRecoveredGate ||
     !validLocks ||
@@ -420,6 +428,11 @@ function handoffTest(pr, options) {
   }
 
   const candidate = fetchCandidate(pr);
+  const reviewReceipt = readReviewReceipt(
+    requireOption(options, "reviewReceipt"),
+    candidate,
+    builder,
+  );
   return withStateLock(pr, (existing) => {
     let state = existing;
     if (
@@ -466,6 +479,7 @@ function handoffTest(pr, options) {
     // while the builder refreshes the durable PR receipt. Always compose the
     // next tester prompt from current GitHub metadata, not cached body text.
     state.candidate = candidate;
+    state.reviewReceipt = reviewReceipt;
 
     // Capacity recovery grants one replacement for this immutable candidate,
     // not one replacement per failed tester. The attempt ledger is therefore
@@ -618,6 +632,13 @@ function acceptOwner(pr, options, role) {
   return withStateLock(pr, (state) => {
     if (!state?.[role] || state[role].contractId !== contractId) {
       fail(`no matching ${role} handoff contract`);
+    }
+    if (
+      role === "tester" &&
+      state.builder.threadId === owner.threadId &&
+      state.builder.hostId === owner.hostId
+    ) {
+      fail("tester owner must differ from the exact builder identity");
     }
     const record = state[role];
     const acceptedPhase = role === "release" ? "owner-recorded" : "active";
@@ -790,6 +811,42 @@ function readReceipt(receiptPath) {
   return receipt;
 }
 
+function readReviewReceipt(receiptPath, candidate, builder) {
+  let receipt;
+  try {
+    receipt = JSON.parse(fs.readFileSync(path.resolve(receiptPath), "utf8"));
+  } catch (error) {
+    fail(`cannot read code review receipt: ${error.message}`);
+  }
+  const validFindings =
+    Array.isArray(receipt?.unresolvedFindings) &&
+    receipt.unresolvedFindings.every(
+      (finding) =>
+        finding &&
+        typeof finding === "object" &&
+        ["low", "medium", "high", "critical"].includes(finding.severity),
+    );
+  if (
+    receipt?.schemaVersion !== SCHEMA_VERSION ||
+    receipt?.role !== "code-reviewer" ||
+    receipt?.status !== "PASS" ||
+    receipt?.headSha !== candidate.headSha ||
+    receipt?.diffFingerprint !== candidate.diffFingerprint ||
+    typeof receipt?.owner?.threadId !== "string" ||
+    receipt.owner.threadId.trim() === "" ||
+    typeof receipt?.owner?.hostId !== "string" ||
+    receipt.owner.hostId.trim() === "" ||
+    (receipt.owner.threadId === builder.threadId && receipt.owner.hostId === builder.hostId) ||
+    !validFindings ||
+    receipt.unresolvedFindings.some((finding) => ["high", "critical"].includes(finding.severity))
+  ) {
+    fail(
+      "tester handoff requires an exact-head independent code review PASS with no unresolved high or critical findings",
+    );
+  }
+  return receipt;
+}
+
 function readTaskAuthority(authorityPath, pr) {
   if (!authorityPath) {
     // Normal merge is the narrow default explicitly requested by the existing
@@ -890,6 +947,8 @@ function makeReleasePacket(state, contractId) {
       contractId: tester.contractId,
       owner: tester.receipt.owner,
     },
+    reviewReceipt: state.reviewReceipt,
+    capabilityPolicy: RELEASE_CAPABILITY_POLICY,
     authority: release.taskAuthority,
     declaredDependencies: release.declaredDependencies,
     lifecycle: {
@@ -988,8 +1047,8 @@ function handoffRelease(pr, options) {
     threadId: requireOption(options, "ownerThread"),
     hostId: requireOption(options, "ownerHost"),
   };
-  if (transport !== "user-visible-task") {
-    fail("release workers require transport=user-visible-task; nested sub-agents are forbidden");
+  if (!new Set(["queue-lease", "user-visible-task"]).has(transport)) {
+    fail("release transport must be queue-lease or user-visible-task");
   }
   if (authority !== "normal-merge") {
     fail(
@@ -1035,6 +1094,12 @@ function handoffRelease(pr, options) {
       );
     }
   }
+  if (queueMode === "repo-backed" && transport !== "queue-lease") {
+    fail("repo-backed release execution requires transport=queue-lease");
+  }
+  if (queueMode === null && transport !== "user-visible-task") {
+    fail("direct release rollback requires transport=user-visible-task");
+  }
   const declaredDependencies = readDeclaredDependencies(options.declaredDependencies, pr);
   const candidate = fetchCandidate(pr);
   if (candidate.isDraft) {
@@ -1055,11 +1120,37 @@ function handoffRelease(pr, options) {
       state.tester?.receipt?.status !== "PASS" ||
       state.tester?.receipt?.routing?.dispatcher?.role !== "builder" ||
       state.tester?.receipt?.routing?.decision !== state.tester?.routing?.decision ||
+      (state.tester?.owner?.threadId === state.builder.threadId &&
+        state.tester?.owner?.hostId === state.builder.hostId) ||
       state.tester?.closure?.type !== requiredClosure
     ) {
       fail(
         "release handoff requires an exact-head PASS and the transport's exact tester lifecycle closure",
       );
+    }
+    if (
+      state.reviewReceipt?.role !== "code-reviewer" ||
+      state.reviewReceipt?.status !== "PASS" ||
+      state.reviewReceipt?.headSha !== candidate.headSha ||
+      state.reviewReceipt?.diffFingerprint !== candidate.diffFingerprint ||
+      typeof state.reviewReceipt?.owner?.threadId !== "string" ||
+      state.reviewReceipt.owner.threadId.trim() === "" ||
+      typeof state.reviewReceipt?.owner?.hostId !== "string" ||
+      state.reviewReceipt.owner.hostId.trim() === "" ||
+      (state.reviewReceipt.owner.threadId === state.builder.threadId &&
+        state.reviewReceipt.owner.hostId === state.builder.hostId) ||
+      !Array.isArray(state.reviewReceipt?.unresolvedFindings) ||
+      !state.reviewReceipt.unresolvedFindings.every(
+        (finding) =>
+          finding &&
+          typeof finding === "object" &&
+          ["low", "medium", "high", "critical"].includes(finding.severity),
+      ) ||
+      state.reviewReceipt.unresolvedFindings.some((finding) =>
+        ["high", "critical"].includes(finding?.severity),
+      )
+    ) {
+      fail("release handoff requires a fresh exact-head review PASS with no serious findings");
     }
     // The PR body is the durable receipt surface and normally advances after
     // tester closure without changing the immutable source candidate. Refresh
@@ -1107,7 +1198,6 @@ function handoffRelease(pr, options) {
     }
 
     const contractId = randomUUID();
-    const modelProfile = releaseModelProfile(taskAuthority);
     state.release = {
       phase: "handoff-pending",
       contractId,
@@ -1129,11 +1219,14 @@ function handoffRelease(pr, options) {
           contractId,
           transport,
           releasePacket: makeReleasePacket(state, contractId),
-          nativeTool: {
-            sequence: ["pr-release-queue enqueue", "create-or-wake-replaceable-operator"],
+          queueTool: { sequence: ["pr-release-queue enqueue", "pr-release-queue claim"] },
+          optionalCoordination: {
+            nativeThread: "create-or-wake-best-effort",
+            establishesOwnership: false,
           },
+          capabilityPolicy: RELEASE_CAPABILITY_POLICY,
           warning:
-            "Persist the packet before waking an operator. Callbacks are wake signals only; the repo-backed queue and GitHub remain authoritative.",
+            "Persist the packet before execution. Only a distinct active fenced queue lease establishes release ownership; native callbacks are optional wake signals.",
         },
       };
     }
@@ -1157,11 +1250,11 @@ function handoffRelease(pr, options) {
             "accept-release-handoff",
           ],
           target: { type: "project", environment: { type: "worktree" } },
-          createThread: modelProfile,
         },
+        capabilityPolicy: RELEASE_CAPABILITY_POLICY,
         prompt: ownerPrompt("release", state, resolveStateRoot()),
         warning:
-          "Consume this action once with the emitted createThread model settings. Prevent recursive handoffs. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
+          "Consume this direct rollback action once. Prevent recursive handoffs. A rerun fails closed with do-not-create until the exact owner is recorded or pending state is explicitly cancelled.",
       },
     };
   });

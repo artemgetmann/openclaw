@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +22,9 @@ type LifecycleOutput = {
     sequence: string[];
     createThread?: { model: string; thinking: string };
   };
+  queueTool?: { sequence: string[] };
+  optionalCoordination?: { nativeThread: string; establishesOwnership: boolean };
+  capabilityPolicy?: { routine: string; escalation: string };
   owner?: { threadId: string; hostId: string } | null;
   prompt?: string;
   retryOfContractId?: string | null;
@@ -34,6 +37,8 @@ type LifecycleOutput = {
     candidate: { pr: number; headSha: string; diffFingerprint: string; changedPaths: string[] };
     builder: { threadId: string; hostId: string; wakeRoute: { threadId: string; hostId: string } };
     testerReceipt: { status: string; closure: string };
+    reviewReceipt: { status: string; headSha: string; unresolvedFindings: unknown[] };
+    capabilityPolicy: { routine: string; escalation: string };
     authority: { allowedActions: string[] };
     declaredDependencies: Array<{ pr: number; relation: string; reason: string }>;
     lifecycle: { contractId: string; stateDirectory: string };
@@ -89,13 +94,34 @@ if (args[0] === "pr" && args[1] === "view") {
   };
 }
 
+function withReviewReceipt(fixture: ReturnType<typeof makeFixture>, args: string[]) {
+  if (args[0] !== "handoff-test" || args.includes("--review-receipt")) {
+    return args;
+  }
+  const reviewPath = path.join(fixture.root, "review-pass.json");
+  fs.writeFileSync(
+    reviewPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "code-reviewer",
+      status: "PASS",
+      owner: { threadId: "reviewer-thread", hostId: "reviewer-host" },
+      headSha: fixture.metadata.headRefOid,
+      diffFingerprint: `sha256:${createHash("sha256").update(fixture.env.TEST_PR_PATCH).digest("hex")}`,
+      unresolvedFindings: [],
+    }),
+  );
+  return [...args, "--review-receipt", reviewPath];
+}
+
 function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
+  const reviewedArgs = withReviewReceipt(fixture, args);
   const commandArgs =
-    args[0] === "handoff-release" &&
-    !args.includes("--queue") &&
+    reviewedArgs[0] === "handoff-release" &&
+    !reviewedArgs.includes("--queue") &&
     !fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE
-      ? [...args, "--queue", "direct"]
-      : args;
+      ? [...reviewedArgs, "--queue", "direct"]
+      : reviewedArgs;
   const output = execFileSync(process.execPath, [SCRIPT, ...commandArgs], {
     cwd: ROOT,
     env: fixture.env,
@@ -105,12 +131,13 @@ function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
 }
 
 function runFailure(fixture: ReturnType<typeof makeFixture>, args: string[]) {
+  const reviewedArgs = withReviewReceipt(fixture, args);
   const commandArgs =
-    args[0] === "handoff-release" &&
-    !args.includes("--queue") &&
+    reviewedArgs[0] === "handoff-release" &&
+    !reviewedArgs.includes("--queue") &&
     !fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE
-      ? [...args, "--queue", "direct"]
-      : args;
+      ? [...reviewedArgs, "--queue", "direct"]
+      : reviewedArgs;
   return spawnSync(process.execPath, [SCRIPT, ...commandArgs], {
     cwd: ROOT,
     env: fixture.env,
@@ -123,7 +150,7 @@ function runFromFreshWorktree(
   cwd: string,
   args: string[],
 ) {
-  const output = execFileSync(process.execPath, [SCRIPT, ...args], {
+  const output = execFileSync(process.execPath, [SCRIPT, ...withReviewReceipt(fixture, args)], {
     cwd,
     env: fixture.env,
     encoding: "utf8",
@@ -285,6 +312,16 @@ function writeJarvisHealthRecovery(
   });
 }
 
+function writeOccupiedSlotRecovery(
+  fixture: ReturnType<typeof makeFixture>,
+  priorTesterContractId: string,
+) {
+  return writeCapacityRecovery(fixture, priorTesterContractId, {
+    cause: { class: "host_capacity", code: "heavy_slot_occupied", workloadStarted: false },
+    evidence: ["prior heavy-slot owner exited and heavy/release lock directories are empty"],
+  });
+}
+
 function capacityRetryArgs(
   priorTesterContractId: string,
   recoveryPath: string,
@@ -397,6 +434,39 @@ function completeTesterPass(fixture: ReturnType<typeof makeFixture>) {
 }
 
 describe("scripts/pr-lifecycle", () => {
+  it("rejects testing when exact-head review has unresolved serious findings", () => {
+    const fixture = makeFixture();
+    const reviewPath = path.join(fixture.root, "review-blocked.json");
+    fs.writeFileSync(
+      reviewPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "code-reviewer",
+        status: "PASS",
+        owner: { threadId: "reviewer-thread", hostId: "reviewer-host" },
+        headSha: fixture.metadata.headRefOid,
+        diffFingerprint: `sha256:${createHash("sha256").update(fixture.env.TEST_PR_PATCH).digest("hex")}`,
+        unresolvedFindings: [{ severity: "high", summary: "unsafe ownership bypass" }],
+      }),
+    );
+    const result = runFailure(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "read-only",
+      "--transport",
+      "nested-read-only",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--review-receipt",
+      reviewPath,
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("no unresolved high or critical findings");
+  });
+
   it("fails closed when live or external testing requests nested transport", () => {
     const fixture = makeFixture();
     const result = runFailure(fixture, [
@@ -486,6 +556,23 @@ describe("scripts/pr-lifecycle", () => {
     expect(duplicate.stderr).toContain("a different tester owner is already active");
   });
 
+  it("rejects the builder as its own tester owner", () => {
+    const fixture = makeFixture();
+    const tester = beginLiveTester(fixture);
+    const rejected = runFailure(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "builder-thread",
+      "--host-id",
+      "builder-host",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("tester owner must differ from the exact builder identity");
+  });
+
   it("atomically reserves one fresh tester after typed capacity recovery", () => {
     const fixture = makeFixture();
     const priorTester = completeCapacityOnlyFailure(fixture);
@@ -507,6 +594,18 @@ describe("scripts/pr-lifecycle", () => {
     expect(state.testerHistory).toHaveLength(1);
     expect(state.testerHistory[0].tester.contractId).toBe(priorTester.contractId);
     expect(state.tester.retryOfContractId).toBe(priorTester.contractId);
+  });
+
+  it("permits one replacement after a bounded occupied-slot refusal is proven cleared", () => {
+    const fixture = makeFixture();
+    const priorTester = completeCapacityOnlyFailure(fixture);
+    const recoveryPath = writeOccupiedSlotRecovery(fixture, priorTester.contractId);
+
+    const retry = run(fixture, capacityRetryArgs(priorTester.contractId, recoveryPath));
+    expect(retry).toMatchObject({
+      action: "create_thread",
+      retryOfContractId: priorTester.contractId,
+    });
   });
 
   it("reserves one fresh tester after pre-workload Jarvis health recovery", () => {
@@ -696,7 +795,9 @@ describe("scripts/pr-lifecycle", () => {
       "--owner-host",
       "builder-host",
     ]);
-    expect(illegalRelease.stderr).toContain("release workers require transport=user-visible-task");
+    expect(illegalRelease.stderr).toContain(
+      "release transport must be queue-lease or user-visible-task",
+    );
 
     const release = run(fixture, [
       "handoff-release",
@@ -721,9 +822,9 @@ describe("scripts/pr-lifecycle", () => {
       "set_thread_archived",
       "accept-release-handoff",
     ]);
-    expect(release.nativeTool?.createThread).toEqual({
-      model: "gpt-5.6-luna",
-      thinking: "max",
+    expect(release.capabilityPolicy).toEqual({
+      routine: "routine-release",
+      escalation: "reasoning-escalation",
     });
     expect(release.prompt).toContain("archive the exact builder thread");
     expect(release.prompt).toContain(
@@ -832,7 +933,7 @@ describe("scripts/pr-lifecycle", () => {
       "handoff-release",
       "42",
       "--transport",
-      "user-visible-task",
+      "queue-lease",
       "--authority",
       "normal-merge",
       "--owner-thread",
@@ -846,10 +947,14 @@ describe("scripts/pr-lifecycle", () => {
     ]);
 
     expect(release.action).toBe("enqueue-release-packet");
-    expect(release.nativeTool?.sequence).toEqual([
+    expect(release.queueTool?.sequence).toEqual([
       "pr-release-queue enqueue",
-      "create-or-wake-replaceable-operator",
+      "pr-release-queue claim",
     ]);
+    expect(release.optionalCoordination).toEqual({
+      nativeThread: "create-or-wake-best-effort",
+      establishesOwnership: false,
+    });
     expect(release.releasePacket).toMatchObject({
       candidate: { pr: 42, headSha: "a".repeat(40) },
       builder: {
@@ -879,6 +984,12 @@ describe("scripts/pr-lifecycle", () => {
               state: "closed",
               candidate: { pr, headSha, diffFingerprint },
               testerReceipt: { status: "PASS", headSha, diffFingerprint, closure: "archived" },
+              reviewReceipt: {
+                status: "PASS",
+                headSha,
+                diffFingerprint,
+                unresolvedFindings: [],
+              },
               lifecycle: { contractId: `contract-${pr}` },
               authority: { allowedActions: ["normal-merge"] },
               ownerHistory: [{ leaseId: `lease-${pr}` }],
@@ -931,7 +1042,7 @@ describe("scripts/pr-lifecycle", () => {
       "handoff-release",
       "42",
       "--transport",
-      "user-visible-task",
+      "queue-lease",
       "--authority",
       "normal-merge",
       "--owner-thread",
@@ -963,6 +1074,35 @@ describe("scripts/pr-lifecycle", () => {
     expect(direct.action).toBe("create_thread");
   });
 
+  it("rejects direct release when migrated state lacks the exact-head review receipt", () => {
+    const fixture = makeFixture();
+    completeTesterPass(fixture);
+    const stateFile = path.join(
+      fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
+      fs.readdirSync(fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR)[0],
+    );
+    const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    delete state.reviewReceipt;
+    fs.writeFileSync(stateFile, JSON.stringify(state));
+
+    const rejected = runFailure(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "user-visible-task",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--queue",
+      "direct",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("fresh exact-head review PASS");
+  });
+
   it("rejects explicit repo-backed routing while authoritative rollout is paused", () => {
     const fixture = makeFixture();
     completeTesterPass(fixture);
@@ -992,7 +1132,7 @@ describe("scripts/pr-lifecycle", () => {
       "handoff-release",
       "42",
       "--transport",
-      "user-visible-task",
+      "queue-lease",
       "--authority",
       "normal-merge",
       "--owner-thread",
@@ -1243,9 +1383,9 @@ describe("scripts/pr-lifecycle", () => {
       source: "direct-user-task",
       allowedActions: ["normal-merge", "deploy"],
     });
-    expect(release.nativeTool?.createThread).toEqual({
-      model: "gpt-5.6-terra",
-      thinking: "high",
+    expect(release.capabilityPolicy).toEqual({
+      routine: "routine-release",
+      escalation: "reasoning-escalation",
     });
     expect(release.prompt).toContain('"allowedActions":["normal-merge","deploy"]');
 

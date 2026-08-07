@@ -23,7 +23,7 @@ Source merge is not runtime or product-release proof.
 
 Every implementation PR uses this ownership flow:
 
-`builder -> independent tester -> release worker`
+`builder -> code reviewer -> independent tester -> release operator`
 
 This guide is the policy source. The PR template is its durable receipt surface.
 The workers coordinate directly; routine PRs do not need a permanent
@@ -48,11 +48,17 @@ Worker transport is part of the ownership contract:
   approval, or any result needing a durable independently addressable transcript.
   Record its exact task and host identity, then archive that exact task only
   after its terminal receipt is recorded.
-- The release worker is always one fresh user-visible project-scoped Codex task,
-  never a nested sub-agent. A default-branch write and any just-in-time approval
-  must remain visible in that worker's own transcript. The worker must also be
-  independently addressable so it can archive or, for a concrete repair, revive
-  the exact builder task.
+- Repo-backed release ownership is one distinct fenced queue lease. The exact
+  builder identity cannot claim it. Native Codex tasks are optional coordination
+  UX and never establish, extend, or prove queue ownership.
+- The documented direct rollback still uses one fresh user-visible project-scoped
+  Codex release task, never a nested sub-agent.
+
+Queue roles are independent of native Codex threads. Reviewers, testers, and
+release operators may be subagents or other replaceable executors; the queue
+owns identity, leases, exact-head receipts, expiry, recovery, duplicate
+prevention, and terminal state. The builder cannot review, test, or release its
+own candidate.
 
 Transport selection is executable, not a memory decision. Immediately before
 tester or release delegation—including after context compaction—the builder
@@ -70,11 +76,11 @@ the transition a mandatory two-step gate:
    returned thread and host with `accept-test-owner` or
    `accept-release-owner`.
 
-Recording a release owner is not permission to begin release work. The fresh
-release task first archives the exact builder, verifies `archived=true`, and
-records that receipt with `accept-release-handoff`. Only the resulting
-`release-handoff-accepted` transition opens review, merge, or already-authorized
-deployment work.
+For direct rollback, recording a release owner is not permission to begin work:
+the fresh release task must still archive the exact builder and record
+`release-handoff-accepted`. For repo-backed execution, claim atomically records
+a distinct-owner queue receipt with `builderSuspended=true`; only that active
+fenced lease opens review or merge. Native archival is best-effort roster UX.
 
 Re-running a pending or active handoff returns `action=do-not-create`; it never
 authorizes a replacement owner. If native task creation definitely failed, use
@@ -100,6 +106,25 @@ exact thread inventory and readback once after a recovery interval, and do not
 repeat a state-changing action unless unchanged state proves the retry safe.
 Compaction timing is a hypothesis until the target or caller transcript records
 it; temporal proximity alone is not causality.
+
+For any stale, failed, or ambiguous native thread transition, apply
+`.agents/skills/codex-thread-control-recovery/SKILL.md`. A resume is a verified
+transaction: resolve the exact thread and host, read current state, explicitly
+unarchive only when authoritative state says the target is archived, send one
+short prompt, then read back both message delivery and actual progress.
+`notLoaded` alone is not archive proof. A successful send receipt is not
+delivery proof; a delivered turn is not completion proof. Never retry an
+ambiguously accepted send. Do not keep the caller alive with shell sleep loops,
+fall back to a second transport, or create a replacement owner. After two
+bounded read-only reconciliations, preserve the owner and report the last
+proven state.
+
+For `create_thread`, do not vary starting-state forms as retries. After an
+ambiguous failure, search inventory for the unique intended task. If no task
+exists, allow at most one identical retry after the recovery interval. A second
+failure preserves the pending lifecycle reservation and blocks on the native
+control plane; it does not authorize cancellation, a same-directory substitute,
+or a replacement creator.
 The wrapper first runs the canonical secret-silent GitHub preflight. A
 restricted `status=indeterminate` result requires the same read-only lifecycle
 command to be rerun in authorized host context; it is not proof that the PR or
@@ -123,7 +148,15 @@ nested-eligibility or user-visible-routing rationale. This is receipt data, not
 an inference from the worker name. A release worker rejects a tester receipt
 that omits or changes either field.
 
-### 2. One independent tester validates one immutable head
+### 2. Code review gates one immutable head
+
+A distinct reviewer records the exact commit, diff fingerprint, result, and
+unresolved finding severities before testing. Any source-head change invalidates
+both review and tester receipts. High or critical unresolved findings return
+ownership to the builder; release requires a fresh review PASS with no serious
+finding left open.
+
+### 3. One independent tester validates one immutable head
 
 The tester checks out and verifies the assigned head before testing. It tries to
 falsify the fixed acceptance criteria on that exact head, including the smallest
@@ -178,7 +211,7 @@ the command returns the existing reservation; a source failure, completed
 workload, missing archive, unrecovered host gate, occupied lock, release owner,
 or different candidate fails closed.
 
-### 3. One release worker owns merge
+### 4. One release operator owns merge
 
 Only after a terminal tester `PASS` is recorded and the exact tester lifecycle
 is closed does the builder confirm that no release worker already owns the PR.
@@ -186,11 +219,13 @@ The builder invokes `scripts/pr-lifecycle handoff-release`. The existing direct
 mode permits only its first `action=create_thread` contract to create one fresh
 user-visible project-scoped release worker.
 
-The repo-backed mode emits `action=enqueue-release-packet`. The lifecycle
+The repo-backed mode uses `--transport queue-lease` and emits
+`action=enqueue-release-packet`. The lifecycle
 command reads authoritative rollout status and selects it automatically during
 dogfood and after graduation, so future builders need no founder reminder or
 rollout flag. Persist that exact packet with
-`scripts/pr-release-queue enqueue` before waking a replaceable release operator.
+`scripts/pr-release-queue enqueue` before execution. A distinct agent identity
+claims the fenced lease; creating or waking a native Codex task is optional.
 Structured semantic dependencies may be supplied with
 `--declared-dependencies <JSON-file>`; do not infer them from prose. A new
 operator reads and claims the durable queue rather than scanning Codex chats.
@@ -206,29 +241,13 @@ Both modes carry the immutable PR, head, base, diff, builder identity, tester
 receipt and closure, dependencies, risks, rollback, remaining proof, and the
 validated task-authority packet. Builders and testers never merge or deploy.
 
-Release-task model selection is risk-based and executable:
+Routine verified merge mechanics use the `routine-release` capability tier.
+Ambiguity, conflicts, serious findings, or repairs require
+`reasoning-escalation` and return behavior-bearing changes to the builder.
+Capability tiers are policy contracts, not hard-coded model names. Neither tier
+changes authority or permits a second owner.
 
-- For `normal-merge` authority only, `handoff-release` emits
-  `model=gpt-5.6-luna` and `thinking=max`. Use those exact `create_thread`
-  settings for the fresh release task. Immutable-head tester proof has already
-  removed the difficult source-discovery work; the remaining job is bounded
-  review, CI monitoring, expected-head merge, and receipts.
-- If the validated authority packet includes `deploy`, it emits
-  `model=gpt-5.6-terra` and `thinking=high` because the task may cross into live
-  state. This changes compute selection, not authority: every deployment,
-  restart, install, runtime mutation, or external proof boundary still applies.
-- Luna or Terra must fail closed and return the exact finding when source repair,
-  a real merge conflict, changed behavior, unclear production state, security
-  judgment, or an unmodeled irreversible action appears. Resume the exact
-  builder for source work. Escalate the same release task to Sol only when the
-  concrete finding needs stronger reasoning; never create a recursive release
-  worker or a second owner.
-
-The emitted model profile is the default for that handoff, not evidence that a
-model completed the work safely. The release receipt and independent state
-checks remain the proof.
-
-The release worker independently refreshes and verifies the PR head, current
+The queue lease owner, or direct rollback release worker, independently refreshes and verifies the PR head, current
 base, effective diff, required checks, review conversations, approvals,
 dependencies, and overlap. It may perform only a normal non-admin merge: no
 bypass, admin override, force, or weakened branch protection. If the reviewed
@@ -241,17 +260,16 @@ release prompt must not embed the pre-test PR contract or stale pending fields.
 The same refresh applies when a definitely uncreated tester reservation is
 cancelled and recreated on the unchanged source candidate.
 
-Before that review begins, the release worker proves its recorded thread and
-host identity, archives the exact builder task, verifies `archived=true`, and
-runs `accept-release-handoff` with both exact identities. The transition is
-idempotent [safe to retry] for the same receipt and fails closed for adjacent
-tasks or incomplete archival. The builder therefore leaves the active Codex
-task list at accepted handoff, not after merge.
+Before review begins, repo-backed execution must hold the active fenced lease
+whose ownership receipt binds a distinct owner and `builderSuspended=true`.
+Direct rollback instead proves its recorded thread and host, archives the exact
+builder, and records `release-handoff-accepted`. Both transitions are
+idempotent [safe to retry] and fail closed for stale or adjacent identities.
 
-Behavior-bearing repair belongs to the builder. When a concrete release
-discrepancy requires source repair, the release worker may unarchive and steer
-only the exact builder thread, then waits for a new builder packet and fresh
-tester validation for the changed head. It must not create a duplicate builder,
+Behavior-bearing repair belongs to the builder. A repo-backed executor records
+the blocker and releases its lease before the same builder supplies a refreshed
+packet with fresh tester proof. A direct rollback worker may unarchive and steer
+only the exact builder thread. Neither path may create a duplicate builder,
 tester, or release owner.
 
 Mechanically, the release worker verifies `archived=false`, records the exact
@@ -279,14 +297,15 @@ release and builder identities, the original builder-archive proof, and an
 ownerless `cancelled` tester record; any live, owned, or ambiguous tester still
 fails closed.
 
-After a successful merge, the release worker records and sends the merge receipt.
-The builder was already archived at accepted handoff. The receipt proves the
+After a successful merge, the queue executor or direct worker records and sends
+the merge receipt. The builder was already suspended by the queue receipt or
+archived by direct acceptance. The receipt proves the
 reviewed head tree equals the landed merge tree and that the merge commit is an
 ancestor of the refreshed target branch. It reports merged-source truth
 separately from any package, installed runtime, provider/backend, GUI, or
 real-user proof.
 
-### 4. Identity and lifecycle failures fail closed
+### 5. Identity and lifecycle failures fail closed
 
 Thread creation, exact identity resolution, approval, handoff, archival, and
 unarchival are lifecycle gates. If a gate fails, preserve the one known owner,
@@ -473,8 +492,9 @@ claimed guarantee cannot be proven mechanically.
 9. Keep ownership while the PR is draft, waiting for review, waiting for CI, or
    refreshing after ordinary base drift. Give a next-step handoff only at a
    genuine stop boundary or final closeout.
-10. Complete the independent tester gate, then hand the immutable receipt to one
-    fresh user-visible release worker. Only that worker may merge under
+10. Complete the independent tester gate, then enqueue the immutable packet for
+    one distinct fenced release executor. Native release tasks are optional.
+    Only that lease owner may merge under
     [the PR merge policy](/ci); otherwise it stops and reports the blocker.
 11. If the merged change needs live runtime behavior, choose the lane explicitly:
     keep daily Jarvis on the managed package/app-support runtime; use sacred

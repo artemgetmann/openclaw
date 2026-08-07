@@ -17,9 +17,11 @@ For a normal, scoped implementation, the default outcome is a merged PR. The
 worker lifecycle collectively owns the full path. Under the canonical contract
 in `docs/agent-guides/workflow.md`, the builder investigates, implements,
 handles actionable review findings, and satisfies required CI, but never merges.
-After exact-head tester `PASS`, one fresh user-visible release worker owns the
-normal merge. It must not bypass required checks, merge a draft, use an admin
-override, or treat queued or pending checks as passed.
+After exact-head tester `PASS`, one distinct fenced queue lease owns the normal
+repo-backed merge. Native Codex tasks are optional coordination. The documented
+direct rollback still requires one fresh user-visible release worker. Neither
+path may bypass required checks, merge a draft, use an admin override, or treat
+queued or pending checks as passed.
 
 Routine review, pending CI, and ordinary base drift are continuation states.
 The builder waits or diagnoses, refreshes/rebases when needed, repeats affected

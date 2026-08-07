@@ -15,7 +15,10 @@ type CommandOutput = {
   state?: {
     sequence: number;
     mergeLease: null | { leaseId: string; fence: number; claimedPr: number };
-    items: Record<string, { state: string; terminalReceipts: unknown[] }>;
+    items: Record<
+      string,
+      { state: string; terminalReceipts: unknown[]; ownershipReceipt?: Record<string, unknown> }
+    >;
   };
   rollout?: {
     phase: string;
@@ -95,9 +98,22 @@ function writePacket(
       },
       testerReceipt: {
         status: "PASS",
+        owner: { threadId: `tester-${pr}`, hostId: "tester-host" },
         headSha,
         diffFingerprint,
         closure: "archived",
+      },
+      reviewReceipt: {
+        role: "code-reviewer",
+        status: "PASS",
+        owner: { threadId: `reviewer-${pr}`, hostId: "reviewer-host" },
+        headSha,
+        diffFingerprint,
+        unresolvedFindings: [],
+      },
+      capabilityPolicy: {
+        routine: "routine-release",
+        escalation: "reasoning-escalation",
       },
       authority: {
         source: "builder-handoff",
@@ -182,11 +198,70 @@ function finishMerge(fixture: ReturnType<typeof makeFixture>, pr: number) {
 }
 
 describe("scripts/pr-release-queue", () => {
+  it("rejects packets with unresolved serious code-review findings", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init-review-gate"]);
+    const packetPath = writePacket(fixture, 19);
+    const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+    packet.reviewReceipt.unresolvedFindings = [
+      { severity: "critical", summary: "merge gate can be bypassed" },
+    ];
+    fs.writeFileSync(packetPath, JSON.stringify(packet));
+    const result = runFailure(fixture, [
+      "enqueue",
+      "--packet",
+      packetPath,
+      "--transaction-id",
+      "enqueue-review-blocked",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("no serious unresolved findings");
+  });
+
+  it("rejects malformed review identities and severity values", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init-malformed-review"]);
+    const packetPath = writePacket(fixture, 18);
+    const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+    packet.reviewReceipt.owner.threadId = "";
+    packet.reviewReceipt.unresolvedFindings = [{ severity: "HIGH", details: "not normalized" }];
+    fs.writeFileSync(packetPath, JSON.stringify(packet));
+    const result = runFailure(fixture, [
+      "enqueue",
+      "--packet",
+      packetPath,
+      "--transaction-id",
+      "enqueue-malformed-review",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("exact-head review PASS");
+  });
+
+  it("rejects an empty tester identity in a direct queue packet", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init-empty-tester"]);
+    const packetPath = writePacket(fixture, 17);
+    const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+    packet.testerReceipt.owner = { threadId: " ", hostId: "" };
+    fs.writeFileSync(packetPath, JSON.stringify(packet));
+    const result = runFailure(fixture, [
+      "enqueue",
+      "--packet",
+      packetPath,
+      "--transaction-id",
+      "enqueue-empty-tester",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("closed exact-candidate tester PASS");
+  });
+
   it("migrates the current schema-1 receipt and derives dogfood progress", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 1354);
     finishMerge(fixture, 1354);
     const legacy = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    delete legacy.items["1354"].reviewReceipt;
+    delete legacy.items["1354"].capabilityPolicy;
     delete legacy.rollout;
     fs.writeFileSync(fixture.statePath, JSON.stringify(legacy));
 
@@ -459,6 +534,89 @@ describe("scripts/pr-release-queue", () => {
     expect(stale.stderr).toContain("fencing number is stale");
   });
 
+  it("rejects builder self-claim and records a distinct queue ownership receipt", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 21);
+
+    const selfClaim = runFailure(fixture, [
+      "claim",
+      "--thread-id",
+      "builder-21",
+      "--host-id",
+      "builder-host",
+      "--pr",
+      "21",
+      "--transaction-id",
+      "self-claim-21",
+    ]);
+    expect(selfClaim.status).toBe(1);
+    expect(selfClaim.stderr).toContain(
+      "release queue owner must differ from the exact builder identity",
+    );
+
+    const owner = claim(fixture, "release-21", 21);
+    const status = run(fixture, ["status"]);
+    expect(status.state?.items["21"]).toMatchObject({
+      state: "claimed",
+      ownershipReceipt: {
+        mode: "queue-lease",
+        owner: { threadId: "release-21", hostId: "release-host" },
+        builder: { threadId: "builder-21", hostId: "builder-host" },
+        builderSuspended: true,
+        leaseId: owner.lease!.leaseId,
+        fence: owner.lease!.fence,
+      },
+    });
+  });
+
+  it("cannot claim a legacy queued packet without the exact-head review gate", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 23);
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    delete state.items["23"].reviewReceipt;
+    delete state.items["23"].capabilityPolicy;
+    fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+
+    const rejected = runFailure(fixture, [
+      "claim",
+      "--thread-id",
+      "release-23",
+      "--host-id",
+      "release-host",
+      "--pr",
+      "23",
+      "--transaction-id",
+      "claim-unreviewed-23",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("fresh exact-head review PASS");
+  });
+
+  it("rejects merge recording when the queue ownership receipt is missing", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 22);
+    const owner = claim(fixture, "release-22", 22);
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    delete state.items["22"].ownershipReceipt;
+    fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+
+    const rejected = runFailure(fixture, [
+      "record-merge",
+      "--lease-id",
+      owner.lease!.leaseId,
+      "--fence",
+      String(owner.lease!.fence),
+      "--receipt",
+      writeMergeReceipt(fixture, 22),
+      "--transaction-id",
+      "merge-without-owner-22",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain(
+      "merge requires the active distinct-owner queue ownership receipt",
+    );
+  });
+
   it("records source-only merge proof, closes the item, and unblocks its dependent", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 30);
@@ -544,6 +702,8 @@ describe("scripts/pr-release-queue", () => {
     repairedPacket.candidate.diffFingerprint = `sha256:${"1".repeat(64)}`;
     repairedPacket.testerReceipt.headSha = repairedPacket.candidate.headSha;
     repairedPacket.testerReceipt.diffFingerprint = repairedPacket.candidate.diffFingerprint;
+    repairedPacket.reviewReceipt.headSha = repairedPacket.candidate.headSha;
+    repairedPacket.reviewReceipt.diffFingerprint = repairedPacket.candidate.diffFingerprint;
     fs.writeFileSync(repairedPacketPath, JSON.stringify(repairedPacket));
 
     const refreshed = run(fixture, [

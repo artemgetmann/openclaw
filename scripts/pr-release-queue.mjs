@@ -124,6 +124,18 @@ function emptyState(timestamp) {
 }
 
 function qualifyingMerge(item, receipt) {
+  // Schema-1 terminal receipts created before the exact-head review gate
+  // landed have neither field. Preserve their already-proven rollout credit;
+  // every newly enqueued or refreshed packet is validated to carry both.
+  const reviewQualifies =
+    (item?.reviewReceipt === undefined && item?.capabilityPolicy === undefined) ||
+    (item?.reviewReceipt?.status === "PASS" &&
+      item.reviewReceipt.headSha === item?.candidate?.headSha &&
+      item.reviewReceipt.diffFingerprint === item?.candidate?.diffFingerprint &&
+      Array.isArray(item.reviewReceipt.unresolvedFindings) &&
+      !item.reviewReceipt.unresolvedFindings.some((finding) =>
+        ["high", "critical"].includes(finding?.severity),
+      ));
   return (
     receipt?.schemaVersion === SCHEMA_VERSION &&
     receipt?.kind === "source-merge" &&
@@ -139,6 +151,7 @@ function qualifyingMerge(item, receipt) {
     item?.testerReceipt?.headSha === item?.candidate?.headSha &&
     item?.testerReceipt?.diffFingerprint === item?.candidate?.diffFingerprint &&
     ["archived", "terminal-receipt"].includes(item?.testerReceipt?.closure) &&
+    reviewQualifies &&
     typeof item?.lifecycle?.contractId === "string" &&
     item.lifecycle.contractId.length > 0 &&
     item?.authority?.allowedActions?.includes("normal-merge") &&
@@ -146,6 +159,29 @@ function qualifyingMerge(item, receipt) {
     Array.isArray(item?.ownerHistory) &&
     item.ownerHistory.some(
       (owner) => typeof owner?.leaseId === "string" && owner.leaseId.length > 0,
+    )
+  );
+}
+
+function exactReviewQualifies(item) {
+  return (
+    item?.reviewReceipt?.role === "code-reviewer" &&
+    item.reviewReceipt.status === "PASS" &&
+    item.reviewReceipt.headSha === item?.candidate?.headSha &&
+    item.reviewReceipt.diffFingerprint === item?.candidate?.diffFingerprint &&
+    typeof item.reviewReceipt.owner?.threadId === "string" &&
+    item.reviewReceipt.owner.threadId.trim() !== "" &&
+    typeof item.reviewReceipt.owner?.hostId === "string" &&
+    item.reviewReceipt.owner.hostId.trim() !== "" &&
+    Array.isArray(item.reviewReceipt.unresolvedFindings) &&
+    item.reviewReceipt.unresolvedFindings.every(
+      (finding) =>
+        finding &&
+        typeof finding === "object" &&
+        ["low", "medium", "high", "critical"].includes(finding.severity),
+    ) &&
+    !item.reviewReceipt.unresolvedFindings.some((finding) =>
+      ["high", "critical"].includes(finding?.severity),
     )
   );
 }
@@ -295,6 +331,7 @@ function validatePacket(packet) {
   const candidate = packet?.candidate;
   const builder = packet?.builder;
   const tester = packet?.testerReceipt;
+  const review = packet?.reviewReceipt;
   const authority = packet?.authority;
   const lifecycle = packet?.lifecycle;
   const dependencies = packet?.declaredDependencies ?? [];
@@ -323,11 +360,43 @@ function validatePacket(packet) {
   }
   if (
     tester?.status !== "PASS" ||
+    typeof tester?.owner?.threadId !== "string" ||
+    tester.owner.threadId.trim() === "" ||
+    typeof tester?.owner?.hostId !== "string" ||
+    tester.owner.hostId.trim() === "" ||
+    (tester.owner.threadId === builder.threadId && tester.owner.hostId === builder.hostId) ||
     tester?.headSha !== candidate.headSha ||
     tester?.diffFingerprint !== candidate.diffFingerprint ||
     !["archived", "terminal-receipt"].includes(tester?.closure)
   ) {
     fail("release packet requires a closed exact-candidate tester PASS");
+  }
+  if (
+    review?.role !== "code-reviewer" ||
+    review?.status !== "PASS" ||
+    typeof review?.owner?.threadId !== "string" ||
+    review.owner.threadId.trim() === "" ||
+    typeof review?.owner?.hostId !== "string" ||
+    review.owner.hostId.trim() === "" ||
+    (review.owner.threadId === builder.threadId && review.owner.hostId === builder.hostId) ||
+    review?.headSha !== candidate.headSha ||
+    review?.diffFingerprint !== candidate.diffFingerprint ||
+    !Array.isArray(review?.unresolvedFindings) ||
+    !review.unresolvedFindings.every(
+      (finding) =>
+        finding &&
+        typeof finding === "object" &&
+        ["low", "medium", "high", "critical"].includes(finding.severity),
+    ) ||
+    review.unresolvedFindings.some((finding) => ["high", "critical"].includes(finding?.severity))
+  ) {
+    fail("release packet requires an exact-head review PASS with no serious unresolved findings");
+  }
+  if (
+    packet?.capabilityPolicy?.routine !== "routine-release" ||
+    packet?.capabilityPolicy?.escalation !== "reasoning-escalation"
+  ) {
+    fail("release packet requires the capability-tier execution policy");
   }
   if (
     !Array.isArray(authority?.allowedActions) ||
@@ -520,6 +589,8 @@ function mutateEnqueue(state, packet, transactionId, now) {
       candidate: packet.candidate,
       builder: packet.builder,
       testerReceipt: packet.testerReceipt,
+      reviewReceipt: packet.reviewReceipt,
+      capabilityPolicy: packet.capabilityPolicy,
       authority: packet.authority,
       lifecycle: packet.lifecycle,
       declaredDependencies: packet.declaredDependencies ?? [],
@@ -537,7 +608,18 @@ function mutateEnqueue(state, packet, transactionId, now) {
 function mutateRefresh(state, packet, transactionId, now) {
   return transition(state, transactionId, now, (next) => {
     const item = next.items[String(packet.candidate.pr)];
-    if (!item || !["blocked", "awaiting-decision"].includes(item.state)) {
+    // An unowned schema-1 packet queued before review receipts existed can be
+    // replaced directly by the same builder. It cannot be claimed or merged;
+    // forcing a fake release owner merely to block it would recreate the
+    // native-control dependency this migration removes.
+    const legacyUnreviewedQueued =
+      item?.state === "queued" &&
+      item.reviewReceipt === undefined &&
+      item.capabilityPolicy === undefined;
+    if (
+      !item ||
+      (!legacyUnreviewedQueued && !["blocked", "awaiting-decision"].includes(item.state))
+    ) {
       fail(`PR #${packet.candidate.pr} is not waiting for a repaired candidate`);
     }
     if (next.mergeLease?.claimedPr === packet.candidate.pr) {
@@ -563,12 +645,15 @@ function mutateRefresh(state, packet, transactionId, now) {
     item.candidateHistory.push({
       candidate: item.candidate,
       testerReceipt: item.testerReceipt,
+      reviewReceipt: item.reviewReceipt,
       discoveredBlockers: item.discoveredBlockers,
       replacedAt: now.toISOString(),
     });
     item.candidate = packet.candidate;
     item.builder = packet.builder;
     item.testerReceipt = packet.testerReceipt;
+    item.reviewReceipt = packet.reviewReceipt;
+    item.capabilityPolicy = packet.capabilityPolicy;
     item.authority = packet.authority;
     item.lifecycle = packet.lifecycle;
     item.declaredDependencies = packet.declaredDependencies ?? [];
@@ -625,6 +710,15 @@ function mutateClaim(state, options, transactionId, now) {
     }
 
     const item = next.items[String(selected.pr)];
+    if (!exactReviewQualifies(item)) {
+      fail("release claim requires a fresh exact-head review PASS with no serious findings");
+    }
+    // Queue ownership must be independent from source ownership. Native task
+    // creation is deliberately not required, but a builder cannot relabel
+    // itself as the release executor and silently self-merge.
+    if (item.builder.threadId === threadId && item.builder.hostId === hostId) {
+      fail("release queue owner must differ from the exact builder identity");
+    }
     const lease = {
       leaseId: randomUUID(),
       fence: next.nextFence,
@@ -638,6 +732,15 @@ function mutateClaim(state, options, transactionId, now) {
     next.mergeLease = lease;
     item.state = "claimed";
     item.ownerHistory.push({ ...lease });
+    item.ownershipReceipt = {
+      mode: "queue-lease",
+      owner: { threadId, hostId },
+      builder: { threadId: item.builder.threadId, hostId: item.builder.hostId },
+      builderSuspended: true,
+      leaseId: lease.leaseId,
+      fence: lease.fence,
+      recordedAt: now.toISOString(),
+    };
     return { action: "claimed", lease, item: selected };
   });
 }
@@ -692,6 +795,22 @@ function mutateRecordMerge(state, options, receipt, transactionId, now) {
   return transition(state, transactionId, now, (next) => {
     const lease = requireLease(next, options, now);
     const item = next.items[String(lease.claimedPr)];
+    if (!exactReviewQualifies(item)) {
+      fail("merge requires a fresh exact-head review PASS with no serious findings");
+    }
+    const ownership = item.ownershipReceipt;
+    if (
+      ownership?.mode !== "queue-lease" ||
+      ownership?.builderSuspended !== true ||
+      ownership?.leaseId !== lease.leaseId ||
+      ownership?.fence !== lease.fence ||
+      ownership?.owner?.threadId !== lease.owner.threadId ||
+      ownership?.owner?.hostId !== lease.owner.hostId ||
+      (ownership?.builder?.threadId === lease.owner.threadId &&
+        ownership?.builder?.hostId === lease.owner.hostId)
+    ) {
+      fail("merge requires the active distinct-owner queue ownership receipt");
+    }
     validateMergeReceipt(receipt, item);
     item.terminalReceipts.push(receipt);
     const deployAuthorized = item.authority.allowedActions.includes("deploy");

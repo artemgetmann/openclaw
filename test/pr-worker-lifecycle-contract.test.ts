@@ -12,6 +12,7 @@ const ci = readRepoFile("docs/ci.md");
 const forkGuide = readRepoFile("FORK_CONTRIBUTING.md");
 const prTemplate = readRepoFile(".github/pull_request_template.md");
 const lifecycleCommand = readRepoFile("scripts/pr-lifecycle");
+const threadRecoverySkill = readRepoFile(".agents/skills/codex-thread-control-recovery/SKILL.md");
 const normalizedWorkflow = workflow.replace(/\s+/g, " ");
 
 describe("canonical PR worker lifecycle policy", () => {
@@ -28,20 +29,20 @@ describe("canonical PR worker lifecycle policy", () => {
   it("separates builder, tester, and release ownership without self-merge", () => {
     // The release role exists to keep default-branch writes and approvals out
     // of builder or tester transcripts and to prevent duplicate merge owners.
-    expect(workflow).toContain("`builder -> independent tester -> release worker`");
+    expect(workflow).toContain(
+      "`builder -> code reviewer -> independent tester -> release operator`",
+    );
     expect(workflow).toContain("builder is always a user-visible, project-scoped Codex task");
     expect(workflow).toContain("It never merges its own PR and never deploys");
-    expect(normalizedWorkflow).toContain(
-      "exactly one fresh user-visible project-scoped release worker",
-    );
+    expect(workflow).toContain("Repo-backed release ownership is one distinct fenced queue lease");
+    expect(normalizedWorkflow).toContain("exact builder identity cannot claim it");
+    expect(workflow).toContain("Native Codex tasks are optional coordination");
     expect(normalizedWorkflow).toContain("never a nested sub-agent");
     expect(normalizedWorkflow).toContain("normal non-admin merge");
     expect(normalizedWorkflow).toContain(
-      "must not create a duplicate builder, tester, or release owner",
+      "Neither path may create a duplicate builder, tester, or release owner",
     );
-    expect(normalizedWorkflow).toContain(
-      "builder therefore leaves the active Codex task list at accepted handoff, not after merge",
-    );
+    expect(normalizedWorkflow).toContain("Native archival is best-effort roster UX");
     expect(normalizedWorkflow).toContain(
       "records the exact finding and identities with `return-source`",
     );
@@ -62,6 +63,18 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain("does not retry after ambiguity, failure, refusal");
   });
 
+  it("requires exact-head review before independent testing and release", () => {
+    expect(normalizedWorkflow).toContain("distinct reviewer records the exact commit");
+    expect(normalizedWorkflow).toContain("unresolved finding severities before testing");
+    expect(normalizedWorkflow).toContain(
+      "source-head change invalidates both review and tester receipts",
+    );
+    expect(normalizedWorkflow).toContain("fresh review PASS with no serious finding left open");
+    expect(normalizedWorkflow).toContain("`routine-release` capability tier");
+    expect(normalizedWorkflow).toContain("`reasoning-escalation`");
+    expect(normalizedWorkflow).toContain("not hard-coded model names");
+  });
+
   it("invalidates stale-head proof and fails lifecycle operations closed", () => {
     // A changed head is a new candidate. Exact identity checks ensure archival
     // or repair steering cannot hit an adjacent user-visible task.
@@ -80,7 +93,7 @@ describe("canonical PR worker lifecycle policy", () => {
     // body captures the immutable packet needed to cross that boundary safely.
     expect(ci).toContain("canonical contract");
     expect(ci).toContain("the builder investigates");
-    expect(ci).toContain("one fresh user-visible release worker");
+    expect(ci).toContain("one distinct fenced queue lease");
     expect(forkGuide).toContain("lifecycle ownership");
     expect(prTemplate).toContain("Base branch + exact SHA");
     expect(prTemplate).toContain("Diff fingerprint + changed paths");
@@ -88,8 +101,8 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(prTemplate).toContain("exact worker identity/head/diff");
     expect(prTemplate).not.toContain("exact thread/head/diff");
     expect(prTemplate).toContain("Tester lifecycle closure");
-    expect(prTemplate).toContain("fresh user-visible project task ID");
-    expect(prTemplate).toContain("exact builder `archived=true` receipt");
+    expect(prTemplate).toContain("repo-backed lease ID + fence + distinct owner");
+    expect(prTemplate).toContain("queue `builderSuspended=true` ownership receipt");
     expect(prTemplate).toContain("same-builder `archived=false` receipt");
   });
 
@@ -115,5 +128,30 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(prTemplate).toContain("authenticated connector + expected head; exactly one");
     expect(lifecycleCommand).toContain('source "$script_dir/lib/github-auth-preflight.sh"');
     expect(lifecycleCommand).toContain("openclaw_github_preflight");
+  });
+
+  it("makes native thread recovery a verified bounded transaction", () => {
+    // Native control receipts prove API acceptance, not delivery, progress, or
+    // completion. The repo-local skill keeps those claims mechanically distinct.
+    expect(agents).toContain(".agents/skills/codex-thread-control-recovery/SKILL.md");
+    expect(normalizedWorkflow).toContain("successful send receipt is not delivery proof");
+    expect(normalizedWorkflow).toContain("delivered turn is not completion proof");
+    expect(normalizedWorkflow).toContain("Never retry an ambiguously accepted send");
+    expect(normalizedWorkflow).toContain("`notLoaded` alone is not archive proof");
+    expect(normalizedWorkflow).toContain("do not vary starting-state forms as retries");
+    expect(normalizedWorkflow).toContain("allow at most one identical retry");
+    expect(normalizedWorkflow).toContain("Do not keep the caller alive with shell sleep loops");
+    expect(threadRecoverySkill).toContain("Do not cycle");
+    expect(threadRecoverySkill).toContain("most one identical create retry");
+    expect(threadRecoverySkill).toContain("preserve the pending lifecycle reservation");
+    expect(threadRecoverySkill).toContain("set only that");
+    expect(threadRecoverySkill).toContain("target to `archived:false`");
+    expect(threadRecoverySkill).toContain("A successful send receipt alone is insufficient");
+    expect(threadRecoverySkill).toContain("Never repeat an ambiguously accepted send");
+    expect(threadRecoverySkill).toContain("`notLoaded` does not prove archival");
+    expect(threadRecoverySkill).toContain("unchanged archive state proves");
+    expect(threadRecoverySkill).toContain("require either a new running tool/action");
+    expect(threadRecoverySkill).toContain("After two bounded read-only reconciliation attempts");
+    expect(threadRecoverySkill).toContain("Do not fall back to the CLI");
   });
 });

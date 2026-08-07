@@ -42,8 +42,8 @@ Describe the problem and fix in 2–5 bullets:
 - Independent tester: (`PASS`/`FAIL` + exact worker identity/head/diff + receipt)
 - Tester/runtime cleanup:
 - Tester lifecycle closure: (exact task archive, or exact nested-agent terminal receipt)
-- Release worker: (fresh user-visible project task ID + host ID + typed task-authority packet; fill after tester `PASS`)
-- Release acceptance: (exact builder `archived=true` receipt before review/merge/deploy work)
+- Release worker: (repo-backed lease ID + fence + distinct owner, or direct rollback task ID + host ID; include typed task-authority packet)
+- Release acceptance: (queue `builderSuspended=true` ownership receipt, or direct rollback exact builder `archived=true` receipt)
 - Source return / re-acceptance: (`None`, or exact finding + same-builder `archived=false` receipt + repaired-head re-archive receipt)
 - GitHub mutation transport: (`host-gh` or authenticated connector + expected head; exactly one)
 - Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
