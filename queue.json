@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 21,
+  "sequence": 22,
   "nextFence": 6,
   "mergeLease": null,
   "items": {
@@ -489,13 +489,93 @@
         "fence": 5,
         "recordedAt": "2026-08-07T05:40:29.134Z"
       }
+    },
+    "1362": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1362,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1362",
+        "headSha": "46c82523b50eef4d93ea2fc27c55999451848d74",
+        "baseBranch": "main",
+        "testedBaseSha": "913e507427f19c224f43ea570189ae7a63af6f48",
+        "diffFingerprint": "sha256:a5741efb4db1367ebe0604c87c1d679db2cab6492ca0da15371dc28434c99bb2",
+        "changedPaths": [
+          "src/agents/system-prompt.test.ts",
+          "src/agents/system-prompt.ts"
+        ]
+      },
+      "builder": {
+        "threadId": "019fd696-9c4a-7540-8cb7-b2f76ef8244e",
+        "hostId": "MacBook-Pro-JetBook-4.local",
+        "wakeRoute": {
+          "threadId": "019fd696-9c4a-7540-8cb7-b2f76ef8244e",
+          "hostId": "MacBook-Pro-JetBook-4.local"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "46c82523b50eef4d93ea2fc27c55999451848d74",
+        "diffFingerprint": "sha256:a5741efb4db1367ebe0604c87c1d679db2cab6492ca0da15371dc28434c99bb2",
+        "closure": "terminal-receipt",
+        "contractId": "2350a04d-aeb6-4873-bc7d-d24c7e7d0d4e",
+        "owner": {
+          "threadId": "/root/pr1362_tester",
+          "hostId": "MacBook-Pro-JetBook-4.local"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "headSha": "46c82523b50eef4d93ea2fc27c55999451848d74",
+        "diffFingerprint": "sha256:a5741efb4db1367ebe0604c87c1d679db2cab6492ca0da15371dc28434c99bb2",
+        "owner": {
+          "threadId": "/root/pr1362_code_review",
+          "hostId": "MacBook-Pro-JetBook-4.local"
+        },
+        "unresolvedFindings": [],
+        "evidence": [
+          "Independent exact-head review PASS.",
+          "Raw patch fingerprint matched.",
+          "git diff --check passed."
+        ]
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1362 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "b111e43d-b2ea-47d4-baf5-d20c6072cbc1",
+        "stateDirectory": "/Users/user/.codex/worktrees/jarvis-reminder-prerequisite-verification-915d3920-t4Or3a/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-08T07:43:33.067Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "bdfb68f9-aade-4727-b279-9afbf83d835f",
-    "recordedAt": "2026-08-07T05:46:10.866Z"
+    "id": "f1fd96fa-15d7-403c-9906-d4d4f2b43c7c",
+    "recordedAt": "2026-08-08T07:43:33.067Z"
   },
-  "updatedAt": "2026-08-07T05:46:10.866Z",
+  "updatedAt": "2026-08-08T07:43:33.067Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
