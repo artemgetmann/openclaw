@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 23,
-  "nextFence": 6,
-  "mergeLease": null,
+  "sequence": 24,
+  "nextFence": 7,
+  "mergeLease": {
+    "leaseId": "7f0d714a-9e7f-4ead-8e84-6cf6fb6f1c8c",
+    "fence": 6,
+    "owner": {
+      "threadId": "/root/pr1362_release_operator",
+      "hostId": "nested-agent"
+    },
+    "claimedPr": 1362,
+    "claimedAt": "2026-08-08T07:44:44.315Z",
+    "heartbeatAt": "2026-08-08T07:44:44.315Z",
+    "expiresAt": "2026-08-08T08:04:44.315Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -568,7 +579,7 @@
       "terminalReceipts": []
     },
     "1362": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1362,
         "url": "https://github.com/artemgetmann/openclaw/pull/1362",
@@ -642,17 +653,45 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-08T07:43:33.067Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "7f0d714a-9e7f-4ead-8e84-6cf6fb6f1c8c",
+          "fence": 6,
+          "owner": {
+            "threadId": "/root/pr1362_release_operator",
+            "hostId": "nested-agent"
+          },
+          "claimedPr": 1362,
+          "claimedAt": "2026-08-08T07:44:44.315Z",
+          "heartbeatAt": "2026-08-08T07:44:44.315Z",
+          "expiresAt": "2026-08-08T08:04:44.315Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [],
-      "terminalReceipts": []
+      "terminalReceipts": [],
+      "ownershipReceipt": {
+        "mode": "queue-lease",
+        "owner": {
+          "threadId": "/root/pr1362_release_operator",
+          "hostId": "nested-agent"
+        },
+        "builder": {
+          "threadId": "019fd696-9c4a-7540-8cb7-b2f76ef8244e",
+          "hostId": "MacBook-Pro-JetBook-4.local"
+        },
+        "builderSuspended": true,
+        "leaseId": "7f0d714a-9e7f-4ead-8e84-6cf6fb6f1c8c",
+        "fence": 6,
+        "recordedAt": "2026-08-08T07:44:44.315Z"
+      }
     }
   },
   "lastTransaction": {
-    "id": "7c1f35f3-0ee5-4054-903a-de57131f55b4",
-    "recordedAt": "2026-08-08T07:43:52.105Z"
+    "id": "0dab1dc3-201c-4f98-b258-36ec19d97fb0",
+    "recordedAt": "2026-08-08T07:44:44.315Z"
   },
-  "updatedAt": "2026-08-08T07:43:52.105Z",
+  "updatedAt": "2026-08-08T07:44:44.315Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
