@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 27,
+  "sequence": 28,
   "nextFence": 8,
   "mergeLease": null,
   "items": {
@@ -491,14 +491,14 @@
       }
     },
     "1359": {
-      "state": "blocked",
+      "state": "queued",
       "candidate": {
         "pr": 1359,
         "url": "https://github.com/artemgetmann/openclaw/pull/1359",
-        "headSha": "0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4",
+        "headSha": "23a691adf70dbaeff8cb613ca2953b76a63c34e6",
         "baseBranch": "main",
         "testedBaseSha": "913e507427f19c224f43ea570189ae7a63af6f48",
-        "diffFingerprint": "sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643",
+        "diffFingerprint": "sha256:dbf479a26a7b4c667d4d2c887170223a15c9d989bb71994659a0f2521fd4e6c7",
         "changedPaths": [
           ".agents/skills/codex-worktree-adoption/SKILL.md",
           "docs/agent-guides/workflow.md",
@@ -516,10 +516,10 @@
       },
       "testerReceipt": {
         "status": "PASS",
-        "headSha": "0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4",
-        "diffFingerprint": "sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643",
+        "headSha": "23a691adf70dbaeff8cb613ca2953b76a63c34e6",
+        "diffFingerprint": "sha256:dbf479a26a7b4c667d4d2c887170223a15c9d989bb71994659a0f2521fd4e6c7",
         "closure": "terminal-receipt",
-        "contractId": "38bf4898-aae1-4d57-a108-6d5ee2d88e04",
+        "contractId": "072b832f-35e7-4f7a-9eb9-942656a51057",
         "owner": {
           "threadId": "/root/pr1359_tester",
           "hostId": "nested-agent-local"
@@ -533,8 +533,8 @@
           "threadId": "/root/pr1359_reviewer",
           "hostId": "nested-agent-local"
         },
-        "headSha": "0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4",
-        "diffFingerprint": "sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643",
+        "headSha": "23a691adf70dbaeff8cb613ca2953b76a63c34e6",
+        "diffFingerprint": "sha256:dbf479a26a7b4c667d4d2c887170223a15c9d989bb71994659a0f2521fd4e6c7",
         "unresolvedFindings": []
       },
       "capabilityPolicy": {
@@ -556,18 +556,12 @@
         ]
       },
       "lifecycle": {
-        "contractId": "a90d3b51-1623-4779-93ca-79272903ee3f",
+        "contractId": "b16faf2f-7f73-4773-b01c-b31c534f68c5",
         "stateDirectory": "/Users/user/.codex/worktrees/7f30f350-717b-475a-becc-4596efa3bb7b/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [
-        {
-          "kind": "checks-pending",
-          "details": "PR #1359 remains blocked on exact head 0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4: CI run 31246641010 still has required test shard checks (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test) IN_PROGRESS after bounded watch. GitHub reports mergeStateStatus=BLOCKED; actionlint is passing, no PR comments or GitHub review records are present, head/base and raw patch diff sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643 match the immutable packet. Normal merge forbidden until relevant CI completes successfully and a fresh lease independently rechecks.",
-          "observedAt": "2026-08-08T07:48:22.070Z"
-        }
-      ],
-      "readyAt": "2026-08-08T07:43:52.105Z",
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-08T07:58:24.852Z",
       "ownerHistory": [
         {
           "leaseId": "5e5378f7-f3f7-417b-ab1c-a0be32c495e4",
@@ -583,7 +577,55 @@
         }
       ],
       "mutationIntent": null,
-      "candidateHistory": [],
+      "candidateHistory": [
+        {
+          "candidate": {
+            "pr": 1359,
+            "url": "https://github.com/artemgetmann/openclaw/pull/1359",
+            "headSha": "0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4",
+            "baseBranch": "main",
+            "testedBaseSha": "913e507427f19c224f43ea570189ae7a63af6f48",
+            "diffFingerprint": "sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643",
+            "changedPaths": [
+              ".agents/skills/codex-worktree-adoption/SKILL.md",
+              "docs/agent-guides/workflow.md",
+              "scripts/adopt-codex-worktree.sh",
+              "test/adopt-codex-worktree-owner.test.ts"
+            ]
+          },
+          "testerReceipt": {
+            "status": "PASS",
+            "headSha": "0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4",
+            "diffFingerprint": "sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643",
+            "closure": "terminal-receipt",
+            "contractId": "38bf4898-aae1-4d57-a108-6d5ee2d88e04",
+            "owner": {
+              "threadId": "/root/pr1359_tester",
+              "hostId": "nested-agent-local"
+            }
+          },
+          "reviewReceipt": {
+            "schemaVersion": 1,
+            "role": "code-reviewer",
+            "status": "PASS",
+            "owner": {
+              "threadId": "/root/pr1359_reviewer",
+              "hostId": "nested-agent-local"
+            },
+            "headSha": "0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4",
+            "diffFingerprint": "sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643",
+            "unresolvedFindings": []
+          },
+          "discoveredBlockers": [
+            {
+              "kind": "checks-pending",
+              "details": "PR #1359 remains blocked on exact head 0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4: CI run 31246641010 still has required test shard checks (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test) IN_PROGRESS after bounded watch. GitHub reports mergeStateStatus=BLOCKED; actionlint is passing, no PR comments or GitHub review records are present, head/base and raw patch diff sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643 match the immutable packet. Normal merge forbidden until relevant CI completes successfully and a fresh lease independently rechecks.",
+              "observedAt": "2026-08-08T07:48:22.070Z"
+            }
+          ],
+          "replacedAt": "2026-08-08T07:58:24.852Z"
+        }
+      ],
       "terminalReceipts": [],
       "ownershipReceipt": {
         "mode": "queue-lease",
@@ -717,10 +759,10 @@
     }
   },
   "lastTransaction": {
-    "id": "D599B5E9-B480-4267-9B9E-EF392BDB57CC",
-    "recordedAt": "2026-08-08T07:48:22.070Z"
+    "id": "d5bcbe19-9773-43af-ab80-ef1d6b1d3d58",
+    "recordedAt": "2026-08-08T07:58:24.852Z"
   },
-  "updatedAt": "2026-08-08T07:48:22.070Z",
+  "updatedAt": "2026-08-08T07:58:24.852Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
