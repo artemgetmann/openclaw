@@ -407,10 +407,18 @@ async def run_fake_topic_read(
 
 
 class FakeSendClient:
-  def __init__(self) -> None:
+  def __init__(self, topic = None) -> None:
     self.disconnected = False
+    self.requests: list[object] = []
     self.send_file_calls: list[dict[str, object]] = []
     self.send_message_calls: list[dict[str, object]] = []
+    self.topic = topic
+
+  async def __call__(self, request):
+    self.requests.append(request)
+    if isinstance(request, FakeGetForumTopicsByIDRequest):
+      return SimpleNamespace(topics = [self.topic] if self.topic is not None else [])
+    raise AssertionError(f"unexpected request {type(request).__name__}")
 
   async def disconnect(self) -> None:
     self.disconnected = True
@@ -1495,6 +1503,47 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual([type(request) for request in fake_client.requests], [FakeGetForumTopicsByIDRequest])
     self.assertEqual(fake_client.get_messages_calls, [])
 
+  async def test_run_topic_list_returns_server_search_candidates_without_selecting_one(self) -> None:
+    topics = [
+      SimpleNamespace(
+        closed = False,
+        hidden = False,
+        id = 5335,
+        title = "Jarvis Outreach",
+        top_message = 5335,
+      )
+    ]
+    fake_client = FakeTopicReadClient(replies = [], root = None, topics = topics)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_topic_list(
+          argparse.Namespace(
+            chat = "-1003783709877",
+            limit = 20,
+            query = "outreach",
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(emitted["query"], "outreach")
+    self.assertEqual(emitted["topics"][0]["topic_anchor"], 5335)
+    request = fake_client.requests[0]
+    self.assertEqual(request.q, "outreach")
+    self.assertEqual(request.limit, 20)
+
   async def test_run_topic_resolve_finds_one_exact_title_across_short_pages(self) -> None:
     first_page_date = datetime(2026, 7, 27, 10, 0, tzinfo = timezone.utc)
     topic_pages = [
@@ -2329,6 +2378,87 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertIsNone(fake_client.send_message_calls[0]["reply_to"])
     self.assertEqual(emitted["message"]["media_kind"], None)
 
+  async def test_run_send_rejects_topic_title_mismatch_before_mutation(self) -> None:
+    fake_client = FakeSendClient(
+      topic = SimpleNamespace(id = 28340, title = "Pavel Alberto investment discussion")
+    )
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_send(
+          argparse.Namespace(
+            caption = None,
+            chat = "-1003783709877",
+            media = None,
+            message = "handoff",
+            reply_to = 0,
+            session = str(session_path),
+            topic_anchor = 28340,
+            topic_title = "Jarvis Outreach",
+            voice = False,
+          )
+        )
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(emitted["error"]["code"], "E_TOPIC_TITLE_MISMATCH")
+    self.assertEqual(fake_client.send_message_calls, [])
+    self.assertEqual(fake_client.send_file_calls, [])
+    self.assertTrue(fake_client.disconnected)
+
+  async def test_run_send_requires_exact_topic_title_case_before_mutation(self) -> None:
+    fake_client = FakeSendClient(topic = SimpleNamespace(id = 5335, title = "Jarvis Outreach"))
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(telethon_cli, "emit", side_effect = lambda payload, **_: emitted.update(payload) or 0),
+      ):
+        exit_code = await telethon_cli.run_send(argparse.Namespace(
+          caption = None, chat = "-1003783709877", media = None, message = "handoff",
+          reply_to = 0, session = str(session_path), topic_anchor = 5335,
+          topic_title = "jarvis outreach", voice = False,
+        ))
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(emitted["error"]["code"], "E_TOPIC_TITLE_MISMATCH")
+    self.assertEqual(fake_client.send_message_calls, [])
+
+  async def test_run_send_rejects_invalid_topic_anchors_before_connection(self) -> None:
+    for topic_anchor in (0, -1, 1.5, "1.5"):
+      with self.subTest(topic_anchor = topic_anchor):
+        emitted: dict[str, object] = {}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+          session_path = Path(temp_dir) / "userbot.session"
+          session_path.touch()
+          with (
+            patch.object(telethon_cli, "connect_client", side_effect = AssertionError("must not connect")),
+            patch.object(telethon_cli, "emit", side_effect = lambda payload, **_: emitted.update(payload) or 0),
+          ):
+            exit_code = await telethon_cli.run_send(argparse.Namespace(
+              caption = None, chat = "-1003783709877", media = None, message = "handoff",
+              reply_to = 0, session = str(session_path), topic_anchor = topic_anchor,
+              topic_title = "Jarvis Outreach", voice = False,
+            ))
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(emitted["error"]["code"], "E_USAGE")
+
   async def test_run_topic_create_returns_stable_topic_anchor_payload(self) -> None:
     fake_client = FakeTopicClient()
     emitted: dict[str, object] = {}
@@ -2692,6 +2822,16 @@ class TelethonCliSyncTests(unittest.TestCase):
     self.assertEqual(topic_resolve_args.command, "topic-resolve")
     self.assertEqual(topic_resolve_args.title, "Gmail Keychain Auth RCA")
 
+    topic_list_args = parser.parse_args([
+      "topic-list",
+      "--chat",
+      "-1003783709877",
+      "--query",
+      "outreach",
+    ])
+    self.assertEqual(topic_list_args.command, "topic-list")
+    self.assertEqual(topic_list_args.query, "outreach")
+
     topic_read_args = parser.parse_args([
       "read",
       "--chat",
@@ -2711,10 +2851,16 @@ class TelethonCliSyncTests(unittest.TestCase):
       "--caption",
       "voice proof",
       "--voice",
+      "--topic-anchor",
+      "5335",
+      "--topic-title",
+      "Jarvis Outreach",
     ])
     self.assertEqual(send_args.command, "send")
     self.assertEqual(send_args.media, "/tmp/proof.ogg")
     self.assertEqual(send_args.caption, "voice proof")
+    self.assertEqual(send_args.topic_anchor, 5335)
+    self.assertEqual(send_args.topic_title, "Jarvis Outreach")
     self.assertTrue(send_args.voice)
 
     download_args = parser.parse_args([

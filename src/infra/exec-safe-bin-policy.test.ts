@@ -230,6 +230,20 @@ describe("exec safe bin policy product-owned cli defaults", () => {
     ).toBe(true);
     expect(
       validateSafeBinArgv(
+        [
+          "telegram-user",
+          "topic-list",
+          "--chat",
+          "-1003783709877",
+          "--query",
+          "outreach",
+          "--json",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
         ["telegram-user", "mark-read", "--chat", "@jarvis_tester_1_bot", "--json"],
         openclawProfile,
       ),

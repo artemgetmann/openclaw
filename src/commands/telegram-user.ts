@@ -19,6 +19,7 @@ import {
   runTelegramUserStatus,
   runTelegramUserTopicCreate,
   runTelegramUserTopicDelete,
+  runTelegramUserTopicList,
   runTelegramUserTopicResolve,
   sleep,
 } from "../telegram-user/backend.js";
@@ -46,6 +47,7 @@ import type {
   TelegramUserSendResult,
   TelegramUserTopicCreateResult,
   TelegramUserTopicDeleteResult,
+  TelegramUserTopicListResult,
   TelegramUserTopicResolveResult,
   TelegramUserWaitParams,
   TelegramUserWaitResult,
@@ -126,18 +128,40 @@ function readRequiredNumberOpt(
   return value;
 }
 
-function resolveSendReplyTo(opts: Record<string, unknown>): number | undefined {
+function resolveSendTarget(opts: Record<string, unknown>): {
+  replyTo?: number;
+  topicAnchor?: number;
+  topicTitle?: string;
+} {
   const replyTo = readRequiredNumberOpt(opts, "replyTo", "--reply-to");
   const topicAnchor =
     readRequiredNumberOpt(opts, "topicAnchor", "--topic-anchor") ??
     readRequiredNumberOpt(opts, "topicId", "--topic-id");
+  if (topicAnchor !== undefined && (!Number.isInteger(topicAnchor) || topicAnchor <= 0)) {
+    throw new Error("Telegram user send requires --topic-anchor to be a positive integer.");
+  }
   if (replyTo !== undefined && topicAnchor !== undefined && replyTo !== topicAnchor) {
     throw new Error("Telegram user send cannot combine --reply-to with a different topic anchor.");
   }
-  // Telegram forum topics are addressed by replying to the topic anchor
-  // service message. Expose topic vocabulary at the CLI while keeping the
-  // transport path identical to the proven reply-to behavior.
-  return replyTo ?? topicAnchor;
+  const topicTitle = readStringOpt(opts, "topicTitle");
+  const rawTopicTitle = opts.topicTitle;
+  // A title is an assertion, not a search query. Reject invisible normalization
+  // at the CLI boundary so the backend compares the caller's exact title.
+  if (typeof rawTopicTitle === "string" && rawTopicTitle !== rawTopicTitle.trim()) {
+    throw new Error("Telegram user send requires --topic-title without surrounding whitespace.");
+  }
+  // A numeric topic id is not durable identity: titles and ids can be confused
+  // across agent handoffs. Force callers onto a title+anchor pair so the
+  // backend can revalidate both under the same session lock as the send.
+  if (topicAnchor !== undefined && !topicTitle) {
+    throw new Error(
+      "Telegram user send requires --topic-title with --topic-anchor so Telegram can validate the destination before sending.",
+    );
+  }
+  if (topicTitle && topicAnchor === undefined) {
+    throw new Error("Telegram user send requires --topic-anchor with --topic-title.");
+  }
+  return { replyTo, topicAnchor, topicTitle };
 }
 
 function resolveBackendOptions(opts: Record<string, unknown>): TelegramUserBackendOptions {
@@ -725,6 +749,18 @@ function logTopicResolveText(runtime: RuntimeEnv, result: TelegramUserTopicResol
   runtime.log(formatBackendMeta(result.backend_meta));
 }
 
+function logTopicListText(runtime: RuntimeEnv, result: TelegramUserTopicListResult) {
+  runtime.log(
+    `Telegram user topic-list completed. chat=${result.chat} topics=${result.topics.length} query=${JSON.stringify(result.query)}`,
+  );
+  runtime.log(formatBackendMeta(result.backend_meta));
+  for (const topic of result.topics) {
+    runtime.log(
+      `topic_anchor=${topic.topic_anchor} topic_title=${JSON.stringify(topic.topic_title)} closed=${topic.closed} hidden=${topic.hidden}`,
+    );
+  }
+}
+
 function logReadText(runtime: RuntimeEnv, result: TelegramUserReadResult) {
   runtime.log(
     `Telegram user read completed. messages=${result.messages.length} ${formatBackendMeta(result.backend_meta)}`,
@@ -1026,13 +1062,14 @@ export async function telegramUserSendCommand(opts: Record<string, unknown>, run
   // useful as a caption alias so existing smoke snippets can grow a media flag
   // without changing their wording option.
   const mediaCaption = media ? (caption ?? message) : undefined;
+  const target = resolveSendTarget(opts);
   const result = await runTelegramUserSend({
     ...resolveBackendOptions(opts),
     caption: mediaCaption,
     chat,
     media,
     message: media ? undefined : message,
-    replyTo: resolveSendReplyTo(opts),
+    ...target,
     voice: readBooleanOpt(opts, "voice") || readBooleanOpt(opts, "audioAsVoice"),
   });
   if (readBooleanOpt(opts, "json")) {
@@ -1040,6 +1077,27 @@ export async function telegramUserSendCommand(opts: Record<string, unknown>, run
     return;
   }
   logSendText(runtime, result);
+}
+
+export async function telegramUserTopicListCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const chat = readStringOpt(opts, "chat");
+  if (!chat) {
+    throw new Error("Telegram user topic-list requires --chat.");
+  }
+  const result = await runTelegramUserTopicList({
+    ...resolveBackendOptions(opts),
+    chat,
+    limit: readNumberOpt(opts, "limit") ?? 50,
+    query: readStringOpt(opts, "query"),
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logTopicListText(runtime, result);
 }
 
 export async function telegramUserButtonClickCommand(

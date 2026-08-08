@@ -20,6 +20,7 @@ const backendMocks = vi.hoisted(() => ({
   runTelegramUserStatus: vi.fn(),
   runTelegramUserTopicCreate: vi.fn(),
   runTelegramUserTopicDelete: vi.fn(),
+  runTelegramUserTopicList: vi.fn(),
   runTelegramUserTopicResolve: vi.fn(),
   sleep: vi.fn(async () => {}),
 }));
@@ -67,6 +68,7 @@ const {
   telegramUserStatusCommand,
   telegramUserTopicCreateCommand,
   telegramUserTopicDeleteCommand,
+  telegramUserTopicListCommand,
   telegramUserTopicResolveCommand,
   telegramUserWaitCommand,
 } = await import("./telegram-user.js");
@@ -498,6 +500,8 @@ describe("telegram-user commands", () => {
       session: undefined,
       voice: false,
       replyTo: undefined,
+      topicAnchor: undefined,
+      topicTitle: undefined,
     });
   });
 
@@ -542,6 +546,8 @@ describe("telegram-user commands", () => {
       session: undefined,
       voice: true,
       replyTo: 120,
+      topicAnchor: undefined,
+      topicTitle: undefined,
     });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("message_id=125"));
   });
@@ -572,6 +578,7 @@ describe("telegram-user commands", () => {
         chat: "-1003783709877",
         message: "seed prompt",
         topicAnchor: "18327",
+        topicTitle: "Jarvis Warm Discovery Calls",
       },
       runtime,
     );
@@ -580,9 +587,21 @@ describe("telegram-user commands", () => {
       expect.objectContaining({
         chat: "-1003783709877",
         message: "seed prompt",
-        replyTo: 18327,
+        replyTo: undefined,
+        topicAnchor: 18327,
+        topicTitle: "Jarvis Warm Discovery Calls",
       }),
     );
+  });
+
+  it("rejects an unlabelled topic anchor before calling the backend", async () => {
+    await expect(
+      telegramUserSendCommand(
+        { chat: "-1003783709877", message: "seed prompt", topicAnchor: "28340" },
+        runtime,
+      ),
+    ).rejects.toThrow(/requires --topic-title with --topic-anchor/i);
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
   });
 
   it("rejects conflicting reply and topic targets", async () => {
@@ -610,6 +629,39 @@ describe("telegram-user commands", () => {
         runtime,
       ),
     ).rejects.toThrow(/requires --topic-anchor to be a numeric message\/topic id/i);
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "-1", "1.5"])(
+    "rejects non-positive or fractional topic anchor %s",
+    async (anchor) => {
+      await expect(
+        telegramUserSendCommand(
+          {
+            chat: "-1003783709877",
+            message: "seed prompt",
+            topicAnchor: anchor,
+            topicTitle: "Jarvis Outreach",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(/topic-anchor to be a positive integer/i);
+      expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects surrounding whitespace in an asserted topic title", async () => {
+    await expect(
+      telegramUserSendCommand(
+        {
+          chat: "-1003783709877",
+          message: "seed prompt",
+          topicAnchor: "5335",
+          topicTitle: " Jarvis Outreach ",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/topic-title without surrounding whitespace/i);
     expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
   });
 
@@ -743,6 +795,36 @@ describe("telegram-user commands", () => {
       title: "Gmail Keychain Auth RCA",
     });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"topic_anchor": 15250'));
+  });
+
+  it("lists authoritative topic candidates for approximate user wording", async () => {
+    backendMocks.runTelegramUserTopicList.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: "-1003783709877",
+      query: "outreach",
+      topics: [
+        {
+          closed: false,
+          hidden: false,
+          topic_anchor: 5335,
+          topic_title: "Jarvis Outreach",
+        },
+      ],
+    });
+
+    await telegramUserTopicListCommand(
+      { chat: "-1003783709877", json: true, query: "outreach" },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserTopicList).toHaveBeenCalledWith({
+      chat: "-1003783709877",
+      envFile: undefined,
+      limit: 50,
+      query: "outreach",
+      session: undefined,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"topic_anchor": 5335'));
   });
 
   it("renders recent messages as a table", async () => {

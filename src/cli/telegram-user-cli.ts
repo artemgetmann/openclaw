@@ -55,8 +55,8 @@ export function registerTelegramUserCli(program: Command) {
             "Send as the Telegram user account.",
           ],
           [
-            'openclaw telegram-user send --chat -1003783709877 --topic-anchor 15250 --message "hello topic" --json',
-            "Send into a forum topic by using the topic anchor returned by topic-create.",
+            'openclaw telegram-user send --chat -1003783709877 --topic-anchor 15250 --topic-title "voice proof" --message "hello topic" --json',
+            "Send into a forum topic after validating its human-readable title and numeric anchor together.",
           ],
           [
             'openclaw telegram-user topic-create --chat -1003783709877 --title "voice proof" --json',
@@ -69,6 +69,10 @@ export function registerTelegramUserCli(program: Command) {
           [
             'openclaw telegram-user topic-resolve --chat -1003783709877 --title "Gmail Keychain Auth RCA" --json',
             "Resolve one exact forum-topic title to its authoritative topic anchor.",
+          ],
+          [
+            'openclaw telegram-user topic-list --chat -1003783709877 --query "gmail keychain" --json',
+            "List authoritative topic candidates when the user's wording is approximate.",
           ],
           [
             "openclaw telegram-user read --chat -1003783709877 --topic-anchor 15250 --limit 20 --format compact",
@@ -240,12 +244,27 @@ export function registerTelegramUserCli(program: Command) {
     .option("--reply-to <id>", "Reply to this message id")
     .option("--topic-anchor <id>", "Forum topic anchor returned by topic-create")
     .option("--topic-id <id>", "Alias for --topic-anchor")
+    .option("--topic-title <title>", "Expected forum topic title; required with --topic-anchor")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {
         const { telegramUserSendCommand } = await import("../commands/telegram-user.js");
         await telegramUserSendCommand(opts, defaultRuntime);
       });
     });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("topic-list")
+      .description("List or search authoritative Telegram forum topics")
+      .requiredOption("--chat <target>", "Target forum chat username or id")
+      .option("--query <text>", "Optional Telegram topic search text")
+      .option("--limit <n>", "Maximum topics to return", "50"),
+  ).action(async (opts) => {
+    await runTelegramUserCommand(async () => {
+      const { telegramUserTopicListCommand } = await import("../commands/telegram-user.js");
+      await telegramUserTopicListCommand(opts, defaultRuntime);
+    });
+  });
 
   withTelegramUserBase(
     telegramUser

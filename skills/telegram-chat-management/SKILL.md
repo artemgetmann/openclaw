@@ -59,8 +59,11 @@ Keep internal run ids, token counts, and system metadata out of Telegram.
    - Existing topic with a known anchor: use the exact chat id and anchor.
    - Existing topic named only by title: resolve it authoritatively with
      `openclaw telegram-user topic-resolve --chat <chat> --title "<exact title>" --json`.
-     If the installed runtime lacks that command, stop and ask for the anchor;
-     never infer one from group-wide history or nearby reply metadata.
+     If the user's wording is approximate, first run
+     `openclaw telegram-user topic-list --chat <chat> --query "<keywords>" --json`,
+     reason over the returned titles, then resolve the chosen exact title. If
+     the installed runtime lacks these commands, stop and ask for the exact
+     title/anchor; never infer one from group-wide history or reply metadata.
    - New topic: get the chat id and a short topic title.
 2. For non-trivial handoffs, save the plan in the relevant project directory
    first, then reference the path in the Telegram message.
@@ -73,7 +76,7 @@ openclaw telegram-user topic-create --chat -1003783709877 --title "launch follow
 4. Send the handoff into the topic as the user:
 
 ```bash
-openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message "Jarvis, continue this workstream from docs/plans/launch-follow-up.md. Reply in this topic with the next 3 actions. Do not post publicly or DM anyone without approval." --json
+openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --topic-title "launch follow-up" --message "Jarvis, continue this workstream from docs/plans/launch-follow-up.md. Reply in this topic with the next 3 actions. Do not post publicly or DM anyone without approval." --json
 ```
 
 Give a one-shot installed command at least 360 seconds at the outer shell/exec
@@ -97,6 +100,9 @@ before retrying so the handoff cannot be duplicated.
 - Use the installed CLI first: `openclaw telegram-user ...`.
 - Confirm the target chat/topic before write actions when the user did not name
   it exactly.
+- Never use raw `--reply-to` for a named forum topic. Send with the authoritative
+  `--topic-anchor` and exact `--topic-title` pair so the backend can fail closed
+  if the numeric anchor points at a sibling topic.
 - Do not replace a user-style handoff with a bot summary. That creates the
   topic but fails to trigger the bot/agent in the user's voice.
 - Do not claim a topic-bound agent exists unless the runtime/tool actually

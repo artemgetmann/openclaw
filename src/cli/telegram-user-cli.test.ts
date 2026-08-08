@@ -80,6 +80,7 @@ describe("telegram-user cli", () => {
     expect(help).toContain("openclaw telegram-user send --chat -1003783709877 --topic-anchor");
     expect(help).toContain("openclaw telegram-user topic-delete --chat -1003783709877");
     expect(help).toContain("openclaw telegram-user topic-resolve --chat -1003783709877");
+    expect(help).toContain("topic-list");
     expect(help).toContain("read --chat -1003783709877 --topic-anchor 15250");
     expect(help).toContain(
       "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof",
