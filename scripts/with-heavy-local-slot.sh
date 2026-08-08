@@ -11,8 +11,6 @@ RUNNER="$ROOT_DIR/scripts/lib/heavy-local-slot-runner.pl"
 # must never weaken admission or stretch monitoring beyond the documented
 # protection window.
 readonly MIN_MEMORY_FREE_PERCENT=25
-readonly MIN_RUNTIME_SWAP_FREE_KIB=$((512 * 1024))
-readonly MAX_RUNTIME_SWAPOUT_GROWTH_PAGES=4096
 readonly PREFLIGHT_MIN_CPU_IDLE_PERCENT=35
 readonly RUNTIME_MIN_CPU_IDLE_PERCENT=20
 readonly MIN_DISK_FREE_KIB=$((25 * 1024 * 1024))
@@ -131,6 +129,7 @@ task_disk_before_kib=''
 dedicated_jarvis_baseline_pid=''
 runtime_baseline_swapouts_total=''
 runtime_previous_swapouts_file=''
+runtime_previous_pageouts_file=''
 
 # Map stable refusal codes to machine-readable recovery conditions. These are
 # intentionally actions, not shell commands: callers can wake on recovery
@@ -140,7 +139,7 @@ refusal_next_action() {
     memory_pressure | memory_pressure_state)
       printf '%s' 'wait_for_memory_pressure_normal'
       ;;
-    swap_free_floor | swapout_growth)
+    active_paging_growth)
       printf '%s' 'wait_for_paging_pressure_recovery'
       ;;
     memory_measurement_failed | memory_state_measurement_failed | paging_measurement_failed)
@@ -637,9 +636,11 @@ dedicated_resource_health_reason() {
   local pressure_level="" pressure_state=""
   local swap_line="" swap_used_kib="" swap_free_kib=""
   local vm_stat_output="" pageouts_total="" swapouts_total=""
+  local confirmation_vm_stat_output="" confirmation_pageouts_total="" confirmation_swapouts_total=""
   local thermal_output="" thermal_status=0 thermal_state=""
   local runtime_swapout_growth_pages=0 runtime_swapout_interval_pages=0
-  local runtime_previous_swapouts_total=''
+  local runtime_pageout_interval_pages=0
+  local runtime_previous_pageouts_total='' runtime_previous_swapouts_total=''
 
   # The kernel memory-pressure level is a platform decision, not a guessed
   # percentage. Its values match the public dispatch memory-pressure states:
@@ -764,20 +765,64 @@ dedicated_resource_health_reason() {
   # function through command substitution, so the slot-owned state file is the
   # durable handoff between subshell samples.
   if [ "$sample_phase" = "runtime" ]; then
+    runtime_previous_pageouts_total="$(
+      /bin/cat "$runtime_previous_pageouts_file" 2>/dev/null || true
+    )"
     runtime_previous_swapouts_total="$(
       /bin/cat "$runtime_previous_swapouts_file" 2>/dev/null || true
     )"
-    if [[ ! "$runtime_previous_swapouts_total" =~ ^[0-9]+$ ||
+    if [[ ! "$runtime_previous_pageouts_total" =~ ^[0-9]+$ ||
+      ! "$runtime_previous_swapouts_total" =~ ^[0-9]+$ ||
+      "$pageouts_total" -lt "$runtime_previous_pageouts_total" ||
       "$swapouts_total" -lt "$runtime_previous_swapouts_total" ]]; then
       printf '%s' \
-        'guard_internal|paging_baseline_unavailable|runtime swapout interval baseline is unavailable|metric=runtime_swapout_interval status=unavailable'
+        'guard_internal|paging_baseline_unavailable|runtime paging interval baseline is unavailable|metric=runtime_paging_interval status=unavailable'
       return 0
     fi
+    runtime_pageout_interval_pages=$((pageouts_total - runtime_previous_pageouts_total))
     runtime_swapout_interval_pages=$((swapouts_total - runtime_previous_swapouts_total))
+    printf '%s\n' "$pageouts_total" >"$runtime_previous_pageouts_file"
     printf '%s\n' "$swapouts_total" >"$runtime_previous_swapouts_file"
   fi
 
-  printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s elapsed_seconds=%s memory_pressure=%s memory_pressure_level=%s swap_used_kib=%s swap_free_kib=%s pageouts_total=%s swapouts_total=%s runtime_swapout_growth_pages=%s runtime_swapout_interval_pages=%s paging_status=observed paging_enforcement=runtime_warn_bounded thermal_state=%s next_action=observe_pageout_swapout_trend\n' \
+  # A yellow admission is provisional, not fatal. Confirm that the kernel's
+  # cumulative paging counters are not both advancing before starting work.
+  # This one-second sample is intentionally local to yellow admission: normal
+  # admission remains immediate, while red pressure still refuses outright.
+  if [ "$pressure_state" = "warn" ] && [ "$sample_phase" != "runtime" ]; then
+    /bin/sleep 1
+    confirmation_vm_stat_output="$(/usr/bin/vm_stat 2>/dev/null || true)"
+    confirmation_pageouts_total="$(
+      printf '%s\n' "$confirmation_vm_stat_output" |
+        /usr/bin/awk -F': ' '/^Pageouts:/ {
+          gsub(/[.[:space:]]/, "", $2)
+          if ($2 ~ /^[0-9]+$/) print $2
+          exit
+        }'
+    )"
+    confirmation_swapouts_total="$(
+      printf '%s\n' "$confirmation_vm_stat_output" |
+        /usr/bin/awk -F': ' '/^Swapouts:/ {
+          gsub(/[.[:space:]]/, "", $2)
+          if ($2 ~ /^[0-9]+$/) print $2
+          exit
+        }'
+    )"
+    if [[ ! "$confirmation_pageouts_total" =~ ^[0-9]+$ ||
+      ! "$confirmation_swapouts_total" =~ ^[0-9]+$ ||
+      "$confirmation_pageouts_total" -lt "$pageouts_total" ||
+      "$confirmation_swapouts_total" -lt "$swapouts_total" ]]; then
+      printf '%s' \
+        'guard_internal|paging_confirmation_unavailable|yellow-pressure paging confirmation is unavailable|metric=admission_paging_interval status=unavailable'
+      return 0
+    fi
+    runtime_pageout_interval_pages=$((confirmation_pageouts_total - pageouts_total))
+    runtime_swapout_interval_pages=$((confirmation_swapouts_total - swapouts_total))
+    pageouts_total="$confirmation_pageouts_total"
+    swapouts_total="$confirmation_swapouts_total"
+  fi
+
+  printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s elapsed_seconds=%s memory_pressure=%s memory_pressure_level=%s swap_used_kib=%s swap_free_kib=%s pageouts_total=%s swapouts_total=%s runtime_swapout_growth_pages=%s runtime_pageout_interval_pages=%s runtime_swapout_interval_pages=%s paging_status=observed paging_enforcement=warn_active_paging_two_strike thermal_state=%s next_action=observe_pageout_swapout_trend\n' \
     "$sample_phase" \
     "$SECONDS" \
     "$pressure_state" \
@@ -787,43 +832,26 @@ dedicated_resource_health_reason() {
     "$pageouts_total" \
     "$swapouts_total" \
     "$runtime_swapout_growth_pages" \
+    "$runtime_pageout_interval_pages" \
     "$runtime_swapout_interval_pages" \
     "$thermal_state" >&2
 
-  # Admission remains conservative: a job starts only from the kernel's normal
-  # state. At runtime, critical pressure is always unhealthy. A warn state is
-  # bounded by the two signals that distinguished the measured safe and unsafe
-  # workloads: remaining swap capacity and fresh swapout growth in this sample
-  # interval. Cumulative transaction growth remains telemetry for attribution.
-  # File-backed pageouts alone are not anonymous-memory exhaustion.
-  if [ "$pressure_state" = "critical" ] ||
-    { [ "$pressure_state" = "warn" ] && [ "$sample_phase" != "runtime" ]; }; then
+  # Critical pressure is always unhealthy. Yellow pressure is provisional: it
+  # becomes an unhealthy sample only while both pageouts and swapouts advance.
+  # Either counter alone remains telemetry because file-backed pageouts and
+  # retained historical swap are not proof of anonymous-memory exhaustion.
+  if [ "$pressure_state" = "critical" ]; then
     printf 'host_unhealthy|memory_pressure_state|macOS memory pressure is %s|metric=memory_pressure_state observed=%s expected=normal' \
       "$pressure_state" \
       "$pressure_state"
     return 0
   fi
   if [ "$pressure_state" = "warn" ]; then
-    if [ "$swap_free_kib" -lt "$MIN_RUNTIME_SWAP_FREE_KIB" ]; then
-      printf 'host_unhealthy|swap_free_floor|swap availability is %s KiB (minimum %s KiB)|metric=swap_free_kib observed=%s threshold=%s unit=KiB' \
-        "$swap_free_kib" \
-        "$MIN_RUNTIME_SWAP_FREE_KIB" \
-        "$swap_free_kib" \
-        "$MIN_RUNTIME_SWAP_FREE_KIB"
-      return 0
-    fi
-    if [[ ! "$runtime_previous_swapouts_total" =~ ^[0-9]+$ ||
-      "$swapouts_total" -lt "$runtime_previous_swapouts_total" ]]; then
-      printf '%s' \
-        'guard_internal|paging_baseline_unavailable|runtime swapout interval baseline is unavailable|metric=runtime_swapout_interval status=unavailable'
-      return 0
-    fi
-    if [ "$runtime_swapout_interval_pages" -gt "$MAX_RUNTIME_SWAPOUT_GROWTH_PAGES" ]; then
-      printf 'host_unhealthy|swapout_growth|runtime swapouts grew by %s pages in one sample interval (maximum %s pages)|metric=runtime_swapout_interval_pages observed=%s threshold=%s unit=pages' \
-        "$runtime_swapout_interval_pages" \
-        "$MAX_RUNTIME_SWAPOUT_GROWTH_PAGES" \
-        "$runtime_swapout_interval_pages" \
-        "$MAX_RUNTIME_SWAPOUT_GROWTH_PAGES"
+    if [ "$runtime_pageout_interval_pages" -gt 0 ] &&
+      [ "$runtime_swapout_interval_pages" -gt 0 ]; then
+      printf 'host_unhealthy|active_paging_growth|yellow memory pressure has active pageout and swapout growth|metric=active_paging_growth pageouts_delta=%s swapouts_delta=%s threshold=stable unit=pages' \
+        "$runtime_pageout_interval_pages" \
+        "$runtime_swapout_interval_pages"
       return 0
     fi
   fi
@@ -1256,6 +1284,23 @@ if [ "$(uname -s)" = "Darwin" ]; then
     exit 75
   fi
   runtime_previous_swapouts_file="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/runtime_previous_swapouts_total"
+  runtime_previous_pageouts_file="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/runtime_previous_pageouts_total"
+  runtime_baseline_pageouts_total="$(
+    /usr/bin/vm_stat 2>/dev/null |
+      /usr/bin/awk -F': ' '/^Pageouts:/ {
+        gsub(/[.[:space:]]/, "", $2)
+        if ($2 ~ /^[0-9]+$/) print $2
+        exit
+      }'
+  )"
+  if [[ ! "$runtime_baseline_pageouts_total" =~ ^[0-9]+$ ]]; then
+    emit_refusal \
+      "guard_internal" \
+      "paging_baseline_unavailable" \
+      "could not establish the runtime pageout baseline"
+    exit 75
+  fi
+  printf '%s\n' "$runtime_baseline_pageouts_total" >"$runtime_previous_pageouts_file"
   printf '%s\n' "$runtime_baseline_swapouts_total" >"$runtime_previous_swapouts_file"
 fi
 
