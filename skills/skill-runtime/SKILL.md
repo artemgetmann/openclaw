@@ -33,6 +33,9 @@ version to force migration. Roll back only with the exact emitted receipt:
 openclaw skills runtime rollback <receipt-path>
 ```
 
+Rollback restores the legacy loader and preserves migrated copies in the
+receipt's recovery directory; do not delete that recovery copy implicitly.
+
 For one bounded Codex benchmark, inject a canonical skill into the child process
 without changing persistent visibility:
 

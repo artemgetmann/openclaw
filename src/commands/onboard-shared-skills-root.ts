@@ -32,6 +32,7 @@ export type SharedSkillsRootReceipt = {
   sharedSkillsDir: string;
   managedSkillsDir: string;
   backupDir?: string;
+  rollbackPreservedDir?: string;
   introducedSkills: Array<{ name: string; hash: string }>;
   inventory: PersonalSkillInventoryEntry[];
   unknownEntries: string[];
@@ -44,6 +45,7 @@ export type SharedSkillsRootResult = {
   managedSkillsDir: string;
   receiptPath?: string;
   backupDir?: string;
+  rollbackPreservedDir?: string;
   inventory: PersonalSkillInventoryEntry[];
   unknownEntries: string[];
   message?: string;
@@ -149,6 +151,7 @@ function resultFromReceipt(
     managedSkillsDir: receipt.managedSkillsDir,
     receiptPath,
     backupDir: receipt.backupDir,
+    rollbackPreservedDir: receipt.rollbackPreservedDir,
     inventory: receipt.inventory,
     unknownEntries: receipt.unknownEntries,
     message: receipt.message,
@@ -168,12 +171,11 @@ function inventoryManagedRoot(params: {
 
   for (const entry of entries) {
     const sourceSkillDir = path.join(params.managedSkillsDir, entry.name);
-    if (
-      (!entry.isDirectory() && !entry.isSymbolicLink()) ||
-      !params.fs.existsSync(path.join(sourceSkillDir, "SKILL.md"))
-    ) {
+    if (!entry.isDirectory() || !params.fs.existsSync(path.join(sourceSkillDir, "SKILL.md"))) {
       // Replacing the whole managed root would hide unknown user content. Keep
       // the legacy loader active until the user moves or removes it explicitly.
+      // Top-level symlink skills are never materialized: doing so could turn a
+      // loader-rejected external path into an active canonical skill.
       unknownEntries.push(entry.name);
       continue;
     }
@@ -414,12 +416,18 @@ export function ensureSharedPersonalSkillsManagedRoot(
       introducedSkills.push({ name: entry.name, hash: entry.sourceHash });
     }
 
+    // Persist the exact introduced set before moving the legacy root. A hard
+    // process exit after the following rename can then be recovered from this
+    // prepared receipt even if the final canonical symlink was never created.
+    receiptPath = writeReceipt({ fs: fsImpl, receiptDir, receipt });
+
     fsImpl.mkdirSync(path.dirname(backupDir), { recursive: true });
     fsImpl.renameSync(managedSkillsDir, backupDir);
     sourceMoved = true;
     params.beforeLink?.();
     fsImpl.symlinkSync(sharedSkillsDir, managedSkillsDir, "dir");
     receipt.status = "migrated";
+    receiptPath = writeReceipt({ fs: fsImpl, receiptDir, receipt });
   } catch (error) {
     // Restore the active legacy root first. Removing copied canonical entries is
     // safe only while their verified bytes still match this transaction.

@@ -61,7 +61,7 @@ function parseReceipt(params: {
   const receipt = value as Partial<SharedSkillsRootReceipt>;
   if (
     receipt.version !== 1 ||
-    receipt.status !== "migrated" ||
+    (receipt.status !== "migrated" && receipt.status !== "prepared") ||
     typeof receipt.transactionId !== "string" ||
     !/^\d{17}-[a-f0-9]{10}$/.test(receipt.transactionId) ||
     typeof receipt.generatedAt !== "string" ||
@@ -69,7 +69,7 @@ function parseReceipt(params: {
     !Array.isArray(receipt.inventory) ||
     !Array.isArray(receipt.unknownEntries)
   ) {
-    throw new Error("receipt does not describe a completed personal skills migration");
+    throw new Error("receipt does not describe a recoverable personal skills migration");
   }
   const expectedBackupDir = path.join(
     params.stateDir,
@@ -117,12 +117,20 @@ export function rollbackSharedPersonalSkillsManagedRoot(
     stateDir,
   });
 
-  if (
-    !fs.existsSync(managedSkillsDir) ||
-    !fs.lstatSync(managedSkillsDir).isSymbolicLink() ||
-    fs.realpathSync(managedSkillsDir) !== fs.realpathSync(sharedSkillsDir)
-  ) {
-    throw new Error("managed skills root no longer matches the migration receipt");
+  let managedRootPresent = false;
+  try {
+    const managedStat = fs.lstatSync(managedSkillsDir);
+    managedRootPresent = true;
+    if (
+      !managedStat.isSymbolicLink() ||
+      fs.realpathSync(managedSkillsDir) !== fs.realpathSync(sharedSkillsDir)
+    ) {
+      throw new Error("managed skills root no longer matches the migration receipt");
+    }
+  } catch (error) {
+    if (managedRootPresent || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
   }
   if (!fs.existsSync(receipt.backupDir!)) {
     throw new Error("migration backup is missing; refusing destructive rollback");
@@ -133,7 +141,9 @@ export function rollbackSharedPersonalSkillsManagedRoot(
     }
   }
 
-  fs.rmSync(managedSkillsDir, { force: true });
+  if (managedRootPresent) {
+    fs.rmSync(managedSkillsDir, { force: true });
+  }
   try {
     fs.renameSync(receipt.backupDir!, managedSkillsDir);
   } catch (error) {
@@ -143,10 +153,25 @@ export function rollbackSharedPersonalSkillsManagedRoot(
     throw new Error(`failed to restore migration backup: ${formatError(error)}`, { cause: error });
   }
 
+  const rollbackPreservedDir = path.join(
+    stateDir,
+    "personal-skills-migration",
+    "rollback-preserved",
+    receipt.transactionId,
+  );
   let cleanupError: unknown;
   for (const introduced of receipt.introducedSkills.toReversed()) {
     try {
-      fs.rmSync(path.join(sharedSkillsDir, introduced.name), { recursive: true, force: true });
+      const canonicalSkillDir = path.join(sharedSkillsDir, introduced.name);
+      if (hashSharedSkillDirectory(canonicalSkillDir) !== introduced.hash) {
+        throw new Error(`canonical skill changed during rollback: ${introduced.name}`);
+      }
+      // Never delete a migrated body during rollback. Rename it atomically out
+      // of the active catalog and retain it beside the receipt. If an editor
+      // races after the hash check, those bytes move into recovery instead of
+      // being lost; the restored legacy root remains the active copy.
+      fs.mkdirSync(rollbackPreservedDir, { recursive: true });
+      fs.renameSync(canonicalSkillDir, path.join(rollbackPreservedDir, introduced.name));
     } catch (error) {
       cleanupError ??= error;
     }
@@ -157,9 +182,10 @@ export function rollbackSharedPersonalSkillsManagedRoot(
     ...receipt,
     generatedAt: new Date().toISOString(),
     status: rollbackStatus,
+    rollbackPreservedDir,
     message: cleanupError
-      ? `Legacy root restored, but copied canonical cleanup failed: ${formatError(cleanupError)}`
-      : "Legacy managed skills root restored from inactive migration backup.",
+      ? `Legacy root restored, but copied canonical quarantine failed: ${formatError(cleanupError)}`
+      : `Legacy managed skills root restored; migrated copies preserved at ${rollbackPreservedDir}.`,
   };
   atomicWriteJson(receiptPath, rolledBack);
   atomicWriteJson(path.join(receiptDir, "latest.json"), rolledBack);
@@ -169,6 +195,7 @@ export function rollbackSharedPersonalSkillsManagedRoot(
     managedSkillsDir,
     receiptPath,
     backupDir: rolledBack.backupDir,
+    rollbackPreservedDir,
     inventory: rolledBack.inventory,
     unknownEntries: rolledBack.unknownEntries,
     message: rolledBack.message,
