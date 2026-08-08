@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 32,
+  "sequence": 33,
   "nextFence": 10,
-  "mergeLease": {
-    "leaseId": "09792718-0e12-4903-abfd-a5e25d4a6ca9",
-    "fence": 9,
-    "owner": {
-      "threadId": "/root/pr1359_release_operator",
-      "hostId": "nested-agent-local"
-    },
-    "claimedPr": 1359,
-    "claimedAt": "2026-08-08T08:07:08.111Z",
-    "heartbeatAt": "2026-08-08T08:07:08.111Z",
-    "expiresAt": "2026-08-08T08:27:08.111Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -502,7 +491,7 @@
       }
     },
     "1359": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1359,
         "url": "https://github.com/artemgetmann/openclaw/pull/1359",
@@ -649,7 +638,30 @@
           "replacedAt": "2026-08-08T07:58:24.852Z"
         }
       ],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1359,
+          "reviewedHeadSha": "23a691adf70dbaeff8cb613ca2953b76a63c34e6",
+          "diffFingerprint": "sha256:dbf479a26a7b4c667d4d2c887170223a15c9d989bb71994659a0f2521fd4e6c7",
+          "mergeSha": "65567894969b8dcb7990fb55318d4328640a523e",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true,
+          "evidence": {
+            "reviewedTreeSha": "314a1b7296a0c0176299ee648e6aa70f1fe02729",
+            "landedTreeSha": "314a1b7296a0c0176299ee648e6aa70f1fe02729",
+            "targetRef": "refs/heads/main",
+            "targetRefSha": "65567894969b8dcb7990fb55318d4328640a523e",
+            "requiredChecks": [
+              "CI / pr-required",
+              "Workflow Sanity / actionlint"
+            ]
+          }
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -845,17 +857,18 @@
     }
   },
   "lastTransaction": {
-    "id": "C014AE8D-7DD5-47A8-A929-D1ACC4915B74",
-    "recordedAt": "2026-08-08T08:07:08.111Z"
+    "id": "8FA4DDB9-7576-4334-A75E-F4289DB258EB",
+    "recordedAt": "2026-08-08T08:08:35.182Z"
   },
-  "updatedAt": "2026-08-08T08:07:08.111Z",
+  "updatedAt": "2026-08-08T08:08:35.182Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
     "successfulPrs": [
       1354,
       1355,
-      1358
+      1358,
+      1359
     ],
     "pausedReason": null,
     "graduatedAt": "2026-08-07T05:46:10.866Z",
