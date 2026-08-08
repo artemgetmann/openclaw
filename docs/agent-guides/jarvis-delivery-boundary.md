@@ -86,9 +86,11 @@ scripts/jarvis-delivery-boundary validate-receipt \
 The PR template is the durable receipt surface. CI validates classification for
 Jarvis-named PRs and direct consumer-app/product paths. `scripts/pr-lifecycle`
 revalidates the same receipt at handoff and requires proven product source plus
-a truthful non-progress completion claim. The validator implementation in
-`scripts/lib/jarvis-delivery-boundary.mjs` is the canonical machine-readable
-policy consumed by both checks.
+a truthful non-progress completion claim. The release packet carries the PR
+title/body claim surface as well as changed paths, so the independent release
+queue can recompute classification and reject an omitted or inflated receipt.
+The validator implementation in `scripts/lib/jarvis-delivery-boundary.mjs` is
+the canonical machine-readable policy consumed by every enforcement point.
 
 Rollback is one source revert: remove the CI job and lifecycle import together,
 then revert the template/instruction pointers. Existing product or runtime state

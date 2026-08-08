@@ -248,6 +248,8 @@ describe("Jarvis delivery boundary", () => {
     "docs/consumer/project-status.md",
     "scripts/consumer-preflight.sh",
     "src/agents/consumer-default-bundled-skills.ts",
+    "scripts/check-consumer-config.sh",
+    "src/agents/default-consumer.ts",
   ])("requires classification for direct consumer product path %s", (changedPath) => {
     expect(
       validateJarvisPullRequest({

@@ -73,6 +73,8 @@ function writePacket(
     dependencies?: Array<{ pr: number; relation: string; reason: string }>;
     actions?: string[];
     jarvisDeliveryBoundary?: unknown;
+    title?: string;
+    prContract?: string;
   } = {},
 ) {
   const headSha = pr.toString(16).padStart(40, "a").slice(-40);
@@ -91,6 +93,10 @@ function writePacket(
         testedBaseSha: baseSha,
         diffFingerprint,
         changedPaths: options.paths ?? [`src/feature-${pr}.ts`],
+        title: options.title ?? `fix(feature): deliver PR ${pr}`,
+        prContract:
+          options.prContract ??
+          "Observable claim + acceptance criteria: the scoped feature behaves as tested.",
         jarvisDeliveryBoundary: options.jarvisDeliveryBoundary,
       },
       builder: {
@@ -211,6 +217,28 @@ describe("scripts/pr-release-queue", () => {
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toContain("release packet is missing Jarvis delivery boundary");
     expect(rejected.stderr).toContain("apps/macos/Sources/Jarvis/App.swift");
+  });
+
+  it("rejects an omitted receipt when only the packet title or claim names Jarvis", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init"]);
+
+    const titlePacket = writePacket(fixture, 17, {
+      paths: ["src/agents/system-prompt.ts"],
+      title: "fix(jarvis): preserve reminder behavior",
+    });
+    const titleRejected = runFailure(fixture, ["enqueue", "--packet", titlePacket]);
+    expect(titleRejected.status).toBe(1);
+    expect(titleRejected.stderr).toContain("PR title names Jarvis");
+
+    const claimPacket = writePacket(fixture, 18, {
+      paths: ["src/agents/system-prompt.ts"],
+      prContract:
+        "Observable claim + acceptance criteria: Jarvis preserves reminder prerequisites.",
+    });
+    const claimRejected = runFailure(fixture, ["enqueue", "--packet", claimPacket]);
+    expect(claimRejected.status).toBe(1);
+    expect(claimRejected.stderr).toContain("PR summary or acceptance names Jarvis");
   });
 
   it("rejects a carried Jarvis receipt with an inflated completion claim", () => {

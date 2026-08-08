@@ -40,6 +40,8 @@ type LifecycleOutput = {
       headSha: string;
       diffFingerprint: string;
       changedPaths: string[];
+      title: string;
+      prContract: string;
       jarvisDeliveryBoundary?: unknown;
     };
     builder: { threadId: string; hostId: string; wakeRoute: { threadId: string; hostId: string } };

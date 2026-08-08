@@ -261,13 +261,14 @@ export function jarvisDeliverySignals({ title = "", body = "", changedPaths = []
   }
   for (const filePath of changedPaths) {
     // Consumer-named files and directories are product-owned even when the PR
-    // deliberately avoids the word "Jarvis". Keep the pattern segment-bound
-    // so unrelated words such as "consumerism" do not create paperwork.
+    // deliberately avoids the word "Jarvis". Token boundaries include common
+    // filename separators, so both consumer-preflight and default-consumer are
+    // covered without treating unrelated words such as "consumerism" as scope.
     if (
       filePath === "CONSUMER.md" ||
       filePath.startsWith("apps/macos/") ||
       filePath.startsWith("docs/jarvis/") ||
-      /(^|\/)consumer(?:[-./]|$)/i.test(filePath) ||
+      /(^|[/._-])consumer(?=$|[/._-])/i.test(filePath) ||
       /(^|\/)jarvis[^/]*($|\/|\.)/i.test(filePath)
     ) {
       signals.push(`Jarvis product path: ${filePath}`);

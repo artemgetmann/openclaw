@@ -118,7 +118,7 @@ function fetchCandidate(pr) {
   if (metadata.number !== pr || metadata.state !== "OPEN") {
     fail(`PR #${pr} must be open`);
   }
-  for (const field of ["url", "headRefName", "headRefOid", "baseRefName", "baseRefOid"]) {
+  for (const field of ["url", "title", "headRefName", "headRefOid", "baseRefName", "baseRefOid"]) {
     if (typeof metadata[field] !== "string" || metadata[field] === "") {
       fail(`PR #${pr} is missing immutable field ${field}`);
     }
@@ -170,6 +170,7 @@ function fetchCandidate(pr) {
     headSha: metadata.headRefOid,
     baseRefName: metadata.baseRefName,
     baseSha: metadata.baseRefOid,
+    title: metadata.title,
     diffFingerprint: `sha256:${sha256(patch)}`,
     changedPaths,
     acceptance,
@@ -948,6 +949,8 @@ function makeReleasePacket(state, contractId) {
       testedBaseSha: candidate.baseSha,
       diffFingerprint: candidate.diffFingerprint,
       changedPaths: candidate.changedPaths,
+      title: candidate.title,
+      prContract: candidate.prContract,
       jarvisDeliveryBoundary: candidate.jarvisDeliveryBoundary,
     },
     builder: {
