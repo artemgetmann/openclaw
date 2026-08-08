@@ -173,12 +173,19 @@ scripts/pr-release-queue recover-transient-blocker \
   --transaction-id "$STABLE_TRANSACTION_ID"
 ```
 
-The command uses authenticated GitHub reads itself. It reads the exact PR head,
-queries the complete `gh pr checks --required` set, then reads the head again.
-Only a non-empty, structurally complete set whose every GitHub bucket is `pass`
-and whose head stayed equal to the queued head can recover. Caller-authored
-receipts are rejected. The queue generates and stores the normalized GitHub
-evidence in `blockerRecoveryHistory` with the original blocker.
+The command uses authenticated GitHub reads itself. It brackets the proof with
+exact PR head and base reads. Between them, it enumerates the required
+`(context, app)` identities from legacy branch protection and every active rule
+that applies to the exact base branch. It then compares that expected set with
+the paginated check runs and commit statuses for the exact queued head. Every
+configured identity must have a GitHub-accepted passing observation; a required
+check that never started is therefore `missing`, not silently absent.
+
+Caller-authored receipts are rejected. The queue generates and stores the
+normalized policy plus exact-head observations in `blockerRecoveryHistory` with
+the original blocker. Empty or malformed policy responses, app mismatches,
+pending or failed observations, head/base drift, and required-workflow rules
+that cannot be reduced safely to status identities all fail closed.
 
 The command also refuses an active release lease, candidate mismatch, mixed
 blocker set, malformed or future blocker time, or any blocker other than

@@ -50,10 +50,26 @@ if (args[0] === "pr" && args[1] === "view") {
   const head = afterChecks && process.env.TEST_PR_HEAD_AFTER_CHECK
     ? process.env.TEST_PR_HEAD_AFTER_CHECK
     : heads[pr];
-  process.stdout.write(JSON.stringify({ headRefOid: head }));
-} else if (args[0] === "pr" && args[1] === "checks") {
-  fs.writeFileSync(process.env.TEST_GH_CHECK_MARKER, "queried");
-  process.stdout.write(process.env.TEST_REQUIRED_CHECKS ?? "[]");
+  process.stdout.write(JSON.stringify({ headRefOid: head, baseRefName: "main" }));
+} else if (args[0] === "api") {
+  const endpoint = args.at(-1);
+  if (endpoint.includes("/protection/required_status_checks")) {
+    if (process.env.TEST_LEGACY_PROTECTION === "404") {
+      process.stderr.write("HTTP 404: branch protection not found");
+      process.exit(1);
+    }
+    process.stdout.write(process.env.TEST_LEGACY_PROTECTION);
+  } else if (endpoint.includes("/rules/branches/")) {
+    process.stdout.write(process.env.TEST_BRANCH_RULES);
+  } else if (endpoint.includes("/check-runs")) {
+    fs.writeFileSync(process.env.TEST_GH_CHECK_MARKER, "queried");
+    process.stdout.write(process.env.TEST_CHECK_RUN_PAGES);
+  } else if (endpoint.includes("/statuses")) {
+    process.stdout.write(process.env.TEST_STATUS_PAGES);
+  } else {
+    process.stderr.write("unexpected fake gh api endpoint: " + endpoint);
+    process.exit(2);
+  }
 } else {
   process.stderr.write("unexpected fake gh call: " + args.join(" "));
   process.exit(2);
@@ -72,9 +88,19 @@ if (args[0] === "pr" && args[1] === "view") {
       OPENCLAW_PR_RELEASE_QUEUE_NOW: "2026-08-05T00:00:00.000Z",
       TEST_PR_HEADS: "{}",
       TEST_GH_CHECK_MARKER: path.join(root, "checks-queried"),
-      TEST_REQUIRED_CHECKS: JSON.stringify([
-        { name: "test", workflow: "CI", bucket: "pass", state: "SUCCESS" },
+      TEST_LEGACY_PROTECTION: JSON.stringify({
+        contexts: ["test"],
+        checks: [{ context: "test", app_id: 1 }],
+      }),
+      TEST_BRANCH_RULES: "[]",
+      TEST_CHECK_RUN_PAGES: JSON.stringify([
+        {
+          check_runs: [
+            { name: "test", app: { id: 1 }, status: "completed", conclusion: "success" },
+          ],
+        },
       ]),
+      TEST_STATUS_PAGES: "[[]]",
     },
   };
 }
@@ -811,7 +837,19 @@ describe("scripts/pr-release-queue", () => {
         receipt: {
           source: "github-live-required-checks",
           repository: "artemgetmann/openclaw",
-          requiredChecks: [{ name: "test", workflow: "CI", bucket: "pass", state: "SUCCESS" }],
+          requiredChecks: [
+            {
+              context: "test",
+              appId: 1,
+              source: "branch-protection",
+              observed: {
+                kind: "check-run",
+                appId: 1,
+                status: "completed",
+                conclusion: "success",
+              },
+            },
+          ],
         },
       },
     });
@@ -894,22 +932,143 @@ describe("scripts/pr-release-queue", () => {
     expect(rejected.stderr).toContain("recovery evidence is read live from GitHub");
   });
 
-  it("refuses missing, incomplete, pending, and failing live required-check evidence", () => {
-    for (const [pr, checks, expected, expectedStatus] of [
-      [58, [], "complete required-check set", 1],
-      [59, [{ name: "test", bucket: "pass" }], "incomplete required-check evidence", 75],
-      [60, [{ name: "test", bucket: "pending", state: "PENDING" }], "not all passing", 1],
-      [61, [{ name: "test", bucket: "fail", state: "FAILURE" }], "not all passing", 1],
-    ] as const) {
+  it("refuses a configured required check that never started and is absent from observations", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 58);
+    fixture.env.TEST_LEGACY_PROTECTION = JSON.stringify({
+      contexts: ["test", "never-started"],
+      checks: [
+        { context: "test", app_id: 1 },
+        { context: "never-started", app_id: 2 },
+      ],
+    });
+
+    const rejected = runFailure(fixture, [
+      ...checksRecoveryArgs(fixture, 58),
+      "--transaction-id",
+      "recover-missing-58",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain(
+      "required check never-started (app 2) is not passing: missing",
+    );
+  });
+
+  it("enumerates applicable ruleset checks with their required app identity", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 59);
+    fixture.env.TEST_LEGACY_PROTECTION = "404";
+    fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+      {
+        type: "required_status_checks",
+        parameters: { required_status_checks: [{ context: "ruleset-ci", integration_id: 7 }] },
+      },
+    ]);
+    fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+      {
+        check_runs: [
+          { name: "ruleset-ci", app: { id: 7 }, status: "completed", conclusion: "success" },
+        ],
+      },
+    ]);
+
+    const recovered = run(fixture, [
+      ...checksRecoveryArgs(fixture, 59),
+      "--transaction-id",
+      "recover-ruleset-59",
+    ]);
+    expect(recovered).toMatchObject({
+      action: "transient-blocker-recovered",
+      recovery: {
+        receipt: {
+          requiredChecks: [{ context: "ruleset-ci", appId: 7, source: "ruleset" }],
+        },
+      },
+    });
+  });
+
+  it("refuses missing, malformed, pending, failing, app-mismatched, or unsupported policies", () => {
+    const cases = [
+      {
+        pr: 60,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_LEGACY_PROTECTION = "404";
+        },
+        expected: "did not report any configured required checks",
+      },
+      {
+        pr: 61,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_LEGACY_PROTECTION = JSON.stringify({ contexts: ["test"] });
+        },
+        expected: "branch-protection checks are malformed",
+      },
+      {
+        pr: 67,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+            { check_runs: [{ name: "test", app: { id: 1 }, status: "in_progress" }] },
+          ]);
+        },
+        expected: "is not passing: in_progress/unknown",
+      },
+      {
+        pr: 68,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+            {
+              check_runs: [
+                { name: "test", app: { id: 1 }, status: "completed", conclusion: "failure" },
+              ],
+            },
+          ]);
+        },
+        expected: "is not passing: completed/failure",
+      },
+      {
+        pr: 69,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+            {
+              check_runs: [
+                { name: "test", app: { id: 99 }, status: "completed", conclusion: "success" },
+              ],
+            },
+          ]);
+        },
+        expected: "required check test (app 1) is not passing: missing",
+      },
+      {
+        pr: 73,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_BRANCH_RULES = JSON.stringify([{ type: "workflows", parameters: {} }]);
+        },
+        expected: "required-workflow rules are unsupported",
+      },
+      {
+        pr: 74,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_LEGACY_PROTECTION = "404";
+          fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+            {
+              type: "required_status_checks",
+              parameters: { required_status_checks: [{ context: "ambiguous" }] },
+            },
+          ]);
+        },
+        expected: "ruleset check identity is ambiguous",
+      },
+    ];
+    for (const { pr, configure, expected } of cases) {
       const fixture = makeFixture();
       blockChecksPending(fixture, pr);
-      fixture.env.TEST_REQUIRED_CHECKS = JSON.stringify(checks);
+      configure(fixture);
       const rejected = runFailure(fixture, [
         ...checksRecoveryArgs(fixture, pr),
         "--transaction-id",
-        `recover-checks-${pr}`,
+        `recover-policy-${pr}`,
       ]);
-      expect(rejected.status).toBe(expectedStatus);
+      expect(rejected.status).not.toBe(0);
       expect(rejected.stderr).toContain(expected);
     }
   });
@@ -934,7 +1093,7 @@ describe("scripts/pr-release-queue", () => {
         `recover-drift-${pr}`,
       ]);
       expect(rejected.status).toBe(1);
-      expect(rejected.stderr).toMatch(/head drifted|head changed/);
+      expect(rejected.stderr).toMatch(/candidate drifted|candidate changed/);
     }
   });
 

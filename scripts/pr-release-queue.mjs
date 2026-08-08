@@ -719,75 +719,216 @@ function runGhJson(args, label) {
   }
 }
 
-function readLiveRequiredCheckEvidence(recovery, now) {
-  const repo = parseRepoSlug();
-  const readHead = () => {
-    const metadata = runGhJson(
-      ["pr", "view", String(recovery.pr), "--repo", repo, "--json", "headRefOid"],
-      `GitHub PR #${recovery.pr} head query`,
-    );
-    if (!/^[0-9a-f]{40}$/i.test(metadata?.headRefOid ?? "")) {
-      fail(`GitHub PR #${recovery.pr} head query returned an invalid head`, 75);
+function runGhJsonAllowNotFound(args, label) {
+  try {
+    const output = execFileSync(GH_BIN, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (output.trim() === "") {
+      fail(`${label} returned empty evidence`, 75);
     }
-    return metadata.headRefOid;
+    return JSON.parse(output);
+  } catch (error) {
+    const stderr = typeof error?.stderr === "string" ? error.stderr : "";
+    if (/HTTP 404|not found/i.test(stderr)) {
+      return null;
+    }
+    if (error instanceof SyntaxError) {
+      fail(`${label} returned malformed JSON`, 75);
+    }
+    fail(`${label} failed; transient blocker recovery evidence is indeterminate`, 75);
+  }
+}
+
+function expectedRequiredChecks(repo, baseBranch) {
+  const encodedBranch = encodeURIComponent(baseBranch);
+  const legacy = runGhJsonAllowNotFound(
+    ["api", `repos/${repo}/branches/${encodedBranch}/protection/required_status_checks`],
+    `GitHub ${baseBranch} branch-protection query`,
+  );
+  const branchRules = runGhJson(
+    ["api", `repos/${repo}/rules/branches/${encodedBranch}`],
+    `GitHub ${baseBranch} active-rules query`,
+  );
+  if (!Array.isArray(branchRules)) {
+    fail(`GitHub ${baseBranch} active rules are malformed`, 75);
+  }
+  if (branchRules.some((rule) => /workflow/i.test(rule?.type ?? ""))) {
+    fail("required-workflow rules are unsupported by transient blocker recovery");
+  }
+
+  const expected = new Map();
+  const addExpected = (context, appId, source) => {
+    if (
+      typeof context !== "string" ||
+      context.trim() === "" ||
+      (appId !== null && (!Number.isSafeInteger(appId) || appId <= 0))
+    ) {
+      fail(`GitHub ${baseBranch} required-check configuration is ambiguous`, 75);
+    }
+    expected.set(`${context}\u0000${appId ?? "any"}`, { context, appId, source });
   };
 
-  // Bracket the required-check query with exact-head reads. A force push or
-  // ordinary source update during observation makes the entire evidence set
-  // stale even if every returned check happened to be green.
-  const headBefore = readHead();
-  if (headBefore !== recovery.headSha) {
-    fail(`GitHub PR #${recovery.pr} head drifted from the immutable queue candidate`);
-  }
-  const checks = runGhJson(
-    [
-      "pr",
-      "checks",
-      String(recovery.pr),
-      "--repo",
-      repo,
-      "--required",
-      "--json",
-      "name,bucket,state,workflow",
-    ],
-    `GitHub PR #${recovery.pr} required-check query`,
-  );
-  const headAfter = readHead();
-  if (headAfter !== recovery.headSha || headAfter !== headBefore) {
-    fail(`GitHub PR #${recovery.pr} head changed during required-check verification`);
-  }
-  if (!Array.isArray(checks) || checks.length === 0) {
-    fail(`GitHub PR #${recovery.pr} did not report a complete required-check set`);
+  if (legacy !== null) {
+    if (!Array.isArray(legacy?.contexts) || !Array.isArray(legacy?.checks)) {
+      fail(`GitHub ${baseBranch} branch-protection checks are malformed`, 75);
+    }
+    const checkedContexts = new Set();
+    for (const check of legacy.checks) {
+      addExpected(check?.context, check?.app_id ?? null, "branch-protection");
+      checkedContexts.add(check.context);
+    }
+    // `contexts` duplicates app-bound `checks` for modern configurations.
+    // Only contexts absent from `checks` are independent any-app requirements.
+    for (const context of legacy.contexts) {
+      if (!checkedContexts.has(context)) {
+        addExpected(context, null, "branch-protection");
+      }
+    }
   }
 
-  const requiredChecks = checks.map((check) => {
-    if (
-      typeof check?.name !== "string" ||
-      check.name.trim() === "" ||
-      typeof check?.bucket !== "string" ||
-      check.bucket.trim() === "" ||
-      typeof check?.state !== "string" ||
-      check.state.trim() === "" ||
-      (check.workflow !== null &&
-        check.workflow !== undefined &&
-        typeof check.workflow !== "string")
-    ) {
-      fail(`GitHub PR #${recovery.pr} returned incomplete required-check evidence`, 75);
+  for (const rule of branchRules.filter(
+    (candidate) => candidate?.type === "required_status_checks",
+  )) {
+    const configured = rule?.parameters?.required_status_checks;
+    if (!Array.isArray(configured)) {
+      fail(`GitHub ${baseBranch} ruleset required checks are malformed`, 75);
+    }
+    for (const check of configured) {
+      if (check?.integration_id === undefined) {
+        fail(`GitHub ${baseBranch} ruleset check identity is ambiguous`, 75);
+      }
+      addExpected(check.context, check.integration_id, "ruleset");
+    }
+  }
+  if (expected.size === 0) {
+    fail(`GitHub ${baseBranch} did not report any configured required checks`);
+  }
+  return [...expected.values()].toSorted((left, right) =>
+    `${left.context}:${left.appId ?? "any"}`.localeCompare(
+      `${right.context}:${right.appId ?? "any"}`,
+    ),
+  );
+}
+
+function observedExactHeadChecks(repo, headSha) {
+  const checkPages = runGhJson(
+    ["api", "--paginate", "--slurp", `repos/${repo}/commits/${headSha}/check-runs?per_page=100`],
+    `GitHub ${headSha} check-runs query`,
+  );
+  const statusPages = runGhJson(
+    ["api", "--paginate", "--slurp", `repos/${repo}/commits/${headSha}/statuses?per_page=100`],
+    `GitHub ${headSha} commit-status query`,
+  );
+  if (!Array.isArray(checkPages) || !Array.isArray(statusPages)) {
+    fail("GitHub exact-head status evidence is malformed", 75);
+  }
+  const checkRuns = checkPages.flatMap((page) => {
+    if (!page || !Array.isArray(page.check_runs)) {
+      fail("GitHub exact-head check-run page is malformed", 75);
+    }
+    return page.check_runs;
+  });
+  const statuses = statusPages.flatMap((page) => {
+    if (!Array.isArray(page)) {
+      fail("GitHub exact-head commit-status page is malformed", 75);
+    }
+    return page;
+  });
+  return { checkRuns, statuses };
+}
+
+function matchRequiredChecks(expected, observed) {
+  const passingConclusions = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+  return expected.map((requirement) => {
+    const checkRuns = observed.checkRuns.filter(
+      (check) =>
+        check?.name === requirement.context &&
+        (requirement.appId === null || check?.app?.id === requirement.appId),
+    );
+    const statuses =
+      requirement.appId === null
+        ? observed.statuses.filter((status) => status?.context === requirement.context)
+        : [];
+    const runPasses = (check) =>
+      String(check?.status).toUpperCase() === "COMPLETED" &&
+      passingConclusions.has(String(check?.conclusion).toUpperCase());
+    const latestRun = checkRuns[0] ?? null;
+    const latestStatus = statuses[0] ?? null;
+    const observations = [latestRun, latestStatus].filter(Boolean);
+    // For an any-app requirement, conflicting check-run and commit-status
+    // observations with the same context are ambiguous. Requiring every latest
+    // visible form to pass avoids reviving an older success behind a new failure.
+    const allPass = observations.every((observation) =>
+      observation === latestRun
+        ? runPasses(observation)
+        : String(observation?.state).toUpperCase() === "SUCCESS",
+    );
+    if (observations.length === 0 || !allPass) {
+      const state = latestRun
+        ? `${latestRun.status ?? "unknown"}/${latestRun.conclusion ?? "unknown"}`
+        : (latestStatus?.state ?? "missing");
+      fail(
+        `required check ${requirement.context} (app ${requirement.appId ?? "any"}) is not passing: ${state}`,
+      );
+    }
+    if (latestRun && !Number.isSafeInteger(latestRun?.app?.id)) {
+      fail(`required check ${requirement.context} returned an ambiguous app identity`, 75);
     }
     return {
-      name: check.name,
-      workflow: check.workflow ?? null,
-      bucket: check.bucket,
-      state: check.state,
+      ...requirement,
+      observed: latestRun
+        ? {
+            kind: "check-run",
+            appId: latestRun.app.id,
+            status: latestRun.status,
+            conclusion: latestRun.conclusion,
+          }
+        : { kind: "commit-status", state: latestStatus.state },
     };
   });
-  const notPassing = requiredChecks.filter((check) => check.bucket !== "pass");
-  if (notPassing.length > 0) {
-    fail(
-      `GitHub PR #${recovery.pr} required checks are not all passing: ${notPassing
-        .map((check) => `${check.name}=${check.bucket}/${check.state}`)
-        .join(", ")}`,
+}
+
+function readLiveRequiredCheckEvidence(recovery, now) {
+  const repo = parseRepoSlug();
+  const readCandidate = () => {
+    const metadata = runGhJson(
+      ["pr", "view", String(recovery.pr), "--repo", repo, "--json", "headRefOid,baseRefName"],
+      `GitHub PR #${recovery.pr} candidate query`,
     );
+    if (
+      !/^[0-9a-f]{40}$/i.test(metadata?.headRefOid ?? "") ||
+      typeof metadata?.baseRefName !== "string" ||
+      metadata.baseRefName.trim() === ""
+    ) {
+      fail(`GitHub PR #${recovery.pr} candidate query returned invalid identity`, 75);
+    }
+    return { headSha: metadata.headRefOid, baseBranch: metadata.baseRefName };
+  };
+
+  // Bracket both policy enumeration and exact-head observations. A head/base
+  // change makes the full evidence set stale, including otherwise green runs.
+  const candidateBefore = readCandidate();
+  if (
+    candidateBefore.headSha !== recovery.headSha ||
+    candidateBefore.baseBranch !== recovery.baseBranch
+  ) {
+    fail(`GitHub PR #${recovery.pr} candidate drifted from the immutable queue candidate`);
+  }
+  const expected = expectedRequiredChecks(repo, recovery.baseBranch);
+  const requiredChecks = matchRequiredChecks(
+    expected,
+    observedExactHeadChecks(repo, recovery.headSha),
+  );
+  const candidateAfter = readCandidate();
+  if (
+    candidateAfter.headSha !== recovery.headSha ||
+    candidateAfter.baseBranch !== recovery.baseBranch ||
+    candidateAfter.headSha !== candidateBefore.headSha ||
+    candidateAfter.baseBranch !== candidateBefore.baseBranch
+  ) {
+    fail(`GitHub PR #${recovery.pr} candidate changed during required-check verification`);
   }
 
   return {
@@ -801,8 +942,9 @@ function readLiveRequiredCheckEvidence(recovery, now) {
       diffFingerprint: recovery.diffFingerprint,
     },
     observedAt: now.toISOString(),
-    headShaBefore: headBefore,
-    headShaAfter: headAfter,
+    baseBranch: recovery.baseBranch,
+    headShaBefore: candidateBefore.headSha,
+    headShaAfter: candidateAfter.headSha,
     requiredChecks,
   };
 }
@@ -868,7 +1010,10 @@ function mutateRecoverTransientBlocker(state, recovery, transactionId, now) {
     if (blockerObservedAt > now.valueOf()) {
       fail("blocker observedAt cannot be in the future");
     }
-    const receipt = readLiveRequiredCheckEvidence(recovery, now);
+    const receipt = readLiveRequiredCheckEvidence(
+      { ...recovery, baseBranch: item.candidate.baseBranch },
+      now,
+    );
     const recoveryObservedAt = parseStoredTimestamp(receipt.observedAt, "recovery observedAt");
     if (blockerObservedAt > recoveryObservedAt || recoveryObservedAt > now.valueOf()) {
       fail("recovery timestamps are out of order or in the future");
