@@ -7,7 +7,7 @@ import { resolveBundledSkillsDir } from "./bundled-dir.js";
 
 const SHARED_SKILL_MARKER_FILENAME = ".openclaw-skill.json";
 const SHARED_SKILL_MANAGED_SOURCE = "openclaw-bundled";
-const JARVIS_ONLY_SHARED_MIRROR_EXCLUDE_SKILLS = new Set(["goal-mode"]);
+const JARVIS_ONLY_SHARED_MIRROR_EXCLUDE_SKILLS = new Set(["goal-mode", "skill-runtime"]);
 
 type SharedSkillMarker = {
   version: 1;

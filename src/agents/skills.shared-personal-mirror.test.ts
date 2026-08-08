@@ -63,7 +63,7 @@ describe("syncBundledSkillsToSharedPersonalRoot", () => {
     ).resolves.toContain('"source": "openclaw-bundled"');
   });
 
-  it("does not mirror Jarvis-only goal mode into the shared personal skills root", async () => {
+  it("does not mirror Jarvis-only product policy skills into the personal skills root", async () => {
     const root = await tempDir();
     const bundledSkillsDir = path.join(root, "bundled");
     const sharedSkillsDir = path.join(root, "shared");
@@ -72,6 +72,12 @@ describe("syncBundledSkillsToSharedPersonalRoot", () => {
       name: "goal-mode",
       description: "Jarvis goal mode",
       body: "# Goal Mode\n",
+    });
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, "skill-runtime"),
+      name: "skill-runtime",
+      description: "Personal skill visibility policy",
+      body: "# Skill Runtime\n",
     });
     await writeSkill({
       dir: path.join(bundledSkillsDir, "telegram-user"),
@@ -89,6 +95,9 @@ describe("syncBundledSkillsToSharedPersonalRoot", () => {
       ["telegram-user", "copied"],
     ]);
     await expect(fs.stat(path.join(sharedSkillsDir, "goal-mode"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.stat(path.join(sharedSkillsDir, "skill-runtime"))).rejects.toMatchObject({
       code: "ENOENT",
     });
     await expect(readSkillBody(path.join(sharedSkillsDir, "telegram-user"))).resolves.toContain(

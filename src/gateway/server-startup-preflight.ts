@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { repairConsumerDefaultBundledSkillAllowlist } from "../agents/consumer-default-bundled-skills.js";
 import { syncBundledSkillsToSharedPersonalRoot } from "../agents/skills/shared-personal-mirror.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { ensureSharedPersonalSkillsManagedRoot } from "../commands/onboard-shared-skills-root.js";
 import {
   migrateLegacyConfig,
   type ConfigFileSnapshot,
@@ -13,6 +15,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveStateDir } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL } from "../consumer/runtime-identity.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
@@ -147,6 +150,7 @@ type GatewayStartupPreflightDeps = {
   env?: NodeJS.ProcessEnv;
   migrateLegacyConfigFn?: typeof migrateLegacyConfig;
   applyPluginAutoEnableFn?: typeof applyPluginAutoEnable;
+  ensureSharedPersonalSkillsManagedRootFn?: typeof ensureSharedPersonalSkillsManagedRoot;
   syncBundledSkillsToSharedPersonalRootFn?: typeof syncBundledSkillsToSharedPersonalRoot;
 };
 
@@ -208,6 +212,7 @@ export async function runGatewayStartupSharedSkillsSync(params: {
   isNixMode: boolean;
   log: Pick<GatewayStartupPreflightDeps["log"], "info" | "warn">;
   env?: NodeJS.ProcessEnv;
+  ensureManagedRoot?: typeof ensureSharedPersonalSkillsManagedRoot;
   syncBundledSkills?: typeof syncBundledSkillsToSharedPersonalRoot;
 }): Promise<void> {
   const env = params.env ?? process.env;
@@ -221,8 +226,67 @@ export async function runGatewayStartupSharedSkillsSync(params: {
   ) {
     return;
   }
+  const sharedSkillsHome = env.HOME?.trim() || os.homedir();
+  const stateDir = resolveStateDir(env, () => sharedSkillsHome);
+  const consumerWorkspaceDir = path.join(stateDir, "workspace");
+  const configuredWorkspaceDir = resolveAgentWorkspaceDir(
+    params.config,
+    resolveDefaultAgentId(params.config),
+  );
+  const rootsToAdopt: Array<{ managedSkillsDir: string; preserveNonEmpty?: boolean }> = [
+    { managedSkillsDir: path.join(stateDir, "skills") },
+  ];
+  if (path.resolve(configuredWorkspaceDir) === path.resolve(consumerWorkspaceDir)) {
+    // Older consumer builds could keep personal skills in the app-owned
+    // workspace. Adopt only this exact product default; custom workspaces stay
+    // workspace-scoped and are never silently converted into personal roots.
+    rootsToAdopt.push({
+      managedSkillsDir: path.join(consumerWorkspaceDir, "skills"),
+      preserveNonEmpty: true,
+    });
+  }
+  let canonicalManagedRootReady = false;
   try {
-    const sharedSkillsHome = env.HOME?.trim() || os.homedir();
+    for (const [index, root] of rootsToAdopt.entries()) {
+      if (index > 0 && !canonicalManagedRootReady) {
+        break;
+      }
+      const adoption = (params.ensureManagedRoot ?? ensureSharedPersonalSkillsManagedRoot)({
+        homeDir: sharedSkillsHome,
+        stateDir,
+        managedSkillsDir: root.managedSkillsDir,
+        ...(root.preserveNonEmpty ? { preserveNonEmpty: true } : {}),
+      });
+      if (index === 0) {
+        canonicalManagedRootReady = ["linked", "already-linked", "migrated"].includes(
+          adoption.status,
+        );
+      }
+      if (["linked", "migrated"].includes(adoption.status)) {
+        params.log.info(
+          `gateway: personal skills root ${adoption.status} (${adoption.managedSkillsDir} -> ${adoption.sharedSkillsDir})`,
+        );
+      } else if (
+        adoption.status.startsWith("compatibility-") ||
+        adoption.status.includes("rollback")
+      ) {
+        params.log.warn(
+          [
+            `gateway: personal skills migration kept the legacy loader (${adoption.status})`,
+            adoption.message ? `- ${adoption.message}` : undefined,
+            adoption.receiptPath ? `- receipt: ${adoption.receiptPath}` : undefined,
+          ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n"),
+        );
+      }
+    }
+  } catch (err) {
+    // Skill migration is fail-closed but must not make the assistant itself
+    // unavailable. The existing managed root remains the compatibility path.
+    params.log.warn(`gateway: failed to reconcile personal skills root: ${String(err)}`);
+  }
+  try {
     // This phase can write/remove managed mirrors. Staged restarts therefore
     // invoke it only after the old listener closes.
     const syncResult = await (params.syncBundledSkills ?? syncBundledSkillsToSharedPersonalRoot)({
@@ -277,6 +341,8 @@ export async function runGatewayStartupConfigPreflight(
   const autoEnablePlugins = deps.applyPluginAutoEnableFn ?? applyPluginAutoEnable;
   const syncSharedBundledSkills =
     deps.syncBundledSkillsToSharedPersonalRootFn ?? syncBundledSkillsToSharedPersonalRoot;
+  const ensureManagedSkillsRoot =
+    deps.ensureSharedPersonalSkillsManagedRootFn ?? ensureSharedPersonalSkillsManagedRoot;
   const env = deps.env ?? process.env;
 
   let configSnapshot = await deps.readSnapshot();
@@ -377,6 +443,7 @@ export async function runGatewayStartupConfigPreflight(
     isNixMode: deps.isNixMode,
     log: deps.log,
     env,
+    ensureManagedRoot: ensureManagedSkillsRoot,
     syncBundledSkills: syncSharedBundledSkills,
   });
 
