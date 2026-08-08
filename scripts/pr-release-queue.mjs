@@ -5,6 +5,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import {
+  jarvisDeliverySignals,
+  validateJarvisDeliveryReceipt,
+} from "./lib/jarvis-delivery-boundary.mjs";
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_BRANCH = "ops/release-state";
@@ -340,6 +344,10 @@ function validatePacket(packet) {
     !Number.isSafeInteger(candidate?.pr) ||
     candidate.pr <= 0 ||
     typeof candidate?.url !== "string" ||
+    typeof candidate?.title !== "string" ||
+    candidate.title.trim() === "" ||
+    typeof candidate?.prContract !== "string" ||
+    candidate.prContract.trim() === "" ||
     !/^[0-9a-f]{40}$/i.test(candidate?.headSha ?? "") ||
     typeof candidate?.baseBranch !== "string" ||
     !/^[0-9a-f]{40}$/i.test(candidate?.testedBaseSha ?? "") ||
@@ -348,6 +356,30 @@ function validatePacket(packet) {
     fail("release packet candidate must bind PR, URL, exact head/base, and SHA-256 diff");
   }
   assertNonEmptyStrings(candidate.changedPaths, "candidate.changedPaths");
+  // Recompute every classification signal from packet-carried PR metadata.
+  // Release packets are independently writable, so checking changed paths
+  // alone would lose Jarvis mentions from a generic engine PR's title/body.
+  const jarvisSignals = jarvisDeliverySignals({
+    title: candidate.title,
+    body: candidate.prContract,
+    changedPaths: candidate.changedPaths,
+  });
+  if (jarvisSignals.length > 0 && candidate.jarvisDeliveryBoundary == null) {
+    fail(`release packet is missing Jarvis delivery boundary: ${jarvisSignals.join("; ")}`);
+  }
+  if (candidate.jarvisDeliveryBoundary != null) {
+    // Queue packets are independently writable artifacts. Revalidate the
+    // carried Jarvis receipt here so a hand-authored packet cannot bypass the
+    // builder lifecycle's source-proof and completion-claim gate.
+    const deliveryBoundary = validateJarvisDeliveryReceipt(candidate.jarvisDeliveryBoundary, {
+      stage: "handoff",
+    });
+    if (!deliveryBoundary.ok) {
+      fail(
+        `release packet has invalid Jarvis delivery boundary: ${deliveryBoundary.errors.join("; ")}`,
+      );
+    }
+  }
   if (
     typeof builder?.threadId !== "string" ||
     typeof builder?.hostId !== "string" ||
