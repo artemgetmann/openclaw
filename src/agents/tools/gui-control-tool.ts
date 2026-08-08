@@ -114,6 +114,10 @@ export function createGuiControlTool(options?: {
     execSecurity: "deny" | "allowlist" | "full";
     execAsk: "off" | "on-miss" | "always";
   };
+  resolvePermissionDefaults?: () => {
+    execSecurity: "deny" | "allowlist" | "full";
+    execAsk: "off" | "on-miss" | "always";
+  };
 }): AnyAgentTool {
   return {
     label: "Computer Use",
@@ -134,9 +138,10 @@ export function createGuiControlTool(options?: {
       const runtime = new AgentDesktopRuntime();
       // This is supplied by the runtime from the same effective session-level
       // settings used by exec. Never derive approval mode from model arguments.
+      const permissionDefaults =
+        options?.resolvePermissionDefaults?.() ?? options?.permissionDefaults;
       const fullPermissions =
-        options?.permissionDefaults !== undefined &&
-        usesFullPermissionGuiApproval(options.permissionDefaults);
+        permissionDefaults !== undefined && usesFullPermissionGuiApproval(permissionDefaults);
 
       return jsonResult(
         await runGuiControl({

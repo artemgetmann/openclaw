@@ -107,6 +107,11 @@ export function createOpenClawTools(
       execSecurity: "deny" | "allowlist" | "full";
       execAsk: "off" | "on-miss" | "always";
     };
+    /** Fresh trusted resolver for cached tool surfaces whose session mode can change. */
+    resolvePermissionDefaults?: () => {
+      execSecurity: "deny" | "allowlist" | "full";
+      execAsk: "off" | "on-miss" | "always";
+    };
     /** Trusted sender id from inbound context (not tool args). */
     requesterSenderId?: string | null;
     /** Whether the requesting sender is an owner. */
@@ -217,6 +222,7 @@ export function createOpenClawTools(
       ? [
           createGuiControlTool({
             permissionDefaults: options?.permissionDefaults,
+            resolvePermissionDefaults: options?.resolvePermissionDefaults,
             approvalOrigin: {
               agentId: resolveSessionAgentId({
                 sessionKey: options?.agentSessionKey,
