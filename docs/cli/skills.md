@@ -23,4 +23,15 @@ openclaw skills list
 openclaw skills list --eligible
 openclaw skills info <name>
 openclaw skills check
+openclaw skills runtime status <name>
+openclaw skills runtime set <name> shared|codex|jarvis
+openclaw skills runtime reconcile
+openclaw skills runtime rollback <receipt-path>
+openclaw skills runtime with codex <name> -- <codex-arguments...>
 ```
+
+Personal runtime commands operate on one canonical personal body under
+`~/.agents/skills`. `set` is the only supported persistent visibility mutation
+path. `reconcile` safely adopts a legacy managed root and emits a receipt;
+conflicts leave legacy loading unchanged. `with codex` is process-scoped and
+does not persist catalog or configuration changes.
