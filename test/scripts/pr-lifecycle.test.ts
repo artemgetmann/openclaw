@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { exampleJarvisDeliveryReceipt } from "../../scripts/lib/jarvis-delivery-boundary.mjs";
 
 const ROOT = process.cwd();
 const SCRIPT = path.join(ROOT, "scripts", "pr-lifecycle.mjs");
@@ -34,7 +35,13 @@ type LifecycleOutput = {
     rationale: string[];
   };
   releasePacket?: {
-    candidate: { pr: number; headSha: string; diffFingerprint: string; changedPaths: string[] };
+    candidate: {
+      pr: number;
+      headSha: string;
+      diffFingerprint: string;
+      changedPaths: string[];
+      jarvisDeliveryBoundary?: unknown;
+    };
     builder: { threadId: string; hostId: string; wakeRoute: { threadId: string; hostId: string } };
     testerReceipt: { status: string; closure: string };
     reviewReceipt: { status: string; headSha: string; unresolvedFindings: unknown[] };
@@ -50,6 +57,7 @@ function makeFixture() {
   const gh = path.join(root, "fake-gh.mjs");
   const metadata = {
     number: 42,
+    title: "fix(workflow): enforce lifecycle ownership",
     url: "https://github.com/artemgetmann/openclaw/pull/42",
     state: "OPEN",
     isDraft: false,
@@ -434,6 +442,50 @@ function completeTesterPass(fixture: ReturnType<typeof makeFixture>) {
 }
 
 describe("scripts/pr-lifecycle", () => {
+  it("rejects Jarvis handoff when the PR has no delivery-boundary receipt", () => {
+    const fixture = makeFixture();
+    fixture.metadata.title = "fix(jarvis): change consumer behavior";
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+
+    const result = runFailure(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "read-only",
+      "--transport",
+      "nested-read-only",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Jarvis delivery boundary is invalid");
+    expect(result.stderr).toContain("missing Jarvis delivery boundary receipt block");
+  });
+
+  it("accepts Jarvis handoff with proven source and an explicit source boundary", () => {
+    const fixture = makeFixture();
+    const receipt = exampleJarvisDeliveryReceipt({
+      workScope: "product-wide",
+      deliveryTarget: "source",
+    });
+    receipt.completionClaim = "declared-boundary-complete";
+    receipt.layers.source = {
+      status: "proven",
+      evidence: "Exact candidate head passed the focused delivery-boundary tests.",
+    };
+    fixture.metadata.title = "fix(jarvis): enforce delivery truth";
+    fixture.metadata.body += `\n<!-- jarvis-delivery-boundary:start -->\n\`\`\`json\n${JSON.stringify(receipt)}\n\`\`\`\n<!-- jarvis-delivery-boundary:end -->`;
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+
+    expect(beginLiveTester(fixture)).toMatchObject({
+      action: "create_thread",
+      candidate: { jarvisDeliveryBoundary: receipt },
+    });
+  });
+
   it("rejects testing when exact-head review has unresolved serious findings", () => {
     const fixture = makeFixture();
     const reviewPath = path.join(fixture.root, "review-blocked.json");
@@ -956,7 +1008,7 @@ describe("scripts/pr-lifecycle", () => {
       establishesOwnership: false,
     });
     expect(release.releasePacket).toMatchObject({
-      candidate: { pr: 42, headSha: "a".repeat(40) },
+      candidate: { pr: 42, headSha: "a".repeat(40), jarvisDeliveryBoundary: null },
       builder: {
         threadId: "builder-thread",
         hostId: "builder-host",

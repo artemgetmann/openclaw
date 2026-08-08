@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { validateJarvisDeliveryReceipt } from "./lib/jarvis-delivery-boundary.mjs";
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_BRANCH = "ops/release-state";
@@ -348,6 +349,19 @@ function validatePacket(packet) {
     fail("release packet candidate must bind PR, URL, exact head/base, and SHA-256 diff");
   }
   assertNonEmptyStrings(candidate.changedPaths, "candidate.changedPaths");
+  if (candidate.jarvisDeliveryBoundary != null) {
+    // Queue packets are independently writable artifacts. Revalidate the
+    // carried Jarvis receipt here so a hand-authored packet cannot bypass the
+    // builder lifecycle's source-proof and completion-claim gate.
+    const deliveryBoundary = validateJarvisDeliveryReceipt(candidate.jarvisDeliveryBoundary, {
+      stage: "handoff",
+    });
+    if (!deliveryBoundary.ok) {
+      fail(
+        `release packet has invalid Jarvis delivery boundary: ${deliveryBoundary.errors.join("; ")}`,
+      );
+    }
+  }
   if (
     typeof builder?.threadId !== "string" ||
     typeof builder?.hostId !== "string" ||

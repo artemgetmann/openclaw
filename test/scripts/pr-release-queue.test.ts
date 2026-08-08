@@ -72,6 +72,7 @@ function writePacket(
     paths?: string[];
     dependencies?: Array<{ pr: number; relation: string; reason: string }>;
     actions?: string[];
+    jarvisDeliveryBoundary?: unknown;
   } = {},
 ) {
   const headSha = pr.toString(16).padStart(40, "a").slice(-40);
@@ -90,6 +91,7 @@ function writePacket(
         testedBaseSha: baseSha,
         diffFingerprint,
         changedPaths: options.paths ?? [`src/feature-${pr}.ts`],
+        jarvisDeliveryBoundary: options.jarvisDeliveryBoundary,
       },
       builder: {
         threadId: `builder-${pr}`,
@@ -198,6 +200,40 @@ function finishMerge(fixture: ReturnType<typeof makeFixture>, pr: number) {
 }
 
 describe("scripts/pr-release-queue", () => {
+  it("rejects a carried Jarvis receipt with an inflated completion claim", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init"]);
+    const packetPath = writePacket(fixture, 16, {
+      jarvisDeliveryBoundary: {
+        schemaVersion: 1,
+        workScope: "product-wide",
+        deliveryTarget: "public-release",
+        completionClaim: "consumer-delivered",
+        upgradeImpact: "not-applicable",
+        layers: {
+          localConfiguration: {
+            status: "not-applicable",
+            evidence: "No personal-home mutation was used.",
+          },
+          source: { status: "proven", evidence: "Exact candidate source passed." },
+          packagedArtifact: { status: "pending", evidence: "Package proof remains." },
+          installedRuntime: { status: "pending", evidence: "Install proof remains." },
+          upgradeMigration: {
+            status: "not-applicable",
+            evidence: "Persisted state is unaffected.",
+          },
+          publicRelease: { status: "pending", evidence: "Publication remains." },
+          endUserBehavior: { status: "pending", evidence: "Shipped behavior remains." },
+        },
+      },
+    });
+
+    const rejected = runFailure(fixture, ["enqueue", "--packet", packetPath]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("invalid Jarvis delivery boundary");
+    expect(rejected.stderr).toContain("consumer-delivered is missing proven receipts");
+  });
+
   it("rejects packets with unresolved serious code-review findings", () => {
     const fixture = makeFixture();
     run(fixture, ["init", "--transaction-id", "init-review-gate"]);
