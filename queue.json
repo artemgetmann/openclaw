@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 56,
+  "sequence": 57,
   "nextFence": 17,
-  "mergeLease": {
-    "leaseId": "f11fd86a-7ee4-4388-9a25-4a9efbb2f510",
-    "fence": 16,
-    "owner": {
-      "threadId": "/root/pr1363_final_release",
-      "hostId": "subagent"
-    },
-    "claimedPr": 1363,
-    "claimedAt": "2026-08-08T12:31:45.865Z",
-    "heartbeatAt": "2026-08-08T12:33:15.097Z",
-    "expiresAt": "2026-08-08T13:03:15.097Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -936,7 +925,7 @@
       }
     },
     "1363": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1363,
         "url": "https://github.com/artemgetmann/openclaw/pull/1363",
@@ -1084,7 +1073,20 @@
           "replacedAt": "2026-08-08T12:25:18.937Z"
         }
       ],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1363,
+          "reviewedHeadSha": "c6304f09c522cfc3a92944c9b3aed6d2300686ea",
+          "diffFingerprint": "sha256:d393e78642b1d00a8872f38e6fd3aa5fffa3ba536c71845773001e7e5ef752c3",
+          "mergeSha": "46145ab4632d9c34ac7ed051a368ac39db9136d7",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -1533,10 +1535,10 @@
     }
   },
   "lastTransaction": {
-    "id": "a166dd2a-3927-4507-a51a-cc238ab9bb87",
-    "recordedAt": "2026-08-08T12:33:15.097Z"
+    "id": "218dddbf-78d7-41c0-aadc-8583fa2c1875",
+    "recordedAt": "2026-08-08T12:34:18.664Z"
   },
-  "updatedAt": "2026-08-08T12:33:15.097Z",
+  "updatedAt": "2026-08-08T12:34:18.664Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -1546,6 +1548,7 @@
       1358,
       1359,
       1362,
+      1363,
       1364,
       1366,
       1369
