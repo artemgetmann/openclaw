@@ -260,10 +260,14 @@ export function jarvisDeliverySignals({ title = "", body = "", changedPaths = []
     signals.push("PR summary or acceptance names Jarvis");
   }
   for (const filePath of changedPaths) {
+    // Consumer-named files and directories are product-owned even when the PR
+    // deliberately avoids the word "Jarvis". Keep the pattern segment-bound
+    // so unrelated words such as "consumerism" do not create paperwork.
     if (
       filePath === "CONSUMER.md" ||
       filePath.startsWith("apps/macos/") ||
       filePath.startsWith("docs/jarvis/") ||
+      /(^|\/)consumer(?:[-./]|$)/i.test(filePath) ||
       /(^|\/)jarvis[^/]*($|\/|\.)/i.test(filePath)
     ) {
       signals.push(`Jarvis product path: ${filePath}`);

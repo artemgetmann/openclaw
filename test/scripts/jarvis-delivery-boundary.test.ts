@@ -242,6 +242,22 @@ describe("Jarvis delivery boundary", () => {
     ).toMatchObject({ ok: true, required: false });
   });
 
+  it.each([
+    "src/consumer/setup.ts",
+    "skills/consumer-setup/SKILL.md",
+    "docs/consumer/project-status.md",
+    "scripts/consumer-preflight.sh",
+    "src/agents/consumer-default-bundled-skills.ts",
+  ])("requires classification for direct consumer product path %s", (changedPath) => {
+    expect(
+      validateJarvisPullRequest({
+        title: "fix(product): preserve behavior",
+        body: "Observable claim + acceptance criteria: existing users retain configured behavior",
+        changedPaths: [changedPath],
+      }),
+    ).toMatchObject({ ok: false, required: true });
+  });
+
   it("ignores engine-only PRs and rejects duplicate receipt blocks", () => {
     expect(
       validateJarvisPullRequest({

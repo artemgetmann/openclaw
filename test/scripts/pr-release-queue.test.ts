@@ -200,6 +200,19 @@ function finishMerge(fixture: ReturnType<typeof makeFixture>, pr: number) {
 }
 
 describe("scripts/pr-release-queue", () => {
+  it("rejects a Jarvis release packet that omits the carried boundary receipt", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init"]);
+    const packetPath = writePacket(fixture, 15, {
+      paths: ["apps/macos/Sources/Jarvis/App.swift"],
+    });
+
+    const rejected = runFailure(fixture, ["enqueue", "--packet", packetPath]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("release packet is missing Jarvis delivery boundary");
+    expect(rejected.stderr).toContain("apps/macos/Sources/Jarvis/App.swift");
+  });
+
   it("rejects a carried Jarvis receipt with an inflated completion claim", () => {
     const fixture = makeFixture();
     run(fixture, ["init", "--transaction-id", "init"]);

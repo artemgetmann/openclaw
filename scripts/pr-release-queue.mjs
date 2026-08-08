@@ -5,7 +5,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { validateJarvisDeliveryReceipt } from "./lib/jarvis-delivery-boundary.mjs";
+import {
+  jarvisDeliverySignals,
+  validateJarvisDeliveryReceipt,
+} from "./lib/jarvis-delivery-boundary.mjs";
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_BRANCH = "ops/release-state";
@@ -349,6 +352,10 @@ function validatePacket(packet) {
     fail("release packet candidate must bind PR, URL, exact head/base, and SHA-256 diff");
   }
   assertNonEmptyStrings(candidate.changedPaths, "candidate.changedPaths");
+  const jarvisSignals = jarvisDeliverySignals({ changedPaths: candidate.changedPaths });
+  if (jarvisSignals.length > 0 && candidate.jarvisDeliveryBoundary == null) {
+    fail(`release packet is missing Jarvis delivery boundary: ${jarvisSignals.join("; ")}`);
+  }
   if (candidate.jarvisDeliveryBoundary != null) {
     // Queue packets are independently writable artifacts. Revalidate the
     // carried Jarvis receipt here so a hand-authored packet cannot bypass the
