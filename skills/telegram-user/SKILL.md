@@ -336,6 +336,8 @@ Safety
   perform no action. Never browser-open, guess, normalize, or rewrite a button
   URL. Joining changes the user's Telegram memberships, so preserve the normal
   external-action approval boundary before running `button-click --expected-url`.
+  If Telegram returns `url_action.status=request_sent`, the join request was
+  accepted and is pending admin approval. Report that state and do not retry.
 - Do not expose Telegram API hash, session files, OTPs, or 2FA secrets in logs
   or chat transcripts.
 - OCR only an owner-provided fresh Telegram OTP screenshot while login state is

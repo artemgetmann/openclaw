@@ -275,7 +275,9 @@ Supported `https://t.me/...` and `https://telegram.me/...` public-chat and
 invite URLs join through the authenticated Telegram client. External,
 message-specific, malformed, or otherwise unsupported URLs return a structured
 `clicked=false`, `url_action_required=true` result with the exact verified URL
-and perform no action.
+and perform no action. A Telegram `InviteRequestSentError` returns
+`status=request_sent`: the join request is pending admin approval and must not
+be retried as though the original action failed.
 
 Session states returned by `telegram-user status`:
 

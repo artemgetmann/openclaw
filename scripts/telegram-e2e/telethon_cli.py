@@ -52,8 +52,9 @@ PENDING_AUTH_SUFFIX = ".openclaw-login.json"
 LOGIN_PASSWORD_ENV = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD"
 SESSION_LOCK_PATH_ENV = "OPENCLAW_TELEGRAM_USER_LOCK_PATH"
 TELEGRAM_URL_HOSTS = {"t.me", "telegram.me"}
-TELEGRAM_INVITE_HASH_PATTERN = re.compile(r"^[A-Za-z0-9_-]{5,}$")
-TELEGRAM_PUBLIC_USERNAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
+TELEGRAM_PLUS_INVITE_PATH_PATTERN = re.compile(r"^/\+([A-Za-z0-9_-]{5,})$")
+TELEGRAM_JOINCHAT_PATH_PATTERN = re.compile(r"^/joinchat/([A-Za-z0-9_-]{5,})$")
+TELEGRAM_PUBLIC_USERNAME_PATH_PATTERN = re.compile(r"^/([A-Za-z][A-Za-z0-9_]{3,31})$")
 TELEGRAM_RESERVED_PATHS = {
   "addlist",
   "addstickers",
@@ -798,25 +799,20 @@ def parse_telegram_join_url(url: str) -> tuple[str, str] | None:
   ):
     return None
 
-  segments = [segment for segment in parsed.path.split("/") if segment]
-  if len(segments) == 1 and segments[0].startswith("+"):
-    invite_hash = segments[0][1:]
-    if TELEGRAM_INVITE_HASH_PATTERN.fullmatch(invite_hash):
-      return "import_chat_invite", invite_hash
+  # Match the provider path byte-for-byte. Splitting while dropping empty
+  # segments would silently turn malformed `//`, trailing-slash, or otherwise
+  # non-canonical paths into an actionable join target.
+  plus_invite = TELEGRAM_PLUS_INVITE_PATH_PATTERN.fullmatch(parsed.path)
+  if plus_invite is not None:
+    return "import_chat_invite", plus_invite.group(1)
+  joinchat_invite = TELEGRAM_JOINCHAT_PATH_PATTERN.fullmatch(parsed.path)
+  if joinchat_invite is not None:
+    return "import_chat_invite", joinchat_invite.group(1)
+  public_username = TELEGRAM_PUBLIC_USERNAME_PATH_PATTERN.fullmatch(parsed.path)
+  if public_username is None:
     return None
-  if len(segments) == 2 and segments[0].lower() == "joinchat":
-    invite_hash = segments[1]
-    if TELEGRAM_INVITE_HASH_PATTERN.fullmatch(invite_hash):
-      return "import_chat_invite", invite_hash
-    return None
-  if len(segments) != 1:
-    return None
-
-  username = segments[0]
-  if (
-    username.lower() in TELEGRAM_RESERVED_PATHS
-    or TELEGRAM_PUBLIC_USERNAME_PATTERN.fullmatch(username) is None
-  ):
+  username = public_username.group(1)
+  if username.lower() in TELEGRAM_RESERVED_PATHS:
     return None
   return "join_public_chat", username
 
@@ -837,11 +833,17 @@ async def run_telegram_url_action(client, *, url: str) -> dict[str, object]:
   try:
     await client(request)
   except Exception as err:
-    # Telegram reports repeated public/private joins with this stable RPC
-    # class. Treat only that exact provider result as idempotent success.
-    if err.__class__.__name__ != "UserAlreadyParticipantError":
+    error_name = err.__class__.__name__
+    # These two RPC outcomes are both successful external transitions. One is
+    # already complete; the other is explicitly pending an admin decision.
+    # Returning either as a stable status prevents a blind retry from creating
+    # ambiguous provider state after the original request was accepted.
+    if error_name == "UserAlreadyParticipantError":
+      status = "already_member"
+    elif error_name == "InviteRequestSentError":
+      status = "request_sent"
+    else:
       raise
-    status = "already_member"
   return {
     "kind": kind,
     "status": status,

@@ -177,6 +177,47 @@ describe("telegram-user commands", () => {
     });
   });
 
+  it("renders a pending Telegram join request as structured non-retry success", async () => {
+    backendMocks.runTelegramUserButtonClick.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      button: {
+        callback_data: null,
+        callback_data_base64: null,
+        column: 0,
+        row: 0,
+        text: "Participant chat",
+        url: "https://t.me/+PendingInviteHash",
+      },
+      chat: "@jarvis_tester_1_bot",
+      click_result: {
+        alert: false,
+        cache_time: 0,
+        message: null,
+        url: "https://t.me/+PendingInviteHash",
+      },
+      clicked: true,
+      message_id: 52838,
+      url_action: {
+        kind: "import_chat_invite",
+        status: "request_sent",
+        url: "https://t.me/+PendingInviteHash",
+      },
+    });
+
+    await telegramUserButtonClickCommand(
+      {
+        buttonText: "Participant chat",
+        chat: "@jarvis_tester_1_bot",
+        expectedUrl: "https://t.me/+PendingInviteHash",
+        json: true,
+        messageId: "52838",
+      },
+      runtime,
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"status": "request_sent"'));
+  });
+
   it("rejects button-click when callback and URL guards are both supplied", async () => {
     await expect(
       telegramUserButtonClickCommand(

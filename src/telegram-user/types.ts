@@ -139,7 +139,7 @@ export type TelegramUserButtonClickResult = {
   message_id: number;
   url_action?: {
     kind: "import_chat_invite" | "join_public_chat" | "unsupported";
-    status: "action_required" | "already_member" | "joined";
+    status: "action_required" | "already_member" | "joined" | "request_sent";
     url: string;
   };
   url_action_required?: boolean;

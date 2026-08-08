@@ -2007,6 +2007,53 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(exit_code, 0)
     self.assertEqual(emitted["url_action"]["status"], "already_member")
 
+  async def test_run_button_click_treats_invite_request_sent_as_pending_success(self) -> None:
+    cases = [
+      ("https://t.me/+PendingInviteHash", "import_chat_invite"),
+      ("https://telegram.me/openclaw_updates", "join_public_chat"),
+    ]
+    for expected_url, expected_kind in cases:
+      with self.subTest(expected_url = expected_url):
+        message = FakeInlineButtonMessage(
+          buttons = [[SimpleNamespace(data = None, text = "Participant chat", url = expected_url)]],
+          message_id = 52838,
+        )
+        request_sent_error = type("InviteRequestSentError", (Exception,), {})(
+          "request sent for admin approval"
+        )
+        fake_client = FakeButtonClickClient(message, request_error = request_sent_error)
+        emitted: dict[str, object] = {}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+          session_path = Path(temp_dir) / "userbot.session"
+          session_path.touch()
+          with (
+            patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+            patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+            patch.object(
+              telethon_cli,
+              "emit",
+              side_effect = lambda payload, **_kwargs: emitted.update(payload) or 0,
+            ),
+          ):
+            exit_code = await telethon_cli.run_button_click(
+              argparse.Namespace(
+                button_text = "Participant chat",
+                chat = "@jarvis_tester_1_bot",
+                expected_callback_data = None,
+                expected_url = expected_url,
+                message_id = 52838,
+                session = str(session_path),
+              )
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(emitted["clicked"])
+        self.assertEqual(emitted["url_action"]["kind"], expected_kind)
+        self.assertEqual(emitted["url_action"]["status"], "request_sent")
+        self.assertEqual(message.click_calls, [])
+        self.assertEqual(len(fake_client.requests), 1)
+
   async def test_run_button_click_refuses_external_url_without_opening_it(self) -> None:
     expected_url = "https://example.com/participant-chat"
     message = FakeInlineButtonMessage(
@@ -2125,6 +2172,27 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(fake_client.requests, [])
     self.assertEqual(emitted["error"]["code"], "E_BUTTON_MISMATCH")
     self.assertEqual(emitted["error"]["details"]["match_count"], 0)
+
+  def test_parse_telegram_join_url_rejects_noncanonical_paths(self) -> None:
+    rejected_urls = [
+      "https://t.me/",
+      "https://t.me//openclaw_updates",
+      "https://t.me/openclaw_updates/",
+      "https://t.me/openclaw_updates//",
+      "https://t.me/openclaw_updates/123",
+      "https://t.me/+PendingInviteHash/",
+      "https://t.me//+PendingInviteHash",
+      "https://t.me/joinchat//PendingInviteHash",
+      "https://t.me/joinchat/PendingInviteHash/",
+      "https://t.me/joinchat/PendingInviteHash/123",
+      "https://t.me/openclaw_updates?start=payload",
+      "https://t.me/+PendingInviteHash?single",
+      "https://t.me/openclaw_updates#fragment",
+    ]
+
+    for rejected_url in rejected_urls:
+      with self.subTest(rejected_url = rejected_url):
+        self.assertIsNone(telethon_cli.parse_telegram_join_url(rejected_url))
 
   async def test_run_button_click_rejects_ambiguous_guard_modes_without_clicking(self) -> None:
     message = FakeInlineButtonMessage(
