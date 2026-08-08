@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 42,
+  "sequence": 43,
   "nextFence": 13,
-  "mergeLease": {
-    "leaseId": "c6c673ac-2d5d-42a3-8691-5139673493eb",
-    "fence": 12,
-    "owner": {
-      "threadId": "/root/tldr_release",
-      "hostId": "nested-agent"
-    },
-    "claimedPr": 1364,
-    "claimedAt": "2026-08-08T08:33:56.836Z",
-    "heartbeatAt": "2026-08-08T08:33:56.836Z",
-    "expiresAt": "2026-08-08T08:53:56.836Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -1046,7 +1035,7 @@
       }
     },
     "1364": {
-      "state": "claimed",
+      "state": "blocked",
       "candidate": {
         "pr": 1364,
         "url": "https://github.com/artemgetmann/openclaw/pull/1364",
@@ -1114,7 +1103,13 @@
         "stateDirectory": "/Users/user/Programming_Projects/openclaw/.worktrees/tldr-skill/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [],
+      "discoveredBlockers": [
+        {
+          "kind": "main-drift",
+          "details": "PR #1364 immutable candidate remains head 517ada4955a7347dfaa3c11b1deed79eea33ba74 with raw patch sha256:98b4a95811be2c6dc309679affc430d68541beb63f6805ba407405820610cf1b, but tested base 65567894969b8dcb7990fb55318d4328640a523e is stale: current main is 089357248e0b644170a8bf946f6d6bfc81e1bf1 and GitHub reports mergeable=MERGEABLE, mergeStateStatus=BEHIND. Review PASS and tester PASS/terminal closure match the immutable head; review threads are empty; declared dependencies and open-PR path overlap are none. Relevant CI checks node test shard 2/2 remains IN_PROGRESS and CI / pr-required has not completed. No merge attempted. Return source to the same builder for base refresh, then require fresh exact-head review, tester PASS/closure, and refreshed queue packet.",
+          "observedAt": "2026-08-08T08:35:34.052Z"
+        }
+      ],
       "readyAt": "2026-08-08T08:31:03.657Z",
       "ownerHistory": [
         {
@@ -1151,10 +1146,10 @@
     }
   },
   "lastTransaction": {
-    "id": "3a98c83b-c9d2-4ca7-9f6a-c4f452d8a064",
-    "recordedAt": "2026-08-08T08:33:56.836Z"
+    "id": "27ee953c-e93c-47b7-ace4-411da21811c0",
+    "recordedAt": "2026-08-08T08:35:34.052Z"
   },
-  "updatedAt": "2026-08-08T08:33:56.836Z",
+  "updatedAt": "2026-08-08T08:35:34.052Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
