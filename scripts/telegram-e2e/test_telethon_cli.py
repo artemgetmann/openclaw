@@ -269,14 +269,30 @@ class FakeInlineButtonMessage:
 
   async def click(self, *, i: int, j: int):
     self.click_calls.append({"i": i, "j": j})
+    url = getattr(self.buttons[i][j], "url", None)
+    if url:
+      return url
     return SimpleNamespace(alert = False, cache_time = 5, message = "Queued", url = None)
 
 
 class FakeButtonClickClient:
-  def __init__(self, message: FakeInlineButtonMessage | None) -> None:
+  def __init__(
+    self,
+    message: FakeInlineButtonMessage | None,
+    *,
+    request_error: Exception | None = None,
+  ) -> None:
     self.disconnected = False
     self.get_messages_calls: list[dict[str, object]] = []
     self.message = message
+    self.request_error = request_error
+    self.requests: list[object] = []
+
+  async def __call__(self, request):
+    self.requests.append(request)
+    if self.request_error is not None:
+      raise self.request_error
+    return SimpleNamespace(updates = [])
 
   async def disconnect(self) -> None:
     self.disconnected = True
@@ -493,7 +509,18 @@ class FakeMarkDialogUnreadRequest:
     self.unread = unread
 
 
+class FakeJoinChannelRequest:
+  def __init__(self, *, channel: str) -> None:
+    self.channel = channel
+
+
+class FakeImportChatInviteRequest:
+  def __init__(self, *, hash: str) -> None:
+    self.hash = hash
+
+
 class FakeTelethonFunctions:
+  channels = SimpleNamespace(JoinChannelRequest = FakeJoinChannelRequest)
   messages = SimpleNamespace(
     CreateForumTopicRequest = FakeCreateForumTopicRequest,
     DeleteTopicHistoryRequest = FakeDeleteTopicHistoryRequest,
@@ -501,6 +528,7 @@ class FakeTelethonFunctions:
     GetForumTopicsRequest = FakeGetForumTopicsRequest,
     GetRepliesRequest = FakeGetRepliesRequest,
     MarkDialogUnreadRequest = FakeMarkDialogUnreadRequest,
+    ImportChatInviteRequest = FakeImportChatInviteRequest,
   )
 
 
@@ -1858,6 +1886,271 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     details = emitted["error"]["details"]
     self.assertEqual(details["match_count"], 2)
     self.assertEqual(details["available_buttons"][0]["callback_data"], "queue:actual")
+
+  async def test_run_button_click_requires_one_exact_text_and_url_match(self) -> None:
+    expected_url = "https://t.me/+exact-participant-invite"
+    message = FakeInlineButtonMessage(
+      buttons = [
+        [SimpleNamespace(data = None, text = "Participant chat", url = "https://example.com/wrong")],
+        [SimpleNamespace(data = None, text = "Participant chat", url = expected_url)],
+      ],
+      message_id = 52832,
+    )
+    fake_client = FakeButtonClickClient(message)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_kwargs: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_button_click(
+          argparse.Namespace(
+            button_text = "Participant chat",
+            chat = "@jarvis_tester_1_bot",
+            expected_callback_data = None,
+            expected_url = expected_url,
+            message_id = 52832,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(message.click_calls, [])
+    self.assertEqual(len(fake_client.requests), 1)
+    self.assertIsInstance(fake_client.requests[0], FakeImportChatInviteRequest)
+    self.assertEqual(fake_client.requests[0].hash, "exact-participant-invite")
+    self.assertEqual(emitted["button"]["url"], expected_url)
+    self.assertEqual(emitted["url_action"]["kind"], "import_chat_invite")
+    self.assertEqual(emitted["url_action"]["status"], "joined")
+
+  async def test_run_button_click_joins_exact_public_telegram_chat(self) -> None:
+    expected_url = "https://telegram.me/openclaw_updates"
+    message = FakeInlineButtonMessage(
+      buttons = [[SimpleNamespace(data = None, text = "Updates", url = expected_url)]],
+      message_id = 52833,
+    )
+    fake_client = FakeButtonClickClient(message)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_kwargs: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_button_click(
+          argparse.Namespace(
+            button_text = "Updates",
+            chat = "@jarvis_tester_1_bot",
+            expected_callback_data = None,
+            expected_url = expected_url,
+            message_id = 52833,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(message.click_calls, [])
+    self.assertEqual(len(fake_client.requests), 1)
+    self.assertIsInstance(fake_client.requests[0], FakeJoinChannelRequest)
+    self.assertEqual(fake_client.requests[0].channel, "openclaw_updates")
+    self.assertEqual(emitted["url_action"]["kind"], "join_public_chat")
+    self.assertEqual(emitted["url_action"]["status"], "joined")
+
+  async def test_run_button_click_treats_already_joined_invite_as_idempotent_success(self) -> None:
+    expected_url = "https://t.me/joinchat/AlreadyJoinedHash"
+    message = FakeInlineButtonMessage(
+      buttons = [[SimpleNamespace(data = None, text = "Participant chat", url = expected_url)]],
+      message_id = 52834,
+    )
+    already_joined_error = type("UserAlreadyParticipantError", (Exception,), {})("already joined")
+    fake_client = FakeButtonClickClient(message, request_error = already_joined_error)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_kwargs: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_button_click(
+          argparse.Namespace(
+            button_text = "Participant chat",
+            chat = "@jarvis_tester_1_bot",
+            expected_callback_data = None,
+            expected_url = expected_url,
+            message_id = 52834,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(emitted["url_action"]["status"], "already_member")
+
+  async def test_run_button_click_refuses_external_url_without_opening_it(self) -> None:
+    expected_url = "https://example.com/participant-chat"
+    message = FakeInlineButtonMessage(
+      buttons = [[SimpleNamespace(data = None, text = "Participant chat", url = expected_url)]],
+      message_id = 52835,
+    )
+    fake_client = FakeButtonClickClient(message)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_kwargs: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_button_click(
+          argparse.Namespace(
+            button_text = "Participant chat",
+            chat = "@jarvis_tester_1_bot",
+            expected_callback_data = None,
+            expected_url = expected_url,
+            message_id = 52835,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(message.click_calls, [])
+    self.assertEqual(fake_client.requests, [])
+    self.assertFalse(emitted["clicked"])
+    self.assertTrue(emitted["url_action_required"])
+    self.assertEqual(emitted["url_action"]["kind"], "unsupported")
+    self.assertEqual(emitted["url_action"]["status"], "action_required")
+    self.assertEqual(emitted["url_action"]["url"], expected_url)
+
+  async def test_run_button_click_rejects_url_mismatch_and_duplicate_label_without_action(self) -> None:
+    actual_url = "https://t.me/+ActualInviteHash"
+    message = FakeInlineButtonMessage(
+      buttons = [
+        [SimpleNamespace(data = None, text = "Participant chat", url = actual_url)],
+        [SimpleNamespace(data = None, text = "Participant chat", url = actual_url)],
+      ],
+      message_id = 52836,
+    )
+    fake_client = FakeButtonClickClient(message)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_kwargs: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_button_click(
+          argparse.Namespace(
+            button_text = "Participant chat",
+            chat = "@jarvis_tester_1_bot",
+            expected_callback_data = None,
+            expected_url = actual_url,
+            message_id = 52836,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(message.click_calls, [])
+    self.assertEqual(fake_client.requests, [])
+    self.assertEqual(emitted["error"]["code"], "E_BUTTON_MISMATCH")
+    self.assertEqual(emitted["error"]["details"]["match_count"], 2)
+
+  async def test_run_button_click_rejects_exact_url_mismatch_without_action(self) -> None:
+    message = FakeInlineButtonMessage(
+      buttons = [[SimpleNamespace(data = None, text = "Participant chat", url = "https://t.me/+ActualInviteHash")]],
+      message_id = 52837,
+    )
+    fake_client = FakeButtonClickClient(message)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_kwargs: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_button_click(
+          argparse.Namespace(
+            button_text = "Participant chat",
+            chat = "@jarvis_tester_1_bot",
+            expected_callback_data = None,
+            expected_url = "https://t.me/+ExpectedInviteHash",
+            message_id = 52837,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(message.click_calls, [])
+    self.assertEqual(fake_client.requests, [])
+    self.assertEqual(emitted["error"]["code"], "E_BUTTON_MISMATCH")
+    self.assertEqual(emitted["error"]["details"]["match_count"], 0)
+
+  async def test_run_button_click_rejects_ambiguous_guard_modes_without_clicking(self) -> None:
+    message = FakeInlineButtonMessage(
+      buttons = [[SimpleNamespace(data = b"queue:actual", text = "Queue", url = None)]],
+      message_id = 52831,
+    )
+    fake_client = FakeButtonClickClient(message)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())):
+        exit_code = await telethon_cli.run_button_click(
+          argparse.Namespace(
+            button_text = "Queue",
+            chat = "@jarvis_tester_1_bot",
+            expected_callback_data = "queue:actual",
+            expected_url = "https://example.com/queue",
+            message_id = 52831,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(fake_client.get_messages_calls, [])
+    self.assertEqual(message.click_calls, [])
 
   async def test_run_send_uploads_media_as_voice_with_caption_and_reply_target(self) -> None:
     fake_client = FakeSendClient()

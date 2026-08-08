@@ -21,6 +21,7 @@ import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import session_owner
 
@@ -50,6 +51,29 @@ DEFAULT_SESSION_LOCK = (
 PENDING_AUTH_SUFFIX = ".openclaw-login.json"
 LOGIN_PASSWORD_ENV = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD"
 SESSION_LOCK_PATH_ENV = "OPENCLAW_TELEGRAM_USER_LOCK_PATH"
+TELEGRAM_URL_HOSTS = {"t.me", "telegram.me"}
+TELEGRAM_INVITE_HASH_PATTERN = re.compile(r"^[A-Za-z0-9_-]{5,}$")
+TELEGRAM_PUBLIC_USERNAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
+TELEGRAM_RESERVED_PATHS = {
+  "addlist",
+  "addstickers",
+  "boost",
+  "c",
+  "confirmphone",
+  "contact",
+  "giftcode",
+  "invoice",
+  "iv",
+  "joinchat",
+  "login",
+  "m",
+  "nft",
+  "proxy",
+  "s",
+  "setlanguage",
+  "share",
+  "socks",
+}
 
 
 def emit(payload: object, *, stream = sys.stdout) -> int:
@@ -697,7 +721,7 @@ def resolve_download_output_path(output_raw: str, *, chat_raw: str, message) -> 
 
 
 def build_button_metadata(button, *, column: int, row: int) -> dict[str, object]:
-  """Return bounded, JSON-safe identity metadata without following the button."""
+  """Return JSON-safe identity metadata without following the button."""
 
   text = str(getattr(button, "text", "") or "")
   data = getattr(button, "data", None)
@@ -716,6 +740,9 @@ def build_button_metadata(button, *, column: int, row: int) -> dict[str, object]
     "column": column,
     "row": row,
     "text": text[:200],
+    # URL buttons do not carry callback bytes. Expose the provider value in
+    # structured reads so a later action can repeat it as an exact guard.
+    "url": str(getattr(button, "url", "") or "") or None,
   }
 
 
@@ -735,11 +762,90 @@ def list_message_buttons(message) -> list[tuple[object, dict[str, object]]]:
 def build_button_click_result_payload(result) -> dict[str, object | None]:
   """Expose only bounded callback-answer fields, never an arbitrary RPC object."""
 
+  # URL actions reuse this bounded shape for their verified value. The CLI
+  # never passes Telethon's open_url=True and therefore never launches a browser.
+  if isinstance(result, str):
+    return {
+      "alert": False,
+      "cache_time": 0,
+      "message": None,
+      "url": result,
+    }
   return {
     "alert": bool(getattr(result, "alert", False)),
     "cache_time": int(getattr(result, "cache_time", 0) or 0),
     "message": str(getattr(result, "message", "") or "")[:400] or None,
     "url": str(getattr(result, "url", "") or "")[:400] or None,
+  }
+
+
+def parse_telegram_join_url(url: str) -> tuple[str, str] | None:
+  """Recognize only exact Telegram public-chat and private-invite URL forms."""
+
+  try:
+    parsed = urlsplit(url)
+    port = parsed.port
+  except ValueError:
+    return None
+  if (
+    parsed.scheme != "https"
+    or (parsed.hostname or "").lower() not in TELEGRAM_URL_HOSTS
+    or parsed.username is not None
+    or parsed.password is not None
+    or port is not None
+    or parsed.query
+    or parsed.fragment
+  ):
+    return None
+
+  segments = [segment for segment in parsed.path.split("/") if segment]
+  if len(segments) == 1 and segments[0].startswith("+"):
+    invite_hash = segments[0][1:]
+    if TELEGRAM_INVITE_HASH_PATTERN.fullmatch(invite_hash):
+      return "import_chat_invite", invite_hash
+    return None
+  if len(segments) == 2 and segments[0].lower() == "joinchat":
+    invite_hash = segments[1]
+    if TELEGRAM_INVITE_HASH_PATTERN.fullmatch(invite_hash):
+      return "import_chat_invite", invite_hash
+    return None
+  if len(segments) != 1:
+    return None
+
+  username = segments[0]
+  if (
+    username.lower() in TELEGRAM_RESERVED_PATHS
+    or TELEGRAM_PUBLIC_USERNAME_PATTERN.fullmatch(username) is None
+  ):
+    return None
+  return "join_public_chat", username
+
+
+async def run_telegram_url_action(client, *, url: str) -> dict[str, object]:
+  """Join one exact Telegram chat URL without invoking a browser or web client."""
+
+  parsed = parse_telegram_join_url(url)
+  if parsed is None:
+    raise ValueError("unsupported Telegram join URL")
+  kind, value = parsed
+  request = (
+    functions.messages.ImportChatInviteRequest(hash = value)
+    if kind == "import_chat_invite"
+    else functions.channels.JoinChannelRequest(channel = value)
+  )
+  status = "joined"
+  try:
+    await client(request)
+  except Exception as err:
+    # Telegram reports repeated public/private joins with this stable RPC
+    # class. Treat only that exact provider result as idempotent success.
+    if err.__class__.__name__ != "UserAlreadyParticipantError":
+      raise
+    status = "already_member"
+  return {
+    "kind": kind,
+    "status": status,
+    "url": url,
   }
 
 
@@ -813,15 +919,18 @@ def build_parser() -> argparse.ArgumentParser:
 
   button_click = subparsers.add_parser(
     "button-click",
-    help = "Click one exact inline callback button on one exact message",
+    help = "Select one exact inline callback or URL button on one exact message",
   )
   button_click.add_argument("--chat", required = True, help = "Exact target chat username or id")
   button_click.add_argument("--message-id", type = int, required = True, help = "Exact message id")
   button_click.add_argument("--button-text", required = True, help = "Exact visible button text")
   button_click.add_argument(
     "--expected-callback-data",
-    required = True,
     help = "Exact UTF-8 callback data expected behind the button",
+  )
+  button_click.add_argument(
+    "--expected-url",
+    help = "Exact Telegram public-chat or invite URL to join without opening a browser",
   )
 
   inbox = subparsers.add_parser("inbox", help = "List dialogs with unread metadata")
@@ -1658,13 +1767,17 @@ async def run_button_click(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   message_id = int(args.message_id or 0)
   button_text = str(args.button_text or "")
-  callback_data = str(args.expected_callback_data or "")
+  callback_data = str(getattr(args, "expected_callback_data", None) or "")
+  expected_url = str(getattr(args, "expected_url", None) or "")
   if message_id <= 0:
     return fail("E_USAGE", "Telegram button-click requires a positive --message-id.")
   if not button_text:
     return fail("E_USAGE", "Telegram button-click requires --button-text.")
-  if not callback_data:
-    return fail("E_USAGE", "Telegram button-click requires --expected-callback-data.")
+  if bool(callback_data) == bool(expected_url):
+    return fail(
+      "E_USAGE",
+      "Telegram button-click requires exactly one of --expected-callback-data or --expected-url.",
+    )
 
   expected_callback_bytes = callback_data.encode("utf-8")
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
@@ -1684,14 +1797,18 @@ async def run_button_click(args: argparse.Namespace) -> int:
         (button, metadata)
         for button, metadata in available
         if str(getattr(button, "text", "") or "") == button_text
-        and getattr(button, "data", None) == expected_callback_bytes
+        and (
+          getattr(button, "data", None) == expected_callback_bytes
+          if callback_data
+          else str(getattr(button, "url", "") or "") == expected_url
+        )
       ]
       if len(matches) != 1:
         # Fail closed and return enough bounded metadata to diagnose stale UI
         # assumptions. Crucially, no Message.click call occurs on this branch.
         return fail(
           "E_BUTTON_MISMATCH",
-          "Expected exactly one inline button matching both text and callback data.",
+          "Expected exactly one inline button matching text and the selected callback or URL guard.",
           details = {
             "available_buttons": [metadata for _, metadata in available[:100]],
             "match_count": len(matches),
@@ -1701,7 +1818,39 @@ async def run_button_click(args: argparse.Namespace) -> int:
         )
 
       _, matched = matches[0]
-      # Coordinates are derived only after the exact text+data uniqueness check.
+      if expected_url:
+        telegram_action = parse_telegram_join_url(expected_url)
+        if telegram_action is None:
+          # Exact matching proves which URL the caller selected, but arbitrary
+          # web navigation remains outside this MTProto command's authority.
+          return emit(
+            {
+              "button": matched,
+              "chat": args.chat,
+              "click_result": build_button_click_result_payload(expected_url),
+              "clicked": False,
+              "message_id": message_id,
+              "url_action": {
+                "kind": "unsupported",
+                "status": "action_required",
+                "url": expected_url,
+              },
+              "url_action_required": True,
+            }
+          )
+        url_action = await run_telegram_url_action(client, url = expected_url)
+        return emit(
+          {
+            "button": matched,
+            "chat": args.chat,
+            "click_result": build_button_click_result_payload(expected_url),
+            "clicked": True,
+            "message_id": message_id,
+            "url_action": url_action,
+          }
+        )
+
+      # Coordinates are derived only after the exact text+value uniqueness check.
       # They are not accepted from callers and cannot select a latest/nearby UI.
       click_result = await message.click(i = matched["row"], j = matched["column"])
       return emit(

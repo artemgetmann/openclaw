@@ -285,6 +285,10 @@ Default Commands
   `openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message "seed prompt" --json`
 - Delete a temporary forum topic:
   `openclaw telegram-user topic-delete --chat -1003783709877 --topic-anchor 12345 --json`
+- Select an exact callback button:
+  `openclaw telegram-user button-click --chat @jarvis_tester_1_bot --message-id 52831 --button-text "Steer" --expected-callback-data "oqs:12345678-1234-4234-8234-123456789abc" --json`
+- Join an exact Telegram public-chat or invite URL button:
+  `openclaw telegram-user button-click --chat @jarvis_tester_1_bot --message-id 52832 --button-text "Participant chat" --expected-url "https://t.me/+exact-invite" --json`
 - Wait for a reply:
   `openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 12345 --sender-id 67890 --json`
 - Logout / clear local session:
@@ -309,6 +313,8 @@ Behavior Notes
   association; it must not be used to invent a topic title.
 - `read` exposes `media_kind` for media-bearing messages; use `download` for
   the payload and keep transcription generic through `openclaw media transcribe`.
+- `read` exposes inline-button callback and URL metadata. Repeat the exact
+  observed value with `button-click`; never infer a hidden value from its label.
 - `wait` is thread-aware through the existing backend semantics around
   `reply_to_msg_id`, `reply_to_top_id`, and DM topic metadata.
 - `topic-create` returns `topic_anchor`. Use that value as `--topic-anchor`
@@ -323,6 +329,13 @@ Safety
 
 - Require an explicit chat target and explicit message text before sending.
 - Confirm the intended recipient when the target is ambiguous.
+- URL-button selection joins only exact supported `https://t.me/...` or
+  `https://telegram.me/...` public-chat and invite forms through Telegram.
+  External, message-specific, malformed, or otherwise unsupported URLs return
+  `clicked=false` and `url_action_required=true` with the verified URL and
+  perform no action. Never browser-open, guess, normalize, or rewrite a button
+  URL. Joining changes the user's Telegram memberships, so preserve the normal
+  external-action approval boundary before running `button-click --expected-url`.
 - Do not expose Telegram API hash, session files, OTPs, or 2FA secrets in logs
   or chat transcripts.
 - OCR only an owner-provided fresh Telegram OTP screenshot while login state is

@@ -1185,13 +1185,14 @@ export async function runTelegramUserButtonClick(
   params: {
     buttonText: string;
     chat: string;
-    expectedCallbackData: string;
+    expectedCallbackData?: string;
+    expectedUrl?: string;
     messageId: number;
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserButtonClickResult> {
-  // All four selectors are mandatory and forwarded as separate argv entries.
-  // The Python transport performs the exact-message and unique-button checks
-  // under the canonical Telegram session lock before it mutates provider state.
+  // Message identity and visible text are mandatory. Exactly one hidden-value
+  // guard is forwarded so the Python transport can reject stale or ambiguous
+  // UI metadata before callback mutation or URL resolution.
   const args = [
     "button-click",
     "--chat",
@@ -1200,9 +1201,13 @@ export async function runTelegramUserButtonClick(
     String(params.messageId),
     "--button-text",
     params.buttonText,
-    "--expected-callback-data",
-    params.expectedCallbackData,
   ];
+  if (params.expectedCallbackData !== undefined) {
+    args.push("--expected-callback-data", params.expectedCallbackData);
+  }
+  if (params.expectedUrl !== undefined) {
+    args.push("--expected-url", params.expectedUrl);
+  }
   return runBackendCommand<TelegramUserButtonClickResult>({
     ...params,
     args,

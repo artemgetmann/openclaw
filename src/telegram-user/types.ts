@@ -8,6 +8,7 @@ export type TelegramUserInlineButton = {
   column: number;
   row: number;
   text: string;
+  url: string | null;
 };
 
 export type TelegramUserMessage = {
@@ -121,6 +122,7 @@ export type TelegramUserButtonMetadata = {
   column: number;
   row: number;
   text: string;
+  url: string | null;
 };
 
 export type TelegramUserButtonClickResult = {
@@ -133,8 +135,14 @@ export type TelegramUserButtonClickResult = {
     message: string | null;
     url: string | null;
   };
-  clicked: true;
+  clicked: boolean;
   message_id: number;
+  url_action?: {
+    kind: "import_chat_invite" | "join_public_chat" | "unsupported";
+    status: "action_required" | "already_member" | "joined";
+    url: string;
+  };
+  url_action_required?: boolean;
 };
 
 export type TelegramUserTopicCreateResult = {

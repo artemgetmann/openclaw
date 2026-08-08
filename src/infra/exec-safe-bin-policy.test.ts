@@ -246,6 +246,26 @@ describe("exec safe bin policy product-owned cli defaults", () => {
         openclawProfile,
       ),
     ).toBe(false);
+    // Joining through an inline URL changes account membership and must keep
+    // the normal approval boundary instead of inheriting read-only safe-bin use.
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "button-click",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--message-id",
+          "52832",
+          "--button-text",
+          "Participant chat",
+          "--expected-url",
+          "https://t.me/+ExactInviteHash",
+          "--json",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(false);
     expect(
       validateSafeBinArgv(
         ["telegram-user", "doctor", "--chat", "@jarvis_tester_1_bot", "--json"],
