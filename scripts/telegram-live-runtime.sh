@@ -12,6 +12,8 @@ BASELINE_HELPER_MODULE="${SCRIPT_DIR}/lib/worktree-tester-baseline.mjs"
 ASSIGN_BOT_SCRIPT="${SCRIPT_DIR}/assign-bot.sh"
 BOOTSTRAP_TELEGRAM_SCRIPT="${SCRIPT_DIR}/bootstrap-worktree-telegram.sh"
 MAIN_RECOVER_SCRIPT="${SCRIPT_DIR}/gateway-recover-main.sh"
+RUNTIME_BOOTSTRAP_SCRIPT="${SCRIPT_DIR}/bootstrap-worktree-runtime.sh"
+WORKTREE_READY_SCRIPT="${SCRIPT_DIR}/worktree-ready-check.sh"
 
 WORKTREE="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
 if [[ -d "$WORKTREE" ]]; then
@@ -2153,6 +2155,7 @@ emit_ensure_proof_lines() {
   echo "runtime_worktree=${RUNTIME_WORKTREE:-}"
   echo "runtime_port=${RUNTIME_PORT:-}"
   echo "runtime_state_dir=${RUNTIME_STATE_DIR:-}"
+  echo "runtime_config_path=${RUNTIME_CONFIG_PATH:-}"
   echo "runtime_ownership=${RUNTIME_OWNERSHIP}"
   echo "runtime_health=${RUNTIME_HEALTH}"
   echo "runtime_start_action=${RUNTIME_START_ACTION}"
@@ -2396,7 +2399,68 @@ ensure_command_unlocked() {
   fi
 }
 
+prepare_tester_lane() {
+  local current_branch=""
+
+  current_branch="$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)"
+  if [[ -z "$current_branch" ]]; then
+    echo "tester_preparation=failed" >&2
+    echo "tester_preparation_reason=adoption_required" >&2
+    echo "tester_preparation_hint=bash scripts/adopt-codex-worktree.sh <feature-name> --mode warm" >&2
+    return 1
+  fi
+  if [[ ! -x "$RUNTIME_BOOTSTRAP_SCRIPT" || ! -x "$WORKTREE_READY_SCRIPT" ]]; then
+    echo "tester_preparation=failed" >&2
+    echo "tester_preparation_reason=canonical_helper_missing" >&2
+    return 1
+  fi
+
+  echo "tester_preparation=started"
+  echo "tester_preparation_branch=${current_branch}"
+
+  # Warm preparation is intentionally neutral with respect to Telegram state:
+  # it repairs only this worktree's repository-pinned dependencies and tools.
+  # Never replace this with clean adoption, which may claim a bot and start a
+  # runtime as part of its operator-facing lifecycle.
+  if ! bash "$RUNTIME_BOOTSTRAP_SCRIPT" --root "$REPO_ROOT" --skip-build --quiet; then
+    echo "tester_preparation=failed" >&2
+    echo "tester_preparation_reason=warm_recovery_failed" >&2
+    return 1
+  fi
+  if ! bash "$WORKTREE_READY_SCRIPT" --root "$REPO_ROOT" --mode warm --quiet; then
+    echo "tester_preparation=failed" >&2
+    echo "tester_preparation_reason=warm_readiness_failed" >&2
+    return 1
+  fi
+
+  # The live runtime executes current source through scripts/run-node.mjs, but
+  # runtime imports and operator tooling still consume dist. Recover a missing
+  # or prior-commit build before any identity, auth, reservation, or profile
+  # setup so proof cannot mix current source with stale generated artifacts.
+  if ! bash "$RUNTIME_BOOTSTRAP_SCRIPT" --root "$REPO_ROOT" --skip-install --quiet; then
+    echo "tester_preparation=failed" >&2
+    echo "tester_preparation_reason=build_recovery_failed" >&2
+    return 1
+  fi
+  if ! bash "$WORKTREE_READY_SCRIPT" --root "$REPO_ROOT" --mode clean --quiet; then
+    echo "tester_preparation=failed" >&2
+    echo "tester_preparation_reason=clean_readiness_failed" >&2
+    return 1
+  fi
+
+  echo "tester_preparation=ok"
+  echo "tester_preparation_ready_mode=clean"
+}
+
 ensure_command() {
+  # Preparation is deliberately outside the profile command lock. A cold lane
+  # must not create runtime state, inspect provider auth, or reserve a tester
+  # identity merely because the operator reached the canonical ensure command.
+  # Warm readiness repairs repo-pinned dependencies first; clean readiness then
+  # repairs missing/stale dist from the same guarded command lifecycle.
+  if ! prepare_tester_lane; then
+    return 1
+  fi
   with_profile_command_lock ensure_command_unlocked
 }
 

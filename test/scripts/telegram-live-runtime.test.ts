@@ -24,6 +24,47 @@ function readSourceableRuntimeScript(): string {
 }
 
 describe("telegram-live-runtime.sh", () => {
+  it("does not enter reservation or runtime helpers when preparation fails", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-prepare-first-"));
+    const sourcePath = path.join(tempDir, "runtime-source.sh");
+    const callLog = path.join(tempDir, "calls.log");
+    writeFileSync(sourcePath, readSourceableRuntimeScript(), "utf8");
+
+    const result = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; prepare_tester_lane() { printf 'prepare\\n' >> ${JSON.stringify(callLog)}; return 1; }; with_profile_command_lock() { printf 'reservation-runtime\\n' >> ${JSON.stringify(callLog)}; }; ensure_command || true`,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result).toBe("");
+    expect(readFileSync(callLog, "utf8")).toBe("prepare\n");
+  });
+
+  it("enters reservation and runtime helpers only after preparation succeeds", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-prepared-"));
+    const sourcePath = path.join(tempDir, "runtime-source.sh");
+    const callLog = path.join(tempDir, "calls.log");
+    writeFileSync(sourcePath, readSourceableRuntimeScript(), "utf8");
+
+    execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; prepare_tester_lane() { printf 'prepare\\n' >> ${JSON.stringify(callLog)}; return 0; }; with_profile_command_lock() { printf 'reservation-runtime\\n' >> ${JSON.stringify(callLog)}; }; ensure_command`,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(readFileSync(callLog, "utf8")).toBe("prepare\nreservation-runtime\n");
+  });
+
   it("keeps truthy env parsing compatible with macOS bash 3", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
@@ -326,7 +367,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)} && BRANCH=main WORKTREE=/tmp/test RUNTIME_OWNERSHIP=ok RUNTIME_HEALTH=ok RUNTIME_START_ACTION=skip RUNTIME_START_TIMEOUT_SECS=45 RUNTIME_PLUGIN_MODE=main-parity TOKEN_PRESENT=no TOKEN_POOL_GUARD=ok TOKEN_FINGERPRINT=none CURRENT_LANE_BOT=unknown RUNTIME_TOKEN_SOURCE=unknown TOKEN_ORIGIN_HINT=unknown ASSIGNED_BOT_ID=unknown ASSIGNED_BOT_USERNAME=unknown ASSIGNED_BOT_NAME=unknown TOKEN_CLAIM_COUNT=0 PARITY_REPORT_PATH=/tmp/report.json PARITY_CONFIG_DIFF_ALLOWED_ONLY=true PARITY_BROWSER_SIDECAR_ENABLED=true PARITY_BROWSER_PROFILES_MATCH=true PARITY_TOOLS_MATCH=true PARITY_PLUGINS_MATCH=true PARITY_MODEL_CONFIG_MATCH=true PARITY_UPLOAD_DIR=/tmp/openclaw/uploads PARITY_UPLOAD_DIR_READY=true PARITY_UNEXPECTED_DIFFS= emit_ensure_proof_lines`,
+        `source ${JSON.stringify(sourcePath)} && BRANCH=main WORKTREE=/tmp/test RUNTIME_CONFIG_PATH=/tmp/test-state/openclaw.telegram-live.json RUNTIME_OWNERSHIP=ok RUNTIME_HEALTH=ok RUNTIME_START_ACTION=skip RUNTIME_START_TIMEOUT_SECS=45 RUNTIME_PLUGIN_MODE=main-parity TOKEN_PRESENT=no TOKEN_POOL_GUARD=ok TOKEN_FINGERPRINT=none CURRENT_LANE_BOT=unknown RUNTIME_TOKEN_SOURCE=unknown TOKEN_ORIGIN_HINT=unknown ASSIGNED_BOT_ID=unknown ASSIGNED_BOT_USERNAME=unknown ASSIGNED_BOT_NAME=unknown TOKEN_CLAIM_COUNT=0 PARITY_REPORT_PATH=/tmp/report.json PARITY_CONFIG_DIFF_ALLOWED_ONLY=true PARITY_BROWSER_SIDECAR_ENABLED=true PARITY_BROWSER_PROFILES_MATCH=true PARITY_TOOLS_MATCH=true PARITY_PLUGINS_MATCH=true PARITY_MODEL_CONFIG_MATCH=true PARITY_UPLOAD_DIR=/tmp/openclaw/uploads PARITY_UPLOAD_DIR_READY=true PARITY_UNEXPECTED_DIFFS= emit_ensure_proof_lines`,
       ],
       {
         cwd: process.cwd(),
@@ -336,6 +377,7 @@ describe("telegram-live-runtime.sh", () => {
 
     expect(stdout).toContain("token_claim_count=0");
     expect(stdout).toContain("runtime_ownership=ok");
+    expect(stdout).toContain("runtime_config_path=/tmp/test-state/openclaw.telegram-live.json");
     expect(stdout).toContain("runtime_plugin_mode=main-parity");
     expect(stdout).toContain("config_diff_allowed_only=true");
     expect(stdout).toContain("browser_sidecar_enabled=true");
@@ -376,7 +418,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; export HOME=${JSON.stringify(machineHome)}; HELPER_MODULE=${JSON.stringify(path.join(process.cwd(), "scripts", "lib", "telegram-live-runtime-helpers.mjs"))}; WORKTREE=${JSON.stringify(worktreePath)}; ensure_command_unlocked() { printf 'ensure-start:%s\\n' "$RUNTIME_STATE_DIR" >> ${JSON.stringify(logPath)}; sleep 0.3; printf 'ensure-end\\n' >> ${JSON.stringify(logPath)}; }; release_command_unlocked() { printf 'release-start:%s\\n' "$RUNTIME_STATE_DIR" >> ${JSON.stringify(logPath)}; printf 'release-end\\n' >> ${JSON.stringify(logPath)}; }; OPENCLAW_TELEGRAM_LIVE_STATE_ROOT=${JSON.stringify(customStateRoot)} ensure_command & ensure_pid=$!; sleep 0.05; OPENCLAW_TELEGRAM_LIVE_STATE_ROOT= release_command & release_pid=$!; wait "$ensure_pid"; wait "$release_pid"; cat ${JSON.stringify(logPath)}`,
+        `source ${JSON.stringify(sourcePath)}; export HOME=${JSON.stringify(machineHome)}; HELPER_MODULE=${JSON.stringify(path.join(process.cwd(), "scripts", "lib", "telegram-live-runtime-helpers.mjs"))}; WORKTREE=${JSON.stringify(worktreePath)}; prepare_tester_lane() { return 0; }; ensure_command_unlocked() { printf 'ensure-start:%s\\n' "$RUNTIME_STATE_DIR" >> ${JSON.stringify(logPath)}; sleep 0.3; printf 'ensure-end\\n' >> ${JSON.stringify(logPath)}; }; release_command_unlocked() { printf 'release-start:%s\\n' "$RUNTIME_STATE_DIR" >> ${JSON.stringify(logPath)}; printf 'release-end\\n' >> ${JSON.stringify(logPath)}; }; OPENCLAW_TELEGRAM_LIVE_STATE_ROOT=${JSON.stringify(customStateRoot)} ensure_command & ensure_pid=$!; sleep 0.05; OPENCLAW_TELEGRAM_LIVE_STATE_ROOT= release_command & release_pid=$!; wait "$ensure_pid"; wait "$release_pid"; cat ${JSON.stringify(logPath)}`,
       ],
       {
         cwd: process.cwd(),
@@ -410,7 +452,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(runtimeStateDir)}; PROFILE_COMMAND_LOCK_DIR=${JSON.stringify(commandLockDir)}; }; ensure_command_unlocked() { printf ok; }; ensure_command`,
+        `source ${JSON.stringify(sourcePath)}; prepare_tester_lane() { return 0; }; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(runtimeStateDir)}; PROFILE_COMMAND_LOCK_DIR=${JSON.stringify(commandLockDir)}; }; ensure_command_unlocked() { printf ok; }; ensure_command`,
       ],
       {
         cwd: process.cwd(),
@@ -435,7 +477,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; with_profile_command_lock() { printf '%s\\n' "$1"; }; ensure_command; release_command; handoff_main_command`,
+        `source ${JSON.stringify(sourcePath)}; prepare_tester_lane() { return 0; }; with_profile_command_lock() { printf '%s\\n' "$1"; }; ensure_command; release_command; handoff_main_command`,
       ],
       {
         cwd: process.cwd(),

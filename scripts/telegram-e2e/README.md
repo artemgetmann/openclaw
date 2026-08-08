@@ -18,6 +18,11 @@ Before you trust any live result, prove the lane is clean:
 3. Confirm there is only one active long-poller for the claimed tester bot.
 4. Only then trust `/model`, `/think`, or `/status` replies as evidence.
 
+Bounded harness consumers must read the exact `runtime_config_path` emitted by
+`scripts/telegram-live-runtime.sh ensure`. Never derive a config filename from
+`runtime_state_dir`: isolated tester lanes use `openclaw.telegram-live.json`,
+and guessing `openclaw.json` can silently inspect the wrong runtime contract.
+
 If you skip this, Telegram `getUpdates` conflicts can make another checkout
 answer your messages and waste an hour on fake regressions.
 
