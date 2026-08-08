@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 44,
-  "nextFence": 13,
-  "mergeLease": null,
+  "sequence": 45,
+  "nextFence": 14,
+  "mergeLease": {
+    "leaseId": "7b663ab9-fbb9-43a6-9c0e-f4a1e0a3c67d",
+    "fence": 13,
+    "owner": {
+      "threadId": "/root/tldr_release",
+      "hostId": "nested-agent"
+    },
+    "claimedPr": 1364,
+    "claimedAt": "2026-08-08T09:00:16.201Z",
+    "heartbeatAt": "2026-08-08T09:00:16.201Z",
+    "expiresAt": "2026-08-08T09:20:16.201Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -1035,7 +1046,7 @@
       }
     },
     "1364": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1364,
         "url": "https://github.com/artemgetmann/openclaw/pull/1364",
@@ -1117,6 +1128,18 @@
           "claimedAt": "2026-08-08T08:33:56.836Z",
           "heartbeatAt": "2026-08-08T08:33:56.836Z",
           "expiresAt": "2026-08-08T08:53:56.836Z"
+        },
+        {
+          "leaseId": "7b663ab9-fbb9-43a6-9c0e-f4a1e0a3c67d",
+          "fence": 13,
+          "owner": {
+            "threadId": "/root/tldr_release",
+            "hostId": "nested-agent"
+          },
+          "claimedPr": 1364,
+          "claimedAt": "2026-08-08T09:00:16.201Z",
+          "heartbeatAt": "2026-08-08T09:00:16.201Z",
+          "expiresAt": "2026-08-08T09:20:16.201Z"
         }
       ],
       "mutationIntent": null,
@@ -1180,17 +1203,17 @@
           "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
         },
         "builderSuspended": true,
-        "leaseId": "c6c673ac-2d5d-42a3-8691-5139673493eb",
-        "fence": 12,
-        "recordedAt": "2026-08-08T08:33:56.836Z"
+        "leaseId": "7b663ab9-fbb9-43a6-9c0e-f4a1e0a3c67d",
+        "fence": 13,
+        "recordedAt": "2026-08-08T09:00:16.201Z"
       }
     }
   },
   "lastTransaction": {
-    "id": "tldr-1364-refresh-e811e69fa9d",
-    "recordedAt": "2026-08-08T08:59:27.937Z"
+    "id": "c856ab9b-1b02-47dc-9ef9-c34533a149d6",
+    "recordedAt": "2026-08-08T09:00:16.201Z"
   },
-  "updatedAt": "2026-08-08T08:59:27.937Z",
+  "updatedAt": "2026-08-08T09:00:16.201Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
