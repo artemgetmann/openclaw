@@ -9,6 +9,7 @@ import {
   answerCallbackQuerySpy,
   botCtorSpy,
   commandSpy,
+  editMessageReplyMarkupSpy,
   editMessageTextSpy,
   getLoadConfigMock,
   getLoadWebMediaMock,
@@ -38,6 +39,8 @@ const { setActiveEmbeddedRun, __testing: embeddedRunTesting } =
   await import("../../../src/agents/pi-embedded-runner/runs.js");
 const { FOLLOWUP_QUEUES, getFollowupQueue } =
   await import("../../../src/auto-reply/reply/queue/state.js");
+const { registerTelegramRunStop, __testing: runStopTesting } =
+  await import("./run-stop-control.js");
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -149,6 +152,136 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+  it("routes one exact active-run Stop callback through the existing /stop command", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-run-stop-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    // The default dmScope routes direct messages through the canonical main
+    // session; seed that exact target so /stop persists its cutoff metadata.
+    const sessionKey = "agent:main:main";
+    const callbackTime = "2026-07-31T04:00:05.000Z";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "session-stop-1",
+          updatedAt: Date.parse("2026-07-31T03:00:00.000Z"),
+        },
+      }),
+    );
+    loadConfig.mockReturnValue({
+      session: { store: storePath },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse(callbackTime));
+    const registration = registerTelegramRunStop({
+      accountId: "default",
+      chatId: 1234,
+      requesterId: 9,
+    });
+    try {
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-stop-1",
+          data: registration.buttons[0]?.[0]?.callback_data,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 10,
+            text: "Working…",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-stop-1");
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledWith("1234", "⚙️ Agent was aborted.", {
+        parse_mode: "HTML",
+      });
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+        reply_markup: { inline_keyboard: [] },
+      });
+      const stored = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+        string,
+        { abortCutoffTimestamp?: number }
+      >;
+      expect(stored[sessionKey]?.abortCutoffTimestamp).toBe(Date.parse(callbackTime));
+    } finally {
+      runStopTesting.resetTelegramRunStopsForTests();
+      dateNowSpy.mockRestore();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+  it("still aborts when clearing the active-run Stop button fails", async () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-telegram-run-stop-edit-fail-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "session-stop-edit-fail",
+          updatedAt: Date.parse("2026-07-31T03:00:00.000Z"),
+        },
+      }),
+    );
+    loadConfig.mockReturnValue({
+      session: { store: storePath },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    editMessageReplyMarkupSpy.mockRejectedValueOnce(new Error("Telegram edit failed"));
+    const registration = registerTelegramRunStop({
+      accountId: "default",
+      chatId: 1234,
+      requesterId: 9,
+    });
+    try {
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-stop-edit-fail",
+          data: registration.buttons[0]?.[0]?.callback_data,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 11,
+            text: "Working…",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(sendMessageSpy).toHaveBeenCalledWith("1234", "⚙️ Agent was aborted.", {
+        parse_mode: "HTML",
+      });
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 11, {
+        reply_markup: { inline_keyboard: [] },
+      });
+      const stored = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+        string,
+        { abortCutoffTimestamp?: number }
+      >;
+      expect(stored[sessionKey]?.abortCutoffTimestamp).toBeTypeOf("number");
+    } finally {
+      runStopTesting.resetTelegramRunStopsForTests();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
   it("promotes one exact queued message through the Telegram Steer callback", async () => {
     const durableId = "12345678-1234-4234-8234-123456789abc";

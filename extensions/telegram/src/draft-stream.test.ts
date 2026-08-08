@@ -108,6 +108,33 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
   });
 
+  it("keeps active inline controls attached while editing a stream preview", async () => {
+    const api = createMockDraftApi();
+    const replyMarkup = {
+      inline_keyboard: [[{ text: "⏹ Stop", callback_data: "ors:test", style: "danger" as const }]],
+    };
+    const stream = createDraftStream(api, {
+      thread: { id: 99, scope: "forum" },
+      replyMarkup,
+    });
+
+    stream.update("Working…");
+    await vi.waitFor(() =>
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Working…", {
+        message_thread_id: 99,
+        reply_markup: replyMarkup,
+      }),
+    );
+    await (api.sendMessage.mock.results[0]?.value as Promise<unknown>);
+
+    stream.update("Still working on it.");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Still working on it.", {
+      reply_markup: replyMarkup,
+    });
+  });
+
   it("edits existing stream preview messages with rich_message when the raw API supports it", async () => {
     const api = createMockDraftApi() as ReturnType<typeof createMockDraftApi> & {
       raw: { editMessageText: ReturnType<typeof vi.fn> };

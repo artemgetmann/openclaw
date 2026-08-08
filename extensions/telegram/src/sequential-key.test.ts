@@ -157,6 +157,26 @@ describe("getTelegramBusyAwareSequentialKey", () => {
     }
   });
 
+  it("lets an exact active-run Stop callback bypass the busy message handler", () => {
+    const ctx = {
+      update: {
+        callback_query: {
+          id: "callback-stop-9",
+          data: `ors:${"a".repeat(24)}`,
+          message: mockMessage({ chat: mockChat({ id: 123, type: "private" }) }),
+        },
+      },
+    };
+    const release = markTelegramSequentialKeyBusy("telegram:123");
+    try {
+      expect(getTelegramBusyAwareSequentialKey(ctx)).toBe(
+        "telegram:123:run-stop-control:callback-stop-9",
+      );
+    } finally {
+      release();
+    }
+  });
+
   it("keeps commands serialized while the conversation is busy", () => {
     const ctx = {
       message: mockMessage({
