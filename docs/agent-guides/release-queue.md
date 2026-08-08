@@ -176,7 +176,7 @@ scripts/pr-release-queue recover-transient-blocker \
 The command uses authenticated GitHub reads itself. It brackets the proof with
 exact PR head and base reads. Between them, it enumerates the required
 `(context, app)` identities from legacy branch protection and every active rule
-that applies to the exact base branch. It then compares that expected set with
+that applies to the exact base branch across all paginated rule pages. It then compares that expected set with
 the paginated check runs and commit statuses for the exact queued head. Every
 configured identity must have a GitHub-accepted passing observation; a required
 check that never started is therefore `missing`, not silently absent.

@@ -92,7 +92,7 @@ if (args[0] === "pr" && args[1] === "view") {
         contexts: ["test"],
         checks: [{ context: "test", app_id: 1 }],
       }),
-      TEST_BRANCH_RULES: "[]",
+      TEST_BRANCH_RULES: "[[]]",
       TEST_CHECK_RUN_PAGES: JSON.stringify([
         {
           check_runs: [
@@ -959,10 +959,13 @@ describe("scripts/pr-release-queue", () => {
     blockChecksPending(fixture, 59);
     fixture.env.TEST_LEGACY_PROTECTION = "404";
     fixture.env.TEST_BRANCH_RULES = JSON.stringify([
-      {
-        type: "required_status_checks",
-        parameters: { required_status_checks: [{ context: "ruleset-ci", integration_id: 7 }] },
-      },
+      [],
+      [
+        {
+          type: "required_status_checks",
+          parameters: { required_status_checks: [{ context: "ruleset-ci", integration_id: 7 }] },
+        },
+      ],
     ]);
     fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
       {
@@ -1041,7 +1044,10 @@ describe("scripts/pr-release-queue", () => {
       {
         pr: 73,
         configure: (fixture: ReturnType<typeof makeFixture>) => {
-          fixture.env.TEST_BRANCH_RULES = JSON.stringify([{ type: "workflows", parameters: {} }]);
+          fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+            [],
+            [{ type: "workflows", parameters: {} }],
+          ]);
         },
         expected: "required-workflow rules are unsupported",
       },
@@ -1050,10 +1056,12 @@ describe("scripts/pr-release-queue", () => {
         configure: (fixture: ReturnType<typeof makeFixture>) => {
           fixture.env.TEST_LEGACY_PROTECTION = "404";
           fixture.env.TEST_BRANCH_RULES = JSON.stringify([
-            {
-              type: "required_status_checks",
-              parameters: { required_status_checks: [{ context: "ambiguous" }] },
-            },
+            [
+              {
+                type: "required_status_checks",
+                parameters: { required_status_checks: [{ context: "ambiguous" }] },
+              },
+            ],
           ]);
         },
         expected: "ruleset check identity is ambiguous",

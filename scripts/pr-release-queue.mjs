@@ -747,13 +747,14 @@ function expectedRequiredChecks(repo, baseBranch) {
     ["api", `repos/${repo}/branches/${encodedBranch}/protection/required_status_checks`],
     `GitHub ${baseBranch} branch-protection query`,
   );
-  const branchRules = runGhJson(
-    ["api", `repos/${repo}/rules/branches/${encodedBranch}`],
+  const branchRulePages = runGhJson(
+    ["api", "--paginate", "--slurp", `repos/${repo}/rules/branches/${encodedBranch}?per_page=100`],
     `GitHub ${baseBranch} active-rules query`,
   );
-  if (!Array.isArray(branchRules)) {
+  if (!Array.isArray(branchRulePages) || branchRulePages.some((page) => !Array.isArray(page))) {
     fail(`GitHub ${baseBranch} active rules are malformed`, 75);
   }
+  const branchRules = branchRulePages.flat();
   if (branchRules.some((rule) => /workflow/i.test(rule?.type ?? ""))) {
     fail("required-workflow rules are unsupported by transient blocker recovery");
   }
