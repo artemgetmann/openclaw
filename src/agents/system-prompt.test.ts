@@ -523,6 +523,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("check existing scheduled tasks first");
     expect(prompt).toContain("Do not ask for separate approval");
     expect(prompt).toContain("tentative, ambiguous, or missing a trustworthy time or timezone");
+    expect(prompt).toContain("mandatory prerequisite remains unresolved");
+    expect(prompt).toContain("carry it into every relevant reminder");
+    expect(prompt).toContain("known authorized live source");
+    expect(prompt).toContain("verify the prerequisite and refresh material logistics");
+    expect(prompt).toContain("Do not turn every reminder into live research");
+    expect(prompt).toContain("one consolidated useful update");
     expect(prompt).toContain("target airport arrival at least two hours before departure");
     expect(prompt).toContain("confirmed baggage and check-in status");
     expect(prompt).toContain("no checked baggage");
