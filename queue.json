@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 40,
+  "sequence": 41,
   "nextFence": 12,
-  "mergeLease": {
-    "leaseId": "820f0728-1485-478e-bb6e-d32c9b162d8d",
-    "fence": 11,
-    "owner": {
-      "threadId": "/root/pr1362_final_release",
-      "hostId": "MacBook-Pro-JetBook-4.local"
-    },
-    "claimedPr": 1362,
-    "claimedAt": "2026-08-08T08:31:30.162Z",
-    "heartbeatAt": "2026-08-08T08:31:30.162Z",
-    "expiresAt": "2026-08-08T08:51:30.162Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -690,7 +679,7 @@
       }
     },
     "1362": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1362,
         "url": "https://github.com/artemgetmann/openclaw/pull/1362",
@@ -905,7 +894,20 @@
           "replacedAt": "2026-08-08T08:31:10.178Z"
         }
       ],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1362,
+          "reviewedHeadSha": "aded038b2d73d307dc8b5708d5b575c12b50c878",
+          "diffFingerprint": "sha256:e9e6ef278dfc81d54aef60280d9fb28d7b6907a002a09f065cd7b527c4f0b441",
+          "mergeSha": "089357248e0b644170a8bf946f6d6bfc81e1bf1e",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -1110,10 +1112,10 @@
     }
   },
   "lastTransaction": {
-    "id": "c41711c1-72c1-42cf-a0e4-60a396c0faa7",
-    "recordedAt": "2026-08-08T08:31:30.162Z"
+    "id": "764d6a62-b2e6-4b49-aca8-d490794a18b4",
+    "recordedAt": "2026-08-08T08:32:28.668Z"
   },
-  "updatedAt": "2026-08-08T08:31:30.162Z",
+  "updatedAt": "2026-08-08T08:32:28.668Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -1121,7 +1123,8 @@
       1354,
       1355,
       1358,
-      1359
+      1359,
+      1362
     ],
     "pausedReason": null,
     "graduatedAt": "2026-08-07T05:46:10.866Z",
