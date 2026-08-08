@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -94,9 +95,11 @@ function collectForceSkillName(value: string, previous: string[]): string[] {
 
 function personalRuntimePaths(config?: ReturnType<typeof loadConfig>) {
   const homeDir = process.env.HOME?.trim() || os.homedir();
+  const codexHome = process.env.CODEX_HOME?.trim() || path.join(homeDir, ".codex");
   return {
     homeDir,
     stateDir: resolveStateDir(process.env, () => homeDir),
+    codexConfigPath: path.join(codexHome, "config.toml"),
     workspaceDir: config
       ? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config))
       : undefined,

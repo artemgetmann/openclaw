@@ -56,7 +56,9 @@ The temporary `with codex` form uses a child-process config override and does
 not modify persistent catalogs. If automatic upgrade migration keeps a legacy
 root active, resolve the named conflicts and run `openclaw skills runtime
 reconcile`. Restore a completed cutover only with its exact receipt via
-`openclaw skills runtime rollback <receipt-path>`.
+`openclaw skills runtime rollback <receipt-path>`. Rollback restores the legacy
+root and quarantines migration-introduced canonical copies beside the receipt;
+it never deletes those bodies.
 
 Bundled skills remain package-owned product truth. Do not edit them in place to
 make personal customizations. If Codex, Claude Code, Jarvis, and OpenClaw should

@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -146,6 +147,18 @@ describe("personal skill runtime visibility", () => {
     expect(config.skills?.entries?.demo?.enabled).toBe(false);
   });
 
+  it("preserves a symlinked Codex config while atomically updating its target", async () => {
+    const targetPath = path.join(homeDir, "dotfiles", "codex-config.toml");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.rename(codexConfigPath, targetPath);
+    await fs.symlink(targetPath, codexConfigPath);
+
+    await set("jarvis");
+
+    expect((await fs.lstat(codexConfigPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.readFile(targetPath, "utf8")).resolves.toContain(JSON.stringify(skillFile));
+  });
+
   it("rejects product-managed mirrors and unresolved legacy managed roots", async () => {
     await fs.writeFile(
       path.join(sharedSkillsDir, "demo", ".openclaw-skill.json"),
@@ -166,7 +179,7 @@ describe("personal skill runtime visibility", () => {
 
   it("rejects higher-precedence Jarvis skills with the same name", async () => {
     const workspaceDir = path.join(homeDir, "workspace");
-    const shadowFile = path.join(workspaceDir, "skills", "demo", "SKILL.md");
+    const shadowFile = path.join(workspaceDir, "skills", "alias-folder", "SKILL.md");
     await fs.mkdir(path.dirname(shadowFile), { recursive: true });
     await fs.writeFile(shadowFile, "---\nname: demo\ndescription: shadow\n---\n");
 
@@ -195,11 +208,43 @@ describe("personal skill runtime visibility", () => {
     ).toBe("shared");
   });
 
+  it("rejects a canonical personal skill whose effective Jarvis key differs", async () => {
+    await fs.writeFile(
+      skillFile,
+      [
+        "---",
+        "name: demo",
+        "description: fixture",
+        `metadata: '${JSON.stringify({ openclaw: { skillKey: "actual-key" } })}'`,
+        "---",
+        "",
+      ].join("\n"),
+    );
+
+    expect(() => status()).toThrow(/folder, frontmatter name, and skillKey must all match/i);
+    expect(writeJarvisConfig).not.toHaveBeenCalled();
+  });
+
   it("builds bounded Codex injection and leaves persistent catalogs unchanged", async () => {
     await set("jarvis");
+    const otherSkillFile = path.join(sharedSkillsDir, "other", "SKILL.md");
+    await fs.mkdir(path.dirname(otherSkillFile), { recursive: true });
+    await fs.writeFile(otherSkillFile, "---\nname: other\ndescription: other\n---\n");
+    await fs.appendFile(
+      codexConfigPath,
+      `\n[[skills.config]]\npath = ${JSON.stringify(otherSkillFile)}\nenabled = false\n`,
+    );
     const beforeCodex = await fs.readFile(codexConfigPath);
     const beforeConfig = structuredClone(config);
-    const spawnCodex = vi.fn().mockReturnValue({ status: 17 });
+    let temporaryHome = "";
+    const spawnCodex = vi.fn().mockImplementation((_command, _args, options) => {
+      temporaryHome = options.env.CODEX_HOME;
+      const temporaryConfig = fsSync.readFileSync(path.join(temporaryHome, "config.toml"), "utf8");
+      expect(temporaryConfig).not.toContain(JSON.stringify(skillFile));
+      expect(temporaryConfig).toContain(JSON.stringify(otherSkillFile));
+      expect(temporaryConfig).toContain("enabled = false");
+      return { status: 17 };
+    });
 
     const exitCode = runWithTemporaryCodexSkill({
       name: "demo",
@@ -214,8 +259,14 @@ describe("personal skill runtime visibility", () => {
     expect(spawnCodex).toHaveBeenCalledWith(
       "codex",
       buildTemporaryCodexSkillInjectionArgs(skillFile, ["exec", "probe"]),
-      { stdio: "inherit" },
+      {
+        stdio: "inherit",
+        env: expect.objectContaining({
+          CODEX_HOME: expect.stringContaining("openclaw-codex-skill-"),
+        }),
+      },
     );
+    await expect(fs.stat(temporaryHome)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readFile(codexConfigPath)).toEqual(beforeCodex);
     expect(config).toEqual(beforeConfig);
   });

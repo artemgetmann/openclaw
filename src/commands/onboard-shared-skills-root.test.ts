@@ -174,6 +174,25 @@ describe("ensureSharedPersonalSkillsManagedRoot", () => {
     expect(await fs.readlink(managedSkillsDir)).toBe(foreignTarget);
   });
 
+  it("never materializes a top-level legacy skill symlink", async () => {
+    const homeDir = await tempDir();
+    const stateDir = path.join(homeDir, ".openclaw");
+    const externalRoot = path.join(homeDir, "external");
+    const managedSkillsDir = path.join(stateDir, "skills");
+    await writeSkill(externalRoot, "escaped", "external body");
+    await fs.mkdir(managedSkillsDir, { recursive: true });
+    await fs.symlink(path.join(externalRoot, "escaped"), path.join(managedSkillsDir, "escaped"));
+
+    const result = ensureSharedPersonalSkillsManagedRoot({ homeDir, stateDir });
+
+    expect(result.status).toBe("compatibility-unknown-content");
+    expect(result.unknownEntries).toEqual(["escaped"]);
+    expect((await fs.lstat(path.join(managedSkillsDir, "escaped"))).isSymbolicLink()).toBe(true);
+    await expect(fs.stat(path.join(homeDir, ".agents", "skills", "escaped"))).rejects.toMatchObject(
+      { code: "ENOENT" },
+    );
+  });
+
   it("inventories a non-empty legacy workspace while preserving its scoped loader", async () => {
     const homeDir = await tempDir();
     const stateDir = path.join(homeDir, ".openclaw");
@@ -228,6 +247,13 @@ describe("ensureSharedPersonalSkillsManagedRoot", () => {
     const managedSkillsDir = path.join(stateDir, "skills");
     await writeSkill(managedSkillsDir, "legacy-only", "legacy body");
     const migrated = ensureSharedPersonalSkillsManagedRoot({ homeDir, stateDir });
+    await fs.mkdir(path.join(migrated.sharedSkillsDir, "legacy-only", ".clawhub"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(migrated.sharedSkillsDir, "legacy-only", ".clawhub", "user-state.json"),
+      '{"preserve":true}\n',
+    );
 
     const rolledBack = rollbackSharedPersonalSkillsManagedRoot(migrated.receiptPath!, {
       homeDir,
@@ -242,6 +268,42 @@ describe("ensureSharedPersonalSkillsManagedRoot", () => {
     await expect(
       fs.stat(path.join(homeDir, ".agents", "skills", "legacy-only")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.readFile(path.join(rolledBack.rollbackPreservedDir!, "legacy-only", "SKILL.md"), "utf8"),
+    ).resolves.toContain("legacy body");
+    await expect(
+      fs.readFile(
+        path.join(rolledBack.rollbackPreservedDir!, "legacy-only", ".clawhub", "user-state.json"),
+        "utf8",
+      ),
+    ).resolves.toContain('"preserve":true');
+  });
+
+  it("recovers a prepared transaction after the backup moved but before link creation", async () => {
+    const homeDir = await tempDir();
+    const stateDir = path.join(homeDir, ".openclaw");
+    const managedSkillsDir = path.join(stateDir, "skills");
+    await writeSkill(managedSkillsDir, "legacy-only", "legacy body");
+    const migrated = ensureSharedPersonalSkillsManagedRoot({ homeDir, stateDir });
+    const receipt = JSON.parse(await fs.readFile(migrated.receiptPath!, "utf8")) as {
+      status: string;
+      introducedSkills: unknown[];
+    };
+    expect(receipt.introducedSkills).toHaveLength(1);
+    receipt.status = "prepared";
+    await fs.writeFile(migrated.receiptPath!, `${JSON.stringify(receipt, null, 2)}\n`);
+    await fs.rm(managedSkillsDir);
+
+    const recovered = rollbackSharedPersonalSkillsManagedRoot(migrated.receiptPath!, {
+      homeDir,
+      stateDir,
+    });
+
+    expect(recovered.status).toBe("rolled-back");
+    expect((await fs.lstat(managedSkillsDir)).isDirectory()).toBe(true);
+    await expect(
+      fs.readFile(path.join(managedSkillsDir, "legacy-only", "SKILL.md"), "utf8"),
+    ).resolves.toContain("legacy body");
   });
 
   it("refuses a forged rollback receipt before changing the active canonical link", async () => {
