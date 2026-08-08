@@ -162,28 +162,7 @@ preserves the old candidate and blocker history, clears those old blockers, and
 returns the new immutable candidate to `queued`.
 
 `checks-pending` is the one blocker that may recover without a new candidate.
-After an authoritative read-only GitHub check proves every required check passed
-for the unchanged head, create a receipt that binds the PR, head, and lifecycle
-diff fingerprint:
-
-```json
-{
-  "schemaVersion": 1,
-  "kind": "checks-pending-recovery",
-  "receiptId": "stable-id-for-this-check-observation",
-  "source": "github-required-checks",
-  "candidate": {
-    "pr": 123,
-    "headSha": "40 hex characters",
-    "diffFingerprint": "sha256:64 hex characters"
-  },
-  "observedAt": "2026-08-08T12:00:00.000Z",
-  "allRequiredChecksPassed": true,
-  "requiredChecks": [{ "name": "test", "conclusion": "SUCCESS" }]
-}
-```
-
-Then run the explicit recovery transition with the same immutable identity:
+Run the explicit recovery transition with the same immutable identity:
 
 ```bash
 scripts/pr-release-queue recover-transient-blocker \
@@ -191,14 +170,21 @@ scripts/pr-release-queue recover-transient-blocker \
   --head-sha "$HEAD_SHA" \
   --diff-fingerprint "$DIFF_FINGERPRINT" \
   --kind checks-pending \
-  --receipt /path/to/checks-recovery.json \
   --transaction-id "$STABLE_TRANSACTION_ID"
 ```
 
-The command refuses an active release lease, candidate mismatch, mixed blocker
-set, or any blocker other than `checks-pending`. It preserves the original
-blocker and evidence in `blockerRecoveryHistory`, then makes the unchanged item
-claimable. Repeating the same transaction or durable receipt is idempotent.
+The command uses authenticated GitHub reads itself. It reads the exact PR head,
+queries the complete `gh pr checks --required` set, then reads the head again.
+Only a non-empty, structurally complete set whose every GitHub bucket is `pass`
+and whose head stayed equal to the queued head can recover. Caller-authored
+receipts are rejected. The queue generates and stores the normalized GitHub
+evidence in `blockerRecoveryHistory` with the original blocker.
+
+The command also refuses an active release lease, candidate mismatch, mixed
+blocker set, malformed or future blocker time, or any blocker other than
+`checks-pending`. Repeating the same transaction or durable queue recovery is
+idempotent and does not re-query GitHub. Stored blocker and recovery timestamps
+must remain valid ISO instants ordered as blocker <= recovery <= command time.
 Decision-required, base-drift, lifecycle ambiguity, source findings, candidate
 drift, and unknown blockers still require their existing repair path; this is
 not a generic unblock command.

@@ -32,7 +32,7 @@ function usage() {
   scripts/pr-release-queue.mjs explain-order
   scripts/pr-release-queue.mjs enqueue --packet <FILE>
   scripts/pr-release-queue.mjs refresh --packet <FILE>
-  scripts/pr-release-queue.mjs recover-transient-blocker --pr <NUMBER> --head-sha <SHA> --diff-fingerprint <SHA256> --kind checks-pending --receipt <FILE>
+  scripts/pr-release-queue.mjs recover-transient-blocker --pr <NUMBER> --head-sha <SHA> --diff-fingerprint <SHA256> --kind checks-pending
   scripts/pr-release-queue.mjs claim --thread-id <ID> --host-id <ID> [--pr <NUMBER>] [--ttl-seconds <SECONDS>]
   scripts/pr-release-queue.mjs heartbeat --lease-id <ID> --fence <NUMBER> [--ttl-seconds <SECONDS>]
   scripts/pr-release-queue.mjs block --lease-id <ID> --fence <NUMBER> --kind <KIND> --details <TEXT>
@@ -665,11 +665,14 @@ function mutateRefresh(state, packet, transactionId, now) {
   });
 }
 
-function validateTransientRecoveryReceipt(receipt, options) {
+function parseTransientRecoveryOptions(options) {
   const pr = parsePositiveInteger(requireOption(options, "pr"), "--pr");
   const headSha = requireOption(options, "headSha");
   const diffFingerprint = requireOption(options, "diffFingerprint");
   const blockerKind = requireOption(options, "kind");
+  if (options.receipt !== undefined) {
+    fail("--receipt is not accepted; recovery evidence is read live from GitHub", 2);
+  }
   if (!/^[0-9a-f]{40}$/i.test(headSha)) {
     fail("--head-sha must be a 40-character commit SHA", 2);
   }
@@ -679,34 +682,129 @@ function validateTransientRecoveryReceipt(receipt, options) {
   if (blockerKind !== "checks-pending") {
     fail("only the checks-pending transient blocker is recoverable");
   }
+  return { pr, headSha, diffFingerprint, blockerKind };
+}
 
-  const observedAt = new Date(receipt?.observedAt ?? "");
-  const requiredChecks = receipt?.requiredChecks;
-  if (
-    receipt?.schemaVersion !== SCHEMA_VERSION ||
-    receipt?.kind !== "checks-pending-recovery" ||
-    typeof receipt?.receiptId !== "string" ||
-    receipt.receiptId.trim() === "" ||
-    receipt?.source !== "github-required-checks" ||
-    receipt?.candidate?.pr !== pr ||
-    receipt?.candidate?.headSha !== headSha ||
-    receipt?.candidate?.diffFingerprint !== diffFingerprint ||
-    receipt?.allRequiredChecksPassed !== true ||
-    Number.isNaN(observedAt.valueOf()) ||
-    !Array.isArray(requiredChecks) ||
-    requiredChecks.length === 0 ||
-    requiredChecks.some(
-      (check) =>
-        typeof check?.name !== "string" ||
-        check.name.trim() === "" ||
-        check?.conclusion !== "SUCCESS",
-    )
-  ) {
+function parseStoredTimestamp(value, label) {
+  if (typeof value !== "string") {
+    fail(`${label} must be an ISO timestamp`);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf()) || parsed.toISOString() !== value) {
+    fail(`${label} must be an ISO timestamp`);
+  }
+  return parsed.valueOf();
+}
+
+function runGhJson(args, label) {
+  let output;
+  try {
+    output = execFileSync(GH_BIN, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    // Authentication, transport, and non-success check commands are all
+    // indeterminate evidence. Do not copy stderr into queue output because an
+    // external CLI error is not guaranteed to be secret-free.
+    fail(`${label} failed; transient blocker recovery evidence is indeterminate`, 75);
+  }
+  if (output.trim() === "") {
+    fail(`${label} returned empty evidence`, 75);
+  }
+  try {
+    return JSON.parse(output);
+  } catch {
+    fail(`${label} returned malformed JSON`, 75);
+  }
+}
+
+function readLiveRequiredCheckEvidence(recovery, now) {
+  const repo = parseRepoSlug();
+  const readHead = () => {
+    const metadata = runGhJson(
+      ["pr", "view", String(recovery.pr), "--repo", repo, "--json", "headRefOid"],
+      `GitHub PR #${recovery.pr} head query`,
+    );
+    if (!/^[0-9a-f]{40}$/i.test(metadata?.headRefOid ?? "")) {
+      fail(`GitHub PR #${recovery.pr} head query returned an invalid head`, 75);
+    }
+    return metadata.headRefOid;
+  };
+
+  // Bracket the required-check query with exact-head reads. A force push or
+  // ordinary source update during observation makes the entire evidence set
+  // stale even if every returned check happened to be green.
+  const headBefore = readHead();
+  if (headBefore !== recovery.headSha) {
+    fail(`GitHub PR #${recovery.pr} head drifted from the immutable queue candidate`);
+  }
+  const checks = runGhJson(
+    [
+      "pr",
+      "checks",
+      String(recovery.pr),
+      "--repo",
+      repo,
+      "--required",
+      "--json",
+      "name,bucket,state,workflow",
+    ],
+    `GitHub PR #${recovery.pr} required-check query`,
+  );
+  const headAfter = readHead();
+  if (headAfter !== recovery.headSha || headAfter !== headBefore) {
+    fail(`GitHub PR #${recovery.pr} head changed during required-check verification`);
+  }
+  if (!Array.isArray(checks) || checks.length === 0) {
+    fail(`GitHub PR #${recovery.pr} did not report a complete required-check set`);
+  }
+
+  const requiredChecks = checks.map((check) => {
+    if (
+      typeof check?.name !== "string" ||
+      check.name.trim() === "" ||
+      typeof check?.bucket !== "string" ||
+      check.bucket.trim() === "" ||
+      typeof check?.state !== "string" ||
+      check.state.trim() === "" ||
+      (check.workflow !== null &&
+        check.workflow !== undefined &&
+        typeof check.workflow !== "string")
+    ) {
+      fail(`GitHub PR #${recovery.pr} returned incomplete required-check evidence`, 75);
+    }
+    return {
+      name: check.name,
+      workflow: check.workflow ?? null,
+      bucket: check.bucket,
+      state: check.state,
+    };
+  });
+  const notPassing = requiredChecks.filter((check) => check.bucket !== "pass");
+  if (notPassing.length > 0) {
     fail(
-      "recovery receipt must bind the exact candidate and prove all GitHub required checks passed",
+      `GitHub PR #${recovery.pr} required checks are not all passing: ${notPassing
+        .map((check) => `${check.name}=${check.bucket}/${check.state}`)
+        .join(", ")}`,
     );
   }
-  return { pr, headSha, diffFingerprint, blockerKind, receipt };
+
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    kind: "checks-pending-recovery",
+    source: "github-live-required-checks",
+    repository: repo,
+    candidate: {
+      pr: recovery.pr,
+      headSha: recovery.headSha,
+      diffFingerprint: recovery.diffFingerprint,
+    },
+    observedAt: now.toISOString(),
+    headShaBefore: headBefore,
+    headShaAfter: headAfter,
+    requiredChecks,
+  };
 }
 
 function mutateRecoverTransientBlocker(state, recovery, transactionId, now) {
@@ -730,10 +828,20 @@ function mutateRecoverTransientBlocker(state, recovery, transactionId, now) {
       item.state === "queued" &&
       item.discoveredBlockers?.length === 0 &&
       priorRecovery?.blocker?.kind === recovery.blockerKind &&
-      JSON.stringify(priorRecovery?.receipt) === JSON.stringify(recovery.receipt) &&
       priorRecovery?.candidate?.headSha === recovery.headSha &&
       priorRecovery?.candidate?.diffFingerprint === recovery.diffFingerprint
     ) {
+      const blockerObservedAt = parseStoredTimestamp(
+        priorRecovery.blocker?.observedAt,
+        "stored blocker observedAt",
+      );
+      const recoveryObservedAt = parseStoredTimestamp(
+        priorRecovery.receipt?.observedAt,
+        "stored recovery observedAt",
+      );
+      if (blockerObservedAt > recoveryObservedAt || recoveryObservedAt > now.valueOf()) {
+        fail("stored recovery timestamps are out of order or in the future");
+      }
       // A caller may lose the first response and retry with a new transaction.
       // Return the durable receipt without manufacturing a second recovery.
       return {
@@ -756,10 +864,14 @@ function mutateRecoverTransientBlocker(state, recovery, transactionId, now) {
         `PR #${recovery.pr} is not blocked solely by ${recovery.blockerKind}; refusing recovery`,
       );
     }
-    if (
-      new Date(recovery.receipt.observedAt).valueOf() < new Date(blockers[0].observedAt).valueOf()
-    ) {
-      fail("required-check recovery evidence predates the recorded checks-pending blocker");
+    const blockerObservedAt = parseStoredTimestamp(blockers[0].observedAt, "blocker observedAt");
+    if (blockerObservedAt > now.valueOf()) {
+      fail("blocker observedAt cannot be in the future");
+    }
+    const receipt = readLiveRequiredCheckEvidence(recovery, now);
+    const recoveryObservedAt = parseStoredTimestamp(receipt.observedAt, "recovery observedAt");
+    if (blockerObservedAt > recoveryObservedAt || recoveryObservedAt > now.valueOf()) {
+      fail("recovery timestamps are out of order or in the future");
     }
 
     const recoveryRecord = {
@@ -769,7 +881,7 @@ function mutateRecoverTransientBlocker(state, recovery, transactionId, now) {
         diffFingerprint: recovery.diffFingerprint,
       },
       blocker: blockers[0],
-      receipt: recovery.receipt,
+      receipt,
       transactionId,
       recoveredAt: now.toISOString(),
     };
@@ -1249,8 +1361,7 @@ function main() {
       );
     }
     case "recover-transient-blocker": {
-      const receipt = readJsonFile(requireOption(options, "receipt"), "recovery receipt");
-      const recovery = validateTransientRecoveryReceipt(receipt, options);
+      const recovery = parseTransientRecoveryOptions(options);
       return performMutation(
         store,
         transactionId,
