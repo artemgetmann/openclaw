@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 36,
+  "sequence": 37,
   "nextFence": 11,
   "mergeLease": null,
   "items": {
@@ -964,13 +964,89 @@
         "fence": 10,
         "recordedAt": "2026-08-08T08:22:22.430Z"
       }
+    },
+    "1364": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1364,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1364",
+        "headSha": "517ada4955a7347dfaa3c11b1deed79eea33ba74",
+        "baseBranch": "main",
+        "testedBaseSha": "65567894969b8dcb7990fb55318d4328640a523e",
+        "diffFingerprint": "sha256:98b4a95811be2c6dc309679affc430d68541beb63f6805ba407405820610cf1b",
+        "changedPaths": [
+          "skills/tldr/SKILL.md",
+          "src/agents/consumer-default-bundled-skills.ts",
+          "src/agents/skills.tldr-contract.test.ts"
+        ]
+      },
+      "builder": {
+        "threadId": "019fe06b-22e6-7452-8a51-b90c3c222b8d",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe06b-22e6-7452-8a51-b90c3c222b8d",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "517ada4955a7347dfaa3c11b1deed79eea33ba74",
+        "diffFingerprint": "sha256:98b4a95811be2c6dc309679affc430d68541beb63f6805ba407405820610cf1b",
+        "closure": "terminal-receipt",
+        "contractId": "36a90c7a-d819-46eb-8687-1772f53f416d",
+        "owner": {
+          "threadId": "/root/tldr_tester",
+          "hostId": "nested-agent"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "headSha": "517ada4955a7347dfaa3c11b1deed79eea33ba74",
+        "diffFingerprint": "sha256:98b4a95811be2c6dc309679affc430d68541beb63f6805ba407405820610cf1b",
+        "owner": {
+          "threadId": "/root/tldr_reviewer",
+          "hostId": "nested-agent"
+        },
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1364 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "139b4ebc-a634-47af-9bac-a2a515b8cb3b",
+        "stateDirectory": "/Users/user/Programming_Projects/openclaw/.worktrees/tldr-skill/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-08T08:31:03.657Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "pr1363-block-checks-pending-b3e8e23f-v1",
-    "recordedAt": "2026-08-08T08:23:34.996Z"
+    "id": "tldr-1364-enqueue-517ada4955a",
+    "recordedAt": "2026-08-08T08:31:03.657Z"
   },
-  "updatedAt": "2026-08-08T08:23:34.996Z",
+  "updatedAt": "2026-08-08T08:31:03.657Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
