@@ -797,10 +797,10 @@ function expectedRequiredChecks(repo, baseBranch) {
       fail(`GitHub ${baseBranch} ruleset required checks are malformed`, 75);
     }
     for (const check of configured) {
-      if (check?.integration_id === undefined) {
-        fail(`GitHub ${baseBranch} ruleset check identity is ambiguous`, 75);
-      }
-      addExpected(check.context, check.integration_id, "ruleset");
+      // GitHub omits integration_id for valid any-app ruleset checks. Preserve
+      // that semantic as null; addExpected still rejects an explicitly present
+      // malformed non-null app identity.
+      addExpected(check?.context, check?.integration_id ?? null, "ruleset");
     }
   }
   if (expected.size === 0) {

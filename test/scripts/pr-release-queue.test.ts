@@ -990,6 +990,80 @@ describe("scripts/pr-release-queue", () => {
     });
   });
 
+  it("accepts live-shaped ruleset checks with omitted integration IDs as any-app", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 70);
+    fixture.env.TEST_LEGACY_PROTECTION = "404";
+    fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+      [],
+      [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: [{ context: "pr-required" }, { context: "actionlint" }],
+          },
+        },
+      ],
+    ]);
+    fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+      {
+        check_runs: [
+          { name: "pr-required", app: { id: 11 }, status: "completed", conclusion: "success" },
+          { name: "actionlint", app: { id: 12 }, status: "completed", conclusion: "success" },
+        ],
+      },
+    ]);
+
+    const recovered = run(fixture, [
+      ...checksRecoveryArgs(fixture, 70),
+      "--transaction-id",
+      "recover-any-app-70",
+    ]);
+    expect(recovered).toMatchObject({
+      action: "transient-blocker-recovered",
+      recovery: {
+        receipt: {
+          requiredChecks: [
+            { context: "actionlint", appId: null, source: "ruleset" },
+            { context: "pr-required", appId: null, source: "ruleset" },
+          ],
+        },
+      },
+    });
+  });
+
+  it("keeps omitted-ID checks fail-closed when check-run and status observations conflict", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 71);
+    fixture.env.TEST_LEGACY_PROTECTION = "404";
+    fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+      [
+        {
+          type: "required_status_checks",
+          parameters: { required_status_checks: [{ context: "pr-required" }] },
+        },
+      ],
+    ]);
+    fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+      {
+        check_runs: [
+          { name: "pr-required", app: { id: 11 }, status: "completed", conclusion: "success" },
+        ],
+      },
+    ]);
+    fixture.env.TEST_STATUS_PAGES = JSON.stringify([
+      [{ context: "pr-required", state: "failure" }],
+    ]);
+
+    const rejected = runFailure(fixture, [
+      ...checksRecoveryArgs(fixture, 71),
+      "--transaction-id",
+      "recover-conflict-71",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("required check pr-required (app any) is not passing");
+  });
+
   it("refuses missing, malformed, pending, failing, app-mismatched, or unsupported policies", () => {
     const cases = [
       {
@@ -1059,12 +1133,16 @@ describe("scripts/pr-release-queue", () => {
             [
               {
                 type: "required_status_checks",
-                parameters: { required_status_checks: [{ context: "ambiguous" }] },
+                parameters: {
+                  required_status_checks: [
+                    { context: "ambiguous", integration_id: "not-an-app-id" },
+                  ],
+                },
               },
             ],
           ]);
         },
-        expected: "ruleset check identity is ambiguous",
+        expected: "required-check configuration is ambiguous",
       },
     ];
     for (const { pr, configure, expected } of cases) {

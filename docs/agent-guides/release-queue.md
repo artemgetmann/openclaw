@@ -180,6 +180,9 @@ that applies to the exact base branch across all paginated rule pages. It then c
 the paginated check runs and commit statuses for the exact queued head. Every
 configured identity must have a GitHub-accepted passing observation; a required
 check that never started is therefore `missing`, not silently absent.
+An omitted ruleset `integration_id` means the context may be satisfied by any
+app. Explicit malformed IDs and conflicting latest check-run/commit-status
+observations remain ambiguous and fail closed.
 
 Caller-authored receipts are rejected. The queue generates and stores the
 normalized policy plus exact-head observations in `blockerRecoveryHistory` with
