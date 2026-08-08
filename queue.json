@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 45,
+  "sequence": 46,
   "nextFence": 14,
-  "mergeLease": {
-    "leaseId": "7b663ab9-fbb9-43a6-9c0e-f4a1e0a3c67d",
-    "fence": 13,
-    "owner": {
-      "threadId": "/root/tldr_release",
-      "hostId": "nested-agent"
-    },
-    "claimedPr": 1364,
-    "claimedAt": "2026-08-08T09:00:16.201Z",
-    "heartbeatAt": "2026-08-08T09:00:16.201Z",
-    "expiresAt": "2026-08-08T09:20:16.201Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -1046,7 +1035,7 @@
       }
     },
     "1364": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1364,
         "url": "https://github.com/artemgetmann/openclaw/pull/1364",
@@ -1191,7 +1180,20 @@
           "replacedAt": "2026-08-08T08:59:27.937Z"
         }
       ],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1364,
+          "reviewedHeadSha": "e811e69fa9d6996b1e09e4d0b85e949be35f941e",
+          "diffFingerprint": "sha256:3ff717c0e02cb2433cd4bee1827814776072306df58d670226b9979368b9006f",
+          "mergeSha": "320549aa48e2bcd2870319796396fc6948de5f8a",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -1210,10 +1212,10 @@
     }
   },
   "lastTransaction": {
-    "id": "c856ab9b-1b02-47dc-9ef9-c34533a149d6",
-    "recordedAt": "2026-08-08T09:00:16.201Z"
+    "id": "66c0ad05-9ab4-4bdc-89ac-efceee55b2bc",
+    "recordedAt": "2026-08-08T09:01:50.185Z"
   },
-  "updatedAt": "2026-08-08T09:00:16.201Z",
+  "updatedAt": "2026-08-08T09:01:50.185Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -1222,7 +1224,8 @@
       1355,
       1358,
       1359,
-      1362
+      1362,
+      1364
     ],
     "pausedReason": null,
     "graduatedAt": "2026-08-07T05:46:10.866Z",
