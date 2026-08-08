@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 38,
+  "sequence": 39,
   "nextFence": 11,
   "mergeLease": null,
   "items": {
@@ -1087,10 +1087,10 @@
     }
   },
   "lastTransaction": {
-    "id": "c383c04d-3486-478f-b94a-a338e5655a43",
-    "recordedAt": "2026-08-08T08:31:10.178Z"
+    "id": "pr1363-requeue-ci-green-b3e8e23f",
+    "recordedAt": "2026-08-08T08:31:20.569Z"
   },
-  "updatedAt": "2026-08-08T08:31:10.178Z",
+  "updatedAt": "2026-08-08T08:31:20.569Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
