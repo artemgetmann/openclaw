@@ -128,6 +128,11 @@ export async function processGatewayAllowlist(
   );
   const requiresHeredocApproval =
     hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
+  // Obfuscation is useful evidence for approval-oriented deployments, but it
+  // must not silently turn `ask=off` back into an interactive approval mode.
+  // Full-permission Jarvis sessions still receive the warning and remain
+  // protected by the unconditional catastrophic-command deny list upstream.
+  const requiresObfuscationApproval = obfuscation.detected && hostAsk !== "off";
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -136,7 +141,7 @@ export async function processGatewayAllowlist(
       allowlistSatisfied,
     }) ||
     requiresHeredocApproval ||
-    obfuscation.detected;
+    requiresObfuscationApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",

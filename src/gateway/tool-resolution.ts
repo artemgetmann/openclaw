@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import JSON5 from "json5";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   resolveEffectiveToolPolicy,
@@ -17,17 +21,60 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
+import { resolvePermissionDefaults } from "../infra/permissions-mode.js";
 import { logWarn } from "../logger.js";
 import { resolveMonitorStorePath } from "../monitor/store.js";
 import type { MonitorStoreFile } from "../monitor/types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
+import { resolveSessionStoreKey } from "./session-utils.js";
 
 export type GatewayScopedToolSurface = "http" | "loopback";
+
+export function resolveGatewayGuiPermissionDefaults(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+}): { execSecurity: ExecSecurity; execAsk: ExecAsk } {
+  // Loopback tool objects are cached, but /permissions mutates the session
+  // store. Read the entry on each GUI execution so a mode change takes effect
+  // immediately and cannot inherit stale approval authority from the cache.
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  const store = loadSessionStore(
+    resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
+  );
+  const matchedKey = Object.keys(store).find(
+    (key) => key.toLowerCase() === canonicalKey.toLowerCase(),
+  );
+  const sessionEntry = matchedKey ? store[matchedKey] : undefined;
+  const globalExec = params.cfg.tools?.exec;
+  const agentExec = resolveAgentConfig(params.cfg, params.agentId)?.tools?.exec;
+  const defaults = resolvePermissionDefaults({
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  return {
+    execSecurity:
+      (sessionEntry?.execSecurity as ExecSecurity | undefined) ??
+      agentExec?.security ??
+      globalExec?.security ??
+      defaults.execSecurity,
+    execAsk:
+      (sessionEntry?.execAsk as ExecAsk | undefined) ??
+      agentExec?.ask ??
+      globalExec?.ask ??
+      defaults.execAsk,
+  };
+}
 
 function shouldLogToolResolution(): boolean {
   return (
@@ -128,6 +175,12 @@ export function resolveGatewayScopedTools(params: {
     }),
     workspaceDir,
     enableGuiControlTool: params.surface === "loopback",
+    resolvePermissionDefaults: () =>
+      resolveGatewayGuiPermissionDefaults({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        agentId: agentId ?? resolveDefaultAgentId(params.cfg),
+      }),
     pluginToolGlobalRegistryOnly: params.surface === "loopback",
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,

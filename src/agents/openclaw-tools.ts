@@ -102,6 +102,16 @@ export function createOpenClawTools(
     pluginToolGlobalRegistryOnly?: boolean;
     /** If true, expose experimental host GUI-control tools. Loopback Codex tests only for now. */
     enableGuiControlTool?: boolean;
+    /** Runtime-trusted effective session permissions shared with host GUI control. */
+    permissionDefaults?: {
+      execSecurity: "deny" | "allowlist" | "full";
+      execAsk: "off" | "on-miss" | "always";
+    };
+    /** Fresh trusted resolver for cached tool surfaces whose session mode can change. */
+    resolvePermissionDefaults?: () => {
+      execSecurity: "deny" | "allowlist" | "full";
+      execAsk: "off" | "on-miss" | "always";
+    };
     /** Trusted sender id from inbound context (not tool args). */
     requesterSenderId?: string | null;
     /** Whether the requesting sender is an owner. */
@@ -211,6 +221,8 @@ export function createOpenClawTools(
     ...(options?.enableGuiControlTool
       ? [
           createGuiControlTool({
+            permissionDefaults: options?.permissionDefaults,
+            resolvePermissionDefaults: options?.resolvePermissionDefaults,
             approvalOrigin: {
               agentId: resolveSessionAgentId({
                 sessionKey: options?.agentSessionKey,

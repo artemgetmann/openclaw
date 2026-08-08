@@ -101,8 +101,23 @@ function normalizeAction(action: string): GuiControlAction {
   throw new Error(`Unsupported gui_control action: ${action}`);
 }
 
+export function usesFullPermissionGuiApproval(params: {
+  execSecurity: "deny" | "allowlist" | "full";
+  execAsk: "off" | "on-miss" | "always";
+}): boolean {
+  return params.execSecurity === "full" && params.execAsk === "off";
+}
+
 export function createGuiControlTool(options?: {
   approvalOrigin?: GuiApprovalOrigin;
+  permissionDefaults?: {
+    execSecurity: "deny" | "allowlist" | "full";
+    execAsk: "off" | "on-miss" | "always";
+  };
+  resolvePermissionDefaults?: () => {
+    execSecurity: "deny" | "allowlist" | "full";
+    execAsk: "off" | "on-miss" | "always";
+  };
 }): AnyAgentTool {
   return {
     label: "Computer Use",
@@ -121,6 +136,12 @@ export function createGuiControlTool(options?: {
           ? Math.trunc(maxElementsRaw)
           : 60;
       const runtime = new AgentDesktopRuntime();
+      // This is supplied by the runtime from the same effective session-level
+      // settings used by exec. Never derive approval mode from model arguments.
+      const permissionDefaults =
+        options?.resolvePermissionDefaults?.() ?? options?.permissionDefaults;
+      const fullPermissions =
+        permissionDefaults !== undefined && usesFullPermissionGuiApproval(permissionDefaults);
 
       return jsonResult(
         await runGuiControl({
@@ -155,12 +176,14 @@ export function createGuiControlTool(options?: {
               ? Math.trunc(params.scrollAmount)
               : undefined,
           reason: readStringParam(params, "reason"),
-          approvedPolicyRisk: params.approvedPolicyRisk === true,
-          requestSensitiveApproval: (request) =>
-            requestGuiSensitiveApproval({
-              ...request,
-              origin: options?.approvalOrigin,
-            }),
+          approvedPolicyRisk: fullPermissions || params.approvedPolicyRisk === true,
+          requestSensitiveApproval: fullPermissions
+            ? async () => "allow-once"
+            : (request) =>
+                requestGuiSensitiveApproval({
+                  ...request,
+                  origin: options?.approvalOrigin,
+                }),
           verifyText: readStringParam(params, "verifyText"),
           allowObservedClick: params.allowObservedClick === true,
           maxElements,

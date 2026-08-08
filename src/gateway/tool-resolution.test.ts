@@ -17,7 +17,10 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
 }));
 
-import { resolveGatewayScopedTools } from "./tool-resolution.js";
+import {
+  resolveGatewayGuiPermissionDefaults,
+  resolveGatewayScopedTools,
+} from "./tool-resolution.js";
 
 const tempDirs: string[] = [];
 
@@ -109,6 +112,33 @@ describe("gateway tool resolution", () => {
     });
 
     expect(result.tools.map((tool) => tool.name)).not.toContain("gui_control");
+  });
+
+  it("resolves fresh session GUI permissions ahead of full global defaults", async () => {
+    const workspaceDir = await createTempWorkspace();
+    const storePath = path.join(workspaceDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const cfg: OpenClawConfig = {
+      ...createConfig(workspaceDir),
+      session: { store: storePath },
+      tools: { exec: { security: "full", ask: "off" } },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "permission-test",
+          updatedAt: Date.now(),
+          execSecurity: "allowlist",
+          execAsk: "on-miss",
+        },
+      }),
+    );
+
+    expect(resolveGatewayGuiPermissionDefaults({ cfg, sessionKey, agentId: "main" })).toEqual({
+      execSecurity: "allowlist",
+      execAsk: "on-miss",
+    });
   });
 
   it("resolves loopback plugin tools from an initialized global registry", async () => {
