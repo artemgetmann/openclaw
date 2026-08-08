@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 37,
+  "sequence": 38,
   "nextFence": 11,
   "mergeLease": null,
   "items": {
@@ -679,14 +679,14 @@
       }
     },
     "1362": {
-      "state": "awaiting-decision",
+      "state": "queued",
       "candidate": {
         "pr": 1362,
         "url": "https://github.com/artemgetmann/openclaw/pull/1362",
-        "headSha": "ff2c9a57f63219d923893e0d4b5472a9c6541bbc",
+        "headSha": "aded038b2d73d307dc8b5708d5b575c12b50c878",
         "baseBranch": "main",
-        "testedBaseSha": "913e507427f19c224f43ea570189ae7a63af6f48",
-        "diffFingerprint": "sha256:805102cc8419024e24ae0955940c4f559c9ce7e21ff0b71e7533be3a730513ff",
+        "testedBaseSha": "65567894969b8dcb7990fb55318d4328640a523e",
+        "diffFingerprint": "sha256:e9e6ef278dfc81d54aef60280d9fb28d7b6907a002a09f065cd7b527c4f0b441",
         "changedPaths": [
           "src/agents/system-prompt.test.ts",
           "src/agents/system-prompt.ts"
@@ -702,10 +702,10 @@
       },
       "testerReceipt": {
         "status": "PASS",
-        "headSha": "ff2c9a57f63219d923893e0d4b5472a9c6541bbc",
-        "diffFingerprint": "sha256:805102cc8419024e24ae0955940c4f559c9ce7e21ff0b71e7533be3a730513ff",
+        "headSha": "aded038b2d73d307dc8b5708d5b575c12b50c878",
+        "diffFingerprint": "sha256:e9e6ef278dfc81d54aef60280d9fb28d7b6907a002a09f065cd7b527c4f0b441",
         "closure": "terminal-receipt",
-        "contractId": "726a7474-75cb-498d-aa7e-1935a1437b89",
+        "contractId": "61acb23f-1907-4996-8e27-fc0a0c7a8170",
         "owner": {
           "threadId": "/root/pr1362_refresh_tester",
           "hostId": "MacBook-Pro-JetBook-4.local"
@@ -715,8 +715,8 @@
         "schemaVersion": 1,
         "role": "code-reviewer",
         "status": "PASS",
-        "headSha": "ff2c9a57f63219d923893e0d4b5472a9c6541bbc",
-        "diffFingerprint": "sha256:805102cc8419024e24ae0955940c4f559c9ce7e21ff0b71e7533be3a730513ff",
+        "headSha": "aded038b2d73d307dc8b5708d5b575c12b50c878",
+        "diffFingerprint": "sha256:e9e6ef278dfc81d54aef60280d9fb28d7b6907a002a09f065cd7b527c4f0b441",
         "owner": {
           "threadId": "/root/pr1362_refresh_review",
           "hostId": "MacBook-Pro-JetBook-4.local"
@@ -747,18 +747,12 @@
         ]
       },
       "lifecycle": {
-        "contractId": "bff21ffa-e3e6-44b2-95fa-98165dff0a4b",
+        "contractId": "332b0183-e62a-4e06-835e-70b38acd569f",
         "stateDirectory": "/Users/user/.codex/worktrees/jarvis-reminder-prerequisite-verification-915d3920-t4Or3a/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [
-        {
-          "kind": "decision-required",
-          "details": "Queue-order ambiguity: PR #1359 is ready since 2026-08-08T07:58:24.852Z and PR #1362 is ready since 2026-08-08T07:58:58.544Z. Neither packet declares a dependency, and explain-order reports no changed-path overlap or GitHub blocker that establishes a safe order. Explicit founder/coordinator priority is required before a normal merge; no merge was attempted.",
-          "observedAt": "2026-08-08T08:05:40.608Z"
-        }
-      ],
-      "readyAt": "2026-08-08T07:58:58.544Z",
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-08T08:31:10.178Z",
       "ownerHistory": [
         {
           "leaseId": "7f0d714a-9e7f-4ead-8e84-6cf6fb6f1c8c",
@@ -836,6 +830,56 @@
             }
           ],
           "replacedAt": "2026-08-08T07:58:58.544Z"
+        },
+        {
+          "candidate": {
+            "pr": 1362,
+            "url": "https://github.com/artemgetmann/openclaw/pull/1362",
+            "headSha": "ff2c9a57f63219d923893e0d4b5472a9c6541bbc",
+            "baseBranch": "main",
+            "testedBaseSha": "913e507427f19c224f43ea570189ae7a63af6f48",
+            "diffFingerprint": "sha256:805102cc8419024e24ae0955940c4f559c9ce7e21ff0b71e7533be3a730513ff",
+            "changedPaths": [
+              "src/agents/system-prompt.test.ts",
+              "src/agents/system-prompt.ts"
+            ]
+          },
+          "testerReceipt": {
+            "status": "PASS",
+            "headSha": "ff2c9a57f63219d923893e0d4b5472a9c6541bbc",
+            "diffFingerprint": "sha256:805102cc8419024e24ae0955940c4f559c9ce7e21ff0b71e7533be3a730513ff",
+            "closure": "terminal-receipt",
+            "contractId": "726a7474-75cb-498d-aa7e-1935a1437b89",
+            "owner": {
+              "threadId": "/root/pr1362_refresh_tester",
+              "hostId": "MacBook-Pro-JetBook-4.local"
+            }
+          },
+          "reviewReceipt": {
+            "schemaVersion": 1,
+            "role": "code-reviewer",
+            "status": "PASS",
+            "headSha": "ff2c9a57f63219d923893e0d4b5472a9c6541bbc",
+            "diffFingerprint": "sha256:805102cc8419024e24ae0955940c4f559c9ce7e21ff0b71e7533be3a730513ff",
+            "owner": {
+              "threadId": "/root/pr1362_refresh_review",
+              "hostId": "MacBook-Pro-JetBook-4.local"
+            },
+            "unresolvedFindings": [],
+            "evidence": [
+              "Independent exact-head review PASS.",
+              "Raw patch fingerprint matched.",
+              "git diff --check passed."
+            ]
+          },
+          "discoveredBlockers": [
+            {
+              "kind": "decision-required",
+              "details": "Queue-order ambiguity: PR #1359 is ready since 2026-08-08T07:58:24.852Z and PR #1362 is ready since 2026-08-08T07:58:58.544Z. Neither packet declares a dependency, and explain-order reports no changed-path overlap or GitHub blocker that establishes a safe order. Explicit founder/coordinator priority is required before a normal merge; no merge was attempted.",
+              "observedAt": "2026-08-08T08:05:40.608Z"
+            }
+          ],
+          "replacedAt": "2026-08-08T08:31:10.178Z"
         }
       ],
       "terminalReceipts": [],
@@ -1043,10 +1087,10 @@
     }
   },
   "lastTransaction": {
-    "id": "tldr-1364-enqueue-517ada4955a",
-    "recordedAt": "2026-08-08T08:31:03.657Z"
+    "id": "c383c04d-3486-478f-b94a-a338e5655a43",
+    "recordedAt": "2026-08-08T08:31:10.178Z"
   },
-  "updatedAt": "2026-08-08T08:31:03.657Z",
+  "updatedAt": "2026-08-08T08:31:10.178Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
