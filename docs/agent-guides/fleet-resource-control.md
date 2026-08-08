@@ -123,21 +123,31 @@ guessing that the lease is stale or signaling an unverified group.
 The general wrapper and all canonical self-guarded build, package, release, and
 deployment entrypoints now default to dedicated-agent CPU semantics on this
 agent-owned Mac. The named dedicated entrypoint remains useful when a caller
-wants its declaration to reject any conflicting CPU override:
+wants its declaration to reject any conflicting CPU override and automatically
+queue retryable admission pressure in the same shell turn:
 
 ```bash
 scripts/with-dedicated-agent-slot.sh \
   --label "<thread-id>:capacity-ramp" \
-  --wait-seconds 900 \
   -- pnpm vitest run path/to/focused.test.ts --maxWorkers 1
 ```
 
-The named entrypoint owns CPU policy. Passing a second `--cpu-policy` fails
-before admission with `code=wrong_cpu_policy` and directs the caller to remove
-the override. Direct `scripts/with-heavy-local-slot.sh --cpu-policy
-dedicated-agent` remains supported for lower-level integrations. An unflagged
-call uses the same dedicated-agent CPU semantics, which prevents canonical
-checks, Swift builds, typechecks, tests, release builds, and protected
+Ordinary named-entrypoint commands default to the guard's safe maximum bounded
+wait of 86400 seconds. The lower guard polls every five seconds, releases the
+lease while host health is unavailable, and launches the command exactly once
+after admission. Use an explicit shorter `--wait-seconds` when the task has a
+tighter deadline. `--check` remains an immediate read-only snapshot and never
+inherits the default wait.
+
+The named entrypoint owns CPU policy. Passing a second `--cpu-policy`, including
+one hidden behind flag-like option data, fails before admission with
+`code=wrong_cpu_policy` and directs the caller to remove the override. Malformed
+wait arguments still reach the lower parser and fail closed; authorization and
+`guard_internal` failures are never made retryable. Direct
+`scripts/with-heavy-local-slot.sh --cpu-policy dedicated-agent` remains
+supported for lower-level integrations and retains its explicit wait behavior.
+An unflagged call uses the same dedicated-agent CPU semantics, which prevents
+canonical checks, Swift builds, typechecks, tests, release builds, and protected
 deployments from treating 0% CPU idle as a host failure.
 
 Dedicated mode allows 0% CPU idle while adding dedicated-host observations and
@@ -240,13 +250,13 @@ released when the command exits. Exit code `75` means "temporarily unavailable"
 or "stopped to protect host health"; wait for recovery instead of bypassing the
 guard.
 
-For a temporary availability wait, retain the exact source/checkpoint state and
-poll infrequently. Prefer a product-native monitor or scheduled wake at a
-five-to-ten-minute cadence when one is available. If the active environment has
-no reliable wake mechanism, do not start a tight sleep loop or hammer the
-guard; report the queued checkpoint once and resume when the coordinator or
-user wakes the lane. Never use polling for an authorization rejection:
-authorization requires explicit approval and cannot become valid with time.
+For ordinary dedicated-agent work, use the named entrypoint and let its bounded
+same-turn wait own retryable `occupied` or `host_unhealthy` admission pressure.
+Do not add a conversational cross-thread wake callback or a second polling loop.
+Lower-level direct-wrapper callers must choose an explicit `--wait-seconds` if
+they can safely remain in the same transaction. Never wait for an authorization
+rejection: authorization requires explicit approval and cannot become valid
+with time.
 If one fresh retry after verified host recovery fails at the same stage for the
 same health reason, stop treating it as a queue wait. Preserve the artifact,
 release the lane, and diagnose the command's own resource behavior. Repeatedly
