@@ -66,12 +66,13 @@ function readCodexConfig(fsImpl: typeof fs, configPath: string): string {
 function readSkillIdentity(
   fsImpl: typeof fs,
   skillFile: string,
+  fallbackName?: string,
 ): {
   name: string;
   skillKey: string;
 } {
   const frontmatter = parseFrontmatter(fsImpl.readFileSync(skillFile, "utf8"));
-  const name = frontmatter.name?.trim();
+  const name = frontmatter.name?.trim() || fallbackName;
   if (!name) {
     throw new Error(`personal skill lacks a frontmatter name: ${skillFile}`);
   }
@@ -103,7 +104,7 @@ function findHigherPrecedenceShadow(params: {
         if (params.fs.realpathSync(candidate) === params.canonicalReal) {
           continue;
         }
-        if (readSkillIdentity(params.fs, candidate).name === params.name) {
+        if (readSkillIdentity(params.fs, candidate, entry.name).name === params.name) {
           return candidate;
         }
       } catch {
@@ -125,6 +126,16 @@ function resolveRuntimePaths(params: VisibilityOptions & { name: string }): Runt
   const skillFile = path.join(skillDir, "SKILL.md");
   if (!fsImpl.existsSync(skillFile) || !fsImpl.lstatSync(skillFile).isFile()) {
     throw new Error(`unknown canonical personal skill: ${params.name}`);
+  }
+  const sharedRootReal = fsImpl.realpathSync(sharedSkillsDir);
+  const skillReal = fsImpl.realpathSync(skillFile);
+  const relativeSkillPath = path.relative(sharedRootReal, skillReal);
+  if (
+    relativeSkillPath === ".." ||
+    relativeSkillPath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeSkillPath)
+  ) {
+    throw new Error(`canonical personal skill resolves outside the shared root: ${params.name}`);
   }
   const identity = readSkillIdentity(fsImpl, skillFile);
   if (identity.name !== params.name || identity.skillKey !== params.name) {
@@ -337,8 +348,18 @@ function atomicCompareWrite(params: {
   let expectedSymlinkTarget: string | undefined;
   try {
     if (params.fs.lstatSync(params.targetPath).isSymbolicLink()) {
-      expectedSymlinkTarget = params.fs.realpathSync(params.targetPath);
-      writePath = expectedSymlinkTarget;
+      const linkedPath = params.fs.readlinkSync(params.targetPath);
+      expectedSymlinkTarget = path.resolve(path.dirname(params.targetPath), linkedPath);
+      try {
+        writePath = params.fs.realpathSync(params.targetPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+        // Preserve a dangling dotfiles link and atomically create its intended
+        // target instead of renaming a regular file over the link itself.
+        writePath = expectedSymlinkTarget;
+      }
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -359,7 +380,8 @@ function atomicCompareWrite(params: {
     params.fs.writeFileSync(temporaryPath, params.next, { encoding: "utf8", mode });
     if (
       expectedSymlinkTarget !== undefined &&
-      params.fs.realpathSync(params.targetPath) !== expectedSymlinkTarget
+      path.resolve(path.dirname(params.targetPath), params.fs.readlinkSync(params.targetPath)) !==
+        expectedSymlinkTarget
     ) {
       throw new Error(`concurrent Codex config symlink change detected: ${params.targetPath}`);
     }

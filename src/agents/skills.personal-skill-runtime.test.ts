@@ -159,6 +159,17 @@ describe("personal skill runtime visibility", () => {
     await expect(fs.readFile(targetPath, "utf8")).resolves.toContain(JSON.stringify(skillFile));
   });
 
+  it("preserves a dangling Codex config symlink and creates its intended target", async () => {
+    const targetPath = path.join(homeDir, "dotfiles", "missing-codex-config.toml");
+    await fs.rm(codexConfigPath);
+    await fs.symlink(targetPath, codexConfigPath);
+
+    await set("jarvis");
+
+    expect((await fs.lstat(codexConfigPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.readFile(targetPath, "utf8")).resolves.toContain(JSON.stringify(skillFile));
+  });
+
   it("rejects product-managed mirrors and unresolved legacy managed roots", async () => {
     await fs.writeFile(
       path.join(sharedSkillsDir, "demo", ".openclaw-skill.json"),
@@ -206,6 +217,37 @@ describe("personal skill runtime visibility", () => {
         workspaceDir,
       }).visibility,
     ).toBe("shared");
+  });
+
+  it("detects higher-precedence loader fallback names", async () => {
+    const workspaceDir = path.join(homeDir, "workspace");
+    const shadowFile = path.join(workspaceDir, "skills", "demo", "SKILL.md");
+    await fs.mkdir(path.dirname(shadowFile), { recursive: true });
+    await fs.writeFile(shadowFile, "---\ndescription: fallback shadow\n---\n");
+
+    expect(() =>
+      getPersonalSkillVisibilityStatus({
+        name: "demo",
+        config,
+        homeDir,
+        stateDir,
+        codexConfigPath,
+        workspaceDir,
+      }),
+    ).toThrow(/shadowed by a higher-precedence skill/i);
+  });
+
+  it("rejects a canonical skill directory symlink that escapes the shared root", async () => {
+    const externalSkillDir = path.join(homeDir, "external", "demo");
+    await fs.mkdir(externalSkillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(externalSkillDir, "SKILL.md"),
+      "---\nname: demo\ndescription: escaped\n---\n",
+    );
+    await fs.rm(path.dirname(skillFile), { recursive: true });
+    await fs.symlink(externalSkillDir, path.dirname(skillFile), "dir");
+
+    expect(() => status()).toThrow(/resolves outside the shared root/i);
   });
 
   it("rejects a canonical personal skill whose effective Jarvis key differs", async () => {
