@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 30,
+  "sequence": 31,
   "nextFence": 9,
-  "mergeLease": {
-    "leaseId": "4873c46f-a86f-4083-be45-df7b47a9adb5",
-    "fence": 8,
-    "owner": {
-      "threadId": "/root/pr1362_final_release",
-      "hostId": "nested-agent"
-    },
-    "claimedPr": 1362,
-    "claimedAt": "2026-08-08T08:04:13.013Z",
-    "heartbeatAt": "2026-08-08T08:04:13.013Z",
-    "expiresAt": "2026-08-08T08:24:13.013Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -655,7 +644,7 @@
       }
     },
     "1362": {
-      "state": "claimed",
+      "state": "awaiting-decision",
       "candidate": {
         "pr": 1362,
         "url": "https://github.com/artemgetmann/openclaw/pull/1362",
@@ -727,7 +716,13 @@
         "stateDirectory": "/Users/user/.codex/worktrees/jarvis-reminder-prerequisite-verification-915d3920-t4Or3a/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [],
+      "discoveredBlockers": [
+        {
+          "kind": "decision-required",
+          "details": "Queue-order ambiguity: PR #1359 is ready since 2026-08-08T07:58:24.852Z and PR #1362 is ready since 2026-08-08T07:58:58.544Z. Neither packet declares a dependency, and explain-order reports no changed-path overlap or GitHub blocker that establishes a safe order. Explicit founder/coordinator priority is required before a normal merge; no merge was attempted.",
+          "observedAt": "2026-08-08T08:05:40.608Z"
+        }
+      ],
       "readyAt": "2026-08-08T07:58:58.544Z",
       "ownerHistory": [
         {
@@ -827,10 +822,10 @@
     }
   },
   "lastTransaction": {
-    "id": "27390020-b52c-49d9-8c4b-f0da6fba3cf8",
-    "recordedAt": "2026-08-08T08:04:13.013Z"
+    "id": "3a475146-9749-47af-a822-322fadcfb670",
+    "recordedAt": "2026-08-08T08:05:40.608Z"
   },
-  "updatedAt": "2026-08-08T08:04:13.013Z",
+  "updatedAt": "2026-08-08T08:05:40.608Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
