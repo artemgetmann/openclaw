@@ -86,6 +86,7 @@ describe("telegram-user commands", () => {
         column: 0,
         row: 1,
         text: " Queue ",
+        url: null,
       },
       chat: "@jarvis_tester_1_bot",
       click_result: { alert: false, cache_time: 0, message: "Queued", url: null },
@@ -109,6 +110,7 @@ describe("telegram-user commands", () => {
       chat: "@jarvis_tester_1_bot",
       envFile: undefined,
       expectedCallbackData: " queue:proof ",
+      expectedUrl: undefined,
       messageId: 52831,
       session: undefined,
     });
@@ -127,6 +129,108 @@ describe("telegram-user commands", () => {
         runtime,
       ),
     ).rejects.toThrow("positive integer");
+
+    expect(backendMocks.runTelegramUserButtonClick).not.toHaveBeenCalled();
+  });
+
+  it("forwards an exact URL button guard without normalizing it", async () => {
+    backendMocks.runTelegramUserButtonClick.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      button: {
+        callback_data: null,
+        callback_data_base64: null,
+        column: 0,
+        row: 0,
+        text: "Participant chat",
+        url: "https://t.me/+exact-participant-invite",
+      },
+      chat: "@jarvis_tester_1_bot",
+      click_result: {
+        alert: false,
+        cache_time: 0,
+        message: null,
+        url: "https://t.me/+exact-participant-invite",
+      },
+      clicked: true,
+      message_id: 52832,
+    });
+
+    await telegramUserButtonClickCommand(
+      {
+        buttonText: "Participant chat",
+        chat: "@jarvis_tester_1_bot",
+        expectedUrl: "https://t.me/+exact-participant-invite",
+        json: true,
+        messageId: "52832",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserButtonClick).toHaveBeenCalledWith({
+      buttonText: "Participant chat",
+      chat: "@jarvis_tester_1_bot",
+      envFile: undefined,
+      expectedCallbackData: undefined,
+      expectedUrl: "https://t.me/+exact-participant-invite",
+      messageId: 52832,
+      session: undefined,
+    });
+  });
+
+  it("renders a pending Telegram join request as structured non-retry success", async () => {
+    backendMocks.runTelegramUserButtonClick.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      button: {
+        callback_data: null,
+        callback_data_base64: null,
+        column: 0,
+        row: 0,
+        text: "Participant chat",
+        url: "https://t.me/+PendingInviteHash",
+      },
+      chat: "@jarvis_tester_1_bot",
+      click_result: {
+        alert: false,
+        cache_time: 0,
+        message: null,
+        url: "https://t.me/+PendingInviteHash",
+      },
+      clicked: true,
+      message_id: 52838,
+      url_action: {
+        kind: "import_chat_invite",
+        status: "request_sent",
+        url: "https://t.me/+PendingInviteHash",
+      },
+    });
+
+    await telegramUserButtonClickCommand(
+      {
+        buttonText: "Participant chat",
+        chat: "@jarvis_tester_1_bot",
+        expectedUrl: "https://t.me/+PendingInviteHash",
+        json: true,
+        messageId: "52838",
+      },
+      runtime,
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"status": "request_sent"'));
+  });
+
+  it("rejects button-click when callback and URL guards are both supplied", async () => {
+    await expect(
+      telegramUserButtonClickCommand(
+        {
+          buttonText: "Queue",
+          chat: "@jarvis_tester_1_bot",
+          expectedCallbackData: "queue:proof",
+          expectedUrl: "https://example.com/queue",
+          messageId: "52831",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/exactly one of --expected-callback-data or --expected-url/i);
 
     expect(backendMocks.runTelegramUserButtonClick).not.toHaveBeenCalled();
   });
@@ -759,6 +863,15 @@ describe("telegram-user commands", () => {
               column: 1,
               row: 0,
               text: "Steer",
+              url: null,
+            },
+            {
+              callback_data: null,
+              callback_data_base64: null,
+              column: 0,
+              row: 1,
+              text: "Participant chat",
+              url: "https://t.me/+exact-participant-invite",
             },
           ],
           media_kind: "voice",
@@ -787,6 +900,9 @@ describe("telegram-user commands", () => {
       expect.stringContaining(
         'id=200 date=2026-03-24T00:00:00.000Z dir=in sender=555 reply_to=123 top=120 topic=7001 media=voice buttons=[{"callback_data":"oqs:12345678-1234-4234-8234-123456789abc"',
       ),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining('"url":"https://t.me/+exact-participant-invite"'),
     );
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("Paging: newer --after-id 200 | older --before-id 200"),

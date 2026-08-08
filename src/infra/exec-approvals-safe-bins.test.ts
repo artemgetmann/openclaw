@@ -441,6 +441,22 @@ describe("exec approvals safe bins", () => {
         "--json",
       ]),
     ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "button-click",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--message-id",
+        "52832",
+        "--button-text",
+        "Participant chat",
+        "--expected-url",
+        "https://t.me/+ExactInviteHash",
+        "--json",
+      ]),
+    ).toBe(false);
     expect(evaluate(["openclaw", "telegram-user", "status", "--json"])).toBe(true);
     expect(evaluate(["openclaw", "telegram-user", "doctor", "--json"])).toBe(true);
     expect(

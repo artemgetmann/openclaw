@@ -140,6 +140,39 @@ describe("telegram-user cli", () => {
     );
   });
 
+  it("forwards an exact URL guard for URL buttons", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "button-click",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--message-id",
+        "52832",
+        "--button-text",
+        "Participant chat",
+        "--expected-url",
+        "https://t.me/+exact-participant-invite",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserButtonClickCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buttonText: "Participant chat",
+        chat: "@jarvis_tester_1_bot",
+        expectedUrl: "https://t.me/+exact-participant-invite",
+        json: true,
+        messageId: "52832",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("registers doctor and forwards optional chat/state flags", async () => {
     const program = new Command();
     registerTelegramUserCli(program);

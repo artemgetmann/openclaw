@@ -680,14 +680,15 @@ function logSendText(runtime: RuntimeEnv, result: TelegramUserSendResult) {
 function logButtonClickText(runtime: RuntimeEnv, result: TelegramUserButtonClickResult) {
   const rich = isRich();
   const ok = rich ? theme.success : (text: string) => text;
+  const outcome = result.clicked ? "ok" : "no-action";
   runtime.log(
     ok(
-      `Telegram user button-click ok. message_id=${result.message_id} chat=${result.chat} text=${JSON.stringify(result.button.text)}`,
+      `Telegram user button-click ${outcome}. message_id=${result.message_id} chat=${result.chat} text=${JSON.stringify(result.button.text)}`,
     ),
   );
   runtime.log(formatBackendMeta(result.backend_meta));
   runtime.log(
-    `callback_data=${JSON.stringify(result.button.callback_data)} alert=${result.click_result.alert} response=${JSON.stringify(result.click_result.message)}`,
+    `callback_data=${JSON.stringify(result.button.callback_data)} button_url=${JSON.stringify(result.button.url)} alert=${result.click_result.alert} response=${JSON.stringify(result.click_result.message)} result_url=${JSON.stringify(result.click_result.url)} url_action=${JSON.stringify(result.url_action ?? null)}`,
   );
 }
 
@@ -1052,13 +1053,17 @@ export async function telegramUserButtonClickCommand(
     "--message-id",
     "Telegram user button-click",
   );
-  // Visible text and callback bytes are exact-match safety selectors. Preserve
-  // caller whitespace instead of normalizing either value before the backend.
+  // Visible text and the hidden callback/URL value are exact-match safety
+  // selectors. Preserve caller whitespace instead of normalizing any value.
   const buttonText = readExactStringOpt(opts, "buttonText");
   const expectedCallbackData = readExactStringOpt(opts, "expectedCallbackData");
-  if (!chat || messageId === undefined || !buttonText || !expectedCallbackData) {
+  const expectedUrl = readExactStringOpt(opts, "expectedUrl");
+  if (!chat || messageId === undefined || !buttonText) {
+    throw new Error("Telegram user button-click requires --chat, --message-id, and --button-text.");
+  }
+  if (Boolean(expectedCallbackData) === Boolean(expectedUrl)) {
     throw new Error(
-      "Telegram user button-click requires --chat, --message-id, --button-text, and --expected-callback-data.",
+      "Telegram user button-click requires exactly one of --expected-callback-data or --expected-url.",
     );
   }
   const result = await runTelegramUserButtonClick({
@@ -1066,6 +1071,7 @@ export async function telegramUserButtonClickCommand(
     buttonText,
     chat,
     expectedCallbackData,
+    expectedUrl,
     messageId,
   });
   if (readBooleanOpt(opts, "json")) {

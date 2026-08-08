@@ -229,6 +229,15 @@ openclaw telegram-user button-click \
   --expected-callback-data "oqs:12345678-1234-4234-8234-123456789abc" \
   --json
 
+# URL buttons use the same exact identity contract. Supported Telegram public
+# chat and invite URLs join through MTProto without opening a browser.
+openclaw telegram-user button-click \
+  --chat @jarvis_tester_1_bot \
+  --message-id 52832 \
+  --button-text "Participant chat" \
+  --expected-url "https://t.me/+exact-invite" \
+  --json
+
 openclaw media transcribe \
   --file /tmp/openclaw-media/telegram-jarvis_tester_1_bot-52830.oga \
   --json
@@ -258,10 +267,17 @@ For media-bearing Telegram messages, keep fetching and understanding separate:
 chat and message id, and `media transcribe` turns local audio into text through
 the configured media audio provider path.
 
-Inline callback clicks are fail-closed: callers must name the exact chat,
-message id, visible button text, and callback data. A mismatch returns bounded
-button metadata without clicking anything; the CLI never falls back to a
-latest message, label-only match, or row/column guess.
+Inline button actions are fail-closed: callers must name the exact chat,
+message id, visible button text, and exactly one expected callback value or URL.
+A mismatch returns bounded button metadata without selecting anything; the CLI
+never falls back to a latest message, label-only match, or row/column guess.
+Supported `https://t.me/...` and `https://telegram.me/...` public-chat and
+invite URLs join through the authenticated Telegram client. External,
+message-specific, malformed, or otherwise unsupported URLs return a structured
+`clicked=false`, `url_action_required=true` result with the exact verified URL
+and perform no action. A Telegram `InviteRequestSentError` returns
+`status=request_sent`: the join request is pending admin approval and must not
+be retried as though the original action failed.
 
 Session states returned by `telegram-user status`:
 

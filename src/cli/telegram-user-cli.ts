@@ -95,6 +95,10 @@ export function registerTelegramUserCli(program: Command) {
             "Click only when one exact message has exactly one button matching both visible text and callback data.",
           ],
           [
+            'openclaw telegram-user button-click --chat @jarvis_tester_1_bot --message-id 52832 --button-text "Participant chat" --expected-url "https://t.me/+exact-invite" --json',
+            "Join one exact Telegram public chat or invite without opening a browser.",
+          ],
+          [
             "openclaw telegram-user inbox --contains Artem --unread --dm-only --limit 10 --json",
             "List matching inbox dialogs for unread DM triage with raw metadata.",
           ],
@@ -306,13 +310,17 @@ export function registerTelegramUserCli(program: Command) {
   withTelegramUserBase(
     telegramUser
       .command("button-click")
-      .description("Click one exact inline callback button on one exact Telegram message")
+      .description("Select one exact inline callback or URL button on one exact Telegram message")
       .requiredOption("--chat <target>", "Exact target chat username or id")
       .requiredOption("--message-id <id>", "Exact positive message id")
       .requiredOption("--button-text <text>", "Exact visible button text")
-      .requiredOption(
+      .option(
         "--expected-callback-data <data>",
         "Exact UTF-8 callback data expected behind the button",
+      )
+      .option(
+        "--expected-url <url>",
+        "Exact Telegram public-chat or invite URL to join without opening a browser",
       ),
   ).action(async (opts) => {
     await runTelegramUserCommand(async () => {
