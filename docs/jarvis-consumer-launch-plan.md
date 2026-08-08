@@ -6,11 +6,11 @@ Urgency: high. The window is open now because Claude, Codex, and OpenFlow still 
 
 ## 0. Executive decision
 
-Jarvis should be an open-source, local-first macOS personal assistant with a paid commercial layer for updates, onboarding, subscription/license control, and optional managed cloud/API services.
+Jarvis should be an open-source, local-first macOS high-agency personal operator with guardrails, with a paid commercial layer for updates, onboarding, subscription/license control, and optional managed cloud/API services.
 
 North Star positioning:
 
-> Jarvis is the iPhone/MacBook of AI agents: a proactive, self-improving AI assistant that actually does things and just works.
+> Jarvis is the iPhone/MacBook of AI agents: a high-agency personal operator with guardrails that runs on your Mac and actually does things.
 
 This does not mean users lose power. It means the default experience is consumer-simple, while developers can still go deeper through custom skills, developer mode, and forks.
 
@@ -20,7 +20,7 @@ The first public motion should be Reddit + GitHub, not a polished paid-ads funne
 
 This section is the implementation-oriented summary. If a coding agent needs one source of truth, start here.
 
-1. **Product shape:** Jarvis is a bot-first, app-backed, local-first AI assistant. Telegram/Jarvis is the primary decision/explanation surface; the macOS app handles local install, update, permissions, restart, backups, and runtime health.
+1. **Product shape:** Jarvis is a bot-first, app-backed, local-first personal operator with guardrails. Telegram/Jarvis is the primary decision/explanation surface; the macOS app handles local install, update, permissions, restart, backups, and runtime health.
 2. **Default mode:** v1 defaults to **Autopilot / Full Access** for early users. Jarvis should be useful first, not approval-spammy.
 3. **Deferred mode:** **Protected / Approval Mode** is real but later. It is for paranoid users, enterprise, sensitive environments, sandboxing, and stricter approvals.
 4. **Transparency:** rename developer-facing verbose behavior into `/visibility off`, `/visibility on`, and `/visibility full`. Prefer visibility, logs, and backups over constant approvals for v1.
@@ -38,13 +38,13 @@ This section is the implementation-oriented summary. If a coding agent needs one
 
 ## 1. Positioning
 
-Jarvis is the AI assistant that actually does things on your Mac.
+Jarvis is the high-agency personal operator with guardrails that actually does things on your Mac.
 
 It is not just a chatbot and not just a coding agent. It can operate across your computer: browser, messages, files, apps, research, automations, and software creation.
 
 Primary wedge:
 
-> A local-first AI assistant that actually gets work done on your Mac.
+> A local-first personal operator that actually gets work done on your Mac.
 
 Secondary wedge:
 
@@ -94,7 +94,7 @@ Website/GitHub/onboarding copy direction:
 Why this matters:
 
 - Many users expect software to behave like fixed buttons.
-- AI agents behave more like delegated coworkers/assistants.
+- AI agents behave more like delegated coworkers/operators.
 - Good instructions produce better outcomes.
 - This reduces disappointment when users expect one-click deterministic behavior.
 
@@ -109,7 +109,7 @@ Why:
 - user's browser/session/files/apps are local
 - lower infrastructure cost
 - better privacy story
-- stronger personal assistant positioning
+- stronger personal-operator positioning
 - Mac Mini/dedicated Mac is a clean 24/7 recommendation
 
 ### 2.2 Cloud control plane
@@ -708,7 +708,7 @@ Build the commercial spine first:
 
 Decision statement for product/docs/website draft:
 
-> Jarvis is a proactive, self-improving AI assistant that can actually do things. It can learn your preferences, update its workflows, and create custom skills — while keeping the signed core runtime stable and updateable.
+> Jarvis is a proactive, high-agency personal operator with guardrails that can actually do things on your Mac. It can learn your preferences, update its workflows, and create custom skills — while keeping the signed core runtime stable and updateable.
 
 More technical version for GitHub/developer docs:
 

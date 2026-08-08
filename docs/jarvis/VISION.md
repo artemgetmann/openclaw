@@ -7,19 +7,19 @@ not load it for unrelated implementation tasks.
 
 ## Promise
 
-Jarvis is a local-first personal assistant/operator for Mac. The user talks to
+Jarvis is a local-first, high-agency personal operator with guardrails for Mac. The user talks to
 Jarvis in Telegram, and Jarvis gets real computer work done across apps,
 browser, files, email, messages, tools, memory, and workflows.
 
-Jarvis should feel like delegating to a capable assistant who already works in
-the user's real environment, not like managing infrastructure.
+Jarvis should feel like delegating to a capable operator who already works in
+the user's real environment, not like managing infrastructure or chatting with another assistant bot.
 
 The core thesis: Jarvis is for messy digital life, not a coding workbench.
 It packages cross-channel execution, memory, monitors, approvals, and guided
-setup so users do not need to assemble agent infrastructure themselves.
+setup so users do not need to assemble agent infrastructure themselves. The positioning should emphasize governed agency: Jarvis can act, while risky actions stay bounded by approvals, logs, and user-owned context.
 
 Jarvis can use coding agents such as Codex- or Claude-like workers when that is
-useful, but Jarvis itself should still feel assistant-first, not terminal-first.
+useful, but Jarvis itself should still feel operator-first, not terminal-first.
 
 ## User
 
