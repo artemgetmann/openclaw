@@ -191,13 +191,17 @@ export async function executeNodeHostCommand(
     );
     params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
   }
+  // `ask=off` is an explicit operator choice. Keep surfacing obfuscation as a
+  // warning, but do not manufacture an approval prompt in full-permission
+  // sessions after the operator disabled prompts.
+  const requiresObfuscationApproval = obfuscation.detected && hostAsk !== "off";
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
       security: hostSecurity,
       analysisOk,
       allowlistSatisfied,
-    }) || obfuscation.detected;
+    }) || requiresObfuscationApproval;
   const invokeTimeoutMs = Math.max(
     10_000,
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +

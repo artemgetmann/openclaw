@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../../config/config.js";
 import { AgentDesktopRuntime } from "../../gui-control/agent-desktop-runtime.js";
 import { runGuiControl, type GuiControlAction } from "../../gui-control/control.js";
 import type { ElementIntent } from "../../gui-control/element-resolution.js";
@@ -6,6 +7,7 @@ import {
   requestGuiSensitiveApproval,
   type GuiApprovalOrigin,
 } from "../../gui-control/sensitive-approval.js";
+import { resolvePermissionDefaults } from "../../infra/permissions-mode.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 
@@ -64,7 +66,7 @@ const GuiControlToolSchema = Type.Object({
   approvedPolicyRisk: Type.Optional(
     Type.Boolean({
       description:
-        "Set true when the user requested or approved this specific mutating GUI action.",
+        "Set true only when the user explicitly requested or confirmed this exact mutating GUI action. In Full Permissions this conversational confirmation replaces a second approval prompt for sensitive controls.",
     }),
   ),
   verifyText: Type.Optional(
@@ -101,8 +103,19 @@ function normalizeAction(action: string): GuiControlAction {
   throw new Error(`Unsupported gui_control action: ${action}`);
 }
 
+export function usesPromptConfirmedGuiApproval(params: {
+  execSecurity: "deny" | "allowlist" | "full";
+  execAsk: "off" | "on-miss" | "always";
+}): boolean {
+  return params.execSecurity === "full" && params.execAsk === "off";
+}
+
 export function createGuiControlTool(options?: {
   approvalOrigin?: GuiApprovalOrigin;
+  permissionDefaults?: {
+    execSecurity: "deny" | "allowlist" | "full";
+    execAsk: "off" | "on-miss" | "always";
+  };
 }): AnyAgentTool {
   return {
     label: "Computer Use",
@@ -121,6 +134,16 @@ export function createGuiControlTool(options?: {
           ? Math.trunc(maxElementsRaw)
           : 60;
       const runtime = new AgentDesktopRuntime();
+      // Use the same effective agent/global config as shell execution so a
+      // protected deployment keeps interactive approvals while the default
+      // full-permission product path stays interruption-free.
+      const permissionDefaults =
+        options?.permissionDefaults ??
+        resolvePermissionDefaults({
+          config: loadConfig(),
+          agentId: options?.approvalOrigin?.agentId,
+        });
+      const promptConfirmedFullPermissions = usesPromptConfirmedGuiApproval(permissionDefaults);
 
       return jsonResult(
         await runGuiControl({
@@ -156,11 +179,13 @@ export function createGuiControlTool(options?: {
               : undefined,
           reason: readStringParam(params, "reason"),
           approvedPolicyRisk: params.approvedPolicyRisk === true,
-          requestSensitiveApproval: (request) =>
-            requestGuiSensitiveApproval({
-              ...request,
-              origin: options?.approvalOrigin,
-            }),
+          requestSensitiveApproval: promptConfirmedFullPermissions
+            ? async () => (params.approvedPolicyRisk === true ? "allow-once" : "deny")
+            : (request) =>
+                requestGuiSensitiveApproval({
+                  ...request,
+                  origin: options?.approvalOrigin,
+                }),
           verifyText: readStringParam(params, "verifyText"),
           allowObservedClick: params.allowObservedClick === true,
           maxElements,

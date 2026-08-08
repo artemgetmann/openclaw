@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createGuiControlTool } from "./gui-control-tool.js";
+import { createGuiControlTool, usesPromptConfirmedGuiApproval } from "./gui-control-tool.js";
 
 describe("createGuiControlTool", () => {
   it("keeps secondary_action out of the agent tool until AgentDesktop supports it", () => {
@@ -18,5 +18,13 @@ describe("createGuiControlTool", () => {
     expect(properties).not.toHaveProperty("approvedSensitiveAction");
     expect(properties).not.toHaveProperty("approvedSensitiveScope");
     expect(properties).not.toHaveProperty("approvalId");
+  });
+
+  it("uses conversational confirmation only for full permissions with prompts off", () => {
+    expect(usesPromptConfirmedGuiApproval({ execSecurity: "full", execAsk: "off" })).toBe(true);
+    expect(usesPromptConfirmedGuiApproval({ execSecurity: "full", execAsk: "always" })).toBe(false);
+    expect(usesPromptConfirmedGuiApproval({ execSecurity: "allowlist", execAsk: "off" })).toBe(
+      false,
+    );
   });
 });

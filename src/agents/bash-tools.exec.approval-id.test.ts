@@ -834,7 +834,7 @@ describe("exec approvals", () => {
     expect(text).toContain("Discord or Telegram if those approval clients are enabled");
   });
 
-  it("denies node obfuscated command when approval request times out", async () => {
+  it("honors ask=off for an obfuscated node command", async () => {
     vi.mocked(detectCommandObfuscation).mockReturnValue({
       detected: true,
       reasons: ["Content piped directly to shell interpreter"],
@@ -872,11 +872,11 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call5", { command: "echo hi | sh" });
-    expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => nodeInvokeCommands.includes("system.run")).toBe(false);
+    expect(result.details.status).not.toBe("approval-pending");
+    expect(nodeInvokeCommands).toContain("system.run");
   });
 
-  it("denies gateway obfuscated command when approval request times out", async () => {
+  it("honors ask=off for an obfuscated gateway command", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -909,7 +909,7 @@ describe("exec approvals", () => {
     const result = await tool.execute("call6", {
       command: `echo touch ${JSON.stringify(markerPath)} | sh`,
     });
-    expect(result.details.status).toBe("approval-pending");
+    expect(result.details.status).not.toBe("approval-pending");
     await expect
       .poll(async () => {
         try {
@@ -919,6 +919,7 @@ describe("exec approvals", () => {
           return false;
         }
       })
-      .toBe(false);
+      .toBe(true);
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 });
