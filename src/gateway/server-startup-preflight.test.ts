@@ -550,6 +550,20 @@ describe("runGatewayStartupConfigPreflight", () => {
     const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
     const info = vi.fn<(message: string) => void>();
     const warn = vi.fn<(message: string) => void>();
+    const ensureSharedPersonalSkillsManagedRootFn = vi.fn().mockReturnValue({
+      status: "linked",
+      managedSkillsDir: path.join(
+        home,
+        "Library",
+        "Application Support",
+        "Jarvis",
+        ".jarvis",
+        "skills",
+      ),
+      sharedSkillsDir: path.join(home, ".agents", "skills"),
+      inventory: [],
+      unknownEntries: [],
+    });
     const syncBundledSkillsToSharedPersonalRootFn = vi.fn().mockResolvedValue({
       targetDir: path.join(home, ".agents", "skills"),
       entries: [
@@ -566,17 +580,147 @@ describe("runGatewayStartupConfigPreflight", () => {
       log: { info, warn },
       isNixMode: false,
       env: { HOME: home, OPENCLAW_PROFILE: "consumer" } as NodeJS.ProcessEnv,
+      ensureSharedPersonalSkillsManagedRootFn,
       syncBundledSkillsToSharedPersonalRootFn,
     });
 
+    expect(ensureSharedPersonalSkillsManagedRootFn).toHaveBeenCalledWith({
+      homeDir: home,
+      stateDir: expect.any(String),
+      managedSkillsDir: expect.stringMatching(/skills$/),
+    });
     expect(syncBundledSkillsToSharedPersonalRootFn).toHaveBeenCalledWith({
       sharedSkillsDir: path.join(home, ".agents", "skills"),
     });
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("personal skills root linked"));
     expect(info).toHaveBeenCalledWith(
       expect.stringContaining("synced bundled skills to shared personal root"),
     );
     expect(info).toHaveBeenCalledWith(expect.stringContaining("local overrides skipped: 1"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("broken: permission denied"));
+  });
+
+  it("adopts the exact app-owned legacy workspace skills root without touching custom workspaces", async () => {
+    const home = makeTempDir();
+    const stateDir = path.join(home, "Library", "Application Support", "Jarvis", ".jarvis");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspace = path.join(stateDir, "workspace");
+    const ensureSharedPersonalSkillsManagedRootFn = vi.fn().mockImplementation((options) => ({
+      status: "linked",
+      managedSkillsDir: options.managedSkillsDir,
+      sharedSkillsDir: path.join(home, ".agents", "skills"),
+      inventory: [],
+      unknownEntries: [],
+    }));
+
+    await runGatewayStartupConfigPreflight({
+      readSnapshot: vi.fn().mockResolvedValue(
+        createSnapshot({
+          path: configPath,
+          config: { agents: { defaults: { workspace } } },
+        }),
+      ),
+      writeConfig: vi.fn(),
+      log: { info: vi.fn(), warn: vi.fn() },
+      isNixMode: false,
+      env: { HOME: home, OPENCLAW_PROFILE: "consumer", OPENCLAW_STATE_DIR: stateDir },
+      ensureSharedPersonalSkillsManagedRootFn,
+      syncBundledSkillsToSharedPersonalRootFn: vi.fn().mockResolvedValue({
+        targetDir: path.join(home, ".agents", "skills"),
+        entries: [],
+      }),
+    });
+
+    expect(ensureSharedPersonalSkillsManagedRootFn).toHaveBeenCalledTimes(2);
+    expect(ensureSharedPersonalSkillsManagedRootFn).toHaveBeenCalledWith({
+      homeDir: home,
+      stateDir,
+      managedSkillsDir: path.join(stateDir, "skills"),
+    });
+    expect(ensureSharedPersonalSkillsManagedRootFn).toHaveBeenCalledWith({
+      homeDir: home,
+      stateDir,
+      managedSkillsDir: path.join(workspace, "skills"),
+      preserveNonEmpty: true,
+    });
+  });
+
+  it("leaves the app-owned workspace untouched when managed-root adoption is incomplete", async () => {
+    const home = makeTempDir();
+    const stateDir = path.join(home, "Library", "Application Support", "Jarvis", ".jarvis");
+    const workspace = path.join(stateDir, "workspace");
+    const ensureSharedPersonalSkillsManagedRootFn = vi.fn().mockReturnValue({
+      status: "compatibility-conflict",
+      managedSkillsDir: path.join(stateDir, "skills"),
+      sharedSkillsDir: path.join(home, ".agents", "skills"),
+      inventory: [{ name: "demo", action: "conflict" }],
+      unknownEntries: [],
+      message: "Same-name conflicts require review: demo.",
+    });
+
+    await runGatewayStartupConfigPreflight({
+      readSnapshot: vi.fn().mockResolvedValue(
+        createSnapshot({
+          path: path.join(stateDir, "openclaw.json"),
+          config: { agents: { defaults: { workspace } } },
+        }),
+      ),
+      writeConfig: vi.fn(),
+      log: { info: vi.fn(), warn: vi.fn() },
+      isNixMode: false,
+      env: { HOME: home, OPENCLAW_PROFILE: "consumer", OPENCLAW_STATE_DIR: stateDir },
+      ensureSharedPersonalSkillsManagedRootFn,
+      syncBundledSkillsToSharedPersonalRootFn: vi.fn().mockResolvedValue({
+        targetDir: path.join(home, ".agents", "skills"),
+        entries: [],
+      }),
+    });
+
+    expect(ensureSharedPersonalSkillsManagedRootFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a conflicting legacy personal root active and surfaces its receipt", async () => {
+    const home = makeTempDir();
+    const configPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    const warn = vi.fn<(message: string) => void>();
+    const ensureSharedPersonalSkillsManagedRootFn = vi.fn().mockReturnValue({
+      status: "compatibility-conflict",
+      managedSkillsDir: path.join(home, "state", "skills"),
+      sharedSkillsDir: path.join(home, ".agents", "skills"),
+      receiptPath: path.join(
+        home,
+        "state",
+        "personal-skills-migration",
+        "receipts",
+        "fixture.json",
+      ),
+      inventory: [{ name: "demo", action: "conflict" }],
+      unknownEntries: [],
+      message: "Same-name conflicts require review: demo.",
+    });
+
+    await runGatewayStartupConfigPreflight({
+      readSnapshot: vi.fn().mockResolvedValue(createSnapshot({ path: configPath, config: {} })),
+      writeConfig: vi.fn(),
+      log: { info: vi.fn(), warn },
+      isNixMode: false,
+      env: { HOME: home, OPENCLAW_PROFILE: "consumer" } as NodeJS.ProcessEnv,
+      ensureSharedPersonalSkillsManagedRootFn,
+      syncBundledSkillsToSharedPersonalRootFn: vi.fn().mockResolvedValue({
+        targetDir: path.join(home, ".agents", "skills"),
+        entries: [],
+      }),
+    });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("compatibility-conflict"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("fixture.json"));
   });
 
   it("does not widen intentionally narrowed Jarvis consumer bundled skill allowlists", async () => {

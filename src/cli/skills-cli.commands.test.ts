@@ -9,6 +9,12 @@ const formatSkillsListMock = vi.fn();
 const formatSkillInfoMock = vi.fn();
 const formatSkillsCheckMock = vi.fn();
 const syncBundledSkillsToSharedPersonalRootMock = vi.fn();
+const getPersonalSkillVisibilityStatusMock = vi.fn();
+const setPersonalSkillVisibilityMock = vi.fn();
+const runWithTemporaryCodexSkillMock = vi.fn();
+const writeConfigFileMock = vi.fn();
+const ensureSharedPersonalSkillsManagedRootMock = vi.fn();
+const rollbackSharedPersonalSkillsManagedRootMock = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -18,6 +24,11 @@ const runtime = {
 
 vi.mock("../config/config.js", () => ({
   loadConfig: loadConfigMock,
+  writeConfigFile: writeConfigFileMock,
+}));
+
+vi.mock("../config/paths.js", () => ({
+  resolveStateDir: vi.fn(() => "/tmp/state"),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -31,6 +42,20 @@ vi.mock("../agents/skills-status.js", () => ({
 
 vi.mock("../agents/skills/shared-personal-mirror.js", () => ({
   syncBundledSkillsToSharedPersonalRoot: syncBundledSkillsToSharedPersonalRootMock,
+}));
+
+vi.mock("../agents/skills/personal-skill-runtime.js", () => ({
+  getPersonalSkillVisibilityStatus: getPersonalSkillVisibilityStatusMock,
+  setPersonalSkillVisibility: setPersonalSkillVisibilityMock,
+  runWithTemporaryCodexSkill: runWithTemporaryCodexSkillMock,
+}));
+
+vi.mock("../commands/onboard-shared-skills-root.js", () => ({
+  ensureSharedPersonalSkillsManagedRoot: ensureSharedPersonalSkillsManagedRootMock,
+}));
+
+vi.mock("../commands/onboard-shared-skills-rollback.js", () => ({
+  rollbackSharedPersonalSkillsManagedRoot: rollbackSharedPersonalSkillsManagedRootMock,
 }));
 
 vi.mock("./skills-cli.format.js", () => ({
@@ -83,6 +108,24 @@ describe("registerSkillsCli", () => {
           targetDir: "/tmp/shared/local-only",
         },
       ],
+    });
+    getPersonalSkillVisibilityStatusMock.mockReturnValue({
+      name: "demo",
+      visibility: "shared",
+      skillFile: "/tmp/home/.agents/skills/demo/SKILL.md",
+    });
+    setPersonalSkillVisibilityMock.mockResolvedValue({ name: "demo", visibility: "jarvis" });
+    runWithTemporaryCodexSkillMock.mockReturnValue(0);
+    ensureSharedPersonalSkillsManagedRootMock.mockReturnValue({
+      status: "already-linked",
+      sharedSkillsDir: "/tmp/home/.agents/skills",
+      managedSkillsDir: "/tmp/state/skills",
+      inventory: [],
+      unknownEntries: [],
+    });
+    rollbackSharedPersonalSkillsManagedRootMock.mockReturnValue({
+      status: "rolled-back",
+      message: "restored",
     });
   });
 
@@ -157,6 +200,48 @@ describe("registerSkillsCli", () => {
 
     expect(syncBundledSkillsToSharedPersonalRootMock).toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"targetDir": "/tmp/shared"'));
+  });
+
+  it("reports and sets personal skill visibility through the single runtime authority", async () => {
+    await runCli(["skills", "runtime", "status", "demo", "--json"]);
+    expect(getPersonalSkillVisibilityStatusMock).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "demo", config: { gateway: {} }, stateDir: "/tmp/state" }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"visibility": "shared"'));
+
+    await runCli(["skills", "runtime", "set", "demo", "jarvis"]);
+    expect(setPersonalSkillVisibilityMock).toHaveBeenCalledWith(
+      "demo",
+      "jarvis",
+      expect.objectContaining({
+        config: { gateway: {} },
+        writeJarvisConfig: writeConfigFileMock,
+        stateDir: "/tmp/state",
+      }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith("demo: jarvis");
+  });
+
+  it("passes bounded child arguments without persistent visibility mutation", async () => {
+    await runCli(["skills", "runtime", "with", "codex", "demo", "--", "exec", "probe"]);
+
+    expect(runWithTemporaryCodexSkillMock).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "demo", args: ["exec", "probe"], stateDir: "/tmp/state" }),
+    );
+  });
+
+  it("exposes explicit reconciliation and receipt rollback commands", async () => {
+    await runCli(["skills", "runtime", "reconcile"]);
+    expect(ensureSharedPersonalSkillsManagedRootMock).toHaveBeenCalledWith(
+      expect.objectContaining({ stateDir: "/tmp/state" }),
+    );
+
+    await runCli(["skills", "runtime", "rollback", "/tmp/receipt.json"]);
+    expect(rollbackSharedPersonalSkillsManagedRootMock).toHaveBeenCalledWith(
+      "/tmp/receipt.json",
+      expect.objectContaining({ stateDir: "/tmp/state" }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith("rolled-back: restored");
   });
 
   it("reports runtime errors when report loading fails", async () => {

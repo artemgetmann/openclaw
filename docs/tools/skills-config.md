@@ -52,8 +52,9 @@ hide the skill.
 
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
   For personal skills shared across agents, keep the real folders in
-  `~/.agents/skills`. Skills onboarding creates that directory and symlinks the
-  active OpenClaw managed root (`$OPENCLAW_STATE_DIR/skills`) to it when safe.
+  `~/.agents/skills`. Skills onboarding and packaged Jarvis startup reconcile
+  the active OpenClaw managed root (`$OPENCLAW_STATE_DIR/skills`) to it without
+  overwriting conflicts.
 - `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
 - `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
 - `install.preferBrew`: prefer brew installers when available (default: true).
@@ -78,7 +79,8 @@ Per-skill fields:
   for safety. If you want OpenClaw, Codex, and Claude Code to share skills, keep
   the real folders under `~/.agents/skills` and symlink each tool's skills root
   to that directory. OpenClaw skills onboarding handles its managed root
-  automatically when the target is missing or empty. For OpenClaw, that managed
+  automatically. Non-empty upgrade roots are content-inventoried and retain a
+  receipt/compatibility path when migration cannot complete. For OpenClaw, that managed
   root is `~/.openclaw/skills` for the legacy runtime or
   `~/Library/Application Support/OpenClaw/.openclaw/skills` for the app-owned
   runtime. Packaged Jarvis runtimes use the same pattern under the Jarvis app
@@ -95,6 +97,8 @@ locally edited, sync leaves it untouched and reports it as a local override.
 Use `openclaw skills sync-shared --force <skill-name>` only when the bundled
 copy should replace that named local override. If the local copy is better,
 promote its change back into `skills/<skill-name>` first, then sync.
+Marker-backed bundled mirrors are product-owned and cannot be targeted by
+`openclaw skills runtime set`.
 
 ### Sandboxed skills + env vars
 
