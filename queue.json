@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 49,
+  "sequence": 50,
   "nextFence": 15,
   "mergeLease": null,
   "items": {
@@ -1335,13 +1335,100 @@
         "fence": 14,
         "recordedAt": "2026-08-08T09:51:33.669Z"
       }
+    },
+    "1369": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1369,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1369",
+        "headSha": "9a547f40d1d4ed20869da66e1a24ca48bb78ff99",
+        "baseBranch": "main",
+        "testedBaseSha": "935eb54307ea4fd83584ec314c0e66b70a8a72fa",
+        "diffFingerprint": "sha256:11b315ac7daae7792deb3037f9d0060ffe2a95227d2e400d42780576bea5e524",
+        "changedPaths": [
+          "src/agents/bash-tools.exec-host-gateway.ts",
+          "src/agents/bash-tools.exec-host-node.ts",
+          "src/agents/bash-tools.exec.approval-id.test.ts",
+          "src/agents/openclaw-tools.ts",
+          "src/agents/pi-tools.ts",
+          "src/agents/tools/gui-control-tool.test.ts",
+          "src/agents/tools/gui-control-tool.ts",
+          "src/gateway/tool-resolution.test.ts",
+          "src/gateway/tool-resolution.ts"
+        ]
+      },
+      "builder": {
+        "threadId": "019fe0ff-9088-7ed3-a1c9-5987b127ba67",
+        "hostId": "local",
+        "wakeRoute": {
+          "threadId": "019fe0ff-9088-7ed3-a1c9-5987b127ba67",
+          "hostId": "local"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "9a547f40d1d4ed20869da66e1a24ca48bb78ff99",
+        "diffFingerprint": "sha256:11b315ac7daae7792deb3037f9d0060ffe2a95227d2e400d42780576bea5e524",
+        "closure": "terminal-receipt",
+        "contractId": "c9792544-825a-4615-8581-1ba8d86ec925",
+        "owner": {
+          "threadId": "/root/test_pr_1369",
+          "hostId": "local"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "headSha": "9a547f40d1d4ed20869da66e1a24ca48bb78ff99",
+        "diffFingerprint": "sha256:11b315ac7daae7792deb3037f9d0060ffe2a95227d2e400d42780576bea5e524",
+        "owner": {
+          "threadId": "/root/review_pr_1369_v3",
+          "hostId": "local"
+        },
+        "unresolvedFindings": [],
+        "evidence": [
+          "Full/off is the only automatic GUI approval combination and it is supplied by runtime-trusted effective session state.",
+          "The production loopback resolver reads fresh session state on every GUI action, including after cached tool construction.",
+          "Protected GUI modes retain interactive exact-scope approval; exec allowlist and catastrophic hard-blocks remain intact."
+        ]
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1369 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "e8c90c40-b00d-4546-a3af-2409e93789c8",
+        "stateDirectory": "/Users/user/.codex/worktrees/27651953-da96-4d93-aa10-351f12f78aff/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-08T11:47:14.765Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "AEAA659A-1C78-4B39-BC4A-9EF904ED25D6",
-    "recordedAt": "2026-08-08T09:52:53.129Z"
+    "id": "enqueue-1369-9a547f40",
+    "recordedAt": "2026-08-08T11:47:14.765Z"
   },
-  "updatedAt": "2026-08-08T09:52:53.129Z",
+  "updatedAt": "2026-08-08T11:47:14.765Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
