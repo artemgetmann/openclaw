@@ -234,12 +234,12 @@ Dedicated transactions also emit three bounded telemetry lines:
 
 Absolute swap use and process count remain observations, not unevidenced kill
 thresholds. macOS can retain historical swap after pressure recovers, and the
-known workloads have different legitimate helper counts. The runtime monitor
-instead bounds swap-free capacity and fresh swapout growth in each monitoring
-interval. Transaction-relative growth remains visible for attribution, but a
-burst followed by normal samples does not poison later warnings. Do not
-reinterpret a large historical allocation as a failure when the platform still
-reports normal pressure.
+known workloads have different legitimate helper counts. Yellow pressure is
+provisional: admission confirms that pageout and swapout counters are stable,
+and runtime enforcement treats simultaneous growth in both counters as an
+unhealthy sample. Two consecutive unhealthy samples stop the guarded tree. A
+single counter or a burst followed by a healthy sample remains telemetry and
+does not poison later warnings.
 
 An owner-metadata publication failure also includes the exact atomic
 publication stage and owner path. Inspect that generated lease path and its
@@ -267,15 +267,14 @@ release the lane, and diagnose the command's own resource behavior. Repeatedly
 restarting a deterministic offender is not autonomous completion; it is just a
 slower denial of service.
 
-The 25% memory threshold, 512 MiB runtime swap-free floor, 4,096-page runtime
-swapout-growth limit, standard-policy 35% admission CPU-idle threshold,
+The 25% memory threshold, standard-policy 35% admission CPU-idle threshold,
 standard-policy 20% runtime CPU-idle threshold, 25 GiB disk floor, 35 GiB
 disk-report threshold, 15-second interval, two-strike stop rule, and three-second
 health timeout remain fixed product policy in this revision. Environment
-variables cannot lower, disable, corrupt, or stretch them. Admission still
-requires the kernel memory-pressure state to be normal. During an admitted
-transaction, `critical` remains unhealthy; `warn` is allowed only while both
-the swap-free floor and latest-interval swapout-growth limit remain safe.
+variables cannot lower, disable, corrupt, or stretch them. `critical` memory
+pressure remains an immediate refusal. `warn` is allowed only after a short
+stable-paging admission confirmation and remains subject to active pageout plus
+swapout growth through the existing two-strike runtime stop.
 Only the named
 dedicated entrypoint, the unflagged agent-host default, or the exact lower-level
 `--cpu-policy dedicated-agent` equivalent makes CPU idle telemetry-only.
