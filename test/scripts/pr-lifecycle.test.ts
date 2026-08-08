@@ -962,6 +962,15 @@ describe("scripts/pr-lifecycle", () => {
   it("emits a durable repo-backed packet instead of creating a release thread", () => {
     const fixture = makeFixture();
     completeTesterPass(fixture);
+    const lifecycleStatePath = path.join(fixture.root, "state", "pr-42.json");
+    const legacyState = JSON.parse(fs.readFileSync(lifecycleStatePath, "utf8"));
+    // Schema-1 states created before the delivery contract lack mutable PR
+    // metadata. Release handoff must enrich them from the same exact-head GitHub
+    // fetch it already uses, rather than strand an accepted in-flight PR.
+    delete legacyState.candidate.title;
+    delete legacyState.candidate.prContract;
+    delete legacyState.candidate.jarvisDeliveryBoundary;
+    fs.writeFileSync(lifecycleStatePath, JSON.stringify(legacyState));
     const queueState = path.join(fixture.root, "queue.json");
     fs.writeFileSync(
       queueState,
@@ -1010,7 +1019,13 @@ describe("scripts/pr-lifecycle", () => {
       establishesOwnership: false,
     });
     expect(release.releasePacket).toMatchObject({
-      candidate: { pr: 42, headSha: "a".repeat(40), jarvisDeliveryBoundary: null },
+      candidate: {
+        pr: 42,
+        headSha: "a".repeat(40),
+        title: fixture.metadata.title,
+        prContract: fixture.metadata.body,
+        jarvisDeliveryBoundary: null,
+      },
       builder: {
         threadId: "builder-thread",
         hostId: "builder-host",
