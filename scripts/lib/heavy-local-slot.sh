@@ -343,7 +343,9 @@ openclaw_heavy_local_slot_reclaim_dead_owner() {
     "$lock_path/child_pending" \
     "$lock_path/child_committed" \
     "$lock_path/child_authorized" \
-    "$lock_path/child_authorized.tmp.${expected_owner_pid}"
+    "$lock_path/child_authorized.tmp.${expected_owner_pid}" \
+    "$lock_path/runtime_previous_swapouts_total" \
+    "$lock_path/runtime_previous_pageouts_total"
   /bin/rm -f "$lock_path/owner"
   openclaw_heavy_local_slot_remove_reclaim_claim "$reclaim_path" "$reclaim_token" || return 1
   /bin/rmdir "$lock_path" 2>/dev/null
@@ -372,6 +374,8 @@ openclaw_heavy_local_slot_release() {
         "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_authorized" \
         "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_authorized.tmp.$$" \
         "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/health_stop_reason" \
+        "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/runtime_previous_swapouts_total" \
+        "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/runtime_previous_pageouts_total" \
         "$owner_path"
       /bin/rmdir "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH" 2>/dev/null || true
     fi
