@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { withOpenComputerUseLock } from "./open-computer-use-lock.js";
 import type {
   ActionResult,
   AppState,
@@ -838,12 +839,17 @@ function elementArgs(target: ElementRef): Record<string, unknown> {
 export class OpenComputerUseRuntime implements GuiRuntime {
   readonly name = "open-computer-use" as const;
   private readonly command: string;
+  private readonly appAgentIdentity?: string;
   private readonly baseArgs: string[];
   private readonly timeoutMs: number;
   private readonly visualCursorObservationFile?: string;
 
   constructor(options: OpenComputerUseRuntimeOptions = {}) {
     this.command = resolveOpenComputerUseCommand(options.command);
+    const appIdentity = inferOpenComputerUseAppIdentity(this.command);
+    this.appAgentIdentity = appIdentity.recognized
+      ? `bundle:${appIdentity.bundleIdentifier}`
+      : undefined;
     this.baseArgs = options.baseArgs ?? [];
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.visualCursorObservationFile = options.visualCursorObservationFile;
@@ -852,9 +858,15 @@ export class OpenComputerUseRuntime implements GuiRuntime {
   private async runJson(args: string[]): Promise<unknown> {
     const commandArgs = [...this.baseArgs, ...args];
     try {
-      const result = await runExec(this.command, commandArgs, {
+      const result = await withOpenComputerUseLock({
+        appAgentIdentity: this.appAgentIdentity,
+        command: this.command,
         timeoutMs: this.timeoutMs,
-        maxBuffer: 10 * 1024 * 1024,
+        run: async (remainingTimeoutMs) =>
+          await runExec(this.command, commandArgs, {
+            timeoutMs: remainingTimeoutMs,
+            maxBuffer: 10 * 1024 * 1024,
+          }),
       });
       return parseJsonOutput(result.stdout, result.stderr);
     } catch (error) {
@@ -865,18 +877,24 @@ export class OpenComputerUseRuntime implements GuiRuntime {
   }
 
   private async runActionJson(args: string[]): Promise<{ ok: boolean; raw: unknown }> {
-    const result = await runCommandWithTimeout([this.command, ...this.baseArgs, ...args], {
+    const result = await withOpenComputerUseLock({
+      appAgentIdentity: this.appAgentIdentity,
+      command: this.command,
       timeoutMs: this.timeoutMs,
-      noOutputTimeoutMs: this.timeoutMs,
-      env: this.visualCursorObservationFile
-        ? {
-            // OCU writes this debug-only JSON file whenever its software cursor
-            // overlay paints. Treat the file as proof of visible intent only
-            // after parsing a non-hidden phase with cursor geometry.
-            OPEN_COMPUTER_USE_VISUAL_CURSOR: "1",
-            OPEN_COMPUTER_USE_VISUAL_CURSOR_OBSERVATION_FILE: this.visualCursorObservationFile,
-          }
-        : undefined,
+      run: async (remainingTimeoutMs) =>
+        await runCommandWithTimeout([this.command, ...this.baseArgs, ...args], {
+          timeoutMs: remainingTimeoutMs,
+          noOutputTimeoutMs: remainingTimeoutMs,
+          env: this.visualCursorObservationFile
+            ? {
+                // OCU writes this debug-only JSON file whenever its software cursor
+                // overlay paints. Treat the file as proof of visible intent only
+                // after parsing a non-hidden phase with cursor geometry.
+                OPEN_COMPUTER_USE_VISUAL_CURSOR: "1",
+                OPEN_COMPUTER_USE_VISUAL_CURSOR_OBSERVATION_FILE: this.visualCursorObservationFile,
+              }
+            : undefined,
+        }),
     });
     return {
       ok: result.code === 0,
