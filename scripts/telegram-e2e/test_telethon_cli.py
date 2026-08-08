@@ -2175,6 +2175,13 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
 
   def test_parse_telegram_join_url_rejects_noncanonical_paths(self) -> None:
     rejected_urls = [
+      " https://t.me/openclaw_updates",
+      "https://t.me/openclaw_updates ",
+      "https://t.me:/openclaw_updates",
+      "https://t.me/openclaw_updates?",
+      "https://t.me/openclaw_updates#",
+      "HTTPS://t.me/openclaw_updates",
+      "https://T.ME/openclaw_updates",
       "https://t.me/",
       "https://t.me//openclaw_updates",
       "https://t.me/openclaw_updates/",
@@ -2193,6 +2200,36 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     for rejected_url in rejected_urls:
       with self.subTest(rejected_url = rejected_url):
         self.assertIsNone(telethon_cli.parse_telegram_join_url(rejected_url))
+
+    # A URL parser may strip or reinterpret control characters before exposing
+    # components. Every ASCII control byte must instead make the raw value
+    # non-canonical so an attacker cannot smuggle a different actionable URL.
+    for codepoint in (*range(0x20), 0x7F):
+      control = chr(codepoint)
+      for rejected_url in (
+        f"{control}https://t.me/openclaw_updates",
+        f"https://t.me/openclaw{control}_updates",
+        f"https://t.me/openclaw_updates{control}",
+      ):
+        with self.subTest(codepoint = codepoint, rejected_url = repr(rejected_url)):
+          self.assertIsNone(telethon_cli.parse_telegram_join_url(rejected_url))
+
+  def test_parse_telegram_join_url_accepts_canonical_raw_forms(self) -> None:
+    accepted_urls = {
+      "https://t.me/openclaw_updates": ("join_public_chat", "openclaw_updates"),
+      "https://telegram.me/+PendingInviteHash": (
+        "import_chat_invite",
+        "PendingInviteHash",
+      ),
+      "https://t.me/joinchat/PendingInviteHash": (
+        "import_chat_invite",
+        "PendingInviteHash",
+      ),
+    }
+
+    for accepted_url, expected in accepted_urls.items():
+      with self.subTest(accepted_url = accepted_url):
+        self.assertEqual(telethon_cli.parse_telegram_join_url(accepted_url), expected)
 
   async def test_run_button_click_rejects_ambiguous_guard_modes_without_clicking(self) -> None:
     message = FakeInlineButtonMessage(

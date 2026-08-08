@@ -21,7 +21,6 @@ import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 import session_owner
 
@@ -51,10 +50,17 @@ DEFAULT_SESSION_LOCK = (
 PENDING_AUTH_SUFFIX = ".openclaw-login.json"
 LOGIN_PASSWORD_ENV = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD"
 SESSION_LOCK_PATH_ENV = "OPENCLAW_TELEGRAM_USER_LOCK_PATH"
-TELEGRAM_URL_HOSTS = {"t.me", "telegram.me"}
-TELEGRAM_PLUS_INVITE_PATH_PATTERN = re.compile(r"^/\+([A-Za-z0-9_-]{5,})$")
-TELEGRAM_JOINCHAT_PATH_PATTERN = re.compile(r"^/joinchat/([A-Za-z0-9_-]{5,})$")
-TELEGRAM_PUBLIC_USERNAME_PATH_PATTERN = re.compile(r"^/([A-Za-z][A-Za-z0-9_]{3,31})$")
+# Validate the original button value with one ASCII-only grammar. Component URL
+# parsers may erase empty `?`/`#` delimiters, trim leading controls, or normalize
+# host casing before callers can decide whether the provider URL was canonical.
+TELEGRAM_JOIN_URL_PATTERN = re.compile(
+  r"https://(?:t\.me|telegram\.me)(?:"
+  r"/\+(?P<plus_invite>[A-Za-z0-9_-]{5,})"
+  r"|/joinchat/(?P<joinchat_invite>[A-Za-z0-9_-]{5,})"
+  r"|/(?P<public_username>[A-Za-z][A-Za-z0-9_]{3,31})"
+  r")",
+  re.ASCII,
+)
 TELEGRAM_RESERVED_PATHS = {
   "addlist",
   "addstickers",
@@ -783,35 +789,18 @@ def build_button_click_result_payload(result) -> dict[str, object | None]:
 def parse_telegram_join_url(url: str) -> tuple[str, str] | None:
   """Recognize only exact Telegram public-chat and private-invite URL forms."""
 
-  try:
-    parsed = urlsplit(url)
-    port = parsed.port
-  except ValueError:
-    return None
-  if (
-    parsed.scheme != "https"
-    or (parsed.hostname or "").lower() not in TELEGRAM_URL_HOSTS
-    or parsed.username is not None
-    or parsed.password is not None
-    or port is not None
-    or parsed.query
-    or parsed.fragment
-  ):
+  # `fullmatch` is intentional: unlike `$`, it cannot accept a trailing newline.
+  # Extract components only after the untouched input passes the whole grammar.
+  matched = TELEGRAM_JOIN_URL_PATTERN.fullmatch(url)
+  if matched is None:
     return None
 
-  # Match the provider path byte-for-byte. Splitting while dropping empty
-  # segments would silently turn malformed `//`, trailing-slash, or otherwise
-  # non-canonical paths into an actionable join target.
-  plus_invite = TELEGRAM_PLUS_INVITE_PATH_PATTERN.fullmatch(parsed.path)
-  if plus_invite is not None:
-    return "import_chat_invite", plus_invite.group(1)
-  joinchat_invite = TELEGRAM_JOINCHAT_PATH_PATTERN.fullmatch(parsed.path)
-  if joinchat_invite is not None:
-    return "import_chat_invite", joinchat_invite.group(1)
-  public_username = TELEGRAM_PUBLIC_USERNAME_PATH_PATTERN.fullmatch(parsed.path)
-  if public_username is None:
+  invite_hash = matched.group("plus_invite") or matched.group("joinchat_invite")
+  if invite_hash is not None:
+    return "import_chat_invite", invite_hash
+  username = matched.group("public_username")
+  if username is None:  # Defensive assertion for future grammar changes.
     return None
-  username = public_username.group(1)
   if username.lower() in TELEGRAM_RESERVED_PATHS:
     return None
   return "join_public_chat", username
