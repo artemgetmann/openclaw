@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 22,
+  "sequence": 23,
   "nextFence": 6,
   "mergeLease": null,
   "items": {
@@ -490,6 +490,83 @@
         "recordedAt": "2026-08-07T05:40:29.134Z"
       }
     },
+    "1359": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1359,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1359",
+        "headSha": "0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4",
+        "baseBranch": "main",
+        "testedBaseSha": "913e507427f19c224f43ea570189ae7a63af6f48",
+        "diffFingerprint": "sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643",
+        "changedPaths": [
+          ".agents/skills/codex-worktree-adoption/SKILL.md",
+          "docs/agent-guides/workflow.md",
+          "scripts/adopt-codex-worktree.sh",
+          "test/adopt-codex-worktree-owner.test.ts"
+        ]
+      },
+      "builder": {
+        "threadId": "019fd761-acf4-7070-8875-63118648a22c",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fd761-acf4-7070-8875-63118648a22c",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4",
+        "diffFingerprint": "sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643",
+        "closure": "terminal-receipt",
+        "contractId": "38bf4898-aae1-4d57-a108-6d5ee2d88e04",
+        "owner": {
+          "threadId": "/root/pr1359_tester",
+          "hostId": "nested-agent-local"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/pr1359_reviewer",
+          "hostId": "nested-agent-local"
+        },
+        "headSha": "0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4",
+        "diffFingerprint": "sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1359 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "a90d3b51-1623-4779-93ca-79272903ee3f",
+        "stateDirectory": "/Users/user/.codex/worktrees/7f30f350-717b-475a-becc-4596efa3bb7b/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-08T07:43:52.105Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
+    },
     "1362": {
       "state": "queued",
       "candidate": {
@@ -572,10 +649,10 @@
     }
   },
   "lastTransaction": {
-    "id": "f1fd96fa-15d7-403c-9906-d4d4f2b43c7c",
-    "recordedAt": "2026-08-08T07:43:33.067Z"
+    "id": "7c1f35f3-0ee5-4054-903a-de57131f55b4",
+    "recordedAt": "2026-08-08T07:43:52.105Z"
   },
-  "updatedAt": "2026-08-08T07:43:33.067Z",
+  "updatedAt": "2026-08-08T07:43:52.105Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
