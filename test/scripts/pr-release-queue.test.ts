@@ -33,13 +33,74 @@ type CommandOutput = {
 function makeFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pr-release-queue-"));
   const statePath = path.join(root, "queue.json");
+  const gh = path.join(root, "fake-gh.mjs");
+  fs.writeFileSync(
+    gh,
+    `#!/usr/bin/env node
+import fs from "node:fs";
+const args = process.argv.slice(2);
+if (process.env.TEST_GH_FAIL === "1") {
+  process.stderr.write("injected GitHub failure");
+  process.exit(1);
+}
+const pr = args[2];
+const heads = JSON.parse(process.env.TEST_PR_HEADS ?? "{}");
+if (args[0] === "pr" && args[1] === "view") {
+  const afterChecks = fs.existsSync(process.env.TEST_GH_CHECK_MARKER);
+  const head = afterChecks && process.env.TEST_PR_HEAD_AFTER_CHECK
+    ? process.env.TEST_PR_HEAD_AFTER_CHECK
+    : heads[pr];
+  process.stdout.write(JSON.stringify({ headRefOid: head, baseRefName: "main" }));
+} else if (args[0] === "api") {
+  const endpoint = args.at(-1);
+  if (endpoint.includes("/protection/required_status_checks")) {
+    if (process.env.TEST_LEGACY_PROTECTION === "404") {
+      process.stderr.write("HTTP 404: branch protection not found");
+      process.exit(1);
+    }
+    process.stdout.write(process.env.TEST_LEGACY_PROTECTION);
+  } else if (endpoint.includes("/rules/branches/")) {
+    process.stdout.write(process.env.TEST_BRANCH_RULES);
+  } else if (endpoint.includes("/check-runs")) {
+    fs.writeFileSync(process.env.TEST_GH_CHECK_MARKER, "queried");
+    process.stdout.write(process.env.TEST_CHECK_RUN_PAGES);
+  } else if (endpoint.includes("/statuses")) {
+    process.stdout.write(process.env.TEST_STATUS_PAGES);
+  } else {
+    process.stderr.write("unexpected fake gh api endpoint: " + endpoint);
+    process.exit(2);
+  }
+} else {
+  process.stderr.write("unexpected fake gh call: " + args.join(" "));
+  process.exit(2);
+}
+`,
+  );
+  fs.chmodSync(gh, 0o755);
   return {
     root,
     statePath,
     env: {
       ...process.env,
       OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE: statePath,
+      OPENCLAW_PR_RELEASE_QUEUE_GH: gh,
+      OPENCLAW_PR_RELEASE_QUEUE_REPO: "artemgetmann/openclaw",
       OPENCLAW_PR_RELEASE_QUEUE_NOW: "2026-08-05T00:00:00.000Z",
+      TEST_PR_HEADS: "{}",
+      TEST_GH_CHECK_MARKER: path.join(root, "checks-queried"),
+      TEST_LEGACY_PROTECTION: JSON.stringify({
+        contexts: ["test"],
+        checks: [{ context: "test", app_id: 1 }],
+      }),
+      TEST_BRANCH_RULES: "[[]]",
+      TEST_CHECK_RUN_PAGES: JSON.stringify([
+        {
+          check_runs: [
+            { name: "test", app: { id: 1 }, status: "completed", conclusion: "success" },
+          ],
+        },
+      ]),
+      TEST_STATUS_PAGES: "[[]]",
     },
   };
 }
@@ -77,6 +138,9 @@ function writePacket(
   const headSha = pr.toString(16).padStart(40, "a").slice(-40);
   const baseSha = pr.toString(16).padStart(40, "b").slice(-40);
   const diffFingerprint = `sha256:${pr.toString(16).padStart(64, "c").slice(-64)}`;
+  const heads = JSON.parse(fixture.env.TEST_PR_HEADS);
+  heads[String(pr)] = headSha;
+  fixture.env.TEST_PR_HEADS = JSON.stringify(heads);
   const packetPath = path.join(fixture.root, `packet-${pr}.json`);
   fs.writeFileSync(
     packetPath,
@@ -180,6 +244,39 @@ function writeMergeReceipt(fixture: ReturnType<typeof makeFixture>, pr: number) 
     }),
   );
   return receiptPath;
+}
+
+function checksRecoveryArgs(fixture: ReturnType<typeof makeFixture>, pr: number) {
+  const packet = JSON.parse(fs.readFileSync(path.join(fixture.root, `packet-${pr}.json`), "utf8"));
+  return [
+    "recover-transient-blocker",
+    "--pr",
+    String(pr),
+    "--head-sha",
+    packet.candidate.headSha,
+    "--diff-fingerprint",
+    packet.candidate.diffFingerprint,
+    "--kind",
+    "checks-pending",
+  ];
+}
+
+function blockChecksPending(fixture: ReturnType<typeof makeFixture>, pr: number) {
+  initAndEnqueue(fixture, pr);
+  const owner = claim(fixture, `release-owner-${pr}`, pr);
+  run(fixture, [
+    "block",
+    "--lease-id",
+    owner.lease!.leaseId,
+    "--fence",
+    String(owner.lease!.fence),
+    "--kind",
+    "checks-pending",
+    "--details",
+    "required checks are still running",
+    "--transaction-id",
+    `block-${pr}`,
+  ]);
 }
 
 function finishMerge(fixture: ReturnType<typeof makeFixture>, pr: number) {
@@ -721,6 +818,445 @@ describe("scripts/pr-release-queue", () => {
       action: "claimed",
       lease: { claimedPr: 45, fence: 2 },
     });
+  });
+
+  it("recovers an unchanged candidate after authoritative required-check evidence", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 46);
+
+    const recovered = run(fixture, [
+      ...checksRecoveryArgs(fixture, 46),
+      "--transaction-id",
+      "recover-checks-46",
+    ]);
+    expect(recovered).toMatchObject({
+      action: "transient-blocker-recovered",
+      pr: 46,
+      recovery: {
+        blocker: { kind: "checks-pending" },
+        receipt: {
+          source: "github-live-required-checks",
+          repository: "artemgetmann/openclaw",
+          requiredChecks: [
+            {
+              context: "test",
+              appId: 1,
+              source: "branch-protection",
+              observed: {
+                kind: "check-run",
+                appId: 1,
+                status: "completed",
+                conclusion: "success",
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(run(fixture, ["explain-order"]).items?.find((item) => item.pr === 46)).toMatchObject({
+      state: "queued",
+      ready: true,
+      blockers: [],
+    });
+    expect(claim(fixture, "replacement-owner-46", 46)).toMatchObject({
+      action: "claimed",
+      lease: { claimedPr: 46, fence: 2 },
+    });
+  });
+
+  it("makes transient recovery replay-safe by transaction and durable receipt", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 47);
+    const args = [...checksRecoveryArgs(fixture, 47), "--transaction-id"];
+
+    expect(run(fixture, [...args, "recover-checks-47"])).toMatchObject({
+      action: "transient-blocker-recovered",
+    });
+    fixture.env.TEST_GH_FAIL = "1";
+    expect(run(fixture, [...args, "recover-checks-47"])).toMatchObject({
+      action: "transaction-already-recorded",
+      transactionId: "recover-checks-47",
+    });
+    expect(run(fixture, [...args, "recover-checks-47-reconciled"])).toMatchObject({
+      action: "transient-blocker-already-recovered",
+      recovery: { receipt: { source: "github-live-required-checks" } },
+    });
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    expect(state.items["47"].blockerRecoveryHistory).toHaveLength(1);
+  });
+
+  it("refuses transient recovery while any release lease is active", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 48);
+    initAndEnqueue(fixture, 49);
+    claim(fixture, "release-owner-49", 49);
+
+    const rejected = runFailure(fixture, [
+      ...checksRecoveryArgs(fixture, 48),
+      "--transaction-id",
+      "recover-checks-48",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("refuses while a release lease is active");
+  });
+
+  it("refuses transient recovery when immutable candidate identity mismatches", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 51);
+    const args = checksRecoveryArgs(fixture, 51);
+    const headIndex = args.indexOf("--head-sha") + 1;
+    args[headIndex] = "f".repeat(40);
+
+    const rejected = runFailure(fixture, [...args, "--transaction-id", "recover-checks-51"]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("does not match the immutable queue candidate");
+  });
+
+  it("rejects forged receipts instead of trusting caller-authored check results", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 57);
+    const forgedReceipt = path.join(fixture.root, "forged-recovery.json");
+    fs.writeFileSync(
+      forgedReceipt,
+      JSON.stringify({ allRequiredChecksPassed: true, requiredChecks: [{ name: "fake" }] }),
+    );
+
+    const rejected = runFailure(fixture, [
+      ...checksRecoveryArgs(fixture, 57),
+      "--receipt",
+      forgedReceipt,
+      "--transaction-id",
+      "forged-recovery-57",
+    ]);
+    expect(rejected.status).toBe(2);
+    expect(rejected.stderr).toContain("recovery evidence is read live from GitHub");
+  });
+
+  it("refuses a configured required check that never started and is absent from observations", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 58);
+    fixture.env.TEST_LEGACY_PROTECTION = JSON.stringify({
+      contexts: ["test", "never-started"],
+      checks: [
+        { context: "test", app_id: 1 },
+        { context: "never-started", app_id: 2 },
+      ],
+    });
+
+    const rejected = runFailure(fixture, [
+      ...checksRecoveryArgs(fixture, 58),
+      "--transaction-id",
+      "recover-missing-58",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain(
+      "required check never-started (app 2) is not passing: missing",
+    );
+  });
+
+  it("enumerates applicable ruleset checks with their required app identity", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 59);
+    fixture.env.TEST_LEGACY_PROTECTION = "404";
+    fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+      [],
+      [
+        {
+          type: "required_status_checks",
+          parameters: { required_status_checks: [{ context: "ruleset-ci", integration_id: 7 }] },
+        },
+      ],
+    ]);
+    fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+      {
+        check_runs: [
+          { name: "ruleset-ci", app: { id: 7 }, status: "completed", conclusion: "success" },
+        ],
+      },
+    ]);
+
+    const recovered = run(fixture, [
+      ...checksRecoveryArgs(fixture, 59),
+      "--transaction-id",
+      "recover-ruleset-59",
+    ]);
+    expect(recovered).toMatchObject({
+      action: "transient-blocker-recovered",
+      recovery: {
+        receipt: {
+          requiredChecks: [{ context: "ruleset-ci", appId: 7, source: "ruleset" }],
+        },
+      },
+    });
+  });
+
+  it("accepts live-shaped ruleset checks with omitted integration IDs as any-app", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 70);
+    fixture.env.TEST_LEGACY_PROTECTION = "404";
+    fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+      [],
+      [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: [{ context: "pr-required" }, { context: "actionlint" }],
+          },
+        },
+      ],
+    ]);
+    fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+      {
+        check_runs: [
+          { name: "pr-required", app: { id: 11 }, status: "completed", conclusion: "success" },
+          { name: "actionlint", app: { id: 12 }, status: "completed", conclusion: "success" },
+        ],
+      },
+    ]);
+
+    const recovered = run(fixture, [
+      ...checksRecoveryArgs(fixture, 70),
+      "--transaction-id",
+      "recover-any-app-70",
+    ]);
+    expect(recovered).toMatchObject({
+      action: "transient-blocker-recovered",
+      recovery: {
+        receipt: {
+          requiredChecks: [
+            { context: "actionlint", appId: null, source: "ruleset" },
+            { context: "pr-required", appId: null, source: "ruleset" },
+          ],
+        },
+      },
+    });
+  });
+
+  it("keeps omitted-ID checks fail-closed when check-run and status observations conflict", () => {
+    const fixture = makeFixture();
+    blockChecksPending(fixture, 71);
+    fixture.env.TEST_LEGACY_PROTECTION = "404";
+    fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+      [
+        {
+          type: "required_status_checks",
+          parameters: { required_status_checks: [{ context: "pr-required" }] },
+        },
+      ],
+    ]);
+    fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+      {
+        check_runs: [
+          { name: "pr-required", app: { id: 11 }, status: "completed", conclusion: "success" },
+        ],
+      },
+    ]);
+    fixture.env.TEST_STATUS_PAGES = JSON.stringify([
+      [{ context: "pr-required", state: "failure" }],
+    ]);
+
+    const rejected = runFailure(fixture, [
+      ...checksRecoveryArgs(fixture, 71),
+      "--transaction-id",
+      "recover-conflict-71",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("required check pr-required (app any) is not passing");
+  });
+
+  it("refuses missing, malformed, pending, failing, app-mismatched, or unsupported policies", () => {
+    const cases = [
+      {
+        pr: 60,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_LEGACY_PROTECTION = "404";
+        },
+        expected: "did not report any configured required checks",
+      },
+      {
+        pr: 61,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_LEGACY_PROTECTION = JSON.stringify({ contexts: ["test"] });
+        },
+        expected: "branch-protection checks are malformed",
+      },
+      {
+        pr: 67,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+            { check_runs: [{ name: "test", app: { id: 1 }, status: "in_progress" }] },
+          ]);
+        },
+        expected: "is not passing: in_progress/unknown",
+      },
+      {
+        pr: 68,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+            {
+              check_runs: [
+                { name: "test", app: { id: 1 }, status: "completed", conclusion: "failure" },
+              ],
+            },
+          ]);
+        },
+        expected: "is not passing: completed/failure",
+      },
+      {
+        pr: 69,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_CHECK_RUN_PAGES = JSON.stringify([
+            {
+              check_runs: [
+                { name: "test", app: { id: 99 }, status: "completed", conclusion: "success" },
+              ],
+            },
+          ]);
+        },
+        expected: "required check test (app 1) is not passing: missing",
+      },
+      {
+        pr: 73,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+            [],
+            [{ type: "workflows", parameters: {} }],
+          ]);
+        },
+        expected: "required-workflow rules are unsupported",
+      },
+      {
+        pr: 74,
+        configure: (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_LEGACY_PROTECTION = "404";
+          fixture.env.TEST_BRANCH_RULES = JSON.stringify([
+            [
+              {
+                type: "required_status_checks",
+                parameters: {
+                  required_status_checks: [
+                    { context: "ambiguous", integration_id: "not-an-app-id" },
+                  ],
+                },
+              },
+            ],
+          ]);
+        },
+        expected: "required-check configuration is ambiguous",
+      },
+    ];
+    for (const { pr, configure, expected } of cases) {
+      const fixture = makeFixture();
+      blockChecksPending(fixture, pr);
+      configure(fixture);
+      const rejected = runFailure(fixture, [
+        ...checksRecoveryArgs(fixture, pr),
+        "--transaction-id",
+        `recover-policy-${pr}`,
+      ]);
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain(expected);
+    }
+  });
+
+  it("refuses GitHub head drift before or during live required-check verification", () => {
+    for (const [pr, afterChecks] of [
+      [62, false],
+      [63, true],
+    ] as const) {
+      const fixture = makeFixture();
+      blockChecksPending(fixture, pr);
+      if (afterChecks) {
+        fixture.env.TEST_PR_HEAD_AFTER_CHECK = "f".repeat(40);
+      } else {
+        const heads = JSON.parse(fixture.env.TEST_PR_HEADS);
+        heads[String(pr)] = "f".repeat(40);
+        fixture.env.TEST_PR_HEADS = JSON.stringify(heads);
+      }
+      const rejected = runFailure(fixture, [
+        ...checksRecoveryArgs(fixture, pr),
+        "--transaction-id",
+        `recover-drift-${pr}`,
+      ]);
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toMatch(/candidate drifted|candidate changed/);
+    }
+  });
+
+  it("refuses malformed or future blocker timestamps and future stored recovery replay", () => {
+    for (const [pr, observedAt, expected] of [
+      [64, "not-a-timestamp", "must be an ISO timestamp"],
+      [65, "2026-08-05T00:00:01.000Z", "cannot be in the future"],
+    ] as const) {
+      const fixture = makeFixture();
+      blockChecksPending(fixture, pr);
+      const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+      state.items[String(pr)].discoveredBlockers[0].observedAt = observedAt;
+      fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+      const rejected = runFailure(fixture, [
+        ...checksRecoveryArgs(fixture, pr),
+        "--transaction-id",
+        `recover-time-${pr}`,
+      ]);
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toContain(expected);
+    }
+
+    const replayFixture = makeFixture();
+    blockChecksPending(replayFixture, 66);
+    run(replayFixture, [
+      ...checksRecoveryArgs(replayFixture, 66),
+      "--transaction-id",
+      "recover-checks-66",
+    ]);
+    const replayState = JSON.parse(fs.readFileSync(replayFixture.statePath, "utf8"));
+    replayState.items["66"].blockerRecoveryHistory[0].receipt.observedAt =
+      "2026-08-05T00:00:01.000Z";
+    fs.writeFileSync(replayFixture.statePath, JSON.stringify(replayState));
+    const replayRejected = runFailure(replayFixture, [
+      ...checksRecoveryArgs(replayFixture, 66),
+      "--transaction-id",
+      "recover-checks-66-replay",
+    ]);
+    expect(replayRejected.status).toBe(1);
+    expect(replayRejected.stderr).toContain("out of order or in the future");
+  });
+
+  it("refuses recovery for decision-required and non-retryable blockers", () => {
+    for (const [pr, blockerKind] of [
+      [52, "decision-required"],
+      [53, "base-drift"],
+      [54, "lifecycle-ambiguity"],
+      [55, "source-finding"],
+      [56, "unknown-new-blocker"],
+    ] as const) {
+      const fixture = makeFixture();
+      initAndEnqueue(fixture, pr);
+      const owner = claim(fixture, `release-owner-${pr}`, pr);
+      run(fixture, [
+        "block",
+        "--lease-id",
+        owner.lease!.leaseId,
+        "--fence",
+        String(owner.lease!.fence),
+        "--kind",
+        blockerKind,
+        "--details",
+        "requires a separate repair path",
+        "--transaction-id",
+        `block-${pr}`,
+      ]);
+
+      const rejected = runFailure(fixture, [
+        ...checksRecoveryArgs(fixture, pr),
+        "--transaction-id",
+        `recover-checks-${pr}`,
+      ]);
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toMatch(
+        /not blocked by a retryable transient condition|not blocked solely by checks-pending/,
+      );
+    }
   });
 
   it("rejects stale tester identity and authority expansion", () => {

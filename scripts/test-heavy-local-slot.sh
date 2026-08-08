@@ -835,6 +835,101 @@ test_dedicated_entrypoint_cannot_fall_back_to_standard_cpu_gates() {
   pass "dedicated entrypoint cannot silently fall back to standard CPU gates"
 }
 
+test_dedicated_entrypoint_injects_only_the_safe_default_wait() {
+  local capture_root="$TMP_DIR/dedicated-wait-capture"
+  local capture_wrapper="$capture_root/scripts/with-dedicated-agent-slot.sh"
+  local captured_arguments="$capture_root/arguments"
+
+  mkdir -p "$capture_root/scripts"
+  cp "$ROOT_DIR/scripts/with-dedicated-agent-slot.sh" "$capture_wrapper"
+
+  # Replace only the lower wrapper in this disposable root. Capturing one
+  # argument per line proves the dedicated entrypoint's parsing and forwarding
+  # without invoking admission or depending on current host capacity.
+  cat >"$capture_root/scripts/with-heavy-local-slot.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >"$DEDICATED_WAIT_CAPTURE_PATH"
+EOF
+  chmod +x "$capture_root/scripts/with-heavy-local-slot.sh"
+
+  DEDICATED_WAIT_CAPTURE_PATH="$captured_arguments" \
+    "$capture_wrapper" --label ordinary -- printf '%s\n' --check
+  diff -u - "$captured_arguments" <<'EOF' ||
+--cpu-policy
+dedicated-agent
+--wait-seconds
+86400
+--label
+ordinary
+--
+printf
+%s\n
+--check
+EOF
+    fail "ordinary dedicated work did not receive the 86400-second default wait"
+
+  DEDICATED_WAIT_CAPTURE_PATH="$captured_arguments" \
+    "$capture_wrapper" --label override --wait-seconds 17 -- true
+  diff -u - "$captured_arguments" <<'EOF' ||
+--cpu-policy
+dedicated-agent
+--label
+override
+--wait-seconds
+17
+--
+true
+EOF
+    fail "explicit dedicated wait was duplicated or replaced"
+
+  DEDICATED_WAIT_CAPTURE_PATH="$captured_arguments" \
+    "$capture_wrapper" --label snapshot --check
+  diff -u - "$captured_arguments" <<'EOF' ||
+--cpu-policy
+dedicated-agent
+--label
+snapshot
+--check
+EOF
+    fail "dedicated check-only call received a wait"
+
+  # Strings that resemble control flags are data when consumed as option
+  # values, and everything after the real delimiter belongs to the command.
+  # Neither position may silently disable the ordinary default wait.
+  DEDICATED_WAIT_CAPTURE_PATH="$captured_arguments" \
+    "$capture_wrapper" --label --check --policy --wait-seconds -- true --check
+  diff -u - "$captured_arguments" <<'EOF' ||
+--cpu-policy
+dedicated-agent
+--wait-seconds
+86400
+--label
+--check
+--policy
+--wait-seconds
+--
+true
+--check
+EOF
+    fail "flag-like values or command arguments changed dedicated wait parsing"
+
+  # A malformed explicit wait remains explicit and reaches the lower guard
+  # unchanged. Injecting a valid default here would hide the caller error or
+  # alter which usage failure the fail-closed parser reports.
+  DEDICATED_WAIT_CAPTURE_PATH="$captured_arguments" \
+    "$capture_wrapper" --wait-seconds --check
+  diff -u - "$captured_arguments" <<'EOF' ||
+--cpu-policy
+dedicated-agent
+--wait-seconds
+--check
+EOF
+    fail "malformed explicit wait was hidden by a default"
+
+  pass "dedicated entrypoint defaults ordinary work to the safe bounded wait only"
+}
+
 test_reachable_http_errors_keep_their_status() {
   local port_path="$TMP_DIR/jarvis-http-error.port"
   local server_output="$TMP_DIR/jarvis-http-error-server.out"
@@ -3272,6 +3367,7 @@ if [[ "${1:-}" == "--cpu-policy-only" ]]; then
   run_suite_test test_production_has_no_ambient_test_bypass
   run_suite_test test_cpu_policy_is_explicit_narrow_and_receipted
   run_suite_test test_dedicated_entrypoint_cannot_fall_back_to_standard_cpu_gates
+  run_suite_test test_dedicated_entrypoint_injects_only_the_safe_default_wait
   run_suite_test test_dedicated_cpu_policy_preserves_signal_cleanup
   SUITE_PHASE="complete"
   echo "Heavy-local slot CPU policy tests passed."
@@ -3318,6 +3414,7 @@ create_term_attribution_holder
 run_suite_test test_production_has_no_ambient_test_bypass
 run_suite_test test_cpu_policy_is_explicit_narrow_and_receipted
 run_suite_test test_dedicated_entrypoint_cannot_fall_back_to_standard_cpu_gates
+run_suite_test test_dedicated_entrypoint_injects_only_the_safe_default_wait
 run_suite_test test_reachable_http_errors_keep_their_status
 run_suite_test test_dedicated_resource_guardrails_are_fail_safe_and_observable
 run_suite_test test_owner_publish_failure_is_actionable

@@ -3,21 +3,37 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+readonly DEFAULT_WAIT_SECONDS=86400
 
 # This named entrypoint is the durable declaration that the transaction is
 # dedicated-agent work. Keep policy ownership here: accepting a second CPU
 # policy would let a copied command silently restore the standard idle floors.
 arguments=("$@")
 argument_index=0
+has_explicit_wait=false
+is_check_only=false
 while [ "$argument_index" -lt "${#arguments[@]}" ]; do
   argument="${arguments[$argument_index]}"
 
-  # The lower wrapper accepts several options whose values may themselves be
-  # the literal string `--`. Consume those values before recognizing the real
-  # command delimiter so a later CPU override cannot hide behind such a value.
+  # Parse only enough of the lower wrapper's option grammar to enforce this
+  # entrypoint's two owned defaults. Option values are deliberately consumed as
+  # opaque data: a label named `--check` must not disable waiting, and a label
+  # named `--wait-seconds` must not masquerade as an explicit override. The
+  # lower wrapper remains the authority that rejects missing or malformed
+  # values before admission.
   case "$argument" in
-    --label|--policy|--wait-seconds)
+    --label|--policy)
       argument_index=$((argument_index + 2))
+      continue
+      ;;
+    --wait-seconds)
+      has_explicit_wait=true
+      argument_index=$((argument_index + 2))
+      continue
+      ;;
+    --check)
+      is_check_only=true
+      argument_index=$((argument_index + 1))
       continue
       ;;
     --)
@@ -35,6 +51,18 @@ while [ "$argument_index" -lt "${#arguments[@]}" ]; do
   argument_index=$((argument_index + 1))
 done
 
+# Ordinary dedicated-agent work is a same-turn bounded transaction: retryable
+# occupancy or measured host pressure waits for the lower guard's existing safe
+# maximum, then the guarded command can launch exactly once. Check-only calls
+# stay immediate, and an explicit caller deadline wins unchanged. Keeping the
+# retry loop in the lower wrapper preserves its lease-release, cancellation,
+# timeout, and fail-closed guard-internal semantics.
+wait_arguments=()
+if [ "$has_explicit_wait" = false ] && [ "$is_check_only" = false ]; then
+  wait_arguments=(--wait-seconds "$DEFAULT_WAIT_SECONDS")
+fi
+
 exec "$ROOT_DIR/scripts/with-heavy-local-slot.sh" \
   --cpu-policy dedicated-agent \
+  "${wait_arguments[@]}" \
   "$@"

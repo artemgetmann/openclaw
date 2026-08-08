@@ -161,6 +161,44 @@ After the same builder supplies a repaired packet with fresh tester proof, use
 preserves the old candidate and blocker history, clears those old blockers, and
 returns the new immutable candidate to `queued`.
 
+`checks-pending` is the one blocker that may recover without a new candidate.
+Run the explicit recovery transition with the same immutable identity:
+
+```bash
+scripts/pr-release-queue recover-transient-blocker \
+  --pr 123 \
+  --head-sha "$HEAD_SHA" \
+  --diff-fingerprint "$DIFF_FINGERPRINT" \
+  --kind checks-pending \
+  --transaction-id "$STABLE_TRANSACTION_ID"
+```
+
+The command uses authenticated GitHub reads itself. It brackets the proof with
+exact PR head and base reads. Between them, it enumerates the required
+`(context, app)` identities from legacy branch protection and every active rule
+that applies to the exact base branch across all paginated rule pages. It then compares that expected set with
+the paginated check runs and commit statuses for the exact queued head. Every
+configured identity must have a GitHub-accepted passing observation; a required
+check that never started is therefore `missing`, not silently absent.
+An omitted ruleset `integration_id` means the context may be satisfied by any
+app. Explicit malformed IDs and conflicting latest check-run/commit-status
+observations remain ambiguous and fail closed.
+
+Caller-authored receipts are rejected. The queue generates and stores the
+normalized policy plus exact-head observations in `blockerRecoveryHistory` with
+the original blocker. Empty or malformed policy responses, app mismatches,
+pending or failed observations, head/base drift, and required-workflow rules
+that cannot be reduced safely to status identities all fail closed.
+
+The command also refuses an active release lease, candidate mismatch, mixed
+blocker set, malformed or future blocker time, or any blocker other than
+`checks-pending`. Repeating the same transaction or durable queue recovery is
+idempotent and does not re-query GitHub. Stored blocker and recovery timestamps
+must remain valid ISO instants ordered as blocker <= recovery <= command time.
+Decision-required, base-drift, lifecycle ambiguity, source findings, candidate
+drift, and unknown blockers still require their existing repair path; this is
+not a generic unblock command.
+
 A merge receipt must prove the reviewed head and diff, normal non-admin merge,
 expected-head protection, landed-tree equality, and ancestry. Source-only work
 then closes. Explicit deployment authority stops at a separate delivery barrier;
