@@ -22,6 +22,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "jarvis-computer-use",
   "peekaboo",
   "summarize",
+  "tldr",
   "weather",
   "wacli",
   "mcporter",
