@@ -17,6 +17,7 @@ Options:
   --allow-stale-head         Allow detached HEAD that is not origin/<base>.
   --allow-dirty              Allow existing local changes while adopting.
   --no-home-refresh          Do not fast-forward the sacred home clone first.
+  --thread-id <id>           Optional native Codex thread receipt (secret-free).
 EOF
 }
 
@@ -145,6 +146,7 @@ LANE_MODE="warm"
 ALLOW_STALE_HEAD=0
 ALLOW_DIRTY=0
 REFRESH_HOME=1
+THREAD_ID="${CODEX_THREAD_ID:-unavailable}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -175,6 +177,11 @@ while [[ $# -gt 0 ]]; do
       REFRESH_HOME=0
       shift
       ;;
+    --thread-id)
+      [[ $# -ge 2 ]] || fail "--thread-id requires a value."
+      THREAD_ID="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -196,6 +203,7 @@ done
 }
 
 [[ "$FEATURE_NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || fail "feature name must match [a-zA-Z0-9_-]+."
+[[ "$THREAD_ID" =~ ^[a-zA-Z0-9:_-]+$ ]] || fail "thread id must match [a-zA-Z0-9:_-]+."
 [[ "$LANE_MODE" == "clean" || "$LANE_MODE" == "warm" ]] || fail "--mode must be one of: clean, warm."
 
 if [[ -z "$ROOT" ]]; then
@@ -236,6 +244,44 @@ Worktree common dir: ${GIT_COMMON_DIR}
 Expected common dir: ${HOME_GIT_DIR}
 EOF
   exit 1
+fi
+
+# Git owns branch attachment across every linked checkout in the repository.
+# Resolve that ownership before fetch, branch mutation, Telegram-local copying,
+# baseline creation, or dependency setup. The native Codex creator is outside
+# this repository, so this is the earliest enforceable contract boundary.
+BRANCH_OWNER_PATHS=()
+while IFS= read -r owner_path; do
+  [[ -n "$owner_path" ]] || continue
+  BRANCH_OWNER_PATHS+=("$owner_path")
+done < <(
+  git -C "$ROOT" worktree list --porcelain | awk -v wanted="refs/heads/${BRANCH_NAME}" '
+    /^worktree / { path = substr($0, 10) }
+    /^branch / && substr($0, 8) == wanted { print path }
+  '
+)
+
+if [[ "${#BRANCH_OWNER_PATHS[@]}" -gt 0 ]]; then
+  ROOT_OWNS_BRANCH=0
+  for owner_path in "${BRANCH_OWNER_PATHS[@]}"; do
+    if [[ "$owner_path" == "$ROOT" ]]; then
+      ROOT_OWNS_BRANCH=1
+    fi
+  done
+  if [[ "$ROOT_OWNS_BRANCH" != "1" ]]; then
+    cat >&2 <<EOF
+Error: intended lane branch is already attached to another worktree.
+
+Requested worktree: ${ROOT}
+Requested branch:   ${BRANCH_NAME}
+Existing owner(s):
+$(printf '  %s\n' "${BRANCH_OWNER_PATHS[@]}")
+
+No branch was created, switched, or stolen. Reconcile the native Codex task
+owner before adoption; do not create a replacement lane after this failure.
+EOF
+    exit 1
+  fi
 fi
 
 if [[ "$REFRESH_HOME" == "1" ]]; then
@@ -280,12 +326,30 @@ EOF
     exit 1
   fi
   if git -C "$ROOT" show-ref --verify --quiet "refs/heads/${BRANCH_NAME}"; then
-    fail "branch already exists locally: ${BRANCH_NAME}"
+    EXISTING_BRANCH_SHA="$(git -C "$ROOT" rev-parse "refs/heads/${BRANCH_NAME}")"
+    if [[ "$EXISTING_BRANCH_SHA" != "$HEAD_SHA" ]]; then
+      cat >&2 <<EOF
+Error: unattached lane branch does not match this detached checkout.
+
+Requested worktree: ${ROOT}
+Requested branch:   ${BRANCH_NAME}
+Detached head:      ${HEAD_SHA}
+Existing branch:    ${EXISTING_BRANCH_SHA}
+
+No branch was switched or reset. Reconcile the intended source snapshot first.
+EOF
+      exit 1
+    fi
+    git -C "$ROOT" switch "$BRANCH_NAME"
+  else
+    git -C "$ROOT" switch -c "$BRANCH_NAME"
   fi
-  git -C "$ROOT" switch -c "$BRANCH_NAME"
 elif [[ "$CURRENT_BRANCH" != "$BRANCH_NAME" ]]; then
   fail "checkout is already on branch ${CURRENT_BRANCH}; expected detached HEAD or ${BRANCH_NAME}."
 fi
+
+printf 'adoption_owner_receipt=thread:%s worktree:%s branch:%s\n' \
+  "$THREAD_ID" "$ROOT" "$BRANCH_NAME"
 
 # Warm and clean lanes both get isolated dev launch state. This mirrors
 # scripts/new-worktree.sh so feature runtimes do not inherit the shared main
