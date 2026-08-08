@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 39,
-  "nextFence": 11,
-  "mergeLease": null,
+  "sequence": 40,
+  "nextFence": 12,
+  "mergeLease": {
+    "leaseId": "820f0728-1485-478e-bb6e-d32c9b162d8d",
+    "fence": 11,
+    "owner": {
+      "threadId": "/root/pr1362_final_release",
+      "hostId": "MacBook-Pro-JetBook-4.local"
+    },
+    "claimedPr": 1362,
+    "claimedAt": "2026-08-08T08:31:30.162Z",
+    "heartbeatAt": "2026-08-08T08:31:30.162Z",
+    "expiresAt": "2026-08-08T08:51:30.162Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -679,7 +690,7 @@
       }
     },
     "1362": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1362,
         "url": "https://github.com/artemgetmann/openclaw/pull/1362",
@@ -777,6 +788,18 @@
           "claimedAt": "2026-08-08T08:04:13.013Z",
           "heartbeatAt": "2026-08-08T08:04:13.013Z",
           "expiresAt": "2026-08-08T08:24:13.013Z"
+        },
+        {
+          "leaseId": "820f0728-1485-478e-bb6e-d32c9b162d8d",
+          "fence": 11,
+          "owner": {
+            "threadId": "/root/pr1362_final_release",
+            "hostId": "MacBook-Pro-JetBook-4.local"
+          },
+          "claimedPr": 1362,
+          "claimedAt": "2026-08-08T08:31:30.162Z",
+          "heartbeatAt": "2026-08-08T08:31:30.162Z",
+          "expiresAt": "2026-08-08T08:51:30.162Z"
         }
       ],
       "mutationIntent": null,
@@ -887,16 +910,16 @@
         "mode": "queue-lease",
         "owner": {
           "threadId": "/root/pr1362_final_release",
-          "hostId": "nested-agent"
+          "hostId": "MacBook-Pro-JetBook-4.local"
         },
         "builder": {
           "threadId": "019fd696-9c4a-7540-8cb7-b2f76ef8244e",
           "hostId": "MacBook-Pro-JetBook-4.local"
         },
         "builderSuspended": true,
-        "leaseId": "4873c46f-a86f-4083-be45-df7b47a9adb5",
-        "fence": 8,
-        "recordedAt": "2026-08-08T08:04:13.013Z"
+        "leaseId": "820f0728-1485-478e-bb6e-d32c9b162d8d",
+        "fence": 11,
+        "recordedAt": "2026-08-08T08:31:30.162Z"
       }
     },
     "1363": {
@@ -1087,10 +1110,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1363-requeue-ci-green-b3e8e23f",
-    "recordedAt": "2026-08-08T08:31:20.569Z"
+    "id": "c41711c1-72c1-42cf-a0e4-60a396c0faa7",
+    "recordedAt": "2026-08-08T08:31:30.162Z"
   },
-  "updatedAt": "2026-08-08T08:31:20.569Z",
+  "updatedAt": "2026-08-08T08:31:30.162Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
