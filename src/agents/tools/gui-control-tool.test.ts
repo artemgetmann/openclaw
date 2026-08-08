@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createGuiControlTool, usesPromptConfirmedGuiApproval } from "./gui-control-tool.js";
+import { createGuiControlTool, usesFullPermissionGuiApproval } from "./gui-control-tool.js";
 
 describe("createGuiControlTool", () => {
   it("keeps secondary_action out of the agent tool until AgentDesktop supports it", () => {
@@ -20,10 +20,10 @@ describe("createGuiControlTool", () => {
     expect(properties).not.toHaveProperty("approvalId");
   });
 
-  it("uses conversational confirmation only for full permissions with prompts off", () => {
-    expect(usesPromptConfirmedGuiApproval({ execSecurity: "full", execAsk: "off" })).toBe(true);
-    expect(usesPromptConfirmedGuiApproval({ execSecurity: "full", execAsk: "always" })).toBe(false);
-    expect(usesPromptConfirmedGuiApproval({ execSecurity: "allowlist", execAsk: "off" })).toBe(
+  it("auto-approves GUI mutations only for runtime-trusted full permissions with prompts off", () => {
+    expect(usesFullPermissionGuiApproval({ execSecurity: "full", execAsk: "off" })).toBe(true);
+    expect(usesFullPermissionGuiApproval({ execSecurity: "full", execAsk: "always" })).toBe(false);
+    expect(usesFullPermissionGuiApproval({ execSecurity: "allowlist", execAsk: "off" })).toBe(
       false,
     );
   });

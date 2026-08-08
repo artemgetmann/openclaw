@@ -535,6 +535,12 @@ export function createOpenClawCodingTools(options?: {
         : undefined,
       sandboxed: !!sandbox,
       config: options?.config,
+      // Pass the exact effective session settings already selected for exec;
+      // this includes /permissions overrides and avoids a second config lookup.
+      permissionDefaults: {
+        execSecurity: options?.exec?.security ?? execConfig.security,
+        execAsk: options?.exec?.ask ?? execConfig.ask,
+      },
       pluginToolAllowlist: collectExplicitAllowlist([
         profilePolicy,
         providerProfilePolicy,
