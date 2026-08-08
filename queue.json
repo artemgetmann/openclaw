@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 53,
+  "sequence": 54,
   "nextFence": 16,
   "mergeLease": null,
   "items": {
@@ -925,18 +925,21 @@
       }
     },
     "1363": {
-      "state": "blocked",
+      "state": "queued",
       "candidate": {
         "pr": 1363,
         "url": "https://github.com/artemgetmann/openclaw/pull/1363",
-        "headSha": "b3e8e23fb89cfbdf970c207ed7ad74e766f64ef1",
+        "headSha": "c6304f09c522cfc3a92944c9b3aed6d2300686ea",
         "baseBranch": "main",
-        "testedBaseSha": "65567894969b8dcb7990fb55318d4328640a523e",
-        "diffFingerprint": "sha256:f5265f3f36178a2721b8f1ffe39c66678cba871bc5aa0409f3338c32a6f0156b",
+        "testedBaseSha": "b63a5ce6a03e706934c1aee0ae8e4d6d85612d6a",
+        "diffFingerprint": "sha256:d393e78642b1d00a8872f38e6fd3aa5fffa3ba536c71845773001e7e5ef752c3",
         "changedPaths": [
           "docs/agent-guides/fleet-resource-control.md",
+          "docs/agent-guides/release-queue.md",
+          "scripts/pr-release-queue.mjs",
           "scripts/test-heavy-local-slot.sh",
-          "scripts/with-dedicated-agent-slot.sh"
+          "scripts/with-dedicated-agent-slot.sh",
+          "test/scripts/pr-release-queue.test.ts"
         ]
       },
       "builder": {
@@ -949,12 +952,12 @@
       },
       "testerReceipt": {
         "status": "PASS",
-        "headSha": "b3e8e23fb89cfbdf970c207ed7ad74e766f64ef1",
-        "diffFingerprint": "sha256:f5265f3f36178a2721b8f1ffe39c66678cba871bc5aa0409f3338c32a6f0156b",
+        "headSha": "c6304f09c522cfc3a92944c9b3aed6d2300686ea",
+        "diffFingerprint": "sha256:d393e78642b1d00a8872f38e6fd3aa5fffa3ba536c71845773001e7e5ef752c3",
         "closure": "terminal-receipt",
-        "contractId": "b65c70aa-14ea-484e-a069-de99c3f5462e",
+        "contractId": "05ce746f-4558-4e33-a487-36255c0d24d5",
         "owner": {
-          "threadId": "/root/pr1363_rebased_tester",
+          "threadId": "/root/pr1363_final_tester",
           "hostId": "subagent"
         }
       },
@@ -962,10 +965,10 @@
         "schemaVersion": 1,
         "role": "code-reviewer",
         "status": "PASS",
-        "headSha": "b3e8e23fb89cfbdf970c207ed7ad74e766f64ef1",
-        "diffFingerprint": "sha256:f5265f3f36178a2721b8f1ffe39c66678cba871bc5aa0409f3338c32a6f0156b",
+        "headSha": "c6304f09c522cfc3a92944c9b3aed6d2300686ea",
+        "diffFingerprint": "sha256:d393e78642b1d00a8872f38e6fd3aa5fffa3ba536c71845773001e7e5ef752c3",
         "owner": {
-          "threadId": "/root/capacity_autoresume_reviewer",
+          "threadId": "/root/pr1363_final_reviewer",
           "hostId": "subagent"
         },
         "unresolvedFindings": []
@@ -989,18 +992,12 @@
         ]
       },
       "lifecycle": {
-        "contractId": "7d3c9dbe-2afe-4815-b7bb-1dd8d5c01fa1",
+        "contractId": "48a23ec1-5b1b-4e40-94c1-7e59e0eac322",
         "stateDirectory": "/Users/user/.codex/worktrees/4168710a-3a42-41f9-9fdc-8b3ffce0ffb5/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [
-        {
-          "kind": "checks-pending",
-          "details": "PR #1363 exact candidate is unchanged and current: head b3e8e23fb89cfbdf970c207ed7ad74e766f64ef1, base/main 65567894969b8dcb7990fb55318d4328640a523e, gh pr diff --patch sha256:f5265f3f36178a2721b8f1ffe39c66678cba871bc5aa0409f3338c32a6f0156b. Exact-head lifecycle contract 7d3c9dbe-2afe-4815-b7bb-1dd8d5c01fa1, reviewer PASS, and tester PASS/closed match. GitHub reports mergeable=MERGEABLE but mergeStateStatus=BLOCKED because relevant CI checks checks (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test) and checks (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test) remain IN_PROGRESS; CI / pr-required has not completed. Workflow Sanity / actionlint, CI / secrets, CI / check, and CI / check-docs are SUCCESS. Install Smoke / install-smoke is also IN_PROGRESS but is non-required helper noise under the documented normal gate. No merge attempted. Builder should wait for relevant CI and CI / pr-required to complete successfully, then refresh/re-enqueue the unchanged immutable packet for a fresh fenced release claim; if any check fails, diagnose/fix and repeat review/test proof as required.",
-          "observedAt": "2026-08-08T08:23:34.996Z"
-        }
-      ],
-      "readyAt": "2026-08-08T08:21:35.191Z",
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-08T12:25:18.937Z",
       "ownerHistory": [
         {
           "leaseId": "6e93c247-e25d-4b00-80fa-b6ad166780d7",
@@ -1016,7 +1013,54 @@
         }
       ],
       "mutationIntent": null,
-      "candidateHistory": [],
+      "candidateHistory": [
+        {
+          "candidate": {
+            "pr": 1363,
+            "url": "https://github.com/artemgetmann/openclaw/pull/1363",
+            "headSha": "b3e8e23fb89cfbdf970c207ed7ad74e766f64ef1",
+            "baseBranch": "main",
+            "testedBaseSha": "65567894969b8dcb7990fb55318d4328640a523e",
+            "diffFingerprint": "sha256:f5265f3f36178a2721b8f1ffe39c66678cba871bc5aa0409f3338c32a6f0156b",
+            "changedPaths": [
+              "docs/agent-guides/fleet-resource-control.md",
+              "scripts/test-heavy-local-slot.sh",
+              "scripts/with-dedicated-agent-slot.sh"
+            ]
+          },
+          "testerReceipt": {
+            "status": "PASS",
+            "headSha": "b3e8e23fb89cfbdf970c207ed7ad74e766f64ef1",
+            "diffFingerprint": "sha256:f5265f3f36178a2721b8f1ffe39c66678cba871bc5aa0409f3338c32a6f0156b",
+            "closure": "terminal-receipt",
+            "contractId": "b65c70aa-14ea-484e-a069-de99c3f5462e",
+            "owner": {
+              "threadId": "/root/pr1363_rebased_tester",
+              "hostId": "subagent"
+            }
+          },
+          "reviewReceipt": {
+            "schemaVersion": 1,
+            "role": "code-reviewer",
+            "status": "PASS",
+            "headSha": "b3e8e23fb89cfbdf970c207ed7ad74e766f64ef1",
+            "diffFingerprint": "sha256:f5265f3f36178a2721b8f1ffe39c66678cba871bc5aa0409f3338c32a6f0156b",
+            "owner": {
+              "threadId": "/root/capacity_autoresume_reviewer",
+              "hostId": "subagent"
+            },
+            "unresolvedFindings": []
+          },
+          "discoveredBlockers": [
+            {
+              "kind": "checks-pending",
+              "details": "PR #1363 exact candidate is unchanged and current: head b3e8e23fb89cfbdf970c207ed7ad74e766f64ef1, base/main 65567894969b8dcb7990fb55318d4328640a523e, gh pr diff --patch sha256:f5265f3f36178a2721b8f1ffe39c66678cba871bc5aa0409f3338c32a6f0156b. Exact-head lifecycle contract 7d3c9dbe-2afe-4815-b7bb-1dd8d5c01fa1, reviewer PASS, and tester PASS/closed match. GitHub reports mergeable=MERGEABLE but mergeStateStatus=BLOCKED because relevant CI checks checks (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test) and checks (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test) remain IN_PROGRESS; CI / pr-required has not completed. Workflow Sanity / actionlint, CI / secrets, CI / check, and CI / check-docs are SUCCESS. Install Smoke / install-smoke is also IN_PROGRESS but is non-required helper noise under the documented normal gate. No merge attempted. Builder should wait for relevant CI and CI / pr-required to complete successfully, then refresh/re-enqueue the unchanged immutable packet for a fresh fenced release claim; if any check fails, diagnose/fix and repeat review/test proof as required.",
+              "observedAt": "2026-08-08T08:23:34.996Z"
+            }
+          ],
+          "replacedAt": "2026-08-08T12:25:18.937Z"
+        }
+      ],
       "terminalReceipts": [],
       "ownershipReceipt": {
         "mode": "queue-lease",
@@ -1466,10 +1510,10 @@
     }
   },
   "lastTransaction": {
-    "id": "record-merge-1369-b63a5ce6",
-    "recordedAt": "2026-08-08T11:51:30.062Z"
+    "id": "a884611a-1275-421b-9c12-8ece6637fa3c",
+    "recordedAt": "2026-08-08T12:25:18.937Z"
   },
-  "updatedAt": "2026-08-08T11:51:30.062Z",
+  "updatedAt": "2026-08-08T12:25:18.937Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
