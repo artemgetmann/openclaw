@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 26,
+  "sequence": 27,
   "nextFence": 8,
-  "mergeLease": {
-    "leaseId": "5e5378f7-f3f7-417b-ab1c-a0be32c495e4",
-    "fence": 7,
-    "owner": {
-      "threadId": "/root/pr1359_release_operator",
-      "hostId": "nested-agent-local"
-    },
-    "claimedPr": 1359,
-    "claimedAt": "2026-08-08T07:46:35.607Z",
-    "heartbeatAt": "2026-08-08T07:46:35.607Z",
-    "expiresAt": "2026-08-08T08:06:35.607Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -502,7 +491,7 @@
       }
     },
     "1359": {
-      "state": "claimed",
+      "state": "blocked",
       "candidate": {
         "pr": 1359,
         "url": "https://github.com/artemgetmann/openclaw/pull/1359",
@@ -571,7 +560,13 @@
         "stateDirectory": "/Users/user/.codex/worktrees/7f30f350-717b-475a-becc-4596efa3bb7b/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [],
+      "discoveredBlockers": [
+        {
+          "kind": "checks-pending",
+          "details": "PR #1359 remains blocked on exact head 0bbc106411aeb9d0ee89d9ce1100a5f943a3ace4: CI run 31246641010 still has required test shard checks (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test) IN_PROGRESS after bounded watch. GitHub reports mergeStateStatus=BLOCKED; actionlint is passing, no PR comments or GitHub review records are present, head/base and raw patch diff sha256:60c25727e84255827de4c731cd075e1f02d073bcbaaa5d9554e36abb0ee42643 match the immutable packet. Normal merge forbidden until relevant CI completes successfully and a fresh lease independently rechecks.",
+          "observedAt": "2026-08-08T07:48:22.070Z"
+        }
+      ],
       "readyAt": "2026-08-08T07:43:52.105Z",
       "ownerHistory": [
         {
@@ -722,10 +717,10 @@
     }
   },
   "lastTransaction": {
-    "id": "4E8C0E8A-DF7B-4B51-AA44-164DD551D7EA",
-    "recordedAt": "2026-08-08T07:46:35.607Z"
+    "id": "D599B5E9-B480-4267-9B9E-EF392BDB57CC",
+    "recordedAt": "2026-08-08T07:48:22.070Z"
   },
-  "updatedAt": "2026-08-08T07:46:35.607Z",
+  "updatedAt": "2026-08-08T07:48:22.070Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
