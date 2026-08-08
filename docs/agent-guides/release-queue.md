@@ -161,6 +161,48 @@ After the same builder supplies a repaired packet with fresh tester proof, use
 preserves the old candidate and blocker history, clears those old blockers, and
 returns the new immutable candidate to `queued`.
 
+`checks-pending` is the one blocker that may recover without a new candidate.
+After an authoritative read-only GitHub check proves every required check passed
+for the unchanged head, create a receipt that binds the PR, head, and lifecycle
+diff fingerprint:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "checks-pending-recovery",
+  "receiptId": "stable-id-for-this-check-observation",
+  "source": "github-required-checks",
+  "candidate": {
+    "pr": 123,
+    "headSha": "40 hex characters",
+    "diffFingerprint": "sha256:64 hex characters"
+  },
+  "observedAt": "2026-08-08T12:00:00.000Z",
+  "allRequiredChecksPassed": true,
+  "requiredChecks": [{ "name": "test", "conclusion": "SUCCESS" }]
+}
+```
+
+Then run the explicit recovery transition with the same immutable identity:
+
+```bash
+scripts/pr-release-queue recover-transient-blocker \
+  --pr 123 \
+  --head-sha "$HEAD_SHA" \
+  --diff-fingerprint "$DIFF_FINGERPRINT" \
+  --kind checks-pending \
+  --receipt /path/to/checks-recovery.json \
+  --transaction-id "$STABLE_TRANSACTION_ID"
+```
+
+The command refuses an active release lease, candidate mismatch, mixed blocker
+set, or any blocker other than `checks-pending`. It preserves the original
+blocker and evidence in `blockerRecoveryHistory`, then makes the unchanged item
+claimable. Repeating the same transaction or durable receipt is idempotent.
+Decision-required, base-drift, lifecycle ambiguity, source findings, candidate
+drift, and unknown blockers still require their existing repair path; this is
+not a generic unblock command.
+
 A merge receipt must prove the reviewed head and diff, normal non-admin merge,
 expected-head protection, landed-tree equality, and ancestry. Source-only work
 then closes. Explicit deployment authority stops at a separate delivery barrier;

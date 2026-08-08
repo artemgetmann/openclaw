@@ -182,6 +182,50 @@ function writeMergeReceipt(fixture: ReturnType<typeof makeFixture>, pr: number) 
   return receiptPath;
 }
 
+function writeChecksRecoveryReceipt(fixture: ReturnType<typeof makeFixture>, pr: number) {
+  const packet = JSON.parse(fs.readFileSync(path.join(fixture.root, `packet-${pr}.json`), "utf8"));
+  const receiptPath = path.join(fixture.root, `checks-recovery-${pr}.json`);
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: "checks-pending-recovery",
+      receiptId: `required-checks-pass-${pr}`,
+      source: "github-required-checks",
+      candidate: {
+        pr,
+        headSha: packet.candidate.headSha,
+        diffFingerprint: packet.candidate.diffFingerprint,
+      },
+      observedAt: "2026-08-05T00:00:00.000Z",
+      allRequiredChecksPassed: true,
+      requiredChecks: [{ name: "test", conclusion: "SUCCESS" }],
+    }),
+  );
+  return receiptPath;
+}
+
+function checksRecoveryArgs(
+  fixture: ReturnType<typeof makeFixture>,
+  pr: number,
+  receiptPath = writeChecksRecoveryReceipt(fixture, pr),
+) {
+  const packet = JSON.parse(fs.readFileSync(path.join(fixture.root, `packet-${pr}.json`), "utf8"));
+  return [
+    "recover-transient-blocker",
+    "--pr",
+    String(pr),
+    "--head-sha",
+    packet.candidate.headSha,
+    "--diff-fingerprint",
+    packet.candidate.diffFingerprint,
+    "--kind",
+    "checks-pending",
+    "--receipt",
+    receiptPath,
+  ];
+}
+
 function finishMerge(fixture: ReturnType<typeof makeFixture>, pr: number) {
   const owner = claim(fixture, `release-${pr}`, pr);
   return run(fixture, [
@@ -721,6 +765,179 @@ describe("scripts/pr-release-queue", () => {
       action: "claimed",
       lease: { claimedPr: 45, fence: 2 },
     });
+  });
+
+  it("recovers an unchanged candidate after authoritative required-check evidence", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 46);
+    const owner = claim(fixture, "release-owner-46", 46);
+    run(fixture, [
+      "block",
+      "--lease-id",
+      owner.lease!.leaseId,
+      "--fence",
+      String(owner.lease!.fence),
+      "--kind",
+      "checks-pending",
+      "--details",
+      "required checks are still running",
+      "--transaction-id",
+      "block-46",
+    ]);
+
+    const recovered = run(fixture, [
+      ...checksRecoveryArgs(fixture, 46),
+      "--transaction-id",
+      "recover-checks-46",
+    ]);
+    expect(recovered).toMatchObject({
+      action: "transient-blocker-recovered",
+      pr: 46,
+      recovery: {
+        blocker: { kind: "checks-pending" },
+        receipt: { receiptId: "required-checks-pass-46" },
+      },
+    });
+    expect(run(fixture, ["explain-order"]).items?.find((item) => item.pr === 46)).toMatchObject({
+      state: "queued",
+      ready: true,
+      blockers: [],
+    });
+    expect(claim(fixture, "replacement-owner-46", 46)).toMatchObject({
+      action: "claimed",
+      lease: { claimedPr: 46, fence: 2 },
+    });
+  });
+
+  it("makes transient recovery replay-safe by transaction and durable receipt", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 47);
+    const owner = claim(fixture, "release-owner-47", 47);
+    run(fixture, [
+      "block",
+      "--lease-id",
+      owner.lease!.leaseId,
+      "--fence",
+      String(owner.lease!.fence),
+      "--kind",
+      "checks-pending",
+      "--details",
+      "required checks are still running",
+      "--transaction-id",
+      "block-47",
+    ]);
+    const receiptPath = writeChecksRecoveryReceipt(fixture, 47);
+    const args = [...checksRecoveryArgs(fixture, 47, receiptPath), "--transaction-id"];
+
+    expect(run(fixture, [...args, "recover-checks-47"])).toMatchObject({
+      action: "transient-blocker-recovered",
+    });
+    expect(run(fixture, [...args, "recover-checks-47"])).toMatchObject({
+      action: "transaction-already-recorded",
+      transactionId: "recover-checks-47",
+    });
+    expect(run(fixture, [...args, "recover-checks-47-reconciled"])).toMatchObject({
+      action: "transient-blocker-already-recovered",
+      recovery: { receipt: { receiptId: "required-checks-pass-47" } },
+    });
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    expect(state.items["47"].blockerRecoveryHistory).toHaveLength(1);
+  });
+
+  it("refuses transient recovery while any release lease is active", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 48);
+    const blockedOwner = claim(fixture, "release-owner-48", 48);
+    run(fixture, [
+      "block",
+      "--lease-id",
+      blockedOwner.lease!.leaseId,
+      "--fence",
+      String(blockedOwner.lease!.fence),
+      "--kind",
+      "checks-pending",
+      "--details",
+      "required checks are still running",
+      "--transaction-id",
+      "block-48",
+    ]);
+    initAndEnqueue(fixture, 49);
+    claim(fixture, "release-owner-49", 49);
+
+    const rejected = runFailure(fixture, [
+      ...checksRecoveryArgs(fixture, 48),
+      "--transaction-id",
+      "recover-checks-48",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("refuses while a release lease is active");
+  });
+
+  it("refuses transient recovery when immutable candidate identity mismatches", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 51);
+    const owner = claim(fixture, "release-owner-51", 51);
+    run(fixture, [
+      "block",
+      "--lease-id",
+      owner.lease!.leaseId,
+      "--fence",
+      String(owner.lease!.fence),
+      "--kind",
+      "checks-pending",
+      "--details",
+      "required checks are still running",
+      "--transaction-id",
+      "block-51",
+    ]);
+    const args = checksRecoveryArgs(fixture, 51);
+    const headIndex = args.indexOf("--head-sha") + 1;
+    args[headIndex] = "f".repeat(40);
+    const receiptPath = args[args.indexOf("--receipt") + 1];
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+    receipt.candidate.headSha = args[headIndex];
+    fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+
+    const rejected = runFailure(fixture, [...args, "--transaction-id", "recover-checks-51"]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("does not match the immutable queue candidate");
+  });
+
+  it("refuses recovery for decision-required and non-retryable blockers", () => {
+    for (const [pr, blockerKind] of [
+      [52, "decision-required"],
+      [53, "base-drift"],
+      [54, "lifecycle-ambiguity"],
+      [55, "source-finding"],
+      [56, "unknown-new-blocker"],
+    ] as const) {
+      const fixture = makeFixture();
+      initAndEnqueue(fixture, pr);
+      const owner = claim(fixture, `release-owner-${pr}`, pr);
+      run(fixture, [
+        "block",
+        "--lease-id",
+        owner.lease!.leaseId,
+        "--fence",
+        String(owner.lease!.fence),
+        "--kind",
+        blockerKind,
+        "--details",
+        "requires a separate repair path",
+        "--transaction-id",
+        `block-${pr}`,
+      ]);
+
+      const rejected = runFailure(fixture, [
+        ...checksRecoveryArgs(fixture, pr),
+        "--transaction-id",
+        `recover-checks-${pr}`,
+      ]);
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toMatch(
+        /not blocked by a retryable transient condition|not blocked solely by checks-pending/,
+      );
+    }
   });
 
   it("rejects stale tester identity and authority expansion", () => {

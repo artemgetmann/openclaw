@@ -32,6 +32,7 @@ function usage() {
   scripts/pr-release-queue.mjs explain-order
   scripts/pr-release-queue.mjs enqueue --packet <FILE>
   scripts/pr-release-queue.mjs refresh --packet <FILE>
+  scripts/pr-release-queue.mjs recover-transient-blocker --pr <NUMBER> --head-sha <SHA> --diff-fingerprint <SHA256> --kind checks-pending --receipt <FILE>
   scripts/pr-release-queue.mjs claim --thread-id <ID> --host-id <ID> [--pr <NUMBER>] [--ttl-seconds <SECONDS>]
   scripts/pr-release-queue.mjs heartbeat --lease-id <ID> --fence <NUMBER> [--ttl-seconds <SECONDS>]
   scripts/pr-release-queue.mjs block --lease-id <ID> --fence <NUMBER> --kind <KIND> --details <TEXT>
@@ -664,6 +665,127 @@ function mutateRefresh(state, packet, transactionId, now) {
   });
 }
 
+function validateTransientRecoveryReceipt(receipt, options) {
+  const pr = parsePositiveInteger(requireOption(options, "pr"), "--pr");
+  const headSha = requireOption(options, "headSha");
+  const diffFingerprint = requireOption(options, "diffFingerprint");
+  const blockerKind = requireOption(options, "kind");
+  if (!/^[0-9a-f]{40}$/i.test(headSha)) {
+    fail("--head-sha must be a 40-character commit SHA", 2);
+  }
+  if (!/^sha256:[0-9a-f]{64}$/i.test(diffFingerprint)) {
+    fail("--diff-fingerprint must be a SHA-256 lifecycle fingerprint", 2);
+  }
+  if (blockerKind !== "checks-pending") {
+    fail("only the checks-pending transient blocker is recoverable");
+  }
+
+  const observedAt = new Date(receipt?.observedAt ?? "");
+  const requiredChecks = receipt?.requiredChecks;
+  if (
+    receipt?.schemaVersion !== SCHEMA_VERSION ||
+    receipt?.kind !== "checks-pending-recovery" ||
+    typeof receipt?.receiptId !== "string" ||
+    receipt.receiptId.trim() === "" ||
+    receipt?.source !== "github-required-checks" ||
+    receipt?.candidate?.pr !== pr ||
+    receipt?.candidate?.headSha !== headSha ||
+    receipt?.candidate?.diffFingerprint !== diffFingerprint ||
+    receipt?.allRequiredChecksPassed !== true ||
+    Number.isNaN(observedAt.valueOf()) ||
+    !Array.isArray(requiredChecks) ||
+    requiredChecks.length === 0 ||
+    requiredChecks.some(
+      (check) =>
+        typeof check?.name !== "string" ||
+        check.name.trim() === "" ||
+        check?.conclusion !== "SUCCESS",
+    )
+  ) {
+    fail(
+      "recovery receipt must bind the exact candidate and prove all GitHub required checks passed",
+    );
+  }
+  return { pr, headSha, diffFingerprint, blockerKind, receipt };
+}
+
+function mutateRecoverTransientBlocker(state, recovery, transactionId, now) {
+  return transition(state, transactionId, now, (next) => {
+    const item = next.items[String(recovery.pr)];
+    if (!item) {
+      fail(`PR #${recovery.pr} is not enrolled in the release queue`);
+    }
+    if (
+      item.candidate.headSha !== recovery.headSha ||
+      item.candidate.diffFingerprint !== recovery.diffFingerprint
+    ) {
+      fail("transient blocker recovery identity does not match the immutable queue candidate");
+    }
+    if (leaseIsActive(next.mergeLease, now)) {
+      fail("transient blocker recovery refuses while a release lease is active");
+    }
+
+    const priorRecovery = item.blockerRecoveryHistory?.at(-1);
+    if (
+      item.state === "queued" &&
+      item.discoveredBlockers?.length === 0 &&
+      priorRecovery?.blocker?.kind === recovery.blockerKind &&
+      JSON.stringify(priorRecovery?.receipt) === JSON.stringify(recovery.receipt) &&
+      priorRecovery?.candidate?.headSha === recovery.headSha &&
+      priorRecovery?.candidate?.diffFingerprint === recovery.diffFingerprint
+    ) {
+      // A caller may lose the first response and retry with a new transaction.
+      // Return the durable receipt without manufacturing a second recovery.
+      return {
+        action: "transient-blocker-already-recovered",
+        pr: recovery.pr,
+        recovery: priorRecovery,
+      };
+    }
+
+    if (item.state !== "blocked") {
+      fail(`PR #${recovery.pr} is not blocked by a retryable transient condition`);
+    }
+
+    const blockers = Array.isArray(item.discoveredBlockers) ? item.discoveredBlockers : [];
+    if (blockers.length !== 1 || blockers[0]?.kind !== recovery.blockerKind) {
+      // Never partially clear a mixed blocker set. Base drift, source findings,
+      // decisions, lifecycle ambiguity, and unknown blockers require their own
+      // authoritative repair path and usually fresh candidate proof.
+      fail(
+        `PR #${recovery.pr} is not blocked solely by ${recovery.blockerKind}; refusing recovery`,
+      );
+    }
+    if (
+      new Date(recovery.receipt.observedAt).valueOf() < new Date(blockers[0].observedAt).valueOf()
+    ) {
+      fail("required-check recovery evidence predates the recorded checks-pending blocker");
+    }
+
+    const recoveryRecord = {
+      candidate: {
+        pr: recovery.pr,
+        headSha: recovery.headSha,
+        diffFingerprint: recovery.diffFingerprint,
+      },
+      blocker: blockers[0],
+      receipt: recovery.receipt,
+      transactionId,
+      recoveredAt: now.toISOString(),
+    };
+    item.blockerRecoveryHistory ??= [];
+    item.blockerRecoveryHistory.push(recoveryRecord);
+    item.discoveredBlockers = [];
+    item.readyAt = now.toISOString();
+    item.state = "queued";
+    return {
+      action: "transient-blocker-recovered",
+      pr: recovery.pr,
+      recovery: recoveryRecord,
+    };
+  });
+}
+
 function mutateClaim(state, options, transactionId, now) {
   const threadId = requireOption(options, "threadId");
   const hostId = requireOption(options, "hostId");
@@ -1124,6 +1246,16 @@ function main() {
         transactionId,
         `chore(release-queue): refresh PR #${packet.candidate.pr}`,
         (state) => mutateRefresh(state, packet, transactionId, now),
+      );
+    }
+    case "recover-transient-blocker": {
+      const receipt = readJsonFile(requireOption(options, "receipt"), "recovery receipt");
+      const recovery = validateTransientRecoveryReceipt(receipt, options);
+      return performMutation(
+        store,
+        transactionId,
+        `chore(release-queue): recover PR #${recovery.pr} transient blocker`,
+        (state) => mutateRecoverTransientBlocker(state, recovery, transactionId, now),
       );
     }
     case "claim":
