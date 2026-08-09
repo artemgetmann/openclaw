@@ -755,11 +755,31 @@ async function startAsyncRelay(params: {
   }, CODEX_RELAY_OVERDUE_PROGRESS_MS);
   overdueTimer.unref?.();
 
+  const workingPresenceOwner = `codex:${delegationId}`;
+  const workingPresenceRoute = resolveTelegramWorkingPresenceRoute(sessionKey, params.api.config);
+  if (workingPresenceRoute) {
+    const presence = params.api.runtime.channel?.telegram?.workingPresence;
+    await presence
+      ?.start({ ownerId: workingPresenceOwner, ...workingPresenceRoute })
+      .catch((error: unknown) => {
+        // Presence is useful but ephemeral. A provider failure must never turn
+        // an accepted native worker into an ambiguous delegation.
+        params.api.logger.warn(
+          `Codex relay ${delegationId} could not start Telegram working presence: ${formatError(error)}`,
+        );
+      });
+  }
+
   // The completion handler deliberately does not send to Telegram directly.
   // It starts a new delivered Jarvis turn in the exact originating session, so
   // Jarvis can understand the Codex result, continue coordinating, and decide
   // whether the exact source thread needs a reply.
   void started.completion
+    .finally(() => {
+      // Stop at the native terminal boundary, before Jarvis performs any
+      // terminal handback work. Completion delivery has its own normal typing.
+      params.api.runtime.channel?.telegram?.workingPresence?.stop(workingPresenceOwner);
+    })
     .then(
       async (completed) => {
         const durableState = await registry.get(delegationId);
@@ -897,6 +917,30 @@ async function dispatchCodexOverdueProgress(params: {
   if (outcome === "completed") {
     await params.registry.markOverdueProgressDelivered(claimed.delegationId);
   }
+}
+
+function resolveTelegramWorkingPresenceRoute(
+  sessionKey: string,
+  cfg: ReturnType<typeof loadConfig>,
+): { to: string; accountId?: string; messageThreadId?: number } | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) return undefined;
+  const store = loadSessionStore(
+    resolveSessionStorePath(cfg.session?.store, { agentId: parsed.agentId }),
+  );
+  const entry = store[sessionKey];
+  if (entry?.lastChannel !== "telegram" || !entry.lastTo) return undefined;
+  const numericThreadId =
+    typeof entry.lastThreadId === "number"
+      ? entry.lastThreadId
+      : entry.lastThreadId != null
+        ? Number.parseInt(String(entry.lastThreadId), 10)
+        : undefined;
+  return {
+    to: entry.lastTo,
+    accountId: entry.lastAccountId,
+    ...(Number.isFinite(numericThreadId) ? { messageThreadId: numericThreadId } : {}),
+  };
 }
 
 export function buildCodexLaunchReceipt(

@@ -22,9 +22,20 @@ import {
 } from "../../../extensions/telegram/src/thread-bindings.js";
 import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
 import { createTelegramTypingLease } from "./runtime-telegram-typing.js";
+import { createTelegramWorkingPresenceManager } from "./runtime-telegram-working-presence.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 export function createRuntimeTelegram(): PluginRuntimeChannel["telegram"] {
+  const workingPresence = createTelegramWorkingPresenceManager({
+    startTyping: async ({ to, accountId, cfg, messageThreadId }) =>
+      await createTelegramTypingLease({
+        to,
+        accountId,
+        cfg,
+        messageThreadId,
+        pulse: async (pulseParams) => await sendTypingTelegram(pulseParams.to, pulseParams),
+      }),
+  });
   return {
     auditGroupMembership: auditTelegramGroupMembership,
     collectUnmentionedGroupIds: collectTelegramUnmentionedGroupIds,
@@ -55,6 +66,7 @@ export function createRuntimeTelegram(): PluginRuntimeChannel["telegram"] {
             }),
         }),
     },
+    workingPresence,
     conversationActions: {
       editMessage: editMessageTelegram,
       editReplyMarkup: editMessageReplyMarkupTelegram,
