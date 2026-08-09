@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 87,
+  "sequence": 88,
   "nextFence": 26,
   "mergeLease": null,
   "items": {
@@ -2915,10 +2915,10 @@
     }
   },
   "lastTransaction": {
-    "id": "refresh-pr1373-d8cc3124",
-    "recordedAt": "2026-08-09T14:24:50.901Z"
+    "id": "7db13c70-bcb7-4971-a3d4-304a3a7a13f9",
+    "recordedAt": "2026-08-09T14:25:18.469Z"
   },
-  "updatedAt": "2026-08-09T14:24:50.901Z",
+  "updatedAt": "2026-08-09T14:25:18.469Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
