@@ -94,32 +94,47 @@ fi
 
 if [[ "$MODE" == "clean" ]]; then
   BUILD_INFO_PATH="$ROOT/dist/build-info.json"
+  BUILD_STATE_PATH="$ROOT/dist/.openclaw-worktree-build-state.json"
   [[ -f "$BUILD_INFO_PATH" ]] || fail "clean lanes require build metadata at $BUILD_INFO_PATH"
+  [[ -f "$BUILD_STATE_PATH" ]] || fail "clean lanes require tracked-source build state at $BUILD_STATE_PATH"
 
   # Artifact presence alone is not readiness. A prior branch or commit can
-  # leave a perfectly executable dist/ tree behind, then silently run stale
-  # code during Telegram proof. Bind clean readiness to the current Git head;
-  # bootstrap-worktree-runtime.sh owns automatic recovery when these differ.
-  HEAD_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" ||
-    fail "could not resolve current Git head for clean readiness: $ROOT"
-  BUILD_COMMIT="$(
-    BUILD_INFO_PATH="$BUILD_INFO_PATH" "$OPENCLAW_NODE_BIN" --input-type=module - <<'NODE'
+  # leave a perfectly executable dist/ tree behind. HEAD alone is insufficient:
+  # staged or unstaged tracked source can also advance without a commit. Bind
+  # clean readiness to both identities and let bootstrap own recovery.
+  BUILD_STATE_STATUS="$(
+    ROOT_PATH="$ROOT" BUILD_INFO_PATH="$BUILD_INFO_PATH" BUILD_STATE_PATH="$BUILD_STATE_PATH" \
+      "$OPENCLAW_NODE_BIN" --input-type=module - <<'NODE'
+import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 
-const buildInfoPath = process.env.BUILD_INFO_PATH;
 try {
-  const parsed = JSON.parse(fs.readFileSync(buildInfoPath, "utf8"));
-  if (typeof parsed?.commit === "string") {
-    process.stdout.write(parsed.commit.trim());
+  const root = process.env.ROOT_PATH;
+  const buildInfo = JSON.parse(fs.readFileSync(process.env.BUILD_INFO_PATH, "utf8"));
+  const buildState = JSON.parse(fs.readFileSync(process.env.BUILD_STATE_PATH, "utf8"));
+  const commit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  const trackedDiff = execFileSync("git", ["-C", root, "diff", "--binary", "HEAD", "--"], {
+    encoding: null,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const trackedDiffHash = crypto.createHash("sha256").update(trackedDiff).digest("hex");
+  if (buildInfo?.commit !== commit || buildState?.commit !== commit) {
+    process.stdout.write("commit_mismatch");
+  } else if (buildState?.version !== 1 || buildState?.trackedDiffHash !== trackedDiffHash) {
+    process.stdout.write("tracked_source_mismatch");
+  } else {
+    process.stdout.write("current");
   }
 } catch {
-  // The shell emits the stable operator-facing classification below.
+  process.stdout.write("invalid_metadata");
 }
 NODE
   )"
-  [[ -n "$BUILD_COMMIT" ]] || fail "clean lane build metadata has no commit: $BUILD_INFO_PATH"
-  [[ "$BUILD_COMMIT" == "$HEAD_COMMIT" ]] ||
-    fail "clean lane build is stale: built $BUILD_COMMIT, current head $HEAD_COMMIT"
+  [[ "$BUILD_STATE_STATUS" == "current" ]] ||
+    fail "clean lane build is stale (${BUILD_STATE_STATUS}): rebuild tracked source state in $ROOT"
 fi
 
 # The specific failure we are closing is "pnpm exec vitest" resolving to

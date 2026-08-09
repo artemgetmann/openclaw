@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -47,6 +47,9 @@ openclaw_run_repo_pnpm() {
 
   case "$1" in
     install)
+      if [[ -n "\${STUB_INSTALL_LOG:-}" ]]; then
+        printf 'install\n' >> "\${STUB_INSTALL_LOG}"
+      fi
       mkdir -p "$root/node_modules/.bin"
       if [[ "\${STUB_DISABLE_INSTALL_VITEST:-0}" != "1" ]]; then
         cat > "$root/node_modules/.bin/vitest" <<'EOF'
@@ -57,6 +60,9 @@ EOF
       fi
       ;;
     build)
+      if [[ -n "\${STUB_BUILD_LOG:-}" ]]; then
+        printf 'build\n' >> "\${STUB_BUILD_LOG}"
+      fi
       mkdir -p "$root/dist"
       printf 'export {}\\n' > "$root/dist/index.js"
       head_commit="$(git -C "$root" rev-parse HEAD)"
@@ -155,5 +161,48 @@ describe("worktree bootstrap readiness", () => {
       ]),
     ) as { commit: string };
     expect(buildInfo.commit).toBe(run(root, "git", ["rev-parse", "HEAD"]));
+  });
+
+  it("reconciles existing node_modules after package metadata advances", () => {
+    const root = installBootstrapFixture();
+    const installLog = path.join(root, "install.log");
+
+    run(root, "bash", ["scripts/bootstrap-worktree-runtime.sh", "--root", root]);
+    writeFileSync(path.join(root, "package.json"), '{"name":"fixture","version":"2.0.0"}\n');
+    run(root, "git", ["add", "package.json"]);
+    run(root, "git", ["commit", "-m", "advance package metadata"]);
+
+    run(root, "bash", ["scripts/bootstrap-worktree-runtime.sh", "--root", root], {
+      STUB_INSTALL_LOG: installLog,
+    });
+
+    expect(readFileSync(installLog, "utf8")).toBe("install\n");
+  });
+
+  it("rejects and rebuilds dist after tracked source changes without a commit", () => {
+    const root = installBootstrapFixture();
+    const buildLog = path.join(root, "build.log");
+
+    run(root, "bash", ["scripts/bootstrap-worktree-runtime.sh", "--root", root]);
+    writeFileSync(path.join(root, "package.json"), '{"name":"fixture","version":"dirty"}\n');
+
+    const stale = runResult(root, "bash", [
+      "scripts/worktree-ready-check.sh",
+      "--root",
+      root,
+      "--mode",
+      "clean",
+    ]);
+    expect(stale.status).not.toBe(0);
+    expect(stale.stderr).toContain("tracked_source_mismatch");
+
+    run(root, "bash", ["scripts/bootstrap-worktree-runtime.sh", "--root", root], {
+      STUB_BUILD_LOG: buildLog,
+    });
+
+    expect(readFileSync(buildLog, "utf8")).toBe("build\n");
+    expect(
+      run(root, "bash", ["scripts/worktree-ready-check.sh", "--root", root, "--mode", "clean"]),
+    ).toContain("lane_ready=yes");
   });
 });
