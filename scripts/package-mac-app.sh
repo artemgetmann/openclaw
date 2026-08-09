@@ -96,7 +96,6 @@ CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
   "MEMORY.md"
 )
 
-SWIFT_BUILD_JOB_ARGS=()
 if [[ -n "$SWIFT_BUILD_JOBS" ]]; then
   # Local acceptance on memory-constrained Macs needs a deliberate fanout cap,
   # while release builders may keep SwiftPM's normal scheduler. Validate the
@@ -106,8 +105,17 @@ if [[ -n "$SWIFT_BUILD_JOBS" ]]; then
     echo "ERROR: SWIFT_BUILD_JOBS must be an integer from 1 through 64." >&2
     exit 1
   fi
-  SWIFT_BUILD_JOB_ARGS=(--jobs "$SWIFT_BUILD_JOBS")
 fi
+
+run_swift_build() {
+  # Bash 3.2 treats an empty-array expansion as unbound under `set -u`. Branch
+  # explicitly so the stock macOS shell keeps the default SwiftPM scheduler.
+  if [[ -n "$SWIFT_BUILD_JOBS" ]]; then
+    swift build --jobs "$SWIFT_BUILD_JOBS" "$@"
+  else
+    swift build "$@"
+  fi
+}
 
 resolve_app_icon_basename() {
   local explicit_icon="${APP_ICON_BASENAME:-}"
@@ -1672,10 +1680,10 @@ echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 swift_build_started_ms="$(phase_now_ms)"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
-  swift build "${SWIFT_BUILD_JOB_ARGS[@]}" -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  run_swift_build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   # The watchdog is a separate native process so a frozen Node event loop or
   # terminated Jarvis UI process cannot freeze the observer with it.
-  swift build "${SWIFT_BUILD_JOB_ARGS[@]}" -c "$BUILD_CONFIG" --product "$WATCHDOG_PRODUCT" --build-path "$BUILD_PATH" --arch "$arch"
+  run_swift_build -c "$BUILD_CONFIG" --product "$WATCHDOG_PRODUCT" --build-path "$BUILD_PATH" --arch "$arch"
 done
 phase_log_elapsed "$swift_build_started_ms" "Swift app build"
 

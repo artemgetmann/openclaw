@@ -637,6 +637,7 @@ dedicated_resource_health_reason() {
   local swap_line="" swap_used_kib="" swap_free_kib=""
   local vm_stat_output="" pageouts_total="" swapouts_total=""
   local confirmation_vm_stat_output="" confirmation_pageouts_total="" confirmation_swapouts_total=""
+  local confirmation_pressure_level="" confirmation_memory_free=""
   local thermal_output="" thermal_status=0 thermal_state=""
   local runtime_swapout_growth_pages=0 runtime_swapout_interval_pages=0
   local runtime_pageout_interval_pages=0
@@ -791,6 +792,37 @@ dedicated_resource_health_reason() {
   # admission remains immediate, while red pressure still refuses outright.
   if [ "$pressure_state" = "warn" ] && [ "$sample_phase" != "runtime" ]; then
     /bin/sleep 1
+    confirmation_pressure_level="$(
+      /usr/sbin/sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null || true
+    )"
+    confirmation_memory_free="$(
+      /usr/bin/memory_pressure 2>/dev/null |
+        /usr/bin/awk -F': ' '/System-wide memory free percentage/{gsub(/%/, "", $2); print int($2); exit}'
+    )"
+    if [[ ! "$confirmation_memory_free" =~ ^[0-9]+$ ]]; then
+      printf '%s' \
+        'guard_internal|memory_measurement_failed|could not confirm memory headroom after yellow-pressure delay|metric=memory_free_percent status=unavailable'
+      return 0
+    fi
+    if [ "$confirmation_pressure_level" = "4" ]; then
+      printf '%s' \
+        'host_unhealthy|memory_pressure_state|macOS memory pressure became critical during admission confirmation|metric=memory_pressure_state observed=critical expected=normal_or_stable_warn'
+      return 0
+    fi
+    if [ "$confirmation_pressure_level" != "2" ] &&
+      [ "$confirmation_pressure_level" != "1" ]; then
+      printf '%s' \
+        'guard_internal|memory_state_measurement_failed|could not confirm the macOS memory-pressure state|metric=memory_pressure_state status=unavailable'
+      return 0
+    fi
+    if [ "$confirmation_memory_free" -lt "$MIN_MEMORY_FREE_PERCENT" ]; then
+      printf 'host_unhealthy|memory_pressure|memory headroom fell to %s%% during admission confirmation (minimum %s%%)|metric=memory_free_percent observed=%s threshold=%s unit=percent' \
+        "$confirmation_memory_free" \
+        "$MIN_MEMORY_FREE_PERCENT" \
+        "$confirmation_memory_free" \
+        "$MIN_MEMORY_FREE_PERCENT"
+      return 0
+    fi
     confirmation_vm_stat_output="$(/usr/bin/vm_stat 2>/dev/null || true)"
     confirmation_pageouts_total="$(
       printf '%s\n' "$confirmation_vm_stat_output" |
@@ -847,8 +879,9 @@ dedicated_resource_health_reason() {
     return 0
   fi
   if [ "$pressure_state" = "warn" ]; then
-    if [ "$runtime_pageout_interval_pages" -gt 0 ] &&
-      [ "$runtime_swapout_interval_pages" -gt 0 ]; then
+    if openclaw_heavy_local_slot_active_paging \
+      "$runtime_pageout_interval_pages" \
+      "$runtime_swapout_interval_pages"; then
       printf 'host_unhealthy|active_paging_growth|yellow memory pressure has active pageout and swapout growth|metric=active_paging_growth pageouts_delta=%s swapouts_delta=%s threshold=stable unit=pages' \
         "$runtime_pageout_interval_pages" \
         "$runtime_swapout_interval_pages"

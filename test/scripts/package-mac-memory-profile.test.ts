@@ -9,8 +9,10 @@ describe("macOS package memory profile", () => {
   it("offers a validated SwiftPM job cap without changing the default scheduler", () => {
     expect(packageScript).toContain('SWIFT_BUILD_JOBS="${SWIFT_BUILD_JOBS:-}"');
     expect(packageScript).toContain("^([1-9]|[1-5][0-9]|6[0-4])$");
-    expect(packageScript).toContain('SWIFT_BUILD_JOB_ARGS=(--jobs "$SWIFT_BUILD_JOBS")');
+    expect(packageScript).toContain('swift build --jobs "$SWIFT_BUILD_JOBS" "$@"');
+    expect(packageScript).toContain('swift build "$@"');
+    expect(packageScript).not.toContain("SWIFT_BUILD_JOB_ARGS");
     expect(packageScript).toContain("SWIFT_BUILD_JOBS must be an integer from 1 through 64");
-    expect(packageScript.match(/swift build "\$\{SWIFT_BUILD_JOB_ARGS\[@\]\}"/g)).toHaveLength(2);
+    expect(packageScript.match(/run_swift_build -c/g)).toHaveLength(2);
   });
 });

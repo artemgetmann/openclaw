@@ -1000,6 +1000,25 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   local sample="" expected_class="" expected_code="" expected_action=""
   local status=0
 
+  # Exercise the production classifier directly. Fixture health samples below
+  # validate orchestration and cleanup; this table validates the exact decision
+  # used by the production sampler.
+  # shellcheck source=scripts/lib/heavy-local-slot.sh
+  source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+  openclaw_heavy_local_slot_active_paging 145 10032 ||
+    fail "production classifier missed simultaneous pageout and swapout growth"
+  if openclaw_heavy_local_slot_active_paging 145 0; then
+    fail "production classifier treated pageouts alone as active swap pressure"
+  fi
+  if openclaw_heavy_local_slot_active_paging 0 10032; then
+    fail "production classifier treated swapouts alone as active paging"
+  fi
+  set +e
+  openclaw_heavy_local_slot_active_paging invalid 1
+  status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || fail "production classifier accepted invalid counters"
+
   # pmset writes error text containing both monitored keywords. The production
   # sampler must preserve its exit status so an unavailable thermal backend is
   # an internal measurement failure, never a false host-pressure reading.
@@ -1016,6 +1035,12 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   grep -Fq 'runtime_previous_pageouts_total' \
     "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
     fail "yellow-pressure policy does not track pageout intervals"
+  grep -Fq 'confirmation_pressure_level' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "yellow admission does not recheck kernel pressure after confirmation"
+  grep -Fq 'confirmation_memory_free' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "yellow admission does not recheck the 25% floor after confirmation"
   grep -Fq 'runtime_baseline_swapouts_total' \
     "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
     fail "runtime warn policy is not transaction-relative"

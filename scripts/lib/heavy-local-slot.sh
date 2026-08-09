@@ -18,6 +18,17 @@ OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_MESSAGE=""
 OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_DATA=""
 OPENCLAW_HEAVY_LOCAL_SLOT_OWNER_PUBLISH_ERROR=""
 
+# Classify a paging interval without embedding an arbitrary absolute threshold.
+# Both counters must advance: file-backed pageouts alone and retained swap alone
+# are not evidence that anonymous-memory pressure is actively worsening.
+openclaw_heavy_local_slot_active_paging() {
+  local pageouts_delta="$1"
+  local swapouts_delta="$2"
+
+  [[ "$pageouts_delta" =~ ^[0-9]+$ && "$swapouts_delta" =~ ^[0-9]+$ ]] || return 2
+  [[ "$pageouts_delta" -gt 0 && "$swapouts_delta" -gt 0 ]]
+}
+
 openclaw_heavy_local_slot_set_refusal() {
   OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CLASS="$1"
   OPENCLAW_HEAVY_LOCAL_SLOT_REFUSAL_CODE="$2"
