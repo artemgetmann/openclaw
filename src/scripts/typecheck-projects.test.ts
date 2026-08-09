@@ -5,13 +5,23 @@ import { describe, expect, it, vi } from "vitest";
 import { TYPECHECK_PROJECTS, runTypecheckProjects } from "../../scripts/typecheck-projects.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const configHost: ts.ParseConfigFileHost = {
+  ...ts.sys,
+  onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+    throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+  },
+};
 
 describe("partitioned typecheck runner", () => {
   it("owns every original source root exactly once", () => {
     // Parse the same file lists that the compiler will use. Literal `include` comparisons can miss
     // a future `exclude`, glob change, or accidental overlap between the two project configs.
     const readRoots = (config: string) => {
-      const parsed = ts.getParsedCommandLineOfConfigFile(path.join(repoRoot, config), {}, ts.sys);
+      const parsed = ts.getParsedCommandLineOfConfigFile(
+        path.join(repoRoot, config),
+        {},
+        configHost,
+      );
       if (!parsed) {
         throw new Error(`Unable to parse ${config}`);
       }
