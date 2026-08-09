@@ -273,11 +273,9 @@ pull_and_confirm_merge() {
     return 0
   fi
 
-  (cd "${MAIN_REPO}" && "${GIT_BIN}" pull --ff-only origin main)
-  assert_clean_sacred_main
-
   local merged_json=""
   local merge_sha=""
+  local prevalidated_head=""
   local head_sha=""
   merged_json="$(pr_json)"
   assert_pr_can_ship "${merged_json}"
@@ -285,15 +283,18 @@ pull_and_confirm_merge() {
     die "PR #${PR_NUMBER} did not confirm as merged after gh pr merge"
   merge_sha="$(printf '%s\n' "${merged_json}" | "${JQ_BIN}" -r '.mergeCommit.oid // empty')"
   valid_commit "${merge_sha}" || die "merged PR is missing a valid mergeCommit.oid"
+
+  # Validate remote main with the currently loaded verifier and current queue
+  # helper before pulling. Newly pulled release code therefore cannot classify,
+  # package, launch, protect, or prove itself under stale authority.
+  prevalidated_head="$(dry_run_reviewed_remote_main "${merge_sha}")"
+  valid_commit "${prevalidated_head}" || die "pre-pull reviewed main receipt is missing or invalid"
+  (cd "${MAIN_REPO}" && "${GIT_BIN}" pull --ff-only origin main)
+  assert_clean_sacred_main
   head_sha="$(${GIT_BIN} -C "${MAIN_REPO}" rev-parse HEAD)"
   valid_commit "${head_sha}" || die "sacred main HEAD is not a valid git commit"
-  # Exact equality remains the fast path. When main advanced, preserve the
-  # user's moving-main hotfix authority only after every intervening commit is
-  # attributable to one reviewed merged PR whose required checks still pass.
-  # Missing association or receipt data is ambiguity, so it fails closed.
-  if ! commit_matches "${merge_sha}" "${head_sha}"; then
-    confirm_intervening_reviewed_main "${merge_sha}" "${head_sha}"
-  fi
+  commit_matches "${prevalidated_head}" "${head_sha}" || \
+    die "main changed after pre-pull review proof: approved=${prevalidated_head} pulled=${head_sha}"
   CONFIRMED_PR_MERGE_COMMIT="${head_sha}"
 }
 
@@ -318,10 +319,19 @@ associated_main_pr_json() {
 release_queue_item_json() {
   local pr="$1"
   local status=""
-  status="$("${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
+  status="$(env -u OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE \
+    "${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
   # The wrapper emits a secret-silent preflight receipt before the JSON body.
   # Select the first JSON object instead of trusting a fixed line count.
-  printf '%s\n' "${status}" | sed -n '/^{/,$p' | "${JQ_BIN}" -c --arg pr "${pr}" '.state.items[$pr] // empty'
+  printf '%s\n' "${status}" | sed -n '/^{/,$p' | "${JQ_BIN}" -c --arg pr "${pr}" '
+    if .action == "status" and
+      (.revision | test("^[0-9a-f]{40}$")) and
+      .state.schemaVersion == 1 and
+      (.state.sequence | type == "number")
+    then .state.items[$pr] // empty
+    else empty
+    end
+  '
 }
 
 release_queue_proves_reviewed_merge() {
@@ -333,6 +343,10 @@ release_queue_proves_reviewed_merge() {
   printf '%s\n' "${item}" | "${JQ_BIN}" -e --argjson pr "${pr}" --arg commit "${commit_sha}" '
     (.state | IN("merged", "delivery-barrier", "delivered", "closed")) and
     (.candidate.pr == $pr) and
+    (.candidate.headSha | test("^[0-9a-f]{40}$")) and
+    (.candidate.diffFingerprint | test("^sha256:[0-9a-f]{64}$")) and
+    (.candidate.changedPaths | type == "array" and length > 0) and
+    (all(.candidate.changedPaths[]; type == "string" and length > 0)) and
     (.reviewReceipt.schemaVersion == 1) and
     (.reviewReceipt.role == "code-reviewer") and
     (.reviewReceipt.status == "PASS") and
@@ -340,13 +354,22 @@ release_queue_proves_reviewed_merge() {
     (.reviewReceipt.diffFingerprint == .candidate.diffFingerprint) and
     ((.reviewReceipt.owner.threadId // "") | length > 0) and
     ((.reviewReceipt.owner.hostId // "") | length > 0) and
+    (.reviewReceipt.unresolvedFindings | type == "array") and
+    (all(.reviewReceipt.unresolvedFindings[]; .severity | IN("low", "medium", "high", "critical"))) and
     ([.reviewReceipt.unresolvedFindings[]? | select(.severity == "high" or .severity == "critical")] | length == 0) and
     (.testerReceipt.status == "PASS") and
     (.testerReceipt.headSha == .candidate.headSha) and
     (.testerReceipt.diffFingerprint == .candidate.diffFingerprint) and
     (.testerReceipt.closure | IN("archived", "terminal-receipt")) and
+    ((.testerReceipt.contractId // "") | length > 0) and
+    ((.testerReceipt.owner.threadId // "") | length > 0) and
+    ((.testerReceipt.owner.hostId // "") | length > 0) and
+    (.reviewReceipt.owner != .testerReceipt.owner) and
+    ((.reviewReceipt.owner.threadId != .builder.threadId) or (.reviewReceipt.owner.hostId != .builder.hostId)) and
+    ((.testerReceipt.owner.threadId != .builder.threadId) or (.testerReceipt.owner.hostId != .builder.hostId)) and
     (any(.terminalReceipts[]?;
       .kind == "source-merge" and
+      .schemaVersion == 1 and
       .pr == $pr and
       .reviewedHeadSha == $item.candidate.headSha and
       .diffFingerprint == $item.candidate.diffFingerprint and
@@ -362,13 +385,15 @@ release_queue_proves_reviewed_merge() {
 moving_main_path_requires_new_approval() {
   local target_path="$1"
   case "${target_path}" in
-    SECURITY.md | .github/CODEOWNERS | .github/dependabot.yml | .github/codeql/* | .github/workflows/* | \
+    SECURITY.md | .github/* | \
       src/security/* | src/secrets/* | src/config/*secret* | src/config/*/*secret* | \
       src/gateway/*auth* | src/gateway/*/*auth* | src/gateway/*secret* | src/gateway/*/*secret* | \
-      src/agents/*auth* | src/agents/*/*auth* | src/agents/sandbox.ts | src/agents/sandbox-* | \
+      src/agents/*auth* | src/agents/*/*auth* | src/agents/tool-policy.ts | src/agents/sandbox.ts | src/agents/sandbox-* | \
       src/agents/sandbox/* | src/infra/secret-file* | docs/security/* | \
-      scripts/openclaw-npm-publish.sh | scripts/openclaw-npm-release-check.ts | \
-      scripts/release-check.ts | scripts/ship-jarvis-hotfix.sh | docs/reference/RELEASING.md)
+      scripts/*release* | scripts/package* | scripts/open-consumer-mac-app.sh | \
+      scripts/protect-jarvis-runtime-from-app-reseed.sh | scripts/prove-jarvis-runtime.sh | \
+      scripts/pr-release-queue | scripts/pr-release-queue.mjs | scripts/pr-required-status.sh | \
+      scripts/ship-jarvis-hotfix.sh | docs/reference/RELEASING.md)
       return 0
       ;;
   esac
@@ -381,41 +406,12 @@ release_queue_paths_are_routine() {
   local target_path=""
   item="$(release_queue_item_json "${pr}")"
   [[ -n "${item}" ]] || return 1
+  [[ "$(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths | type')" == "array" ]] || return 1
+  [[ "$(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths | length')" -gt 0 ]] || return 1
   while IFS= read -r target_path; do
     [[ -n "${target_path}" ]] || continue
     moving_main_path_requires_new_approval "${target_path}" && return 1
   done < <(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths[]?')
-  return 0
-}
-
-confirm_intervening_reviewed_main() {
-  local merge_sha="$1"
-  local head_sha="$2"
-  local commit_sha=""
-  local pr=""
-  local json=""
-  local pr_merge_sha=""
-
-  "${GIT_BIN}" -C "${MAIN_REPO}" merge-base --is-ancestor "${merge_sha}" "${head_sha}" || \
-    die "requested PR merge ${merge_sha} is not an ancestor of current main ${head_sha}"
-  while IFS= read -r commit_sha; do
-    [[ -n "${commit_sha}" ]] || continue
-    json="$(associated_main_pr_json "${commit_sha}")"
-    pr="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.number // empty')"
-    pr_merge_sha="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.mergeCommit.oid // empty')"
-    [[ "$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state // empty')" == "MERGED" ]] || \
-      die "main commit ${commit_sha} PR #${pr:-unknown} is not merged"
-    [[ "$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.baseRefName // empty')" == "main" ]] || \
-      die "main commit ${commit_sha} PR #${pr:-unknown} does not target main"
-    commit_matches "${commit_sha}" "${pr_merge_sha}" || \
-      die "main commit ${commit_sha} does not match PR #${pr:-unknown} merge receipt"
-    release_queue_proves_reviewed_merge "${pr}" "${commit_sha}" || \
-      die "main commit ${commit_sha} PR #${pr:-unknown} lacks exact-head fenced reviewer, tester, and landed-tree receipts"
-    release_queue_paths_are_routine "${pr}" || \
-      die "main commit ${commit_sha} PR #${pr:-unknown} touches security/release-class paths and requires new approval"
-    "${PR_REQUIRED_SCRIPT}" --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
-    log "accepted reviewed newer main commit ${commit_sha} from PR #${pr}"
-  done < <("${GIT_BIN}" -C "${MAIN_REPO}" rev-list --reverse "${merge_sha}..${head_sha}")
   return 0
 }
 

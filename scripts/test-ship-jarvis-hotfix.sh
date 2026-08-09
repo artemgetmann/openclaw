@@ -67,12 +67,12 @@ moving_main_path_requires_new_approval "scripts/ship-jarvis-hotfix.sh" || \
   fail "release tooling was not classified as protected"
 moving_main_path_requires_new_approval "src/gateway/auth-handler.ts" || \
   fail "security-owned auth path was not classified as protected"
-if moving_main_path_requires_new_approval "src/agents/tool-policy.ts"; then
+if moving_main_path_requires_new_approval "src/agents/pi-tools.ts"; then
   fail "ordinary source path was classified as protected"
 fi
 pass "moving-main path gate separates routine from security/release scope"
 
-QUEUE_ITEM_FIXTURE='{"state":"closed","candidate":{"pr":42,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:test","changedPaths":["src/agents/tool-policy.ts"]},"reviewReceipt":{"schemaVersion":1,"role":"code-reviewer","status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:test","owner":{"threadId":"reviewer","hostId":"host"},"unresolvedFindings":[]},"testerReceipt":{"status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:test","closure":"terminal-receipt"},"terminalReceipts":[{"kind":"source-merge","pr":42,"reviewedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:test","mergeSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","normalNonAdmin":true,"expectedHeadProtected":true,"landedTreeMatchesReviewed":true,"targetAncestryProven":true}]}'
+QUEUE_ITEM_FIXTURE='{"state":"closed","candidate":{"pr":42,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","changedPaths":["src/agents/pi-tools.ts"]},"builder":{"threadId":"builder","hostId":"host"},"reviewReceipt":{"schemaVersion":1,"role":"code-reviewer","status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","owner":{"threadId":"reviewer","hostId":"host"},"unresolvedFindings":[]},"testerReceipt":{"status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","closure":"terminal-receipt","contractId":"contract","owner":{"threadId":"tester","hostId":"host"}},"terminalReceipts":[{"schemaVersion":1,"kind":"source-merge","pr":42,"reviewedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","mergeSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","normalNonAdmin":true,"expectedHeadProtected":true,"landedTreeMatchesReviewed":true,"targetAncestryProven":true}]}'
 release_queue_item_json() {
   printf '%s\n' "${QUEUE_ITEM_FIXTURE}"
 }
