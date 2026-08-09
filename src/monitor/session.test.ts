@@ -1,8 +1,173 @@
-import { describe, expect, it } from "vitest";
-import { buildMonitorBootstrapPrompt } from "./session.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import { buildMonitorBootstrapPrompt, seedMonitorSession } from "./session.js";
 import { CODEX_THREAD_UNARCHIVE_RESUME_ACTION } from "./types.js";
 
+const tempDirs: string[] = [];
+
+function createSessionFile(params: { sessionFile: string; sessionId: string }) {
+  // SessionManager appends in memory when a file has not been initialized yet.
+  // Production origin transcripts already have this header; create the same
+  // durable shape here so the branch helper exercises the real disk path.
+  fs.writeFileSync(
+    params.sessionFile,
+    `${JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: params.sessionId,
+      timestamp: new Date(0).toISOString(),
+      cwd: process.cwd(),
+    })}\n`,
+  );
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 describe("monitor bootstrap contract", () => {
+  it("branches a new monitor from the origin chat transcript", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-monitor-context-"));
+    tempDirs.push(tempDir);
+    const storePath = path.join(tempDir, "sessions.json");
+    const originSessionKey = "agent:main:telegram:group:-1001:topic:42";
+    const monitorSessionKey = "agent:main:monitor:monitor-1";
+    const originSessionId = "origin-session";
+    const originSessionFile = path.join(tempDir, `${originSessionId}.jsonl`);
+    createSessionFile({ sessionFile: originSessionFile, sessionId: originSessionId });
+    const originManager = SessionManager.open(originSessionFile);
+    originManager.appendMessage({
+      role: "user",
+      content: "The boarding pass is attached in Telegram message 123.",
+      timestamp: 1,
+    });
+    originManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "I have the boarding pass reference." }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    await updateSessionStore(storePath, (store) => {
+      store[originSessionKey] = {
+        sessionId: originSessionId,
+        sessionFile: originSessionFile,
+        updatedAt: 1,
+        totalTokens: 50,
+      };
+    });
+
+    await seedMonitorSession({
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
+      sessionKey: monitorSessionKey,
+      sessionId: "unused-fresh-session",
+      label: "Monitor: AirAsia",
+      instructions: "Watch AirAsia for a reply and continue the case.",
+      sourceType: "gmail",
+      sourceTarget: { account: "owner@example.com", threadId: "airasia" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_only",
+      watchDeliveryConfigured: false,
+      originSessionKey,
+    });
+
+    const monitorEntry = loadSessionStore(storePath, { skipCache: true })[monitorSessionKey];
+    expect(monitorEntry?.forkedFromParent).toBe(true);
+    expect(monitorEntry?.sessionId).not.toBe("unused-fresh-session");
+    const context = SessionManager.open(monitorEntry?.sessionFile ?? "").buildSessionContext();
+    expect(context.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: "The boarding pass is attached in Telegram message 123.",
+        }),
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("You are a durable monitor task."),
+        }),
+      ]),
+    );
+  });
+
+  it("starts fresh when the origin context exceeds the configured fork limit", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-monitor-limit-"));
+    tempDirs.push(tempDir);
+    const storePath = path.join(tempDir, "sessions.json");
+    const originSessionKey = "agent:main:telegram:direct:user-1";
+    const originSessionFile = path.join(tempDir, "large-origin.jsonl");
+    createSessionFile({ sessionFile: originSessionFile, sessionId: "large-origin" });
+    const originManager = SessionManager.open(originSessionFile);
+    originManager.appendMessage({
+      role: "user",
+      content: "Large prior context",
+      timestamp: 1,
+    });
+    originManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Acknowledged." }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    await updateSessionStore(storePath, (store) => {
+      store[originSessionKey] = {
+        sessionId: "large-origin",
+        sessionFile: originSessionFile,
+        updatedAt: 1,
+        totalTokens: 101,
+      };
+    });
+
+    await seedMonitorSession({
+      cfg: { session: { store: storePath, parentForkMaxTokens: 100 } } as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "agent:main:monitor:monitor-large",
+      sessionId: "fresh-monitor-session",
+      label: "Monitor: bounded",
+      instructions: "Watch the case.",
+      sourceType: "gmail",
+      sourceTarget: { account: "owner@example.com", threadId: "case" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_only",
+      watchDeliveryConfigured: false,
+      originSessionKey,
+    });
+
+    const monitorEntry = loadSessionStore(storePath, { skipCache: true })[
+      "agent:main:monitor:monitor-large"
+    ];
+    expect(monitorEntry?.sessionId).toBe("fresh-monitor-session");
+    expect(monitorEntry?.forkedFromParent).not.toBe(true);
+  });
+
   it("includes the exact approved continuation prompt in the seeded session", () => {
     const prompt = buildMonitorBootstrapPrompt({
       instructions: "Watch for the release.",
