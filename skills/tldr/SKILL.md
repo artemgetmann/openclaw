@@ -2,7 +2,6 @@
 name: "tldr"
 description: "Rewrite the last response in plain language."
 user-invocable: true
-disable-model-invocation: true
 ---
 
 # TL;DR
