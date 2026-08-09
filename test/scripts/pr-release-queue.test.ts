@@ -133,6 +133,9 @@ function writePacket(
     paths?: string[];
     dependencies?: Array<{ pr: number; relation: string; reason: string }>;
     actions?: string[];
+    jarvisDeliveryBoundary?: unknown;
+    title?: string;
+    prContract?: string;
   } = {},
 ) {
   const headSha = pr.toString(16).padStart(40, "a").slice(-40);
@@ -154,6 +157,11 @@ function writePacket(
         testedBaseSha: baseSha,
         diffFingerprint,
         changedPaths: options.paths ?? [`src/feature-${pr}.ts`],
+        title: options.title ?? `fix(feature): deliver PR ${pr}`,
+        prContract:
+          options.prContract ??
+          "Observable claim + acceptance criteria: the scoped feature behaves as tested.",
+        jarvisDeliveryBoundary: options.jarvisDeliveryBoundary,
       },
       builder: {
         threadId: `builder-${pr}`,
@@ -295,6 +303,116 @@ function finishMerge(fixture: ReturnType<typeof makeFixture>, pr: number) {
 }
 
 describe("scripts/pr-release-queue", () => {
+  it("rejects a Jarvis release packet that omits the carried boundary receipt", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init"]);
+    const packetPath = writePacket(fixture, 15, {
+      paths: ["apps/macos/Sources/Jarvis/App.swift"],
+    });
+
+    const rejected = runFailure(fixture, ["enqueue", "--packet", packetPath]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("release packet is missing Jarvis delivery boundary");
+    expect(rejected.stderr).toContain("apps/macos/Sources/Jarvis/App.swift");
+  });
+
+  it("rejects an omitted receipt when only the packet title or claim names Jarvis", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init"]);
+
+    const titlePacket = writePacket(fixture, 17, {
+      paths: ["src/agents/system-prompt.ts"],
+      title: "fix(jarvis): preserve reminder behavior",
+    });
+    const titleRejected = runFailure(fixture, ["enqueue", "--packet", titlePacket]);
+    expect(titleRejected.status).toBe(1);
+    expect(titleRejected.stderr).toContain("PR title names Jarvis");
+
+    const claimPacket = writePacket(fixture, 18, {
+      paths: ["src/agents/system-prompt.ts"],
+      prContract:
+        "Observable claim + acceptance criteria: Jarvis preserves reminder prerequisites.",
+    });
+    const claimRejected = runFailure(fixture, ["enqueue", "--packet", claimPacket]);
+    expect(claimRejected.status).toBe(1);
+    expect(claimRejected.stderr).toContain("PR summary or acceptance names Jarvis");
+  });
+
+  it("rejects a carried Jarvis receipt with an inflated completion claim", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init"]);
+    const inflatedReceipt = {
+      schemaVersion: 1,
+      workScope: "product-wide",
+      deliveryTarget: "public-release",
+      completionClaim: "consumer-delivered",
+      upgradeImpact: "not-applicable",
+      layers: {
+        localConfiguration: {
+          status: "not-applicable",
+          evidence: "No personal-home mutation was used.",
+        },
+        source: { status: "proven", evidence: "Exact candidate source passed." },
+        packagedArtifact: { status: "pending", evidence: "Package proof remains." },
+        installedRuntime: { status: "pending", evidence: "Install proof remains." },
+        upgradeMigration: {
+          status: "not-applicable",
+          evidence: "Persisted state is unaffected.",
+        },
+        publicRelease: { status: "pending", evidence: "Publication remains." },
+        endUserBehavior: { status: "pending", evidence: "Shipped behavior remains." },
+      },
+    };
+    const packetPath = writePacket(fixture, 16, {
+      title: "fix(jarvis): publish behavior",
+      prContract: `Observable claim + acceptance criteria: Jarvis ships the behavior.\n<!-- jarvis-delivery-boundary:start -->\n\`\`\`json\n${JSON.stringify(inflatedReceipt)}\n\`\`\`\n<!-- jarvis-delivery-boundary:end -->`,
+      jarvisDeliveryBoundary: inflatedReceipt,
+    });
+
+    const rejected = runFailure(fixture, ["enqueue", "--packet", packetPath]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("invalid Jarvis delivery boundary");
+    expect(rejected.stderr).toContain("consumer-delivered is missing proven receipts");
+  });
+
+  it("rejects a carried receipt that is detached from or differs from the PR contract", () => {
+    const fixture = makeFixture();
+    run(fixture, ["init", "--transaction-id", "init"]);
+    const validReceipt = {
+      schemaVersion: 1,
+      workScope: "product-wide",
+      deliveryTarget: "source",
+      completionClaim: "declared-boundary-complete",
+      upgradeImpact: "not-applicable",
+      layers: {
+        localConfiguration: { status: "not-applicable", evidence: "No personal mutation." },
+        source: { status: "proven", evidence: "Exact source passed." },
+        packagedArtifact: { status: "pending", evidence: "Outside source boundary." },
+        installedRuntime: { status: "pending", evidence: "Outside source boundary." },
+        upgradeMigration: { status: "not-applicable", evidence: "No state change." },
+        publicRelease: { status: "pending", evidence: "Outside source boundary." },
+        endUserBehavior: { status: "pending", evidence: "Outside source boundary." },
+      },
+    };
+    const detachedPacket = writePacket(fixture, 19, {
+      jarvisDeliveryBoundary: validReceipt,
+    });
+    const detached = runFailure(fixture, ["enqueue", "--packet", detachedPacket]);
+    expect(detached.status).toBe(1);
+    expect(detached.stderr).toContain("detached Jarvis receipt");
+
+    const embeddedReceipt = structuredClone(validReceipt);
+    embeddedReceipt.layers.source.evidence = "Different embedded evidence.";
+    const mismatchPacket = writePacket(fixture, 20, {
+      title: "fix(jarvis): preserve behavior",
+      prContract: `Observable claim + acceptance criteria: Jarvis preserves behavior.\n<!-- jarvis-delivery-boundary:start -->\n\`\`\`json\n${JSON.stringify(embeddedReceipt)}\n\`\`\`\n<!-- jarvis-delivery-boundary:end -->`,
+      jarvisDeliveryBoundary: validReceipt,
+    });
+    const mismatch = runFailure(fixture, ["enqueue", "--packet", mismatchPacket]);
+    expect(mismatch.status).toBe(1);
+    expect(mismatch.stderr).toContain("does not match the receipt embedded in prContract");
+  });
+
   it("rejects packets with unresolved serious code-review findings", () => {
     const fixture = makeFixture();
     run(fixture, ["init", "--transaction-id", "init-review-gate"]);

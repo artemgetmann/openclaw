@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { validateJarvisPullRequest } from "./lib/jarvis-delivery-boundary.mjs";
 
 const SCHEMA_VERSION = 1;
 const GH_BIN = process.env.OPENCLAW_PR_LIFECYCLE_GH ?? "gh";
@@ -105,7 +106,7 @@ function fetchCandidate(pr) {
     "view",
     String(pr),
     "--json",
-    "number,url,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,files,body",
+    "number,url,state,isDraft,title,headRefName,headRefOid,baseRefName,baseRefOid,files,body",
   ]);
   let metadata;
   try {
@@ -117,7 +118,7 @@ function fetchCandidate(pr) {
   if (metadata.number !== pr || metadata.state !== "OPEN") {
     fail(`PR #${pr} must be open`);
   }
-  for (const field of ["url", "headRefName", "headRefOid", "baseRefName", "baseRefOid"]) {
+  for (const field of ["url", "title", "headRefName", "headRefOid", "baseRefName", "baseRefOid"]) {
     if (typeof metadata[field] !== "string" || metadata[field] === "") {
       fail(`PR #${pr} is missing immutable field ${field}`);
     }
@@ -148,6 +149,19 @@ function fetchCandidate(pr) {
     fail("PR body must contain a filled Observable claim + acceptance criteria field");
   }
 
+  // Jarvis delivery truth is checked before any tester or release ownership is
+  // reserved. That makes a missing or inflated receipt a lifecycle gate instead
+  // of prose a later worker is expected to remember and reinterpret.
+  const deliveryBoundary = validateJarvisPullRequest(
+    { title: metadata.title, body, changedPaths },
+    { stage: "handoff" },
+  );
+  if (!deliveryBoundary.ok) {
+    fail(
+      `Jarvis delivery boundary is invalid: ${deliveryBoundary.errors.join("; ")} (signals: ${deliveryBoundary.signals.join(", ")})`,
+    );
+  }
+
   return {
     number: pr,
     url: metadata.url,
@@ -156,10 +170,12 @@ function fetchCandidate(pr) {
     headSha: metadata.headRefOid,
     baseRefName: metadata.baseRefName,
     baseSha: metadata.baseRefOid,
+    title: metadata.title,
     diffFingerprint: `sha256:${sha256(patch)}`,
     changedPaths,
     acceptance,
     prContract: body,
+    jarvisDeliveryBoundary: deliveryBoundary.required ? deliveryBoundary.receipt : null,
   };
 }
 
@@ -933,6 +949,9 @@ function makeReleasePacket(state, contractId) {
       testedBaseSha: candidate.baseSha,
       diffFingerprint: candidate.diffFingerprint,
       changedPaths: candidate.changedPaths,
+      title: candidate.title,
+      prContract: candidate.prContract,
+      jarvisDeliveryBoundary: candidate.jarvisDeliveryBoundary,
     },
     builder: {
       threadId: builder.threadId,
