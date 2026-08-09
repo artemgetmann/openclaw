@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 71,
+  "sequence": 72,
   "nextFence": 22,
-  "mergeLease": {
-    "leaseId": "f9e2e523-468f-4213-9fe0-d8a10139ee03",
-    "fence": 21,
-    "owner": {
-      "threadId": "/root/release_pr1376",
-      "hostId": "local"
-    },
-    "claimedPr": 1376,
-    "claimedAt": "2026-08-09T10:46:19.302Z",
-    "heartbeatAt": "2026-08-09T10:46:19.302Z",
-    "expiresAt": "2026-08-09T11:16:19.302Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -2082,7 +2071,7 @@
       }
     },
     "1376": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1376,
         "url": "https://github.com/artemgetmann/openclaw/pull/1376",
@@ -2212,7 +2201,20 @@
       ],
       "mutationIntent": null,
       "candidateHistory": [],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1376,
+          "reviewedHeadSha": "d0ef5e6624bcb88d0d55f75386d0eab686c791fa",
+          "diffFingerprint": "sha256:570eab87134b88ee1b6759029c8e5c38e74c3b7fb828889f3926f4dfa523bedb",
+          "mergeSha": "18b5e5fa6342518dfe171c798bfcb96719cb0975",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -2231,10 +2233,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1376-claim-d0ef5e66-local",
-    "recordedAt": "2026-08-09T10:46:19.302Z"
+    "id": "pr1376-record-merge-18b5e5fa-f21",
+    "recordedAt": "2026-08-09T10:48:39.814Z"
   },
-  "updatedAt": "2026-08-09T10:46:19.302Z",
+  "updatedAt": "2026-08-09T10:48:39.814Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -2249,7 +2251,8 @@
       1364,
       1365,
       1366,
-      1369
+      1369,
+      1376
     ],
     "pausedReason": null,
     "graduatedAt": "2026-08-07T05:46:10.866Z",
