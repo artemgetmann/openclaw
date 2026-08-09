@@ -723,16 +723,20 @@ function mutateRefresh(state, packet, options, transactionId, now) {
         // Classify only that additional base delta against the fresh packet;
         // ambiguity leaves the old attempt retryable, while semantic overlap
         // becomes a durable terminal record instead of a manual queue wedge.
-        const evidence = readLiveBaseDriftEvidence(
-          {
-            ...item,
-            candidate: {
-              ...packet.candidate,
-              testedBaseSha: activeRecovery.evidence.currentBase.sha,
-            },
+        const continuedItem = {
+          ...item,
+          candidate: {
+            ...packet.candidate,
+            testedBaseSha: activeRecovery.evidence.currentBase.sha,
           },
-          now,
-        );
+        };
+        const livePacket = readBaseDriftCandidate(parseRepoSlug(), continuedItem);
+        if (livePacket.baseSha !== packet.candidate.testedBaseSha) {
+          fail(
+            "refreshed packet must close the exact active base-drift attempt on the live base and lifecycle",
+          );
+        }
+        const evidence = readLiveBaseDriftEvidence(continuedItem, now);
         if (evidence.currentBase.sha !== packet.candidate.testedBaseSha) {
           fail("fresh packet is not bound to the exact newly classified base", 75);
         }

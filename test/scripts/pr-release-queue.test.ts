@@ -1289,12 +1289,9 @@ describe("scripts/pr-release-queue", () => {
       sourceReturnReceipt: { attemptId: expect.any(String) },
     });
 
-    const stale = runFailure(fixture, [
-      ...args.slice(0, args.indexOf("--fence") + 1),
-      String(owner.lease!.fence + 1),
-      ...args.slice(args.indexOf("--fence") + 2, -1),
-      "route-drift-78-stale",
-    ]);
+    const staleArgs = [...args, "route-drift-78-stale"];
+    staleArgs[args.indexOf("--fence") + 1] = String(owner.lease!.fence + 1);
+    const stale = runFailure(fixture, staleArgs);
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("lease identity or fencing number is stale");
   });
