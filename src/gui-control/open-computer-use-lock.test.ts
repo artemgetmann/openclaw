@@ -294,7 +294,11 @@ describe("withOpenComputerUseLock", () => {
       vi.waitFor(
         async () =>
           expect(await fs.readFile(acquiredPath, "utf8").catch(() => undefined)).toBe("acquired"),
-        { timeout: 5_000 },
+        // This bound includes cold Node + TSX process startup before the child
+        // can exercise the lock. Keep it separate from the production lock
+        // budget so a loaded CI host cannot turn fixture startup into a false
+        // dead-owner recovery failure.
+        { timeout: 15_000 },
       ),
       prematureExit,
     ]);
