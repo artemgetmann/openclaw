@@ -543,6 +543,12 @@ release_queue_paths_are_routine() {
   return 0
 }
 
+require_requested_pr_fenced_merge() {
+  local merge_sha="$1"
+  release_queue_proves_reviewed_merge "${PR_NUMBER}" "${merge_sha}" || \
+    die "requested PR #${PR_NUMBER} lacks exact-head fenced source-merge receipts for ${merge_sha}"
+}
+
 dry_run_reviewed_remote_main() {
   local merge_sha="$1"
   local repo=""
@@ -558,6 +564,7 @@ dry_run_reviewed_remote_main() {
   [[ -n "${repo}" ]] || die "could not resolve GitHub repository for dry-run main proof"
   head_sha="$(${GH_BIN} api "repos/${repo}/commits/main" --jq '.sha')"
   valid_commit "${head_sha}" || die "remote main HEAD is missing or invalid in dry-run"
+  require_requested_pr_fenced_merge "${merge_sha}"
   commit_matches "${merge_sha}" "${head_sha}" && {
     printf '%s\n' "${head_sha}"
     return 0
@@ -653,7 +660,7 @@ package_hotfix() {
   local app_version="$2"
   local host_arch="$3"
   local command=(
-    env
+    /usr/bin/env
     "APP_BUILD=${app_build}"
     "APP_VERSION=${app_version}"
     "BUILD_ARCHS=${host_arch}"
@@ -665,7 +672,7 @@ package_hotfix() {
     "SKIP_PNPM_INSTALL=0"
     "SKIP_TSC=0"
     "SKIP_UI_BUILD=0"
-    bash "${PACKAGE_SCRIPT}"
+    /bin/bash "${PACKAGE_SCRIPT}"
   )
 
   if (( DRY_RUN == 1 )); then
@@ -738,7 +745,7 @@ wait_for_seeded_runtime() {
         return 0
       fi
     fi
-    sleep "${SEED_POLL_SECONDS}"
+    /bin/sleep "${SEED_POLL_SECONDS}"
   done
   die "dist/Jarvis.app did not seed expected commit=${expected_commit} build=${expected_build} into app support"
 }
@@ -747,12 +754,12 @@ run_offline_seeded_protection() {
   local expected_commit="$1"
   local action="$2"
   local command=(
-    env
+    /usr/bin/env
     "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}"
     "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
     "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
     "OPENCLAW_JARVIS_CONFIG_PATH=${JARVIS_CONFIG_PATH}"
-    bash "${PROTECT_SCRIPT}"
+    /bin/bash "${PROTECT_SCRIPT}"
     --expected-live-commit "${expected_commit}"
     --offline-seeded-fallback
   )
@@ -771,7 +778,7 @@ run_offline_seeded_protection() {
 
 cleanup_launch_receipt() {
   [[ -n "${TRANSACTION_LAUNCH_RECEIPT_DIR}" ]] || return 0
-  rm -f "${TRANSACTION_LAUNCH_RECEIPT_DIR}/launched-app-path"
+  /bin/rm -f "${TRANSACTION_LAUNCH_RECEIPT_DIR}/launched-app-path"
   rmdir "${TRANSACTION_LAUNCH_RECEIPT_DIR}" 2>/dev/null || true
   TRANSACTION_LAUNCH_RECEIPT_DIR=""
 }
@@ -829,31 +836,31 @@ launch_seed_and_restart() {
   local open_status=0
 
   if (( DRY_RUN == 1 )); then
-    print_main_command bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}"
+    print_main_command /bin/bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}"
     log "dry-run: wait for ${JARVIS_MANIFEST} commit=${expected_commit} version=${app_version} build=${app_build}"
-    print_command env \
+    print_command /usr/bin/env \
       "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}" \
       "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}" \
       "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}" \
-      bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
+      /bin/bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
       --offline-seeded-fallback --apply
-    print_command env \
+    print_command /usr/bin/env \
       "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}" \
       "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}" \
       "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}" \
-      bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
+      /bin/bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
       --offline-seeded-fallback --verify
     print_command "${LAUNCHCTL_BIN}" kickstart -k "${domain}/${JARVIS_LABEL}"
     return 0
   fi
 
   TRANSACTION_EXPECTED_COMMIT="${expected_commit}"
-  TRANSACTION_LAUNCH_RECEIPT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-hotfix-launch.XXXXXX")"
-  chmod 700 "${TRANSACTION_LAUNCH_RECEIPT_DIR}"
+  TRANSACTION_LAUNCH_RECEIPT_DIR="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/jarvis-hotfix-launch.XXXXXX")"
+  /bin/chmod 700 "${TRANSACTION_LAUNCH_RECEIPT_DIR}"
   launch_receipt="${TRANSACTION_LAUNCH_RECEIPT_DIR}/launched-app-path"
   (cd "${MAIN_REPO}" && \
     OPENCLAW_APP_LAUNCH_RECEIPT="${launch_receipt}" \
-      bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}") || open_status=$?
+      /bin/bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}") || open_status=$?
 
   # The helper can launch the app successfully and then fail while preparing
   # foreground activation. Its atomic receipt is therefore the transaction
@@ -879,7 +886,7 @@ launch_seed_and_restart() {
     # EXIT recovery alone could otherwise race ahead of app bootstrap.
     return "${open_status}"
   fi
-  old_pid="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }' || true)"
+  old_pid="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null | /usr/bin/awk '$1 == "pid" && $2 == "=" { print $3; exit }' || true)"
   "${LAUNCHCTL_BIN}" kickstart -k "${domain}/${JARVIS_LABEL}"
   wait_for_restarted_gateway "${expected_commit}" "${app_version}" "${old_pid}"
 }
@@ -892,8 +899,8 @@ gateway_status_is_ready() {
   local runtime_commit=""
   local runtime_package_version=""
   local rpc_ok=""
-  stdout_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.XXXXXX")"
-  json_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.json.XXXXXX")"
+  stdout_file="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.XXXXXX")"
+  json_file="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.json.XXXXXX")"
 
   if ! OPENCLAW_HOME="${JARVIS_HOME}" \
       OPENCLAW_STATE_DIR="${JARVIS_STATE_DIR}" \
@@ -903,19 +910,19 @@ gateway_status_is_ready() {
       OPENCLAW_LAUNCHD_LABEL="${JARVIS_LABEL}" \
       "${JARVIS_NODE}" "${JARVIS_ENTRYPOINT}" gateway status --deep --require-rpc --json \
         >"${stdout_file}" 2>/dev/null; then
-    rm -f "${stdout_file}" "${json_file}"
+    /bin/rm -f "${stdout_file}" "${json_file}"
     return 1
   fi
 
   # Status may prefix JSON with non-secret config warnings. Parse the payload
   # privately and emit nothing so failed startup attempts cannot leak config.
   if "${JQ_BIN}" -e . "${stdout_file}" >/dev/null 2>&1; then
-    cp "${stdout_file}" "${json_file}"
+    /bin/cp "${stdout_file}" "${json_file}"
   else
-    awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${stdout_file}" >"${json_file}"
+    /usr/bin/awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${stdout_file}" >"${json_file}"
   fi
   if ! "${JQ_BIN}" -e . "${json_file}" >/dev/null 2>&1; then
-    rm -f "${stdout_file}" "${json_file}"
+    /bin/rm -f "${stdout_file}" "${json_file}"
     return 1
   fi
 
@@ -924,7 +931,7 @@ gateway_status_is_ready() {
   rpc_ok="$("${JQ_BIN}" -r --arg url "ws://127.0.0.1:${PORT}" '
     .rpc.ok // ([.targets[]? | select(.url == $url and .connect.rpcOk == true)] | length > 0)
   ' "${json_file}")"
-  rm -f "${stdout_file}" "${json_file}"
+  /bin/rm -f "${stdout_file}" "${json_file}"
   commit_matches "${expected_commit}" "${runtime_commit}" && \
     [[ "${runtime_package_version}" == "${expected_version}" ]] && \
     [[ "${rpc_ok}" == "true" ]]
@@ -945,18 +952,18 @@ wait_for_restarted_gateway() {
   # expected commit, and deep RPC before allowing any manifest mutation.
   while (( SECONDS <= deadline )); do
     print_output="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null || true)"
-    pid="$(printf '%s\n' "${print_output}" | awk '$1 == "pid" && $2 == "=" { print $3; exit }')"
+    pid="$(printf '%s\n' "${print_output}" | /usr/bin/awk '$1 == "pid" && $2 == "=" { print $3; exit }')"
     if [[ "${pid}" =~ ^[1-9][0-9]*$ ]] && \
         { [[ -z "${old_pid}" ]] || [[ "${pid}" != "${old_pid}" ]]; }; then
       listener_output="$(${LSOF_BIN} -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
       if printf '%s\n' "${listener_output}" | \
-          awk -v pid="${pid}" 'NR > 1 && $2 == pid { found=1 } END { exit(found ? 0 : 1) }' && \
+          /usr/bin/awk -v pid="${pid}" 'NR > 1 && $2 == pid { found=1 } END { exit(found ? 0 : 1) }' && \
           gateway_status_is_ready "${expected_commit}" "${expected_version}"; then
         log "gateway restart ready pid=${pid} port=${PORT} version=${expected_version} rpc=true"
         return 0
       fi
     fi
-    sleep "${GATEWAY_READY_POLL_SECONDS}"
+    /bin/sleep "${GATEWAY_READY_POLL_SECONDS}"
   done
   die "${JARVIS_LABEL} did not reach new-PID/listener/commit/RPC readiness within ${GATEWAY_READY_TIMEOUT_SECONDS}s"
 }
@@ -964,12 +971,12 @@ wait_for_restarted_gateway() {
 protect_runtime() {
   local expected_commit="$1"
   local base_command=(
-    env
+    /usr/bin/env
     "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}"
     "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
     "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
     "OPENCLAW_JARVIS_CONFIG_PATH=${JARVIS_CONFIG_PATH}"
-    bash "${PROTECT_SCRIPT}"
+    /bin/bash "${PROTECT_SCRIPT}"
     --expected-live-commit "${expected_commit}"
   )
 
@@ -986,17 +993,17 @@ protect_runtime() {
 }
 
 cleanup_status_files() {
-  [[ -z "${STATUS_STDOUT_FILE}" ]] || rm -f "${STATUS_STDOUT_FILE}"
-  [[ -z "${STATUS_STDERR_FILE}" ]] || rm -f "${STATUS_STDERR_FILE}"
-  [[ -z "${STATUS_JSON_FILE}" ]] || rm -f "${STATUS_JSON_FILE}"
+  [[ -z "${STATUS_STDOUT_FILE}" ]] || /bin/rm -f "${STATUS_STDOUT_FILE}"
+  [[ -z "${STATUS_STDERR_FILE}" ]] || /bin/rm -f "${STATUS_STDERR_FILE}"
+  [[ -z "${STATUS_JSON_FILE}" ]] || /bin/rm -f "${STATUS_JSON_FILE}"
 }
 
 extract_status_json() {
   if "${JQ_BIN}" -e . "${STATUS_STDOUT_FILE}" >/dev/null 2>&1; then
-    cp "${STATUS_STDOUT_FILE}" "${STATUS_JSON_FILE}"
+    /bin/cp "${STATUS_STDOUT_FILE}" "${STATUS_JSON_FILE}"
     return 0
   fi
-  awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${STATUS_STDOUT_FILE}" >"${STATUS_JSON_FILE}"
+  /usr/bin/awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${STATUS_STDOUT_FILE}" >"${STATUS_JSON_FILE}"
   "${JQ_BIN}" -e . "${STATUS_JSON_FILE}" >/dev/null 2>&1 || \
     die "Jarvis status command did not emit parseable JSON"
 }
@@ -1008,7 +1015,7 @@ telegram_default_proof() {
   local log_file="${JARVIS_LOG_DIR}/gateway.log"
 
   if [[ -r "${log_file}" ]]; then
-    username="$(tail -n 500 "${log_file}" | sed -nE 's/^.*\[default\].*@([A-Za-z0-9_]+).*$/@\1/p' | tail -n 1)"
+    username="$(/usr/bin/tail -n 500 "${log_file}" | /usr/bin/sed -nE 's/^.*\[default\].*@([A-Za-z0-9_]+).*$/@\1/p' | /usr/bin/tail -n 1)"
     username="${username:-unavailable}"
   fi
   if [[ -r "${JARVIS_CONFIG_PATH}" ]]; then
@@ -1020,7 +1027,7 @@ telegram_default_proof() {
   fi
   if [[ -n "${token}" ]] && command -v "${SHASUM_BIN}" >/dev/null 2>&1; then
     # Hashing proves bot identity without exposing any token prefix or suffix.
-    fingerprint="$(printf '%s' "${token}" | "${SHASUM_BIN}" -a 256 | awk '{print substr($1, 1, 12)}')"
+    fingerprint="$(printf '%s' "${token}" | "${SHASUM_BIN}" -a 256 | /usr/bin/awk '{print substr($1, 1, 12)}')"
   fi
 
   printf 'telegram_default_bot=%s\n' "${username}"
@@ -1051,17 +1058,17 @@ prove_break_glass_runtime() {
     OPENCLAW_INSTALLED_JARVIS_APP_PATH="${INSTALLED_JARVIS_APP_PATH}" \
     OPENCLAW_JARVIS_APP_MANIFEST="${INSTALLED_JARVIS_APP_MANIFEST}" \
     OPENCLAW_JARVIS_GATEWAY_LABEL="${JARVIS_LABEL}" \
-      bash "${PROVE_RUNTIME_SCRIPT}" \
+      /bin/bash "${PROVE_RUNTIME_SCRIPT}" \
         --runtime-source jarvis-break-glass-hotfix \
         --expected-commit "${expected_commit}" \
         --expected-package-version "${expected_version}"
   )" || die "protected-hotfix runtime proof failed"
   printf '%s\n' "${proof_output}"
 
-  runtime_commit="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*runtime_commit=([^ ]+).*$/\1/p' | tail -n 1)"
-  runtime_package_version="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*runtime_package_version=([^ ]+).*$/\1/p' | tail -n 1)"
-  runtime_source="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*runtime_source=([^ ]+).*$/\1/p' | tail -n 1)"
-  pid="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*pid=([1-9][0-9]*).*$/\1/p' | tail -n 1)"
+  runtime_commit="$(printf '%s\n' "${proof_output}" | /usr/bin/sed -nE 's/^.*runtime_commit=([^ ]+).*$/\1/p' | /usr/bin/tail -n 1)"
+  runtime_package_version="$(printf '%s\n' "${proof_output}" | /usr/bin/sed -nE 's/^.*runtime_package_version=([^ ]+).*$/\1/p' | /usr/bin/tail -n 1)"
+  runtime_source="$(printf '%s\n' "${proof_output}" | /usr/bin/sed -nE 's/^.*runtime_source=([^ ]+).*$/\1/p' | /usr/bin/tail -n 1)"
+  pid="$(printf '%s\n' "${proof_output}" | /usr/bin/sed -nE 's/^.*pid=([1-9][0-9]*).*$/\1/p' | /usr/bin/tail -n 1)"
   [[ -n "${runtime_commit}" && -n "${runtime_package_version}" && -n "${runtime_source}" && -n "${pid}" ]] || \
     die "protected-hotfix runtime proof omitted required summary fields"
 

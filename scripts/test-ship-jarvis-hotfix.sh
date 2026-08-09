@@ -65,6 +65,16 @@ grep -q '^status=pass$' "${TMP_ROOT}/enough.out" || fail "sufficient disk omitte
 pass "sufficient disk proceeds to package invocation"
 
 rm -f "${PACKAGE_MARKER}"
+(
+  bash() { return 97; }
+  env() { return 98; }
+  export -f bash env
+  preflight_and_package_hotfix 1 2026.7.16 arm64 >"${TMP_ROOT}/shadow.out" 2>&1
+)
+[[ -e "${PACKAGE_MARKER}" ]] || fail "ambient function shadow intercepted package authority"
+pass "absolute production interpreters resist ambient function shadowing"
+
+rm -f "${PACKAGE_MARKER}"
 DRY_RUN=1
 preflight_and_package_hotfix 1 2026.7.16 arm64 >"${TMP_ROOT}/dry-run.out" 2>&1
 [[ ! -e "${PACKAGE_MARKER}" ]] || fail "dry run invoked package helper"
@@ -95,7 +105,14 @@ release_queue_item_json() {
 }
 release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb || \
   fail "complete exact-head queue receipt was rejected"
+PR_NUMBER=42
+require_requested_pr_fenced_merge bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 VALID_QUEUE_ITEM_FIXTURE="${QUEUE_ITEM_FIXTURE}"
+QUEUE_ITEM_FIXTURE=''
+if (require_requested_pr_fenced_merge bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) >/dev/null 2>&1; then
+  fail "requested merged PR passed without its fenced queue receipt"
+fi
+QUEUE_ITEM_FIXTURE="${VALID_QUEUE_ITEM_FIXTURE}"
 QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${QUEUE_ITEM_FIXTURE}" | jq '.reviewReceipt.unresolvedFindings = [{"severity":"high"}]')"
 if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
   fail "high review finding unexpectedly passed"
