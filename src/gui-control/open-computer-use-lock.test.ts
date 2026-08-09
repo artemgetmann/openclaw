@@ -291,8 +291,10 @@ describe("withOpenComputerUseLock", () => {
       });
     });
     await Promise.race([
-      vi.waitFor(async () =>
-        expect(await fs.readFile(acquiredPath, "utf8").catch(() => undefined)).toBe("acquired"),
+      vi.waitFor(
+        async () =>
+          expect(await fs.readFile(acquiredPath, "utf8").catch(() => undefined)).toBe("acquired"),
+        { timeout: 5_000 },
       ),
       prematureExit,
     ]);
