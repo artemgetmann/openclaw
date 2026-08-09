@@ -291,11 +291,12 @@ creates at least 1 GiB there, task exit prints
 host free-space KiB, and threshold.
 
 That receipt is accountability, not deletion authority. The owner must preserve
-outputs still needed for its PR/release handoff. Otherwise it runs the
-repository cleanup report for that exact lane's generated state and retires the
-whole temporary worktree through `gc-worktrees.sh` only after clean,
-recoverable, process-free proof. Active, dirty, unmerged, release, runtime, and
-ambiguous state remains protected.
+outputs still needed for its PR/release handoff. An already-authorized task may
+clean an exact reproducible cache or failed output only through the active-task
+ownership and inactivity gate in `workflow.md`; the receipt does not satisfy
+that gate by itself. Retire the whole temporary worktree through
+`gc-worktrees.sh` only after clean, recoverable, process-free proof. Active,
+dirty, unmerged, release, runtime, and ambiguous state remains protected.
 
 ## Dedicated-host capacity policy
 

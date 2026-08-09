@@ -1,14 +1,17 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S -i PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin HOME=/Users/user OPENCLAW_HOTFIX_CLEAN_ENTRY=1 /bin/bash
+
+# This sentinel exists only in the env-clean shebang. Check it using builtins
+# before any source, command substitution, or path resolution so `bash script`
+# cannot import functions and reach wrapper authority.
+if [[ "${OPENCLAW_HOTFIX_CLEAN_ENTRY:-}" != "1" ]]; then
+  builtin printf '[ship-jarvis-hotfix] ERROR: unsafe shell entry; execute scripts/ship-jarvis-hotfix.sh directly\n' >&2
+  builtin exit 126
+fi
+builtin unset OPENCLAW_HOTFIX_CLEAN_ENTRY
 set -euo pipefail
 
 SCRIPT_NAME="ship-jarvis-hotfix"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=scripts/lib/heavy-local-slot.sh
-source "${ROOT_DIR}/scripts/lib/heavy-local-slot.sh"
-# shellcheck source=scripts/lib/jarvis-release-lock.sh
-source "${ROOT_DIR}/scripts/lib/jarvis-release-lock.sh"
-# shellcheck source=scripts/lib/jarvis-release-disk-preflight.sh
-source "${ROOT_DIR}/scripts/lib/jarvis-release-disk-preflight.sh"
 CANONICAL_MAIN_REPO="/Users/user/Programming_Projects/openclaw"
 MAIN_REPO_RAW="${OPENCLAW_MAIN_REPO:-${CANONICAL_MAIN_REPO}}"
 MAIN_REPO="${MAIN_REPO_RAW}"
@@ -16,36 +19,92 @@ if [[ -d "${MAIN_REPO_RAW}" ]]; then
   MAIN_REPO="$(cd -- "${MAIN_REPO_RAW}" && pwd -P)"
 fi
 
-GH_BIN="${OPENCLAW_GH_BIN:-gh}"
-GIT_BIN="${OPENCLAW_GIT_BIN:-git}"
-JQ_BIN="${OPENCLAW_JQ_BIN:-jq}"
-LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-launchctl}"
-LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
-ID_BIN="${OPENCLAW_ID_BIN:-id}"
-UNAME_BIN="${OPENCLAW_UNAME_BIN:-uname}"
-SHASUM_BIN="${OPENCLAW_SHASUM_BIN:-shasum}"
-PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
+SHIP_TEST_MODE=0
+# Test indirection is accepted only outside the canonical production checkout.
+# An ambient variable in the sacred clone must never replace release authority.
+if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" &&
+  "${ROOT_DIR}" != "${CANONICAL_MAIN_REPO}" &&
+  "${MAIN_REPO}" == "${ROOT_DIR}" &&
+  "${OPENCLAW_EXPECTED_MAIN_REPO:-}" == "${ROOT_DIR}" ]]; then
+  SHIP_TEST_MODE=1
+fi
 
-PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-required-status.sh}"
-PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
-OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
-PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
-PROVE_RUNTIME_SCRIPT="${OPENCLAW_SHIP_PROVE_RUNTIME_SCRIPT:-${MAIN_REPO}/scripts/prove-jarvis-runtime.sh}"
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+  GH_BIN="${OPENCLAW_GH_BIN:-gh}"
+  GIT_BIN="${OPENCLAW_GIT_BIN:-git}"
+  JQ_BIN="${OPENCLAW_JQ_BIN:-jq}"
+  LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-launchctl}"
+  LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
+  ID_BIN="${OPENCLAW_ID_BIN:-id}"
+  UNAME_BIN="${OPENCLAW_UNAME_BIN:-uname}"
+  SHASUM_BIN="${OPENCLAW_SHASUM_BIN:-shasum}"
+else
+  GH_BIN="/opt/homebrew/bin/gh"
+  GIT_BIN="/usr/bin/git"
+  JQ_BIN="/usr/bin/jq"
+  LAUNCHCTL_BIN="/bin/launchctl"
+  LSOF_BIN="/usr/sbin/lsof"
+  ID_BIN="/usr/bin/id"
+  UNAME_BIN="/usr/bin/uname"
+  SHASUM_BIN="/usr/bin/shasum"
+fi
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+  PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
+else
+  PLISTBUDDY_BIN="/usr/libexec/PlistBuddy"
+fi
 
-JARVIS_APP_PATH="${OPENCLAW_SHIP_JARVIS_APP_PATH:-${MAIN_REPO}/dist/Jarvis.app}"
-INSTALLED_JARVIS_APP_PATH="${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}"
-INSTALLED_JARVIS_INFO_PLIST="${OPENCLAW_SHIP_INSTALLED_APP_INFO_PLIST:-${INSTALLED_JARVIS_APP_PATH}/Contents/Info.plist}"
-INSTALLED_JARVIS_APP_MANIFEST="${OPENCLAW_SHIP_INSTALLED_APP_MANIFEST:-${INSTALLED_JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/manifest.json}"
-JARVIS_HOME="${OPENCLAW_JARVIS_HOME:-${HOME}/Library/Application Support/Jarvis}"
-JARVIS_STATE_DIR="${OPENCLAW_JARVIS_STATE_DIR:-${JARVIS_HOME}/.jarvis}"
-JARVIS_CONFIG_PATH="${OPENCLAW_JARVIS_CONFIG_PATH:-${JARVIS_STATE_DIR}/openclaw.json}"
-JARVIS_LOG_DIR="${OPENCLAW_JARVIS_LOG_DIR:-${JARVIS_STATE_DIR}/logs}"
-JARVIS_MANIFEST="${OPENCLAW_SHIP_INSTALLED_MANIFEST:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json}"
-JARVIS_PROTECTION_MARKER="${OPENCLAW_SHIP_PROTECTION_MARKER:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json}"
-JARVIS_NODE="${OPENCLAW_JARVIS_NODE_BIN:-${JARVIS_STATE_DIR}/tools/node/bin/node}"
-JARVIS_ENTRYPOINT="${OPENCLAW_JARVIS_ENTRYPOINT:-${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js}"
-JARVIS_LABEL="${OPENCLAW_JARVIS_GATEWAY_LABEL:-ai.jarvis.gateway}"
-PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+  PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-required-status.sh}"
+else
+  PR_REQUIRED_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-required-status.sh"
+fi
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+  PR_RELEASE_QUEUE_SCRIPT="${OPENCLAW_SHIP_PR_RELEASE_QUEUE_SCRIPT:-${MAIN_REPO}/scripts/pr-release-queue}"
+else
+  PR_RELEASE_QUEUE_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-release-queue.mjs"
+fi
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+  PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
+  OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
+  PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
+  PROVE_RUNTIME_SCRIPT="${OPENCLAW_SHIP_PROVE_RUNTIME_SCRIPT:-${MAIN_REPO}/scripts/prove-jarvis-runtime.sh}"
+else
+  PACKAGE_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh"
+  OPEN_APP_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/open-consumer-mac-app.sh"
+  PROTECT_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh"
+  PROVE_RUNTIME_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/prove-jarvis-runtime.sh"
+fi
+
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+  JARVIS_APP_PATH="${OPENCLAW_SHIP_JARVIS_APP_PATH:-${MAIN_REPO}/dist/Jarvis.app}"
+  INSTALLED_JARVIS_APP_PATH="${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}"
+  JARVIS_HOME="${OPENCLAW_JARVIS_HOME:-${HOME}/Library/Application Support/Jarvis}"
+  JARVIS_STATE_DIR="${OPENCLAW_JARVIS_STATE_DIR:-${JARVIS_HOME}/.jarvis}"
+  JARVIS_CONFIG_PATH="${OPENCLAW_JARVIS_CONFIG_PATH:-${JARVIS_STATE_DIR}/openclaw.json}"
+  JARVIS_LOG_DIR="${OPENCLAW_JARVIS_LOG_DIR:-${JARVIS_STATE_DIR}/logs}"
+  JARVIS_MANIFEST="${OPENCLAW_SHIP_INSTALLED_MANIFEST:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json}"
+  JARVIS_PROTECTION_MARKER="${OPENCLAW_SHIP_PROTECTION_MARKER:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json}"
+  JARVIS_NODE="${OPENCLAW_JARVIS_NODE_BIN:-${JARVIS_STATE_DIR}/tools/node/bin/node}"
+  JARVIS_ENTRYPOINT="${OPENCLAW_JARVIS_ENTRYPOINT:-${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js}"
+  JARVIS_LABEL="${OPENCLAW_JARVIS_GATEWAY_LABEL:-ai.jarvis.gateway}"
+  PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+else
+  JARVIS_APP_PATH="${CANONICAL_MAIN_REPO}/dist/Jarvis.app"
+  INSTALLED_JARVIS_APP_PATH="/Applications/Jarvis.app"
+  JARVIS_HOME="/Users/user/Library/Application Support/Jarvis"
+  JARVIS_STATE_DIR="${JARVIS_HOME}/.jarvis"
+  JARVIS_CONFIG_PATH="${JARVIS_STATE_DIR}/openclaw.json"
+  JARVIS_LOG_DIR="${JARVIS_STATE_DIR}/logs"
+  JARVIS_MANIFEST="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json"
+  JARVIS_PROTECTION_MARKER="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json"
+  JARVIS_NODE="${JARVIS_STATE_DIR}/tools/node/bin/node"
+  JARVIS_ENTRYPOINT="${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js"
+  JARVIS_LABEL="ai.jarvis.gateway"
+  PORT="18789"
+fi
+INSTALLED_JARVIS_INFO_PLIST="${INSTALLED_JARVIS_APP_PATH}/Contents/Info.plist"
+INSTALLED_JARVIS_APP_MANIFEST="${INSTALLED_JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/manifest.json"
 SEED_TIMEOUT_SECONDS="${OPENCLAW_SHIP_SEED_TIMEOUT_SECONDS:-60}"
 SEED_POLL_SECONDS="${OPENCLAW_SHIP_SEED_POLL_SECONDS:-1}"
 GATEWAY_READY_TIMEOUT_SECONDS="${OPENCLAW_SHIP_GATEWAY_READY_TIMEOUT_SECONDS:-120}"
@@ -62,6 +121,34 @@ TRANSACTION_EXPECTED_COMMIT=""
 TRANSACTION_LAUNCH_RECEIPT_DIR=""
 CONFIRMED_PR_MERGE_COMMIT=""
 
+assert_source_checkout_safe() {
+  local branch=""
+  [[ "${ROOT_DIR}" == "${CANONICAL_MAIN_REPO}" ]] || \
+    die "production entry must be the sacred main wrapper at ${CANONICAL_MAIN_REPO}"
+  [[ "$(pwd -P)" == "${CANONICAL_MAIN_REPO}" ]] || \
+    die "run from clean sacred main: cd ${CANONICAL_MAIN_REPO}"
+  branch="$(/usr/bin/git -C "${CANONICAL_MAIN_REPO}" branch --show-current)"
+  [[ "${branch}" == "main" ]] || die "sacred repo must be on main, got ${branch:-detached}"
+  [[ -z "$(/usr/bin/git -C "${CANONICAL_MAIN_REPO}" status --porcelain)" ]] || \
+    die "sacred main has local changes; refusing to load release helpers"
+  /usr/bin/git -C "${CANONICAL_MAIN_REPO}" diff --quiet HEAD -- \
+    scripts/ship-jarvis-hotfix.sh \
+    scripts/lib/heavy-local-slot.sh \
+    scripts/lib/jarvis-release-lock.sh \
+    scripts/lib/jarvis-release-disk-preflight.sh || \
+    die "release wrapper or helper differs from sacred main HEAD"
+}
+
+load_release_helpers() {
+  # Source only after the source-free sacred checkout gate has passed.
+  # shellcheck source=scripts/lib/heavy-local-slot.sh
+  source "${ROOT_DIR}/scripts/lib/heavy-local-slot.sh"
+  # shellcheck source=scripts/lib/jarvis-release-lock.sh
+  source "${ROOT_DIR}/scripts/lib/jarvis-release-lock.sh"
+  # shellcheck source=scripts/lib/jarvis-release-disk-preflight.sh
+  source "${ROOT_DIR}/scripts/lib/jarvis-release-disk-preflight.sh"
+}
+
 log() {
   printf '[%s] %s\n' "${SCRIPT_NAME}" "$*"
 }
@@ -75,7 +162,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/ship-jarvis-hotfix.sh --pr <number> [--dry-run]
 
-Merge a main-targeted PR and ship it to this Mac's default Jarvis as an
+Ship an already-merged main-targeted PR to this Mac's default Jarvis as an
 explicit app-support break-glass hotfix. The wrapper builds and launches only
 dist/Jarvis.app; it never replaces /Applications/Jarvis.app and never claims a
 public release or managed-bundle steady state.
@@ -132,17 +219,37 @@ require_preflight_tools() {
   require_command "${UNAME_BIN}"
   require_command "${PLISTBUDDY_BIN}"
   [[ -x "${PR_REQUIRED_SCRIPT}" ]] || die "required-check helper is missing or not executable: ${PR_REQUIRED_SCRIPT}"
+  [[ -r "${PR_RELEASE_QUEUE_SCRIPT}" ]] || die "release-queue helper is missing or unreadable: ${PR_RELEASE_QUEUE_SCRIPT}"
   [[ -x "${PACKAGE_SCRIPT}" ]] || die "package helper is missing or not executable: ${PACKAGE_SCRIPT}"
   [[ -x "${OPEN_APP_SCRIPT}" ]] || die "app-open helper is missing or not executable: ${OPEN_APP_SCRIPT}"
   [[ -x "${PROTECT_SCRIPT}" ]] || die "runtime-protection helper is missing or not executable: ${PROTECT_SCRIPT}"
   [[ -x "${PROVE_RUNTIME_SCRIPT}" ]] || die "runtime-proof helper is missing or not executable: ${PROVE_RUNTIME_SCRIPT}"
 }
 
+run_pr_required() {
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+    "${PR_REQUIRED_SCRIPT}" "$@"
+    return
+  fi
+
+  # Required-check authority runs with a minimal, explicit environment. This
+  # prevents ambient helper overrides from substituting GitHub evidence.
+  local -a required_env=(/usr/bin/env -i
+    PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+    HOME="${HOME}"
+    OPENCLAW_GH_BIN="${GH_BIN}")
+  [[ -n "${GH_TOKEN:-}" ]] && required_env+=(GH_TOKEN="${GH_TOKEN}")
+  [[ -n "${GITHUB_TOKEN:-}" ]] && required_env+=(GITHUB_TOKEN="${GITHUB_TOKEN}")
+  [[ -n "${NO_COLOR:-}" ]] && required_env+=(NO_COLOR="${NO_COLOR}")
+  [[ -n "${TERM:-}" ]] && required_env+=(TERM="${TERM}")
+  "${required_env[@]}" "${PR_REQUIRED_SCRIPT}" "$@"
+}
+
 expected_main_repo() {
   # Tests may exercise every fail-closed stage in a temporary git repository.
   # Production callers cannot redirect the sacred-path check with an ambient
   # variable alone; the explicit test-mode gate keeps the operator invariant.
-  if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
     local test_root="${OPENCLAW_EXPECTED_MAIN_REPO:-${MAIN_REPO}}"
     if [[ -d "${test_root}" ]]; then
       (cd -- "${test_root}" && pwd -P)
@@ -188,8 +295,8 @@ assert_pr_can_ship() {
   state="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state // empty')"
 
   [[ "${base}" == "main" ]] || die "refusing PR #${PR_NUMBER}: baseRefName=${base:-missing}, expected main"
-  [[ "${state}" == "OPEN" || "${state}" == "MERGED" ]] || \
-    die "refusing PR #${PR_NUMBER}: state=${state:-missing}, expected OPEN or MERGED"
+  [[ "${state}" == "MERGED" ]] || \
+    die "refusing PR #${PR_NUMBER}: state=${state:-missing}; source merge must complete through the fenced builder -> tester -> release lifecycle first"
 }
 
 print_command() {
@@ -204,46 +311,20 @@ print_main_command() {
   printf '\n'
 }
 
-merge_or_confirm_pr() {
+confirm_merged_pr() {
   local json="$1"
   local state=""
-  local is_draft=""
-  local head_sha=""
-  local title=""
   state="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state')"
 
-  is_draft="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.isDraft')"
-  head_sha="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.headRefOid // empty')"
-  title="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.title // empty')"
-
   if (( DRY_RUN == 1 )); then
-    if [[ "${state}" == "OPEN" && "${is_draft}" == "true" ]]; then
-      print_command "${GH_BIN}" pr ready "${PR_NUMBER}"
-    fi
     print_command "${PR_REQUIRED_SCRIPT}" --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
-    if [[ "${state}" == "MERGED" ]]; then
-      log "PR #${PR_NUMBER} is already merged; required checks still remain part of ship proof"
-      return 0
-    fi
-    [[ "${head_sha}" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "PR head commit is missing or invalid"
-    [[ -n "${title}" ]] || die "PR title is missing"
-    print_command "${GH_BIN}" pr merge "${PR_NUMBER}" --squash --delete-branch \
-      --match-head-commit "${head_sha}" --subject "${title} (#${PR_NUMBER})"
+    log "PR #${PR_NUMBER} is already merged; required checks still remain part of ship proof"
     return 0
   fi
 
-  if [[ "${state}" == "OPEN" && "${is_draft}" == "true" ]]; then
-    "${GH_BIN}" pr ready "${PR_NUMBER}"
-  fi
-  "${PR_REQUIRED_SCRIPT}" --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
-  if [[ "${state}" == "MERGED" ]]; then
-    log "PR #${PR_NUMBER} is already merged; required checks confirmed"
-    return 0
-  fi
-  [[ "${head_sha}" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "PR head commit is missing or invalid"
-  [[ -n "${title}" ]] || die "PR title is missing"
-  "${GH_BIN}" pr merge "${PR_NUMBER}" --squash --delete-branch \
-    --match-head-commit "${head_sha}" --subject "${title} (#${PR_NUMBER})"
+  run_pr_required --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
+  [[ "${state}" == "MERGED" ]] || die "PR #${PR_NUMBER} changed state during required-check proof"
+  log "PR #${PR_NUMBER} is already merged; required checks confirmed"
 }
 
 assert_installed_app_needs_hotfix() {
@@ -271,11 +352,9 @@ pull_and_confirm_merge() {
     return 0
   fi
 
-  (cd "${MAIN_REPO}" && "${GIT_BIN}" pull --ff-only origin main)
-  assert_clean_sacred_main
-
   local merged_json=""
   local merge_sha=""
+  local prevalidated_head=""
   local head_sha=""
   merged_json="$(pr_json)"
   assert_pr_can_ship "${merged_json}"
@@ -283,19 +362,266 @@ pull_and_confirm_merge() {
     die "PR #${PR_NUMBER} did not confirm as merged after gh pr merge"
   merge_sha="$(printf '%s\n' "${merged_json}" | "${JQ_BIN}" -r '.mergeCommit.oid // empty')"
   valid_commit "${merge_sha}" || die "merged PR is missing a valid mergeCommit.oid"
+
+  # Validate remote main with the currently loaded verifier and current queue
+  # helper before pulling. Newly pulled release code therefore cannot classify,
+  # package, launch, protect, or prove itself under stale authority.
+  prevalidated_head="$(dry_run_reviewed_remote_main "${merge_sha}")"
+  valid_commit "${prevalidated_head}" || die "pre-pull reviewed main receipt is missing or invalid"
+  (cd "${MAIN_REPO}" && "${GIT_BIN}" pull --ff-only origin main)
+  assert_clean_sacred_main
   head_sha="$(${GIT_BIN} -C "${MAIN_REPO}" rev-parse HEAD)"
   valid_commit "${head_sha}" || die "sacred main HEAD is not a valid git commit"
-  # Refetch after merge+pull is authoritative for both initially OPEN and
-  # already-MERGED PRs. An ancestor check is insufficient: a newer main HEAD
-  # would package unrelated commits under a misleading "ship this PR" action.
-  commit_matches "${merge_sha}" "${head_sha}" || \
-    die "sacred main advanced beyond requested PR merge ${merge_sha}; HEAD=${head_sha}. Refusing to package unrelated newer commits; start a new ship run for the intended PR or release."
-  CONFIRMED_PR_MERGE_COMMIT="${merge_sha}"
+  commit_matches "${prevalidated_head}" "${head_sha}" || \
+    die "main changed after pre-pull review proof: approved=${prevalidated_head} pulled=${head_sha}"
+  CONFIRMED_PR_MERGE_COMMIT="${head_sha}"
+}
+
+associated_main_pr_json() {
+  local commit_sha="$1"
+  local repo=""
+  local associated=""
+  local pr_number=""
+  repo="$(${GH_BIN} repo view --json nameWithOwner --jq '.nameWithOwner')"
+  [[ -n "${repo}" ]] || die "could not resolve GitHub repository for reviewed-main proof"
+  associated="$(${GH_BIN} api \
+    -H 'Accept: application/vnd.github+json' \
+    "repos/${repo}/commits/${commit_sha}/pulls")"
+  pr_number="$(printf '%s\n' "${associated}" | "${JQ_BIN}" -r \
+    --arg commit "${commit_sha}" \
+    '[.[] | select(.merged_at != null and .base.ref == "main" and .merge_commit_sha == $commit)] | if length == 1 then .[0].number else empty end')"
+  [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]] || \
+    die "main commit ${commit_sha} is not attributable to exactly one merged main PR"
+  "${GH_BIN}" pr view "${pr_number}" --json number,state,baseRefName,mergeCommit
+}
+
+release_queue_item_json() {
+  local pr="$1"
+  local status=""
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+    status="$("${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
+  else
+    local node_bin=""
+    local gh_bin=""
+    local -a queue_env=()
+    for node_bin in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
+      [[ -x "${node_bin}" ]] && break
+    done
+    [[ -x "${node_bin}" ]] || die "trusted Node binary is unavailable for queue proof"
+    for gh_bin in /opt/homebrew/bin/gh /usr/local/bin/gh /usr/bin/gh; do
+      [[ -x "${gh_bin}" ]] && break
+    done
+    [[ -x "${gh_bin}" ]] || die "trusted gh binary is unavailable for queue proof"
+    /usr/bin/env -i PATH=/usr/bin:/bin HOME="${HOME}" /usr/bin/git -C "${MAIN_REPO}" \
+      diff --quiet HEAD -- scripts/pr-release-queue.mjs || \
+      die "authoritative queue executable differs from sacred main HEAD"
+    queue_env=(/usr/bin/env -i
+      PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+      HOME="${HOME}"
+      OPENCLAW_PR_RELEASE_QUEUE_REPO=artemgetmann/openclaw
+      OPENCLAW_PR_RELEASE_QUEUE_GH="${gh_bin}")
+    [[ -n "${GH_TOKEN:-}" ]] && queue_env+=(GH_TOKEN="${GH_TOKEN}")
+    [[ -n "${GITHUB_TOKEN:-}" ]] && queue_env+=(GITHUB_TOKEN="${GITHUB_TOKEN}")
+    [[ -n "${NO_COLOR:-}" ]] && queue_env+=(NO_COLOR="${NO_COLOR}")
+    [[ -n "${TERM:-}" ]] && queue_env+=(TERM="${TERM}")
+    status="$("${queue_env[@]}" "${node_bin}" "${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
+  fi
+  # The wrapper emits a secret-silent preflight receipt before the JSON body.
+  # Select the first JSON object instead of trusting a fixed line count.
+  printf '%s\n' "${status}" | /usr/bin/sed -n '/^{/,$p' | "${JQ_BIN}" -c --arg pr "${pr}" '
+    if .action == "status" and
+      (.revision | test("^[0-9a-f]{40}$")) and
+      .state.schemaVersion == 1 and
+      (.state.sequence | type == "number")
+    then .state.items[$pr] // empty
+    else empty
+    end
+  '
+}
+
+release_queue_proves_reviewed_merge() {
+  local pr="$1"
+  local commit_sha="$2"
+  local item=""
+  item="$(release_queue_item_json "${pr}")"
+  [[ -n "${item}" ]] || return 1
+  printf '%s\n' "${item}" | "${JQ_BIN}" -e --argjson pr "${pr}" --arg commit "${commit_sha}" '
+    (.state | IN("merged", "delivery-barrier", "delivered", "closed")) and
+    (.candidate.pr == $pr) and
+    (.candidate.url == ("https://github.com/artemgetmann/openclaw/pull/" + ($pr | tostring))) and
+    ((.candidate.title // "") | test("\\S")) and
+    ((.candidate.prContract // "") | test("\\S")) and
+    (.candidate.baseBranch == "main") and
+    (.candidate.testedBaseSha | test("^[0-9a-f]{40}$")) and
+    (.candidate.headSha | test("^[0-9a-f]{40}$")) and
+    (.candidate.diffFingerprint | test("^sha256:[0-9a-f]{64}$")) and
+    (.candidate.changedPaths | type == "array" and length > 0) and
+    (all(.candidate.changedPaths[];
+      type == "string" and
+      test("\\S") and
+      . == gsub("^\\s+|\\s+$"; "") and
+      (startswith("/") | not) and
+      (test("(^|/)\\.\\.(/|$)") | not)
+    )) and
+    ((.builder.threadId // "") | test("\\S")) and
+    ((.builder.hostId // "") | test("\\S")) and
+    (.builder.threadId == (.builder.threadId | gsub("^\\s+|\\s+$"; ""))) and
+    (.builder.hostId == (.builder.hostId | gsub("^\\s+|\\s+$"; ""))) and
+    (.builder.wakeRoute.threadId == .builder.threadId) and
+    (.builder.wakeRoute.hostId == .builder.hostId) and
+    (.reviewReceipt.schemaVersion == 1) and
+    (.reviewReceipt.role == "code-reviewer") and
+    (.reviewReceipt.status == "PASS") and
+    (.reviewReceipt.headSha == .candidate.headSha) and
+    (.reviewReceipt.diffFingerprint == .candidate.diffFingerprint) and
+    ((.reviewReceipt.owner.threadId // "") | test("\\S")) and
+    ((.reviewReceipt.owner.hostId // "") | test("\\S")) and
+    (.reviewReceipt.owner.threadId == (.reviewReceipt.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
+    (.reviewReceipt.owner.hostId == (.reviewReceipt.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
+    (.reviewReceipt.unresolvedFindings | type == "array") and
+    (all(.reviewReceipt.unresolvedFindings[]; .severity | IN("low", "medium", "high", "critical"))) and
+    ([.reviewReceipt.unresolvedFindings[]? | select(.severity == "high" or .severity == "critical")] | length == 0) and
+    (.testerReceipt.status == "PASS") and
+    (.testerReceipt.headSha == .candidate.headSha) and
+    (.testerReceipt.diffFingerprint == .candidate.diffFingerprint) and
+    (.testerReceipt.closure | IN("archived", "terminal-receipt")) and
+    ((.testerReceipt.contractId // "") | test("\\S")) and
+    ((.testerReceipt.owner.threadId // "") | test("\\S")) and
+    ((.testerReceipt.owner.hostId // "") | test("\\S")) and
+    (.testerReceipt.owner.threadId == (.testerReceipt.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
+    (.testerReceipt.owner.hostId == (.testerReceipt.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
+    ((.reviewReceipt.owner.threadId != .testerReceipt.owner.threadId) or (.reviewReceipt.owner.hostId != .testerReceipt.owner.hostId)) and
+    ((.reviewReceipt.owner.threadId != .builder.threadId) or (.reviewReceipt.owner.hostId != .builder.hostId)) and
+    ((.testerReceipt.owner.threadId != .builder.threadId) or (.testerReceipt.owner.hostId != .builder.hostId)) and
+    (.authority.schemaVersion == 1) and
+    (.authority.source == "builder-handoff") and
+    (.authority.scope == ("PR #" + ($pr | tostring) + " source merge only")) and
+    (.authority.allowedActions == ["normal-merge"]) and
+    (.authority.constraints | type == "array") and
+    ((.authority.constraints | sort) == (["no admin or bypass", "no credentials or OTP", "no irreversible or public release", "no new scope"] | sort)) and
+    ((.lifecycle.contractId // "") | test("\\S")) and
+    ((.lifecycle.stateDirectory // "") | startswith("/")) and
+    (.capabilityPolicy.routine == "routine-release") and
+    (.capabilityPolicy.escalation == "reasoning-escalation") and
+    (.ownershipReceipt.mode == "queue-lease") and
+    (.ownershipReceipt.builderSuspended == true) and
+    (.ownershipReceipt.builder.threadId == .builder.threadId) and
+    (.ownershipReceipt.builder.hostId == .builder.hostId) and
+    ((.ownershipReceipt.leaseId // "") | test("\\S")) and
+    (.ownershipReceipt.fence | type == "number" and . > 0) and
+    ((.ownershipReceipt.owner.threadId // "") | test("\\S")) and
+    ((.ownershipReceipt.owner.hostId // "") | test("\\S")) and
+    (.ownershipReceipt.owner.threadId == (.ownershipReceipt.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
+    (.ownershipReceipt.owner.hostId == (.ownershipReceipt.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
+    ((.ownershipReceipt.owner.threadId != .builder.threadId) or (.ownershipReceipt.owner.hostId != .builder.hostId)) and
+    ((.ownershipReceipt.owner.threadId != .reviewReceipt.owner.threadId) or (.ownershipReceipt.owner.hostId != .reviewReceipt.owner.hostId)) and
+    ((.ownershipReceipt.owner.threadId != .testerReceipt.owner.threadId) or (.ownershipReceipt.owner.hostId != .testerReceipt.owner.hostId)) and
+    (.ownerHistory | type == "array" and length > 0) and
+    (any(.ownerHistory[]?;
+      .leaseId == $item.ownershipReceipt.leaseId and
+      .fence == $item.ownershipReceipt.fence and
+      .claimedPr == $pr and
+      .owner == $item.ownershipReceipt.owner
+    )) and
+    (.terminalReceipts | type == "array") and
+    ([.terminalReceipts[]? | select(.kind == "source-merge" and .pr == $pr)] | length == 1) and
+    (any(.terminalReceipts[]?;
+      .kind == "source-merge" and
+      .schemaVersion == 1 and
+      .pr == $pr and
+      .reviewedHeadSha == $item.candidate.headSha and
+      .diffFingerprint == $item.candidate.diffFingerprint and
+      .mergeSha == $commit and
+      .normalNonAdmin == true and
+      .expectedHeadProtected == true and
+      .landedTreeMatchesReviewed == true and
+      .targetAncestryProven == true
+    ))
+  ' --argjson item "${item}" >/dev/null
+}
+
+moving_main_path_requires_new_approval() {
+  local target_path="$1"
+  case "${target_path}" in
+    SECURITY.md | CODEOWNERS | docs/CODEOWNERS | .github/* | scripts/* | \
+      src/security/* | src/secrets/* | src/config/*secret* | src/config/*/*secret* | \
+      src/gateway/*auth* | src/gateway/*/*auth* | src/gateway/*secret* | src/gateway/*/*secret* | \
+      src/gateway/security-path* | src/gateway/resolve-configured-secret-input-string* | \
+      src/gateway/protocol/*/*secret* | src/gateway/server-methods/secrets* | \
+      src/agents/*auth* | src/agents/*/*auth* | src/agents/tool-policy.ts | src/agents/sandbox.ts | src/agents/sandbox-* | \
+      src/agents/sandbox/* | src/infra/secret-file* | src/cron/stagger.ts | src/cron/service/jobs.ts | \
+      docs/security/* | docs/gateway/security/* | docs/gateway/*auth* | docs/gateway/*sandbox* | docs/gateway/*secret* | \
+      docs/cli/approvals.md | docs/cli/sandbox.md | docs/cli/security.md | docs/cli/secrets.md | \
+      docs/reference/secretref-* | docs/reference/RELEASING.md)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+release_queue_paths_are_routine() {
+  local pr="$1"
+  local item=""
+  local target_path=""
+  item="$(release_queue_item_json "${pr}")"
+  [[ -n "${item}" ]] || return 1
+  [[ "$(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths | type')" == "array" ]] || return 1
+  [[ "$(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths | length')" -gt 0 ]] || return 1
+  while IFS= read -r target_path; do
+    [[ -n "${target_path}" ]] || continue
+    moving_main_path_requires_new_approval "${target_path}" && return 1
+  done < <(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths[]?')
+  return 0
+}
+
+require_requested_pr_fenced_merge() {
+  local merge_sha="$1"
+  release_queue_proves_reviewed_merge "${PR_NUMBER}" "${merge_sha}" || \
+    die "requested PR #${PR_NUMBER} lacks exact-head fenced source-merge receipts for ${merge_sha}"
+}
+
+dry_run_reviewed_remote_main() {
+  local merge_sha="$1"
+  local repo=""
+  local head_sha=""
+  local compare=""
+  local total=""
+  local returned=""
+  local commit_sha=""
+  local pr=""
+  local json=""
+
+  repo="$(${GH_BIN} repo view --json nameWithOwner --jq '.nameWithOwner')"
+  [[ -n "${repo}" ]] || die "could not resolve GitHub repository for dry-run main proof"
+  head_sha="$(${GH_BIN} api "repos/${repo}/commits/main" --jq '.sha')"
+  valid_commit "${head_sha}" || die "remote main HEAD is missing or invalid in dry-run"
+  require_requested_pr_fenced_merge "${merge_sha}"
+  commit_matches "${merge_sha}" "${head_sha}" && {
+    printf '%s\n' "${head_sha}"
+    return 0
+  }
+  compare="$(${GH_BIN} api "repos/${repo}/compare/${merge_sha}...${head_sha}")"
+  [[ "$(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.status // empty')" == "ahead" ]] || \
+    die "remote main is not a strict descendant of requested PR merge in dry-run"
+  total="$(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.total_commits // -1')"
+  returned="$(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.commits | length')"
+  [[ "${total}" =~ ^[0-9]+$ && "${total}" == "${returned}" ]] || \
+    die "dry-run compare did not return every intervening main commit"
+  while IFS= read -r commit_sha; do
+    json="$(associated_main_pr_json "${commit_sha}")"
+    pr="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.number // empty')"
+    release_queue_proves_reviewed_merge "${pr}" "${commit_sha}" || \
+      die "dry-run main commit ${commit_sha} PR #${pr:-unknown} lacks exact-head fenced receipts"
+    release_queue_paths_are_routine "${pr}" || \
+      die "dry-run main commit ${commit_sha} PR #${pr:-unknown} touches security/release-class paths"
+    run_pr_required --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
+  done < <(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.commits[].sha')
+  printf '%s\n' "${head_sha}"
 }
 
 normal_package_build() {
   local app_version="$1"
-  if [[ -n "${OPENCLAW_SHIP_NORMAL_PACKAGE_BUILD:-}" ]]; then
+  if [[ "${SHIP_TEST_MODE}" == "1" && -n "${OPENCLAW_SHIP_NORMAL_PACKAGE_BUILD:-}" ]]; then
     printf '%s\n' "${OPENCLAW_SHIP_NORMAL_PACKAGE_BUILD}"
     return 0
   fi
@@ -307,7 +633,10 @@ normal_package_build() {
     # shellcheck source=scripts/lib/validated-node.sh
     local git_count=""
     local canonical_build="0"
-    local node_bin="${OPENCLAW_NODE_BIN:-}"
+    local node_bin=""
+    if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+      node_bin="${OPENCLAW_NODE_BIN:-}"
+    fi
     if [[ -z "${node_bin}" ]]; then
       source "${MAIN_REPO}/scripts/lib/validated-node.sh"
       openclaw_use_validated_node "${MAIN_REPO}" >/dev/null
@@ -331,7 +660,10 @@ normal_package_build() {
 }
 
 select_hotfix_version() {
-  local installed_version="${OPENCLAW_SHIP_INSTALLED_APP_VERSION:-}"
+  local installed_version=""
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+    installed_version="${OPENCLAW_SHIP_INSTALLED_APP_VERSION:-}"
+  fi
   if [[ -z "${installed_version}" ]]; then
     [[ -r "${INSTALLED_JARVIS_INFO_PLIST}" ]] || \
       die "installed Jarvis Info.plist is not readable: ${INSTALLED_JARVIS_INFO_PLIST}"
@@ -365,7 +697,11 @@ package_hotfix() {
   local app_version="$2"
   local host_arch="$3"
   local command=(
-    env
+    /usr/bin/env
+    -i
+    "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    "HOME=/Users/user"
+    "TMPDIR=${TMPDIR:-/tmp}"
     "APP_BUILD=${app_build}"
     "APP_VERSION=${app_version}"
     "BUILD_ARCHS=${host_arch}"
@@ -377,8 +713,11 @@ package_hotfix() {
     "SKIP_PNPM_INSTALL=0"
     "SKIP_TSC=0"
     "SKIP_UI_BUILD=0"
-    bash "${PACKAGE_SCRIPT}"
   )
+  if [[ "${SHIP_TEST_MODE}" == "1" && -n "${PACKAGE_MARKER:-}" ]]; then
+    command+=("PACKAGE_MARKER=${PACKAGE_MARKER}")
+  fi
+  command+=(/bin/bash "${PACKAGE_SCRIPT}")
 
   if (( DRY_RUN == 1 )); then
     print_main_command "${command[@]}"
@@ -388,7 +727,13 @@ package_hotfix() {
 }
 
 require_hotfix_disk_preflight() {
-  local required_kib="${JARVIS_RELEASE_DISK_REQUIRED_KIB:-$(jarvis_release_disk_default_required_kib)}"
+  local required_kib=""
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+    required_kib="${JARVIS_RELEASE_DISK_REQUIRED_KIB:-$(jarvis_release_disk_default_required_kib)}"
+  else
+    required_kib="$(jarvis_release_disk_default_required_kib)"
+    unset JARVIS_RELEASE_DISK_PROBE_COMMAND JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE
+  fi
 
   # The hotfix package writes its final app under dist/ and performs its heavy
   # CLI/runtime staging under TMPDIR. The repo checkout, dependency install,
@@ -450,7 +795,7 @@ wait_for_seeded_runtime() {
         return 0
       fi
     fi
-    sleep "${SEED_POLL_SECONDS}"
+    /bin/sleep "${SEED_POLL_SECONDS}"
   done
   die "dist/Jarvis.app did not seed expected commit=${expected_commit} build=${expected_build} into app support"
 }
@@ -459,12 +804,15 @@ run_offline_seeded_protection() {
   local expected_commit="$1"
   local action="$2"
   local command=(
-    env
+    /usr/bin/env
+    -i
+    "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    "HOME=/Users/user"
     "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}"
     "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
     "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
     "OPENCLAW_JARVIS_CONFIG_PATH=${JARVIS_CONFIG_PATH}"
-    bash "${PROTECT_SCRIPT}"
+    /bin/bash "${PROTECT_SCRIPT}"
     --expected-live-commit "${expected_commit}"
     --offline-seeded-fallback
   )
@@ -483,7 +831,7 @@ run_offline_seeded_protection() {
 
 cleanup_launch_receipt() {
   [[ -n "${TRANSACTION_LAUNCH_RECEIPT_DIR}" ]] || return 0
-  rm -f "${TRANSACTION_LAUNCH_RECEIPT_DIR}/launched-app-path"
+  /bin/rm -f "${TRANSACTION_LAUNCH_RECEIPT_DIR}/launched-app-path"
   rmdir "${TRANSACTION_LAUNCH_RECEIPT_DIR}" 2>/dev/null || true
   TRANSACTION_LAUNCH_RECEIPT_DIR=""
 }
@@ -541,31 +889,41 @@ launch_seed_and_restart() {
   local open_status=0
 
   if (( DRY_RUN == 1 )); then
-    print_main_command bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}"
+    print_main_command /bin/bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}"
     log "dry-run: wait for ${JARVIS_MANIFEST} commit=${expected_commit} version=${app_version} build=${app_build}"
-    print_command env \
+    print_command /usr/bin/env \
+      -i \
+      "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" \
+      "HOME=/Users/user" \
       "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}" \
       "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}" \
       "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}" \
-      bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
+      /bin/bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
       --offline-seeded-fallback --apply
-    print_command env \
+    print_command /usr/bin/env \
+      -i \
+      "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" \
+      "HOME=/Users/user" \
       "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}" \
       "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}" \
       "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}" \
-      bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
+      /bin/bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
       --offline-seeded-fallback --verify
     print_command "${LAUNCHCTL_BIN}" kickstart -k "${domain}/${JARVIS_LABEL}"
     return 0
   fi
 
   TRANSACTION_EXPECTED_COMMIT="${expected_commit}"
-  TRANSACTION_LAUNCH_RECEIPT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-hotfix-launch.XXXXXX")"
-  chmod 700 "${TRANSACTION_LAUNCH_RECEIPT_DIR}"
+  TRANSACTION_LAUNCH_RECEIPT_DIR="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/jarvis-hotfix-launch.XXXXXX")"
+  /bin/chmod 700 "${TRANSACTION_LAUNCH_RECEIPT_DIR}"
   launch_receipt="${TRANSACTION_LAUNCH_RECEIPT_DIR}/launched-app-path"
   (cd "${MAIN_REPO}" && \
-    OPENCLAW_APP_LAUNCH_RECEIPT="${launch_receipt}" \
-      bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}") || open_status=$?
+    /usr/bin/env -i \
+      PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
+      HOME=/Users/user \
+      TMPDIR="${TMPDIR:-/tmp}" \
+      OPENCLAW_APP_LAUNCH_RECEIPT="${launch_receipt}" \
+      /bin/bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}") || open_status=$?
 
   # The helper can launch the app successfully and then fail while preparing
   # foreground activation. Its atomic receipt is therefore the transaction
@@ -591,7 +949,7 @@ launch_seed_and_restart() {
     # EXIT recovery alone could otherwise race ahead of app bootstrap.
     return "${open_status}"
   fi
-  old_pid="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }' || true)"
+  old_pid="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null | /usr/bin/awk '$1 == "pid" && $2 == "=" { print $3; exit }' || true)"
   "${LAUNCHCTL_BIN}" kickstart -k "${domain}/${JARVIS_LABEL}"
   wait_for_restarted_gateway "${expected_commit}" "${app_version}" "${old_pid}"
 }
@@ -604,8 +962,8 @@ gateway_status_is_ready() {
   local runtime_commit=""
   local runtime_package_version=""
   local rpc_ok=""
-  stdout_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.XXXXXX")"
-  json_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.json.XXXXXX")"
+  stdout_file="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.XXXXXX")"
+  json_file="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.json.XXXXXX")"
 
   if ! OPENCLAW_HOME="${JARVIS_HOME}" \
       OPENCLAW_STATE_DIR="${JARVIS_STATE_DIR}" \
@@ -615,19 +973,19 @@ gateway_status_is_ready() {
       OPENCLAW_LAUNCHD_LABEL="${JARVIS_LABEL}" \
       "${JARVIS_NODE}" "${JARVIS_ENTRYPOINT}" gateway status --deep --require-rpc --json \
         >"${stdout_file}" 2>/dev/null; then
-    rm -f "${stdout_file}" "${json_file}"
+    /bin/rm -f "${stdout_file}" "${json_file}"
     return 1
   fi
 
   # Status may prefix JSON with non-secret config warnings. Parse the payload
   # privately and emit nothing so failed startup attempts cannot leak config.
   if "${JQ_BIN}" -e . "${stdout_file}" >/dev/null 2>&1; then
-    cp "${stdout_file}" "${json_file}"
+    /bin/cp "${stdout_file}" "${json_file}"
   else
-    awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${stdout_file}" >"${json_file}"
+    /usr/bin/awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${stdout_file}" >"${json_file}"
   fi
   if ! "${JQ_BIN}" -e . "${json_file}" >/dev/null 2>&1; then
-    rm -f "${stdout_file}" "${json_file}"
+    /bin/rm -f "${stdout_file}" "${json_file}"
     return 1
   fi
 
@@ -636,7 +994,7 @@ gateway_status_is_ready() {
   rpc_ok="$("${JQ_BIN}" -r --arg url "ws://127.0.0.1:${PORT}" '
     .rpc.ok // ([.targets[]? | select(.url == $url and .connect.rpcOk == true)] | length > 0)
   ' "${json_file}")"
-  rm -f "${stdout_file}" "${json_file}"
+  /bin/rm -f "${stdout_file}" "${json_file}"
   commit_matches "${expected_commit}" "${runtime_commit}" && \
     [[ "${runtime_package_version}" == "${expected_version}" ]] && \
     [[ "${rpc_ok}" == "true" ]]
@@ -657,18 +1015,18 @@ wait_for_restarted_gateway() {
   # expected commit, and deep RPC before allowing any manifest mutation.
   while (( SECONDS <= deadline )); do
     print_output="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null || true)"
-    pid="$(printf '%s\n' "${print_output}" | awk '$1 == "pid" && $2 == "=" { print $3; exit }')"
+    pid="$(printf '%s\n' "${print_output}" | /usr/bin/awk '$1 == "pid" && $2 == "=" { print $3; exit }')"
     if [[ "${pid}" =~ ^[1-9][0-9]*$ ]] && \
         { [[ -z "${old_pid}" ]] || [[ "${pid}" != "${old_pid}" ]]; }; then
       listener_output="$(${LSOF_BIN} -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
       if printf '%s\n' "${listener_output}" | \
-          awk -v pid="${pid}" 'NR > 1 && $2 == pid { found=1 } END { exit(found ? 0 : 1) }' && \
+          /usr/bin/awk -v pid="${pid}" 'NR > 1 && $2 == pid { found=1 } END { exit(found ? 0 : 1) }' && \
           gateway_status_is_ready "${expected_commit}" "${expected_version}"; then
         log "gateway restart ready pid=${pid} port=${PORT} version=${expected_version} rpc=true"
         return 0
       fi
     fi
-    sleep "${GATEWAY_READY_POLL_SECONDS}"
+    /bin/sleep "${GATEWAY_READY_POLL_SECONDS}"
   done
   die "${JARVIS_LABEL} did not reach new-PID/listener/commit/RPC readiness within ${GATEWAY_READY_TIMEOUT_SECONDS}s"
 }
@@ -676,12 +1034,15 @@ wait_for_restarted_gateway() {
 protect_runtime() {
   local expected_commit="$1"
   local base_command=(
-    env
+    /usr/bin/env
+    -i
+    "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    "HOME=/Users/user"
     "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}"
     "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
     "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
     "OPENCLAW_JARVIS_CONFIG_PATH=${JARVIS_CONFIG_PATH}"
-    bash "${PROTECT_SCRIPT}"
+    /bin/bash "${PROTECT_SCRIPT}"
     --expected-live-commit "${expected_commit}"
   )
 
@@ -698,17 +1059,17 @@ protect_runtime() {
 }
 
 cleanup_status_files() {
-  [[ -z "${STATUS_STDOUT_FILE}" ]] || rm -f "${STATUS_STDOUT_FILE}"
-  [[ -z "${STATUS_STDERR_FILE}" ]] || rm -f "${STATUS_STDERR_FILE}"
-  [[ -z "${STATUS_JSON_FILE}" ]] || rm -f "${STATUS_JSON_FILE}"
+  [[ -z "${STATUS_STDOUT_FILE}" ]] || /bin/rm -f "${STATUS_STDOUT_FILE}"
+  [[ -z "${STATUS_STDERR_FILE}" ]] || /bin/rm -f "${STATUS_STDERR_FILE}"
+  [[ -z "${STATUS_JSON_FILE}" ]] || /bin/rm -f "${STATUS_JSON_FILE}"
 }
 
 extract_status_json() {
   if "${JQ_BIN}" -e . "${STATUS_STDOUT_FILE}" >/dev/null 2>&1; then
-    cp "${STATUS_STDOUT_FILE}" "${STATUS_JSON_FILE}"
+    /bin/cp "${STATUS_STDOUT_FILE}" "${STATUS_JSON_FILE}"
     return 0
   fi
-  awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${STATUS_STDOUT_FILE}" >"${STATUS_JSON_FILE}"
+  /usr/bin/awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${STATUS_STDOUT_FILE}" >"${STATUS_JSON_FILE}"
   "${JQ_BIN}" -e . "${STATUS_JSON_FILE}" >/dev/null 2>&1 || \
     die "Jarvis status command did not emit parseable JSON"
 }
@@ -720,7 +1081,7 @@ telegram_default_proof() {
   local log_file="${JARVIS_LOG_DIR}/gateway.log"
 
   if [[ -r "${log_file}" ]]; then
-    username="$(tail -n 500 "${log_file}" | sed -nE 's/^.*\[default\].*@([A-Za-z0-9_]+).*$/@\1/p' | tail -n 1)"
+    username="$(/usr/bin/tail -n 500 "${log_file}" | /usr/bin/sed -nE 's/^.*\[default\].*@([A-Za-z0-9_]+).*$/@\1/p' | /usr/bin/tail -n 1)"
     username="${username:-unavailable}"
   fi
   if [[ -r "${JARVIS_CONFIG_PATH}" ]]; then
@@ -732,7 +1093,7 @@ telegram_default_proof() {
   fi
   if [[ -n "${token}" ]] && command -v "${SHASUM_BIN}" >/dev/null 2>&1; then
     # Hashing proves bot identity without exposing any token prefix or suffix.
-    fingerprint="$(printf '%s' "${token}" | "${SHASUM_BIN}" -a 256 | awk '{print substr($1, 1, 12)}')"
+    fingerprint="$(printf '%s' "${token}" | "${SHASUM_BIN}" -a 256 | /usr/bin/awk '{print substr($1, 1, 12)}')"
   fi
 
   printf 'telegram_default_bot=%s\n' "${username}"
@@ -752,6 +1113,9 @@ prove_break_glass_runtime() {
   # contract. Keep the wrapper's legacy summary keys as aliases only; the
   # canonical helper owns all source, protection, daemon, listener, and RPC checks.
   proof_output="$(
+    /usr/bin/env -i \
+    PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
+    HOME=/Users/user \
     OPENCLAW_JARVIS_HOME="${JARVIS_HOME}" \
     OPENCLAW_JARVIS_STATE_DIR="${JARVIS_STATE_DIR}" \
     OPENCLAW_JARVIS_CONFIG_PATH="${JARVIS_CONFIG_PATH}" \
@@ -763,17 +1127,17 @@ prove_break_glass_runtime() {
     OPENCLAW_INSTALLED_JARVIS_APP_PATH="${INSTALLED_JARVIS_APP_PATH}" \
     OPENCLAW_JARVIS_APP_MANIFEST="${INSTALLED_JARVIS_APP_MANIFEST}" \
     OPENCLAW_JARVIS_GATEWAY_LABEL="${JARVIS_LABEL}" \
-      bash "${PROVE_RUNTIME_SCRIPT}" \
+      /bin/bash "${PROVE_RUNTIME_SCRIPT}" \
         --runtime-source jarvis-break-glass-hotfix \
         --expected-commit "${expected_commit}" \
         --expected-package-version "${expected_version}"
   )" || die "protected-hotfix runtime proof failed"
   printf '%s\n' "${proof_output}"
 
-  runtime_commit="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*runtime_commit=([^ ]+).*$/\1/p' | tail -n 1)"
-  runtime_package_version="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*runtime_package_version=([^ ]+).*$/\1/p' | tail -n 1)"
-  runtime_source="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*runtime_source=([^ ]+).*$/\1/p' | tail -n 1)"
-  pid="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*pid=([1-9][0-9]*).*$/\1/p' | tail -n 1)"
+  runtime_commit="$(printf '%s\n' "${proof_output}" | /usr/bin/sed -nE 's/^.*runtime_commit=([^ ]+).*$/\1/p' | /usr/bin/tail -n 1)"
+  runtime_package_version="$(printf '%s\n' "${proof_output}" | /usr/bin/sed -nE 's/^.*runtime_package_version=([^ ]+).*$/\1/p' | /usr/bin/tail -n 1)"
+  runtime_source="$(printf '%s\n' "${proof_output}" | /usr/bin/sed -nE 's/^.*runtime_source=([^ ]+).*$/\1/p' | /usr/bin/tail -n 1)"
+  pid="$(printf '%s\n' "${proof_output}" | /usr/bin/sed -nE 's/^.*pid=([1-9][0-9]*).*$/\1/p' | /usr/bin/tail -n 1)"
   [[ -n "${runtime_commit}" && -n "${runtime_package_version}" && -n "${runtime_source}" && -n "${pid}" ]] || \
     die "protected-hotfix runtime proof omitted required summary fields"
 
@@ -793,8 +1157,10 @@ prove_break_glass_runtime() {
 }
 
 main() {
-  trap transaction_exit_guard EXIT
   parse_args "$@"
+  assert_source_checkout_safe
+  load_release_helpers
+  trap transaction_exit_guard EXIT
   if (( DRY_RUN != 1 )); then
     # Fleet admission must wrap the entire live hotfix transaction and precede
     # the narrower release/runtime mutex acquired below. Dry-run remains a
@@ -831,7 +1197,7 @@ main() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
   fi
-  merge_or_confirm_pr "${json}"
+  confirm_merged_pr "${json}"
   pull_and_confirm_merge
 
   if (( DRY_RUN == 1 )) && [[ "${pr_state}" == "OPEN" ]]; then
@@ -841,13 +1207,13 @@ main() {
     expected_commit="<post-merge-main>"
     log "OPEN PR dry-run uses prospective commit ${expected_commit}; real commit resolves after merge and git pull"
   elif (( DRY_RUN == 1 )); then
-    # A MERGED PR has immutable remote merge truth even when sacred main has
-    # not fast-forwarded yet. Model comparisons and the package/seed plan from
-    # that merge commit instead of silently substituting stale local HEAD.
+    # Resolve remote main without mutating the sacred checkout, then apply the
+    # same review, scope, and required-check gates as the live post-pull path.
     expected_commit="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.mergeCommit.oid // empty')"
     [[ "${expected_commit}" =~ ^[0-9a-fA-F]{7,40}$ ]] || \
       die "merged PR is missing a valid mergeCommit.oid for dry-run"
-    log "MERGED PR dry-run models remote merge commit ${expected_commit}; local main advances only in the live git pull"
+    expected_commit="$(dry_run_reviewed_remote_main "${expected_commit}")"
+    log "MERGED PR dry-run models reviewed remote main ${expected_commit}; local main advances only in the live git pull"
     assert_installed_app_needs_hotfix "${expected_commit}"
   else
     # Live packaging is pinned to the refetched PR receipt, not a fresh HEAD

@@ -430,10 +430,21 @@ routine coordination back to the founder. Routine review, ordinary `main`
 drift, a safe rebase, pending CI, or a draft PR are continuation states.
 
 `Ship end-to-end` authorizes the normal source/PR/merge lifecycle. It does not by
-itself authorize new scope, destructive cleanup, credentials, irreversible or
-external actions, security-owned changes, or protected live actions. Package,
-product release, deploy, restart, install, shared-runtime mutation, and live
-acceptance require explicit task authority or later approval.
+itself authorize new scope, credentials, irreversible or external actions,
+security-owned changes, protected live actions, or destructive cleanup beyond
+the exact rebuildable active-task artifacts allowed by the cleanup gate below.
+Package, product release, deploy, restart, install, shared-runtime mutation, and
+live acceptance require explicit task authority or later approval.
+
+When the user explicitly authorizes shipping a feature end-to-end to their main
+Jarvis, that task authority includes advancing the installed hotfix to the
+current reviewed, required-check-green `main` at execution time. Later merged,
+reviewed changes on `main` do not create another approval prompt. Stop for
+unreviewed or check-failing code, a security/release-class change, public
+release, credentials, destructive user-data action, a new external destination,
+or any ambiguous effect outside the original main-Jarvis hotfix scope. Follow
+the moving-target and canonical wrapper gates in `runtime-ops.md`; this authority
+does not generalize to another runtime or public shipment.
 
 When a direct user task explicitly grants normal merge or deployment authority,
 the builder preserves it in the typed release packet with source, exact scope,
@@ -696,6 +707,16 @@ ready`.
     must stop new heavy builds
   - runtime instances, Codex sessions/history/browser state, and ambiguous
     authenticated state are excluded from scheduled deletion
+- Already-authorized build or shipping work may remove an exact cache or failed
+  build/package output without a separate cleanup approval when the active task
+  owns that target, it is reproducible, the current attempt no longer needs it,
+  and native process, open-file, and heavy/release lock checks prove it inactive.
+  This authority never covers a worktree, source, user data, credentials,
+  sessions, browser profiles, shared/live runtime state, or ambiguously owned or
+  referenced artifacts. Uncertain ownership or liveness remains a hard stop.
+  Use the owning repository cleanup command when it can classify that exact
+  target; a disk receipt alone is accountability, not proof that these gates
+  passed.
 - Prove the background job is real with
   `bash scripts/install-worktree-gc.sh status`. A plist on disk is not enough;
   status fails unless launchd reports the job loaded and enabled.
