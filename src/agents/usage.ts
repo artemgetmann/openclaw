@@ -1,38 +1,6 @@
-export type UsageLike = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-  // Common alternates across providers/SDKs.
-  inputTokens?: number;
-  outputTokens?: number;
-  promptTokens?: number;
-  completionTokens?: number;
-  input_tokens?: number;
-  output_tokens?: number;
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-  // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
-  cached_tokens?: number;
-  // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
-  prompt_tokens_details?: { cached_tokens?: number };
-  // Some agents/logs emit alternate naming.
-  totalTokens?: number;
-  total_tokens?: number;
-  cache_read?: number;
-  cache_write?: number;
-};
+import type { NormalizedUsage, UsageLike } from "../shared/usage-normalization-contract.js";
 
-export type NormalizedUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
+export type { NormalizedUsage, UsageLike } from "../shared/usage-normalization-contract.js";
 
 export type AssistantUsageSnapshot = {
   input: number;

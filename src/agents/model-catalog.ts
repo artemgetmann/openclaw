@@ -6,21 +6,13 @@ import {
   resolveProviderBuiltInModelSuppression,
   resolveProviderPluginsForHooks,
 } from "../plugins/provider-runtime.js";
+import type { ModelCatalogEntry, ModelInputType } from "../shared/model-catalog-contract.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 const log = createSubsystemLogger("model-catalog");
 
-export type ModelInputType = "text" | "image" | "document";
-
-export type ModelCatalogEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-  input?: ModelInputType[];
-};
+export type { ModelCatalogEntry, ModelInputType } from "../shared/model-catalog-contract.js";
 
 type DiscoveredModel = {
   id: string;
