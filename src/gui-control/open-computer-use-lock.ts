@@ -257,7 +257,14 @@ export async function resolveOpenComputerUseLockTarget(
   socketIdentity?: string,
 ): Promise<string> {
   const identity = socketIdentity?.trim() || (await canonicalCommand(command));
-  const digest = createHash("sha256").update(identity).digest("hex").slice(0, 24);
+  // os.tmpdir() can resolve to a shared namespace on multi-user hosts while
+  // each login session owns a different OCU agent socket. Bind the lock hash to
+  // the effective user so another account can neither block nor reclaim ours.
+  const effectiveUser = typeof process.geteuid === "function" ? process.geteuid() : "unknown";
+  const digest = createHash("sha256")
+    .update(`${effectiveUser}\0${identity}`)
+    .digest("hex")
+    .slice(0, 24);
   return path.join(os.tmpdir(), "openclaw-gui-control", `open-computer-use-${digest}`);
 }
 
@@ -278,15 +285,16 @@ async function acquireCrossProcessLock(input: {
   explicitLockTimeoutMs?: number;
   identity: string;
   lockTarget: string;
+  orderKey: string;
   startedAtMs: number;
 }): Promise<{ release: () => Promise<void> }> {
   const token = randomUUID();
   const queuePath = `${input.lockTarget}.queue`;
   const legacyPath = `${input.lockTarget}.lock`;
-  // hrtime is a host-wide monotonic clock on supported Node platforms. Unlike
-  // Date.now(), it preserves publication order for contenders born within the
-  // same wall-clock millisecond.
-  const orderKey = process.hrtime.bigint().toString().padStart(20, "0");
+  // The public entrypoint captures this host-wide monotonic key before any
+  // asynchronous resolution, preserving invocation order even when callers
+  // begin within the same wall-clock millisecond.
+  const orderKey = input.orderKey;
   const ownerPath = path.join(queuePath, `${orderKey}-${process.pid}-${token}.json`);
   const candidatePath = `${ownerPath}.candidate`;
   const acquiredCandidatePath = `${ownerPath}.acquired`;
@@ -560,6 +568,10 @@ export async function withOpenComputerUseLock<T>(input: {
   socketIdentity?: string;
   timeoutMs: number;
 }): Promise<T> {
+  // Capture caller order before canonicalCommand() yields. Otherwise filesystem
+  // resolution latency can let a later invocation publish ahead of an earlier
+  // one, reordering dependent GUI actions within this process.
+  const orderKey = process.hrtime.bigint().toString().padStart(20, "0");
   const startedAtMs = Date.now();
   const command = await canonicalCommand(input.command);
   const identity = input.socketIdentity?.trim() || command;
@@ -572,6 +584,7 @@ export async function withOpenComputerUseLock<T>(input: {
     explicitLockTimeoutMs: input.lockTimeoutMs,
     identity,
     lockTarget,
+    orderKey,
     startedAtMs,
   });
   try {

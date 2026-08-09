@@ -163,6 +163,23 @@ describe("withOpenComputerUseLock", () => {
     expect(events).toEqual(["first:start", "second:start"]);
   });
 
+  it("uses a separate lock namespace for each effective OS user", async () => {
+    const directory = await temporaryDirectory();
+    const command = path.join(directory, "OpenComputerUse");
+    const effectiveUser = vi.spyOn(process, "geteuid");
+
+    try {
+      effectiveUser.mockReturnValue(501);
+      const firstUserTarget = await resolveOpenComputerUseLockTarget(command, "socket:shared");
+      effectiveUser.mockReturnValue(502);
+      const secondUserTarget = await resolveOpenComputerUseLockTarget(command, "socket:shared");
+
+      expect(firstUserTarget).not.toBe(secondUserTarget);
+    } finally {
+      effectiveUser.mockRestore();
+    }
+  });
+
   it("does not serialize commands that resolve to different app-agent sockets", async () => {
     const directory = await temporaryDirectory();
     const command = path.join(directory, "OpenComputerUse");
