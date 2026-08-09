@@ -692,10 +692,18 @@ function handoffTest(pr, options) {
           fail("capacity retry contract does not match the exact closed tester");
         }
         recoveryReceipt = readCapacityRecovery(capacityRecoveryReceipt, priorTester);
+        const capacityEnvironment = priorTester.receipt?.environment;
         const userVisibleRecovery =
           priorTester.transport === "user-visible-task" &&
           transport === "user-visible-task" &&
-          priorTester.closure?.type === "archived";
+          priorTester.closure?.type === "archived" &&
+          capacityEnvironment?.status === "blocked" &&
+          capacityEnvironment?.contractId === priorTester.contractId &&
+          capacityEnvironment?.class === "bootstrap_guard" &&
+          capacityEnvironment?.code === "guard_refused" &&
+          capacityEnvironment?.preCollection === true &&
+          capacityEnvironment?.workloadStarted === false &&
+          capacityEnvironment?.bootstrapAttempted === true;
         const nestedOccupiedSlotRecovery =
           priorTester.transport === "nested-read-only" &&
           transport === "nested-read-only" &&
@@ -711,17 +719,20 @@ function handoffTest(pr, options) {
         if (
           (!userVisibleRecovery && !nestedOccupiedSlotRecovery) ||
           priorTester.testKind !== testKind ||
+          priorTester.environmentContract?.admission != null ||
           priorTester.receipt?.status !== "FAIL" ||
-          priorTester.receipt?.workloadStarted !== false ||
+          (priorTester.receipt?.workloadStarted ?? capacityEnvironment?.workloadStarted) !==
+            false ||
           !(
             priorTester.receipt?.cleanup?.status === "not-required" ||
             (priorTester.receipt?.cleanup?.status === "complete" &&
-              priorTester.receipt?.workloadStarted === false)
+              (priorTester.receipt?.workloadStarted ?? capacityEnvironment?.workloadStarted) ===
+                false)
           ) ||
           state.release !== null
         ) {
           fail(
-            "capacity retry requires the same test contract and transport, one terminal pre-workload capacity FAIL with complete or unnecessary cleanup, legal archived user-visible or occupied-slot nested closure, and no release owner",
+            "capacity retry requires one historical contract without bounded admission and one terminal pre-workload capacity FAIL: an exact archived bootstrap_guard/guard_refused receipt or typed nested heavy_slot_occupied terminal receipt, complete or unnecessary cleanup, and no release owner",
           );
         }
 

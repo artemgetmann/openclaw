@@ -417,6 +417,55 @@ function completeJarvisHealthFailure(fixture: ReturnType<typeof makeFixture>) {
   return tester;
 }
 
+function completeCurrentContractFailure(
+  fixture: ReturnType<typeof makeFixture>,
+  environment: (tester: LifecycleOutput) => Record<string, unknown>,
+) {
+  const tester = beginLiveTester(fixture);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "failed-tester",
+    "--host-id",
+    "tester-host",
+  ]);
+  const receiptPath = path.join(fixture.root, "current-contract-fail.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "FAIL",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "failed-tester", hostId: "tester-host" },
+      environment: environment(tester),
+      evidence: ["terminal failure that must not enter capacity recovery"],
+      cleanup: { status: "not-required", evidence: "no protected state created" },
+      limitations: [],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "failed-tester",
+    "--host-id",
+    "tester-host",
+    "--closure",
+    "archived",
+  ]);
+  return tester;
+}
+
 function completeEnvironmentOnlyBlock(fixture: ReturnType<typeof makeFixture>) {
   const tester = beginLiveTester(fixture);
   run(fixture, [
@@ -1362,6 +1411,37 @@ describe("scripts/pr-lifecycle", () => {
     expect(state.tester.contractId).toBe(replacement.contractId);
     expect(state.tester.phase).toBe("active");
     expect(state.testerHistory).toHaveLength(1);
+  });
+
+  it.each([
+    ["post-workload behavioral failure", readyEnvironment],
+    [
+      "internal guard failure",
+      (tester: LifecycleOutput) => ({
+        status: "blocked",
+        contractId: tester.contractId,
+        class: "bootstrap_guard",
+        code: "guard_internal",
+        preCollection: true,
+        workloadStarted: false,
+        bootstrapAttempted: true,
+      }),
+    ],
+  ])("rejects legacy capacity recovery after %s", (_label, environment) => {
+    const fixture = makeFixture();
+    const tester = completeCurrentContractFailure(fixture, environment);
+    const recoveryPath = writeCapacityRecovery(fixture, tester.contractId);
+
+    const result = runFailure(fixture, capacityRetryArgs(tester.contractId, recoveryPath));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("historical contract without bounded admission");
+
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.tester.contractId).toBe(tester.contractId);
+    expect(state.tester.phase).toBe("closed");
+    expect(state.testerHistory ?? []).toHaveLength(0);
   });
 
   it("rejects capacity retry without exact no-work and recovered-capacity proof", () => {
