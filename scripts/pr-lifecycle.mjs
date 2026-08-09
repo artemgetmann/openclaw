@@ -572,25 +572,35 @@ function handoffTest(pr, options) {
       if (priorTester.contractId !== capacityRetryContract) {
         fail("capacity retry contract does not match the exact closed tester");
       }
+      recoveryReceipt = readCapacityRecovery(capacityRecoveryReceipt, priorTester);
+      const userVisibleRecovery =
+        priorTester.transport === "user-visible-task" &&
+        transport === "user-visible-task" &&
+        priorTester.closure?.type === "archived";
+      const nestedOccupiedSlotRecovery =
+        priorTester.transport === "nested-read-only" &&
+        transport === "nested-read-only" &&
+        priorTester.testKind === "read-only" &&
+        testKind === "read-only" &&
+        priorTester.closure?.type === "terminal-receipt" &&
+        recoveryReceipt.cause.code === "heavy_slot_occupied";
       if (
-        priorTester.transport !== "user-visible-task" ||
-        priorTester.transport !== transport ||
+        (!userVisibleRecovery && !nestedOccupiedSlotRecovery) ||
         priorTester.testKind !== testKind ||
         priorTester.receipt?.status !== "FAIL" ||
+        priorTester.receipt?.workloadStarted !== false ||
         !(
           priorTester.receipt?.cleanup?.status === "not-required" ||
           (priorTester.receipt?.cleanup?.status === "complete" &&
             priorTester.receipt?.workloadStarted === false)
         ) ||
-        priorTester.closure?.type !== "archived" ||
         state.release !== null
       ) {
         fail(
-          "capacity retry requires the same test contract, one archived user-visible pre-workload FAIL with complete or unnecessary cleanup, and no release owner",
+          "capacity retry requires the same test contract and transport, one terminal pre-workload capacity FAIL with complete or unnecessary cleanup, legal archived user-visible or occupied-slot nested closure, and no release owner",
         );
       }
 
-      recoveryReceipt = readCapacityRecovery(capacityRecoveryReceipt, priorTester);
       retryOfContractId = priorTester.contractId;
       // Preserve the terminal failed tester verbatim. Moving it into an attempt
       // ledger makes the new reservation atomic without rewriting past truth.

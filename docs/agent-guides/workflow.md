@@ -197,19 +197,26 @@ identity. `handoff-release` refuses a stale, failed, incomplete, or unclosed
 tester receipt.
 
 A capacity or managed-Jarvis health guard refusal before workload start is not
-source proof and is not a generic retry license. After the failed user-visible
+source proof and is not a generic retry license. After a failed user-visible
 tester is archived, the same builder may pass its exact contract plus a typed
 capacity-owner recovery receipt to `handoff-test --capacity-retry-contract ...
---capacity-recovery-receipt ...`. The receipt must bind that closed `FAIL`,
-record `workloadStarted=false`, prove the exact failed gate recovered (the disk
-floor or managed Jarvis health), prove empty heavy/release lock directories,
-and preserve the same immutable candidate and test contract. Cleanup may be
-`not-required`, or `complete` only when the terminal receipt also records that
-the workload never started. The command moves the failed tester unchanged into
-the attempt ledger and atomically reserves exactly one fresh tester. Repeating
-the command returns the existing reservation; a source failure, completed
-workload, missing archive, unrecovered host gate, occupied lock, release owner,
-or different candidate fails closed.
+--capacity-recovery-receipt ...`. One additional shape is legal: a
+`nested-read-only` tester terminally closed by `terminal-receipt` may retry on
+the same nested transport only when its sole recovered gate is
+`heavy_slot_occupied`. Nested disk, Jarvis-health, transport-changing, or
+post-workload retries remain forbidden.
+
+The receipt must bind that closed `FAIL`, record `workloadStarted=false`, prove
+the exact failed gate recovered, prove empty heavy/release lock directories,
+and preserve the same immutable candidate and test contract. The terminal
+tester receipt must independently record `workloadStarted=false`; cleanup may
+be `not-required`, or `complete` only when the workload never started. The
+command moves the failed tester unchanged into the attempt ledger and
+atomically reserves exactly one fresh tester. Repeating the command returns the
+existing reservation; a source/test failure, completed workload, wrong closure
+or transport, missing recovery proof, unrecovered host gate, occupied lock,
+release owner, repeated retry, identity drift, or different candidate fails
+closed.
 
 ### 4. One release operator owns merge
 

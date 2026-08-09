@@ -296,6 +296,7 @@ function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
       headSha: tester.candidate?.headSha,
       diffFingerprint: tester.candidate?.diffFingerprint,
       owner: { threadId: "capacity-blocked-tester", hostId: "tester-host" },
+      workloadStarted: false,
       evidence: ["heavy guard refused disk pressure before workload start"],
       cleanup: { status: "not-required", evidence: "workload never started" },
       limitations: [],
@@ -388,6 +389,63 @@ function writeCapacityRecovery(
   return receiptPath;
 }
 
+function completeNestedOccupiedSlotFailure(fixture: ReturnType<typeof makeFixture>) {
+  const tester = run(fixture, [
+    "handoff-test",
+    "42",
+    "--test-kind",
+    "read-only",
+    "--transport",
+    "nested-read-only",
+    "--owner-thread",
+    "builder-thread",
+    "--owner-host",
+    "builder-host",
+  ]);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "nested-capacity-tester",
+    "--host-id",
+    "nested-agent",
+  ]);
+  const receiptPath = path.join(fixture.root, "nested-capacity-fail.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "FAIL",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "nested-capacity-tester", hostId: "nested-agent" },
+      workloadStarted: false,
+      evidence: ["bounded heavy-slot wait expired before workload start"],
+      cleanup: { status: "not-required", evidence: "workload never started" },
+      limitations: [],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "nested-capacity-tester",
+    "--host-id",
+    "nested-agent",
+    "--closure",
+    "terminal-receipt",
+  ]);
+  return tester;
+}
+
 function writeJarvisHealthRecovery(
   fixture: ReturnType<typeof makeFixture>,
   priorTesterContractId: string,
@@ -414,6 +472,7 @@ function capacityRetryArgs(
   priorTesterContractId: string,
   recoveryPath: string,
   testKind: "read-only" | "live-external" = "read-only",
+  transport: "nested-read-only" | "user-visible-task" = "user-visible-task",
 ) {
   return [
     "handoff-test",
@@ -421,7 +480,7 @@ function capacityRetryArgs(
     "--test-kind",
     testKind,
     "--transport",
-    "user-visible-task",
+    transport,
     "--owner-thread",
     "builder-thread",
     "--owner-host",
@@ -842,6 +901,52 @@ describe("scripts/pr-lifecycle", () => {
     });
   });
 
+  it("permits one same-transport nested retry after a terminal pre-workload occupied-slot refusal", () => {
+    const fixture = makeFixture();
+    const priorTester = completeNestedOccupiedSlotFailure(fixture);
+    const recoveryPath = writeOccupiedSlotRecovery(fixture, priorTester.contractId);
+    const retryArgs = capacityRetryArgs(
+      priorTester.contractId,
+      recoveryPath,
+      "read-only",
+      "nested-read-only",
+    );
+
+    const retry = run(fixture, retryArgs);
+    expect(retry).toMatchObject({
+      action: "spawn_nested_read_only",
+      retryOfContractId: priorTester.contractId,
+      routing: { decision: "nested-eligible" },
+    });
+    expect(run(fixture, retryArgs)).toMatchObject({
+      action: "do-not-create",
+      contractId: retry.contractId,
+    });
+  });
+
+  it("rejects nested capacity retry for a non-slot gate or any started workload", () => {
+    for (const variant of ["disk-gate", "workload-started"] as const) {
+      const fixture = makeFixture();
+      const priorTester = completeNestedOccupiedSlotFailure(fixture);
+      if (variant === "workload-started") {
+        const statePath = path.join(fixture.root, "state", "pr-42.json");
+        const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+        state.tester.receipt.workloadStarted = true;
+        fs.writeFileSync(statePath, JSON.stringify(state));
+      }
+      const recoveryPath =
+        variant === "disk-gate"
+          ? writeCapacityRecovery(fixture, priorTester.contractId)
+          : writeOccupiedSlotRecovery(fixture, priorTester.contractId);
+      const rejected = runFailure(
+        fixture,
+        capacityRetryArgs(priorTester.contractId, recoveryPath, "read-only", "nested-read-only"),
+      );
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toContain("terminal pre-workload capacity FAIL");
+    }
+  });
+
   it("reserves one fresh tester after pre-workload Jarvis health recovery", () => {
     const fixture = makeFixture();
     const priorTester = completeJarvisHealthFailure(fixture);
@@ -903,6 +1008,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: replacement.candidate?.headSha,
         diffFingerprint: replacement.candidate?.diffFingerprint,
         owner: { threadId: "replacement-tester", hostId: "tester-host" },
+        workloadStarted: false,
         evidence: ["heavy guard again refused disk pressure before workload start"],
         cleanup: { status: "not-required", evidence: "workload never started" },
         limitations: [],
