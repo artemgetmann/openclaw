@@ -360,8 +360,13 @@ function testerEnvironmentContract(candidate, contractId, transport) {
     method: "canonical-warm-adoption",
     credentialMode: "none",
     readyMode: "warm",
+    admission: {
+      mode: "same-owner-bounded-wait",
+      waitSeconds: 86400,
+      leaseHeldWhileWaiting: false,
+    },
     branchName,
-    command: `bash scripts/adopt-codex-worktree.sh ${branchName} --mode warm --credential-mode none --allow-stale-head --no-home-refresh --thread-id "\${CODEX_THREAD_ID:?CODEX_THREAD_ID is required}"`,
+    command: `bash scripts/adopt-codex-worktree.sh ${branchName} --mode warm --credential-mode none --capacity-wait-seconds 86400 --allow-stale-head --no-home-refresh --thread-id "\${CODEX_THREAD_ID:?CODEX_THREAD_ID is required}"`,
     readinessCommand: 'bash scripts/worktree-ready-check.sh --root "$PWD" --mode warm',
   };
 }
@@ -448,7 +453,7 @@ function ownerPrompt(role, state, stateDirectory) {
       ? `Environment failure: if canonical adoption/readiness fails, or collection reports test_environment/dependencies_unavailable before behavioral workload starts, run no behavioral retry. Return status=BLOCKED with environment={status:"blocked",contractId:"${environmentContract.contractId}",class:"test_environment",code:"dependencies_unavailable",preCollection:true,workloadStarted:false,bootstrapAttempted:true}. This environment block does not consume the behavioral tester attempt.`
       : null,
     environmentContract
-      ? `Capacity failure: if the canonical adoption guard refuses capacity or managed-health admission before workload, preserve the existing FAIL/capacity-recovery flow and return environment={status:"blocked",contractId:"${environmentContract.contractId}",class:"bootstrap_guard",code:"guard_refused",preCollection:true,workloadStarted:false,bootstrapAttempted:true}.`
+      ? `Capacity wait: canonical adoption owns one same-thread, same-contract bounded wait for up to ${environmentContract.admission.waitSeconds} seconds. Ordinary occupied or recoverable host-unhealthy admission waits lease-free and must not emit a terminal receipt, archive this tester, consume a behavioral attempt, or create a replacement tester. If the bounded wait expires, preserve this exact active owner and report the material blocker without recording a tester receipt. guard_internal, identity/head/fingerprint drift, cleanup ambiguity, or any failure after workload start still fails closed.`
       : null,
     role === "tester"
       ? `Diff identity: if independently recomputing the fingerprint, hash the exact raw stdout bytes from gh pr diff ${candidate.number} --patch with SHA-256. A plain gh pr diff uses a different format and is not the lifecycle fingerprint.`
@@ -1480,7 +1485,17 @@ function recordTestReceipt(pr, options) {
       environment?.preCollection === true &&
       environment?.workloadStarted === false &&
       environment?.bootstrapAttempted === true;
-    const capacityBlockedEnvironment =
+    const internalGuardEnvironment =
+      receipt.status === "FAIL" &&
+      environment?.status === "blocked" &&
+      environment?.contractId === expected.contractId &&
+      environment?.class === "bootstrap_guard" &&
+      environment?.code === "guard_internal" &&
+      environment?.preCollection === true &&
+      environment?.workloadStarted === false &&
+      environment?.bootstrapAttempted === true;
+    const legacyCapacityEnvironment =
+      expected.environmentContract?.admission == null &&
       receipt.status === "FAIL" &&
       environment?.status === "blocked" &&
       environment?.contractId === expected.contractId &&
@@ -1493,12 +1508,13 @@ function recordTestReceipt(pr, options) {
       expected.transport !== "user-visible-task" ||
       readyEnvironment ||
       blockedEnvironment ||
-      capacityBlockedEnvironment;
+      internalGuardEnvironment ||
+      legacyCapacityEnvironment;
     const validStatusEnvironmentPair =
       receipt.status === "BLOCKED"
         ? blockedEnvironment
         : receipt.status === "FAIL"
-          ? readyEnvironment || capacityBlockedEnvironment
+          ? readyEnvironment || internalGuardEnvironment || legacyCapacityEnvironment
           : readyEnvironment;
     if (
       receipt.schemaVersion !== SCHEMA_VERSION ||

@@ -19,6 +19,7 @@ Options:
   --no-home-refresh          Do not fast-forward the sacred home clone first.
   --thread-id <id>           Optional native Codex thread receipt (secret-free).
   --credential-mode <mode>   copy (default) or none for source-only workers.
+  --capacity-wait-seconds <n> Wait lease-free for guarded bootstrap (max 86400).
 EOF
 }
 
@@ -149,6 +150,7 @@ ALLOW_DIRTY=0
 REFRESH_HOME=1
 THREAD_ID="${CODEX_THREAD_ID:-unavailable}"
 CREDENTIAL_MODE="copy"
+CAPACITY_WAIT_SECONDS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -189,6 +191,11 @@ while [[ $# -gt 0 ]]; do
       CREDENTIAL_MODE="$2"
       shift 2
       ;;
+    --capacity-wait-seconds)
+      [[ $# -ge 2 ]] || fail "--capacity-wait-seconds requires a value."
+      CAPACITY_WAIT_SECONDS="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -217,6 +224,10 @@ done
 if [[ "$CREDENTIAL_MODE" == "none" && "$LANE_MODE" != "warm" ]]; then
   fail "--credential-mode none is valid only with --mode warm."
 fi
+[[ "$CAPACITY_WAIT_SECONDS" =~ ^(0|[1-9][0-9]*)$ ]] ||
+  fail "--capacity-wait-seconds must be an integer from 0 to 86400."
+(( CAPACITY_WAIT_SECONDS <= 86400 )) ||
+  fail "--capacity-wait-seconds must be an integer from 0 to 86400."
 
 if [[ -z "$ROOT" ]]; then
   ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || fail "run from inside a git worktree or pass --root."
@@ -424,7 +435,18 @@ RUNTIME_ARGS=(--root "$ROOT" --quiet)
 if [[ "$LANE_MODE" == "warm" ]]; then
   RUNTIME_ARGS+=(--skip-build)
 fi
-bash "$ROOT/scripts/bootstrap-worktree-runtime.sh" "${RUNTIME_ARGS[@]}"
+if (( CAPACITY_WAIT_SECONDS > 0 )); then
+  # Fresh tester tasks keep their exact thread/contract identity while the
+  # canonical wrapper waits without a lease. The guarded bootstrap executes
+  # once after admission; owner races never become replacement tester tasks.
+  bash "$ROOT/scripts/with-heavy-local-slot.sh" \
+    --label "adopt-worktree-runtime:${FEATURE_NAME}" \
+    --wait-seconds "$CAPACITY_WAIT_SECONDS" \
+    -- \
+    bash "$ROOT/scripts/bootstrap-worktree-runtime.sh" "${RUNTIME_ARGS[@]}"
+else
+  bash "$ROOT/scripts/bootstrap-worktree-runtime.sh" "${RUNTIME_ARGS[@]}"
+fi
 
 bash "$ROOT/scripts/worktree-doctor.sh" \
   --root "$ROOT" \

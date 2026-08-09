@@ -74,6 +74,24 @@ const fixture = () => {
     }
     writeFileSync(path.join(home, "scripts", script), body, { mode: 0o755 });
   }
+  writeFileSync(
+    path.join(home, "scripts", "with-heavy-local-slot.sh"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+wait_seconds=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --label) shift 2 ;;
+    --wait-seconds) wait_seconds="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) exit 2 ;;
+  esac
+done
+printf '%s\\n' "$wait_seconds" > "$PWD/capacity-wait-seconds"
+exec "$@"
+`,
+    { mode: 0o755 },
+  );
   run(home, "git", ["add", "."]);
   run(home, "git", ["commit", "-m", "fixture scripts"]);
   run(home, "git", ["push", "origin", "main"]);
@@ -141,6 +159,19 @@ describe("Codex worktree adoption ownership", () => {
     );
     expect(configSource).toContain(".local/no-credential-baseline-source/openclaw.json");
     expect(stateSource).toContain(".local/no-credential-baseline-source");
+  });
+
+  it("uses one bounded lease-free wait for source-only tester bootstrap", () => {
+    const { home, detached } = fixture();
+    const adopted = adopt(home, detached, "bounded-wait", "tester-thread", undefined, [
+      "--credential-mode",
+      "none",
+      "--capacity-wait-seconds",
+      "86400",
+    ]);
+
+    expect(adopted.status).toBe(0);
+    expect(run(detached, "sed", ["-n", "1p", "capacity-wait-seconds"])).toBe("86400");
   });
 
   it("fails before bootstrap when the intended branch is attached elsewhere", () => {
