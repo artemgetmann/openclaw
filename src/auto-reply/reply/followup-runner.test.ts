@@ -968,11 +968,13 @@ describe("createFollowupRunner durable delivery recovery", () => {
     expect(firstWake).toEqual([
       expect.objectContaining({
         contextKey: `restart-followup:${input.id}`,
-        text: expect.stringContaining(
-          "most recent user-authored request immediately before the restart receipt",
-        ),
+        text: expect.stringContaining(`"messageId":"${directTurn.messageId}"`),
       }),
     ]);
+    expect(firstWake[0]?.text).toContain(`"requestSummary":"${directTurn.summaryLine}"`);
+    expect(firstWake[0]?.text).toContain(
+      "Leave any newer user message in its separate queued order",
+    );
     expect(firstWake[0]?.text).toContain("Do not substitute an older task, completion claim");
     expect(firstWake[0]?.text).toContain("draft remains draft");
     // The first heartbeat has drained its event but has not delivered yet.

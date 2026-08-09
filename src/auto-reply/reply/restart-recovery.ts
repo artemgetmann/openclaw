@@ -2,7 +2,7 @@ import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import {
   buildDirectTurnRestartContinuationContext,
   claimDirectTurnRestartContinuation,
-  DIRECT_TURN_RESTART_CONTINUATION_PROMPT,
+  buildDirectTurnRestartContinuationPrompt,
   releaseDirectTurnRestartContinuation,
 } from "../../infra/restart-continuation.js";
 import { enqueueSystemEvent, peekSystemEventEntries } from "../../infra/system-events.js";
@@ -66,7 +66,13 @@ export async function scheduleInterruptedDirectTurnContinuation(
       (event) => event.contextKey === contextKey,
     );
     if (!alreadyQueued) {
-      enqueueSystemEvent(DIRECT_TURN_RESTART_CONTINUATION_PROMPT, { sessionKey, contextKey });
+      enqueueSystemEvent(
+        buildDirectTurnRestartContinuationPrompt({
+          messageId: record.run.messageId,
+          summaryLine: record.run.summaryLine,
+        }),
+        { sessionKey, contextKey },
+      );
     }
     requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "restart-continuation" }));
   } catch (err) {
