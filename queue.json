@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 64,
-  "nextFence": 19,
-  "mergeLease": null,
+  "sequence": 65,
+  "nextFence": 20,
+  "mergeLease": {
+    "leaseId": "70afc59f-1065-4dc8-8926-dafa95a03d60",
+    "fence": 19,
+    "owner": {
+      "threadId": "/root/pr1365_fenced_release",
+      "hostId": "subagent-local"
+    },
+    "claimedPr": 1365,
+    "claimedAt": "2026-08-09T06:17:17.809Z",
+    "heartbeatAt": "2026-08-09T06:17:17.809Z",
+    "expiresAt": "2026-08-09T06:37:17.809Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -1404,7 +1415,7 @@
       }
     },
     "1365": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1365,
         "url": "https://github.com/artemgetmann/openclaw/pull/1365",
@@ -1545,6 +1556,18 @@
           "claimedAt": "2026-08-09T05:48:58.276Z",
           "heartbeatAt": "2026-08-09T05:48:58.276Z",
           "expiresAt": "2026-08-09T06:08:58.276Z"
+        },
+        {
+          "leaseId": "70afc59f-1065-4dc8-8926-dafa95a03d60",
+          "fence": 19,
+          "owner": {
+            "threadId": "/root/pr1365_fenced_release",
+            "hostId": "subagent-local"
+          },
+          "claimedPr": 1365,
+          "claimedAt": "2026-08-09T06:17:17.809Z",
+          "heartbeatAt": "2026-08-09T06:17:17.809Z",
+          "expiresAt": "2026-08-09T06:37:17.809Z"
         }
       ],
       "mutationIntent": null,
@@ -1667,9 +1690,9 @@
           "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
         },
         "builderSuspended": true,
-        "leaseId": "9c0f8fe5-6404-41ac-bd70-a3db4d61260b",
-        "fence": 18,
-        "recordedAt": "2026-08-09T05:48:58.276Z"
+        "leaseId": "70afc59f-1065-4dc8-8926-dafa95a03d60",
+        "fence": 19,
+        "recordedAt": "2026-08-09T06:17:17.809Z"
       }
     },
     "1366": {
@@ -1928,10 +1951,10 @@
     }
   },
   "lastTransaction": {
-    "id": "c46c142f-88dd-44bd-9446-c735df1ebe66",
-    "recordedAt": "2026-08-09T06:15:53.698Z"
+    "id": "57db1bb1-7e57-48e2-9469-0e771dd1ca97",
+    "recordedAt": "2026-08-09T06:17:17.809Z"
   },
-  "updatedAt": "2026-08-09T06:15:53.698Z",
+  "updatedAt": "2026-08-09T06:17:17.809Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
