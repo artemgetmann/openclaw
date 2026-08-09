@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 60,
+  "sequence": 61,
   "nextFence": 18,
   "mergeLease": null,
   "items": {
@@ -1403,6 +1403,141 @@
         "recordedAt": "2026-08-08T09:00:16.201Z"
       }
     },
+    "1365": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1365,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1365",
+        "headSha": "0fd950e0cd61e0169b940b7bec5e18b4cda029b5",
+        "baseBranch": "main",
+        "testedBaseSha": "46145ab4632d9c34ac7ed051a368ac39db9136d7",
+        "diffFingerprint": "sha256:574a1fba84e1c55fe007ca7db7aa5eb082e0db183cec65ff89ac011a5324becb",
+        "changedPaths": [
+          ".github/pull_request_template.md",
+          ".github/workflows/ci.yml",
+          "AGENTS.md",
+          "CONSUMER.md",
+          "FORK_CONTRIBUTING.md",
+          "docs/agent-guides/jarvis-delivery-boundary.md",
+          "scripts/jarvis-delivery-boundary",
+          "scripts/jarvis-delivery-boundary.mjs",
+          "scripts/lib/jarvis-delivery-boundary.d.mts",
+          "scripts/lib/jarvis-delivery-boundary.mjs",
+          "scripts/pr-lifecycle.mjs",
+          "scripts/pr-release-queue.mjs",
+          "test/scripts/jarvis-delivery-boundary.test.ts",
+          "test/scripts/pr-lifecycle.test.ts",
+          "test/scripts/pr-release-queue.test.ts"
+        ],
+        "title": "feat(workflow): enforce Jarvis delivery boundaries",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: Jarvis behavior PRs cannot enter tester or release ownership without an explicit proof-layer receipt; local-only evidence cannot claim consumer shipment, and product delivery claims fail when required source, package, runtime, migration, release, or end-user receipts are missing.\n- Exact head + builder proof: `0fd950e0cd61e0169b940b7bec5e18b4cda029b5`; 3 focused files / 79 tests passed, focused typecheck passed, type-aware lint passed, formatting and syntax passed.\n- Independent tester: Pending exact-head lifecycle handoff.\n- Jarvis delivery boundary: Product-wide governance, source boundary complete; receipt below.\n- Release worker: Pending exact-head tester PASS and fenced queue handoff.\n- Dependencies / merge order / overlap: None — standalone. The concurrent personal-skill migration owns runtime/onboarding files and confirmed no overlap with this governance write set.\n- Remaining proof / cleanup / rollback: Required CI, independent tester, and source merge remain. No Jarvis.app package, install, runtime, migration, or public release is applicable to this governance-only source change. Roll back with one revert.\n- Still hurts: A deliberately mislabeled PR that omits Jarvis from its title, claim text, and direct product paths can evade mechanical detection; repository agent policy still requires classification.\n\n## Why This Matters\n\n- A personal Jarvis customization was previously mistaken for consumer delivery.\n- Source, package, installed runtime, upgrade adoption, public release, and end-user behavior are separate states and must stay separate in every future Jarvis task.\n- One receipt now carries that truth through CI, builder-to-tester handoff, and the fenced release queue.\n\n## Scope Boundary\n\n- Product-wide repository governance and delivery tooling only.\n- No personal-home files, Jarvis.app package inputs, installed runtime, credentials, Telegram, deployment, restart, or publication state changed.\n- The concurrent personal-skill product migration remains independently owned and has a disjoint write set.\n\n## Verification\n\n- `scripts/with-heavy-local-slot.sh --label '019fe03b:jarvis-boundary-post-rebase-final-proof' --wait-seconds 600 -- bash -lc '<focused tests, lint, and typecheck>'` — exact-head 3 files / 79 tests passed; type-aware lint reported 0 warnings and 0 errors on 7 files; focused `tsgo` passed.\n- `pnpm exec oxfmt --check ...` — all 14 changed policy/code/test files formatted.\n- `node --check` on the validator, CLI, PR lifecycle, and release queue — passed.\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"source\",\n  \"completionClaim\": \"declared-boundary-complete\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home files or local Jarvis configuration changed.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Exact head 0fd950e0cd61e0169b940b7bec5e18b4cda029b5 passed 79 focused tests, typecheck, lint, formatting, and syntax checks.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"This governance tooling is not a Jarvis.app package input and changes no packaged runtime behavior.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No installed Jarvis app or app-support runtime mutation is part of this source-scoped task.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The change stores no end-user state and requires no installed-user migration.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No app publication or public release is needed for repository workflow enforcement.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The observable surface is agent delivery governance, not shipped Jarvis runtime behavior.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "source",
+          "completionClaim": "declared-boundary-complete",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home files or local Jarvis configuration changed."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Exact head 0fd950e0cd61e0169b940b7bec5e18b4cda029b5 passed 79 focused tests, typecheck, lint, formatting, and syntax checks."
+            },
+            "packagedArtifact": {
+              "status": "not-applicable",
+              "evidence": "This governance tooling is not a Jarvis.app package input and changes no packaged runtime behavior."
+            },
+            "installedRuntime": {
+              "status": "not-applicable",
+              "evidence": "No installed Jarvis app or app-support runtime mutation is part of this source-scoped task."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "The change stores no end-user state and requires no installed-user migration."
+            },
+            "publicRelease": {
+              "status": "not-applicable",
+              "evidence": "No app publication or public release is needed for repository workflow enforcement."
+            },
+            "endUserBehavior": {
+              "status": "not-applicable",
+              "evidence": "The observable surface is agent delivery governance, not shipped Jarvis runtime behavior."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fe052-ad05-7071-85e7-290beea79196",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe052-ad05-7071-85e7-290beea79196",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "0fd950e0cd61e0169b940b7bec5e18b4cda029b5",
+        "diffFingerprint": "sha256:574a1fba84e1c55fe007ca7db7aa5eb082e0db183cec65ff89ac011a5324becb",
+        "closure": "terminal-receipt",
+        "contractId": "d55fa0c6-1b8e-4a71-897b-3a9380cfbe28",
+        "owner": {
+          "threadId": "/root/pr1365_exact_head_tester",
+          "hostId": "subagent-local"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "headSha": "0fd950e0cd61e0169b940b7bec5e18b4cda029b5",
+        "diffFingerprint": "sha256:574a1fba84e1c55fe007ca7db7aa5eb082e0db183cec65ff89ac011a5324becb",
+        "owner": {
+          "threadId": "/root/jarvis_boundary_final_review",
+          "hostId": "subagent-local"
+        },
+        "unresolvedFindings": [],
+        "evidence": [
+          "Exact remote head and base verified; complete 15-path diff reviewed.",
+          "CI, lifecycle, and release queue bind classification signals and embedded receipts end to end.",
+          "Local-only and consumer-delivered completion claims enforce their required proof layers."
+        ],
+        "limitations": [
+          "Reviewer used public metadata and git refs because local gh authentication was unavailable."
+        ]
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1365 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "ca1bfc3e-d984-4a29-8705-2ae3f5e921b9",
+        "stateDirectory": "/Users/user/.codex/worktrees/fc550f8b-765c-4e17-9dc9-37640875d84d/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T05:47:06.678Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
+    },
     "1366": {
       "state": "closed",
       "candidate": {
@@ -1659,10 +1794,10 @@
     }
   },
   "lastTransaction": {
-    "id": "b4e2e83b-758a-4e30-b1a3-a36bf3991336",
-    "recordedAt": "2026-08-09T05:46:48.913Z"
+    "id": "27e5c4fd-47be-4686-afce-a30592e51152",
+    "recordedAt": "2026-08-09T05:47:06.678Z"
   },
-  "updatedAt": "2026-08-09T05:46:48.913Z",
+  "updatedAt": "2026-08-09T05:47:06.678Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
