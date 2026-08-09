@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { TYPECHECK_PROJECTS, runTypecheckProjects } from "../../scripts/typecheck-projects.mjs";
 
@@ -8,15 +8,21 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 
 describe("partitioned typecheck runner", () => {
   it("owns every original source root exactly once", () => {
-    const includes = TYPECHECK_PROJECTS.flatMap(({ config }) => {
-      const parsed = JSON.parse(fs.readFileSync(path.join(repoRoot, config), "utf8")) as {
-        include?: string[];
-      };
-      return parsed.include ?? [];
-    });
+    // Parse the same file lists that the compiler will use. Literal `include` comparisons can miss
+    // a future `exclude`, glob change, or accidental overlap between the two project configs.
+    const readRoots = (config: string) => {
+      const parsed = ts.getParsedCommandLineOfConfigFile(path.join(repoRoot, config), {}, ts.sys);
+      if (!parsed) {
+        throw new Error(`Unable to parse ${config}`);
+      }
+      return parsed.fileNames.map((fileName) => path.relative(repoRoot, fileName)).toSorted();
+    };
 
-    expect(includes).toEqual(["src/**/*", "extensions/**/*", "ui/**/*"]);
-    expect(new Set(includes).size).toBe(includes.length);
+    const originalRoots = readRoots("tsconfig.json");
+    const partitionRoots = TYPECHECK_PROJECTS.flatMap(({ config }) => readRoots(config));
+
+    expect(new Set(partitionRoots).size).toBe(partitionRoots.length);
+    expect(partitionRoots.toSorted()).toEqual(originalRoots);
   });
 
   it("runs core then UI and succeeds only when both pass", () => {
@@ -41,5 +47,12 @@ describe("partitioned typecheck runner", () => {
 
     expect(runTypecheckProjects({ spawn, binary: "tsgo", output: { write: vi.fn() } })).toBe(1);
     expect(spawn).toHaveBeenCalledTimes(statuses.length);
+  });
+
+  it("fails closed and skips UI when the core compiler is interrupted", () => {
+    const spawn = vi.fn().mockReturnValue({ status: null, signal: "SIGTERM" });
+
+    expect(runTypecheckProjects({ spawn, binary: "tsgo", output: { write: vi.fn() } })).toBe(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 });
