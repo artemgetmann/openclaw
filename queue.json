@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 89,
+  "sequence": 90,
   "nextFence": 27,
-  "mergeLease": {
-    "leaseId": "ba970050-a521-4eb2-a0dc-7d2cbc17b649",
-    "fence": 26,
-    "owner": {
-      "threadId": "/root/pr1373_release_executor",
-      "hostId": "nested-agent"
-    },
-    "claimedPr": 1373,
-    "claimedAt": "2026-08-09T14:25:34.617Z",
-    "heartbeatAt": "2026-08-09T14:25:34.617Z",
-    "expiresAt": "2026-08-09T14:55:34.617Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -1963,7 +1952,7 @@
       }
     },
     "1373": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1373,
         "url": "https://github.com/artemgetmann/openclaw/pull/1373",
@@ -2158,7 +2147,20 @@
       ],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1373,
+          "reviewedHeadSha": "d8cc31240b017e3ed98a843503a245e541cdac93",
+          "diffFingerprint": "sha256:4dad9db3acfc233e4b2bbc65a51dd745e6babf480bbbcc8e4bc3b942b2785853",
+          "mergeSha": "2a7c1b88cb23a55d8253aa766ef078543ca496c8",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -2938,10 +2940,10 @@
     }
   },
   "lastTransaction": {
-    "id": "caa58720-bf34-45ac-af21-e40ac0fd0b11",
-    "recordedAt": "2026-08-09T14:25:34.617Z"
+    "id": "7da6f21d-774c-45d5-982a-a06c900cb4d0",
+    "recordedAt": "2026-08-09T14:28:02.765Z"
   },
-  "updatedAt": "2026-08-09T14:25:34.617Z",
+  "updatedAt": "2026-08-09T14:28:02.765Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -2957,6 +2959,7 @@
       1365,
       1366,
       1369,
+      1373,
       1376,
       1377,
       1378,
