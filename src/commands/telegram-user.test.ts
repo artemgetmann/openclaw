@@ -69,6 +69,7 @@ const {
   telegramUserTopicDeleteCommand,
   telegramUserTopicResolveCommand,
   telegramUserWaitCommand,
+  readTelegramMessageStream,
 } = await import("./telegram-user.js");
 
 describe("telegram-user commands", () => {
@@ -528,6 +529,28 @@ describe("telegram-user commands", () => {
 
     expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
       expect.objectContaining({ message }),
+    );
+  });
+
+  it("stream-decodes UTF-8 when a multibyte character crosses chunk boundaries", async () => {
+    const encoded = Buffer.from("before 🦞 after", "utf8");
+    const splitInsideEmoji = encoded.indexOf(Buffer.from("🦞")) + 2;
+    async function* chunks() {
+      yield encoded.subarray(0, splitInsideEmoji);
+      yield encoded.subarray(splitInsideEmoji);
+    }
+
+    await expect(readTelegramMessageStream(chunks(), "test")).resolves.toBe("before 🦞 after");
+  });
+
+  it("applies the same 4 MiB byte bound to streamed message sources", async () => {
+    async function* chunks() {
+      yield Buffer.alloc(4 * 1024 * 1024, "a");
+      yield Buffer.from("b");
+    }
+
+    await expect(readTelegramMessageStream(chunks(), "test")).rejects.toThrow(
+      /exceeded the 4 MiB local limit/i,
     );
   });
 

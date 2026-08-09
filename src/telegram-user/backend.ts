@@ -351,6 +351,7 @@ type PythonInvocation = {
 type BackendCallOptions = TelegramUserBackendOptions & {
   args: string[];
   envOverrides?: Record<string, string | undefined>;
+  stdinInput?: string;
   stdinSecret?: string;
 };
 
@@ -893,6 +894,9 @@ export function parseTelegramUserBackendExecError(
 }
 
 async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
+  if (options.stdinInput !== undefined && options.stdinSecret !== undefined) {
+    throw new Error("Telegram user backend accepts only one stdin payload.");
+  }
   const python = await ensureTelethonPython();
   const { env: baseEnv, meta } = await buildBackendEnv(options);
   const env = applyEnvOverrides(baseEnv, options.envOverrides);
@@ -952,6 +956,8 @@ async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
     });
     if (options.stdinSecret !== undefined) {
       child.stdin?.end(`${options.stdinSecret}\n`);
+    } else if (options.stdinInput !== undefined) {
+      child.stdin?.end(options.stdinInput);
     } else {
       child.stdin?.end();
     }
@@ -1168,9 +1174,19 @@ export async function runTelegramUserSend(
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserSendResult> {
   const args = ["send", "--chat", params.chat];
-  pushOptionalStringArg(args, "--message", params.message);
   pushOptionalStringArg(args, "--media", params.media);
-  pushOptionalStringArg(args, "--caption", params.caption);
+  const message =
+    typeof params.message === "string" && params.message.trim() ? params.message : undefined;
+  const caption =
+    typeof params.caption === "string" && params.caption.trim() ? params.caption : undefined;
+  if (message && caption) {
+    throw new Error("Telegram user backend send accepts only one text stdin payload.");
+  }
+  if (message) {
+    args.push("--message-stdin");
+  } else if (caption) {
+    args.push("--caption-stdin");
+  }
   pushOptionalNumberArg(args, "--reply-to", params.replyTo);
   if (params.voice) {
     args.push("--voice");
@@ -1178,6 +1194,7 @@ export async function runTelegramUserSend(
   return runBackendCommand<TelegramUserSendResult>({
     ...params,
     args,
+    stdinInput: message ?? caption,
   });
 }
 
