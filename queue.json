@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 94,
+  "sequence": 95,
   "nextFence": 28,
   "mergeLease": null,
   "items": {
@@ -3126,13 +3126,133 @@
         "fence": 25,
         "recordedAt": "2026-08-09T14:06:46.424Z"
       }
+    },
+    "1381": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1381,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1381",
+        "headSha": "e503d63cbfbcab357a0cac3aa14a7a8b34b915d7",
+        "baseBranch": "main",
+        "testedBaseSha": "7a1a36fd8ce1f89348eaed924e571e24a1becbab",
+        "diffFingerprint": "sha256:a1bd56954e97cb93f41cc50fe5f31fcf36cccb6bf3a06d0231744b43ac19c272",
+        "changedPaths": [
+          "AGENTS.md",
+          "docs/agent-guides/fleet-resource-control.md",
+          "docs/agent-guides/runtime-ops.md",
+          "docs/agent-guides/workflow.md",
+          "scripts/ship-jarvis-hotfix.sh",
+          "scripts/test-ship-jarvis-hotfix.sh"
+        ],
+        "title": "docs(workflow): allow safe active-lane cleanup",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: Already-authorized work can clean one exact reproducible task-owned inactive cache/failed output without another approval, and explicit main-Jarvis end-to-end authority may advance to current reviewed green `main`; protected, unreviewed, or ambiguous targets still stop.\n- Exact head + builder proof: `e503d63cbfbcab357a0cac3aa14a7a8b34b915d7`; targeted formatting, markdown lint, receipt validation, adversarial hotfix unit tests, isolated real queue-receipt proof, shell syntax, skill boundary assertion, and `git diff --check` passed.\n- Independent tester: Pending lifecycle handoff.\n- Jarvis delivery boundary: Product-wide source policy, proven on exact head; package/runtime/live layers are not applicable to the requested source-only delivery.\n- Release worker: Pending fenced lifecycle handoff.\n- Dependencies / merge order / overlap: None — standalone.\n- Remaining proof / cleanup / rollback: Independent exact-head test, required CI, and source merge. Revert this commit to restore the prior approval wording.\n- Still hurts: The personal `reclaim-coding-disk` owner is outside this repository and was updated separately; no runtime mirror or product package was changed.\n\n## Why This Matters\n\n- The old personal skill required the owning thread to be terminal or archived, which blocked an active authorized build from deleting its own failed output even after proving the exact target inactive.\n- Repo guidance covered scheduled post-task retention but omitted the active-lane case, so agents reasonably stopped for redundant approval.\n\n## Scope Boundary\n\n- Adds active-lane cleanup authority only for exact, reproducible cache or failed build/package outputs owned by the current authorized task.\n- Requires native process, open-file, and heavy/release-lock proof of inactivity.\n- Treats advancement to current reviewed, required-check-green `main` as routine only when the user already authorized end-to-end shipment to their main Jarvis.\n- Does not authorize removing worktrees, source, user data, credentials, sessions, browser profiles, shared/live runtime state, or anything ambiguously owned or referenced.\n- Does not authorize public release, credentials, destructive user-data action, unreviewed/check-failing code, a new runtime/destination, or ambiguous external effects.\n\n## Verification\n\n- `pnpm exec oxfmt --check docs/agent-guides/workflow.md docs/agent-guides/fleet-resource-control.md`\n- `pnpm dlx markdownlint-cli2 docs/agent-guides/workflow.md docs/agent-guides/fleet-resource-control.md`\n- `bash -n scripts/ship-jarvis-hotfix.sh scripts/test-ship-jarvis-hotfix.sh`\n- `bash scripts/test-ship-jarvis-hotfix.sh`\n- Real repo-backed queue receipt for merged PR #1372 passed exact-head reviewer/tester/landed-tree and routine-path validation.\n- Ruby assertion that the personal skill removed the terminal-only gate and retained the fail-closed boundary\n- `git diff --check`\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"source\",\n  \"completionClaim\": \"declared-boundary-complete\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The personal skill mirror was updated separately and is not claimed as product delivery.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Exact head e503d63cbfbcab357a0cac3aa14a7a8b34b915d7 passed formatting, markdown lint, receipt validation, adversarial hotfix unit tests, isolated real queue-receipt proof, shell syntax, and diff checks; independent review is recorded separately.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The requested delivery boundary is repository source policy only.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No runtime installation, deployment, or restart is authorized or required.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The documentation change does not alter persisted user state.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No public product release is part of this source-only task.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"This change governs future agent workflow and has no packaged end-user behavior claim.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "source",
+          "completionClaim": "declared-boundary-complete",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "The personal skill mirror was updated separately and is not claimed as product delivery."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Exact head e503d63cbfbcab357a0cac3aa14a7a8b34b915d7 passed formatting, markdown lint, receipt validation, adversarial hotfix unit tests, isolated real queue-receipt proof, shell syntax, and diff checks; independent review is recorded separately."
+            },
+            "packagedArtifact": {
+              "status": "not-applicable",
+              "evidence": "The requested delivery boundary is repository source policy only."
+            },
+            "installedRuntime": {
+              "status": "not-applicable",
+              "evidence": "No runtime installation, deployment, or restart is authorized or required."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "The documentation change does not alter persisted user state."
+            },
+            "publicRelease": {
+              "status": "not-applicable",
+              "evidence": "No public product release is part of this source-only task."
+            },
+            "endUserBehavior": {
+              "status": "not-applicable",
+              "evidence": "This change governs future agent workflow and has no packaged end-user behavior claim."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fe65f-f79d-7060-96a9-ebdf4010386d",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe65f-f79d-7060-96a9-ebdf4010386d",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "e503d63cbfbcab357a0cac3aa14a7a8b34b915d7",
+        "diffFingerprint": "sha256:a1bd56954e97cb93f41cc50fe5f31fcf36cccb6bf3a06d0231744b43ac19c272",
+        "closure": "terminal-receipt",
+        "contractId": "abfcac1d-1df1-4d39-9d31-f73dbb0f4a1f",
+        "owner": {
+          "threadId": "/root/policy_tester_final",
+          "hostId": "nested-agent"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "headSha": "e503d63cbfbcab357a0cac3aa14a7a8b34b915d7",
+        "diffFingerprint": "sha256:a1bd56954e97cb93f41cc50fe5f31fcf36cccb6bf3a06d0231744b43ac19c272",
+        "owner": {
+          "threadId": "policy_reviewer_v16",
+          "hostId": "nested-agent"
+        },
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1381 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "da3a7ee9-c460-40fa-9961-c780882aa0d2",
+        "stateDirectory": "/Users/user/.codex/worktrees/3541f5eb-48f0-42d2-b462-bc7a243ee47c/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T17:17:08.034Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "pr1372-release-record-merge-20260809",
-    "recordedAt": "2026-08-09T15:27:00.258Z"
+    "id": "bda21586-3872-41a9-bb82-2d1f8f0e5c2a",
+    "recordedAt": "2026-08-09T17:17:08.034Z"
   },
-  "updatedAt": "2026-08-09T15:27:00.258Z",
+  "updatedAt": "2026-08-09T17:17:08.034Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
