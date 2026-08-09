@@ -697,12 +697,14 @@ describe("Codex natural-language delegation", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
     await vi.waitFor(() => {
+      // The delivered Jarvis turn starts before its terminal wait is registered.
+      // Assert the complete async handback boundary instead of racing that continuation.
       expect(waitForRun).toHaveBeenCalledWith({
         runId: "jarvis-relay-run",
         timeoutMs: 5 * 60 * 1000,
       });
+      expect(stopWorkingPresence).toHaveBeenCalledWith(expect.stringMatching(/^codex:/));
     });
-    expect(stopWorkingPresence).toHaveBeenCalledWith(expect.stringMatching(/^codex:/));
   });
 
   it("proactively reports one overdue silent turn without replacing its native owner", async () => {
