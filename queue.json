@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 58,
-  "nextFence": 17,
-  "mergeLease": null,
+  "sequence": 59,
+  "nextFence": 18,
+  "mergeLease": {
+    "leaseId": "cf7f95b3-f7c9-474a-8f59-d9e9257b2bf5",
+    "fence": 17,
+    "owner": {
+      "threadId": "019fe508-e3a5-71f2-b409-7f1a90d99c32",
+      "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+    },
+    "claimedPr": 1361,
+    "claimedAt": "2026-08-09T05:43:39.416Z",
+    "heartbeatAt": "2026-08-09T05:43:39.416Z",
+    "expiresAt": "2026-08-09T06:03:39.416Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -679,7 +690,7 @@
       }
     },
     "1361": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1361,
         "url": "https://github.com/artemgetmann/openclaw/pull/1361",
@@ -756,10 +767,38 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-09T05:39:21.516Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "cf7f95b3-f7c9-474a-8f59-d9e9257b2bf5",
+          "fence": 17,
+          "owner": {
+            "threadId": "019fe508-e3a5-71f2-b409-7f1a90d99c32",
+            "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+          },
+          "claimedPr": 1361,
+          "claimedAt": "2026-08-09T05:43:39.416Z",
+          "heartbeatAt": "2026-08-09T05:43:39.416Z",
+          "expiresAt": "2026-08-09T06:03:39.416Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [],
-      "terminalReceipts": []
+      "terminalReceipts": [],
+      "ownershipReceipt": {
+        "mode": "queue-lease",
+        "owner": {
+          "threadId": "019fe508-e3a5-71f2-b409-7f1a90d99c32",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "builder": {
+          "threadId": "019fc24d-3571-72a3-8332-46057b26107e",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "builderSuspended": true,
+        "leaseId": "cf7f95b3-f7c9-474a-8f59-d9e9257b2bf5",
+        "fence": 17,
+        "recordedAt": "2026-08-09T05:43:39.416Z"
+      }
     },
     "1362": {
       "state": "closed",
@@ -1618,10 +1657,10 @@
     }
   },
   "lastTransaction": {
-    "id": "03362b5f-053f-46af-895c-cb5a2387fe3d",
-    "recordedAt": "2026-08-09T05:39:21.516Z"
+    "id": "7e86d41b-6f1c-4ca0-a469-c97827a136df",
+    "recordedAt": "2026-08-09T05:43:39.416Z"
   },
-  "updatedAt": "2026-08-09T05:39:21.516Z",
+  "updatedAt": "2026-08-09T05:43:39.416Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
