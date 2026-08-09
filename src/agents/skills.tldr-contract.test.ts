@@ -5,16 +5,18 @@ import { CONSUMER_DEFAULT_BUNDLED_SKILLS } from "./consumer-default-bundled-skil
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./skills/frontmatter.js";
 
 describe("tldr skill contract", () => {
-  it("stays visible to users without allowing automatic model invocation", () => {
+  it("stays available to both explicit commands and natural-language requests", () => {
     // Read the shipped source so this test catches metadata drift in the actual
     // skill instead of proving a hand-built fixture that users never receive.
+    // Natural-language requests need model invocation enabled; otherwise Jarvis
+    // omits TLDR from its active catalog and silently falls back to summarize.
     const skillPath = path.join(process.cwd(), "skills", "tldr", "SKILL.md");
     const frontmatter = parseFrontmatter(fs.readFileSync(skillPath, "utf8"));
 
     expect(frontmatter.description?.trim()).toBe("Rewrite the last response in plain language.");
     expect(resolveSkillInvocationPolicy(frontmatter)).toEqual({
       userInvocable: true,
-      disableModelInvocation: true,
+      disableModelInvocation: false,
     });
   });
 
