@@ -41,10 +41,13 @@ export function createTelegramWorkingPresenceManager(params: {
     if (!promise) {
       return;
     }
-    void promise.then((route) => {
-      route.owners.delete(ownerId);
-      releaseRouteIfEmpty(key, promise, route);
-    });
+    void promise.then(
+      (route) => {
+        route.owners.delete(ownerId);
+        releaseRouteIfEmpty(key, promise, route);
+      },
+      () => undefined,
+    );
   };
 
   return {
@@ -109,7 +112,13 @@ export function createTelegramWorkingPresenceManager(params: {
     stopAll: () => {
       generation += 1;
       for (const promise of routes.values()) {
-        void promise.then((route) => route.lease.stop());
+        // Provider startup can fail while shutdown is concurrently clearing
+        // ownership. Consume that already-reported rejection here so cleanup
+        // never creates a second unhandled child promise.
+        void promise.then(
+          (route) => route.lease.stop(),
+          () => undefined,
+        );
       }
       routes.clear();
       owners.clear();

@@ -82,4 +82,30 @@ describe("telegram working presence", () => {
     manager.stop("worker-a");
     await vi.waitFor(() => expect(lease.stop).toHaveBeenCalledTimes(1));
   });
+
+  it.each(["owner stop", "gateway stop"])(
+    "consumes pending provider rejection during %s cleanup",
+    async (cleanup) => {
+      let rejectLease!: (error: Error) => void;
+      const startTyping = vi.fn(
+        async () =>
+          await new Promise<never>((_resolve, reject) => {
+            rejectLease = reject;
+          }),
+      );
+      const manager = createTelegramWorkingPresenceManager({ startTyping });
+      const start = manager.start({ ownerId: "worker", to: "-1001", messageThreadId: 42 });
+
+      await vi.waitFor(() => expect(startTyping).toHaveBeenCalledTimes(1));
+      if (cleanup === "owner stop") {
+        manager.stop("worker");
+      } else {
+        manager.stopAll();
+      }
+      rejectLease(new Error("telegram unavailable"));
+
+      await expect(start).rejects.toThrow("telegram unavailable");
+      await Promise.resolve();
+    },
+  );
 });
