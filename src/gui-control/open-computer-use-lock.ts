@@ -268,7 +268,8 @@ function compareOwners(left: LockOwnerSnapshot, right: LockOwnerSnapshot): numbe
 
 async function acquireCrossProcessLock(input: {
   command: string;
-  deadlineMs: number;
+  executionTimeoutMs: number;
+  explicitLockTimeoutMs?: number;
   identity: string;
   lockTarget: string;
   startedAtMs: number;
@@ -302,6 +303,24 @@ async function acquireCrossProcessLock(input: {
     ...(processStartIdentity ? { processStartIdentity } : {}),
   };
   const transitions: LockTransition[] = [];
+  const predecessorKeys = new Set<string>();
+  const selfOwner: LockOwnerSnapshot = {
+    state: "live",
+    path: ownerPath,
+    phase: "waiting",
+    orderKey,
+    pid: process.pid,
+    token,
+  };
+  const notePredecessor = (owner: LockOwnerSnapshot) => {
+    if (owner.path === ownerPath || owner.state === "missing") {
+      return;
+    }
+    predecessorKeys.add(owner.token ?? owner.path ?? `pid:${owner.pid ?? "unknown"}`);
+  };
+  const waitBudgetMs = () =>
+    input.explicitLockTimeoutMs ??
+    (predecessorKeys.size + 1) * input.executionTimeoutMs + LOCK_HANDOFF_GRACE_MS;
   let lastTransitionKey = "";
   const record = (phase: LockTransition["phase"], owner: LockOwnerSnapshot) => {
     const key = `${phase}:${owner.path}:${owner.state}:${owner.pid}:${owner.token}`;
@@ -371,6 +390,7 @@ async function acquireCrossProcessLock(input: {
         // also fail closed because an old caller could replace that pathname
         // between inspection and removal.
         record("legacy-observed", legacyOwner);
+        notePredecessor(legacyOwner);
       } else {
         const names = (await fs.readdir(queuePath)).filter((name) => name.endsWith(".json"));
         const owners: LockOwnerSnapshot[] = [];
@@ -389,6 +409,11 @@ async function acquireCrossProcessLock(input: {
           }
         }
         owners.sort(compareOwners);
+        for (const contender of owners) {
+          if (compareOwners(contender, selfOwner) < 0) {
+            notePredecessor(contender);
+          }
+        }
         const owner = owners[0] ?? { state: "missing" as const };
         if (owner.path === ownerPath) {
           try {
@@ -458,7 +483,8 @@ async function acquireCrossProcessLock(input: {
         record("observed", owner);
       }
 
-      if (nowMs >= input.deadlineMs) {
+      const currentWaitBudgetMs = waitBudgetMs();
+      if (nowMs >= input.startedAtMs + currentWaitBudgetMs) {
         const legacyOwner = await readLegacyOwner(legacyPath, nowMs);
         const queueOwners = await Promise.all(
           (await fs.readdir(queuePath))
@@ -480,7 +506,7 @@ async function acquireCrossProcessLock(input: {
             owner: finalOwner,
             transitions,
             waitElapsedMs: nowMs - input.startedAtMs,
-            waitBudgetMs: input.deadlineMs - input.startedAtMs,
+            waitBudgetMs: currentWaitBudgetMs,
           }),
         );
       }
@@ -520,10 +546,10 @@ export async function withOpenComputerUseLock<T>(input: {
   const lockTarget = await resolveOpenComputerUseLockTarget(command, identity);
   // Queue wait and OCU execution are separately bounded. A caller that waits
   // behind one maximum-duration owner still receives its full command budget.
-  const lockTimeoutMs = input.lockTimeoutMs ?? input.timeoutMs + LOCK_HANDOFF_GRACE_MS;
   const lock = await acquireCrossProcessLock({
     command,
-    deadlineMs: startedAtMs + lockTimeoutMs,
+    executionTimeoutMs: input.timeoutMs,
+    explicitLockTimeoutMs: input.lockTimeoutMs,
     identity,
     lockTarget,
     startedAtMs,

@@ -685,6 +685,37 @@ describe("withOpenComputerUseLock", () => {
     expect(receivedExecutionBudget).toBe(100);
   });
 
+  it("budgets default lock waiting for every predecessor already ahead in the queue", async () => {
+    const directory = await temporaryDirectory();
+    const command = path.join(directory, "OpenComputerUse");
+    await trackedLockTarget(command);
+    const events: string[] = [];
+    const calls = ["first", "second", "third"].map((name) =>
+      withOpenComputerUseLock({
+        command,
+        timeoutMs: 1_200,
+        run: async () => {
+          events.push(`${name}:start`);
+          if (name !== "third") {
+            await new Promise((resolve) => setTimeout(resolve, 1_150));
+          }
+          events.push(`${name}:end`);
+          return name;
+        },
+      }),
+    );
+
+    await expect(Promise.all(calls)).resolves.toEqual(["first", "second", "third"]);
+    expect(events).toEqual([
+      "first:start",
+      "first:end",
+      "second:start",
+      "second:end",
+      "third:start",
+      "third:end",
+    ]);
+  });
+
   it("prevents duplicate startup across processes and lets one caller recover stale agent state", async () => {
     const directory = await temporaryDirectory();
     const command = path.join(directory, "OpenComputerUse");
