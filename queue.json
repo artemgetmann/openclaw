@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 91,
-  "nextFence": 27,
-  "mergeLease": null,
+  "sequence": 92,
+  "nextFence": 28,
+  "mergeLease": {
+    "leaseId": "1ef50418-8da1-4732-8f73-56a5665d8be4",
+    "fence": 27,
+    "owner": {
+      "threadId": "/root/pr1372_release",
+      "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+    },
+    "claimedPr": 1372,
+    "claimedAt": "2026-08-09T15:24:47.663Z",
+    "heartbeatAt": "2026-08-09T15:24:47.663Z",
+    "expiresAt": "2026-08-09T15:44:47.663Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -1952,7 +1963,7 @@
       }
     },
     "1372": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1372,
         "url": "https://github.com/artemgetmann/openclaw/pull/1372",
@@ -2092,12 +2103,40 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-09T15:23:20.855Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "1ef50418-8da1-4732-8f73-56a5665d8be4",
+          "fence": 27,
+          "owner": {
+            "threadId": "/root/pr1372_release",
+            "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+          },
+          "claimedPr": 1372,
+          "claimedAt": "2026-08-09T15:24:47.663Z",
+          "heartbeatAt": "2026-08-09T15:24:47.663Z",
+          "expiresAt": "2026-08-09T15:44:47.663Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": []
+      "terminalReceipts": [],
+      "ownershipReceipt": {
+        "mode": "queue-lease",
+        "owner": {
+          "threadId": "/root/pr1372_release",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "builder": {
+          "threadId": "019fccd7-6473-72d1-aa48-2c1007fba833",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "builderSuspended": true,
+        "leaseId": "1ef50418-8da1-4732-8f73-56a5665d8be4",
+        "fence": 27,
+        "recordedAt": "2026-08-09T15:24:47.663Z"
+      }
     },
     "1373": {
       "state": "closed",
@@ -3088,10 +3127,10 @@
     }
   },
   "lastTransaction": {
-    "id": "cadb12a6-758b-4bd2-980b-2e2f5083eac1",
-    "recordedAt": "2026-08-09T15:23:20.855Z"
+    "id": "pr1372-release-claim-20260809",
+    "recordedAt": "2026-08-09T15:24:47.663Z"
   },
-  "updatedAt": "2026-08-09T15:23:20.855Z",
+  "updatedAt": "2026-08-09T15:24:47.663Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
