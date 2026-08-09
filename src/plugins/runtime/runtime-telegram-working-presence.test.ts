@@ -61,6 +61,28 @@ describe("telegram working presence", () => {
     expect(lease.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves a shared pending lease when the first owner stops", async () => {
+    const lease = { refresh: vi.fn(async () => undefined), stop: vi.fn() };
+    let resolveLease!: (value: typeof lease) => void;
+    const startTyping = vi.fn(
+      async () => await new Promise<typeof lease>((resolve) => (resolveLease = resolve)),
+    );
+    const manager = createTelegramWorkingPresenceManager({ startTyping });
+    const route = { to: "-1001", messageThreadId: 42 };
+
+    const first = manager.start({ ownerId: "worker-a", ...route });
+    const second = manager.start({ ownerId: "worker-b", ...route });
+    manager.stop("worker-a");
+    resolveLease(lease);
+    await Promise.all([first, second]);
+
+    expect(startTyping).toHaveBeenCalledTimes(1);
+    expect(lease.stop).not.toHaveBeenCalled();
+    manager.stop("worker-b");
+    await Promise.resolve();
+    expect(lease.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("does not resurrect an owner stopped while a shared refresh is pending", async () => {
     let resolveRefresh!: () => void;
     const lease = {

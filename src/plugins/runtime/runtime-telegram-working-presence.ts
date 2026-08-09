@@ -25,7 +25,11 @@ export function createTelegramWorkingPresenceManager(params: {
     [input.accountId ?? "default", input.to, input.messageThreadId ?? "root"].join(":");
 
   const releaseRouteIfEmpty = (key: string, promise: Promise<Route>, route: Route) => {
-    if (route.owners.size === 0 && routes.get(key) === promise) {
+    // An owner can already target this route while the shared provider lease is
+    // still starting. Do not tear it down merely because no continuation has
+    // reached the attached-owner set yet.
+    const hasPendingOwner = [...owners.values()].some((ownerRoute) => ownerRoute === key);
+    if (route.owners.size === 0 && !hasPendingOwner && routes.get(key) === promise) {
       route.lease.stop();
       routes.delete(key);
     }
