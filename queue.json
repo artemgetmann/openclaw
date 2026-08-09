@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 82,
+  "sequence": 83,
   "nextFence": 25,
   "mergeLease": null,
   "items": {
@@ -2676,13 +2676,143 @@
         "fence": 23,
         "recordedAt": "2026-08-09T13:40:59.917Z"
       }
+    },
+    "1379": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1379,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1379",
+        "headSha": "6d13e29874038a0f286a74620fe1c63b917913d8",
+        "baseBranch": "main",
+        "testedBaseSha": "2e44f8f1c2333b9edd3aeac6ce2a1b2ef5832c8a",
+        "diffFingerprint": "sha256:f8264a37b5763777e019df70ec76067b31e4436e7a373e3e82080e08bf682b6b",
+        "changedPaths": [
+          "scripts/telegram-e2e/README.md",
+          "scripts/telegram-e2e/telethon_cli.py",
+          "skills/telegram-user/SKILL.md",
+          "src/cli/telegram-user-cli.test.ts",
+          "src/cli/telegram-user-cli.ts",
+          "src/commands/telegram-user.test.ts",
+          "src/commands/telegram-user.ts",
+          "src/telegram-user/backend.test.ts",
+          "src/telegram-user/backend.ts"
+        ],
+        "title": "Fix Telegram multiline message transport",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: `telegram-user send` accepts real multiline/generated text through `--message-file <path>` or stdin without rewriting newlines, backslashes, JSON, code, or paths; first-party guidance no longer teaches JSON-stringified shell arguments.\n- Exact head + builder proof: `6d13e29874038a0f286a74620fe1c63b917913d8`; 107 focused tests passed under the dedicated heavy-slot guard after rebasing onto `2e44f8f1c2333b9edd3aeac6ce2a1b2ef5832c8a`.\n- Independent tester: Pending exact-head lifecycle handoff.\n- Jarvis delivery boundary: Product-wide, source-only; receipt below.\n- Release worker: Pending after exact-head tester PASS and closure.\n- Dependencies / merge order / overlap: None — standalone.\n- Remaining proof / cleanup / rollback: Independent tester, CI, normal source merge; installed runtime and live Telegram behavior remain explicitly out of scope.\n- Still hurts: Existing third-party callers that keep shell-embedding `JSON.stringify(message)` must adopt the explicit file/stdin contract.\n\n## Why This Matters\n\n- Shell-embedding a JSON-stringified multiline value turns real line breaks into visible `\\\\n` before Telegram receives it.\n- Heuristic replacement is unsafe for legitimate JSON, source code, regexes, and Windows paths.\n- A file/stdin boundary keeps the input lossless and makes generated-message shell commands deterministic.\n\n## Scope Boundary\n\n- Product-wide source behavior.\n- No Telegram live send, Jarvis deploy/restart, package, installed-runtime mutation, or public release.\n- Inline `--message` remains backward compatible and byte-preserving.\n\n## Verification\n\n- `scripts/with-dedicated-agent-slot.sh --label \"019fe58c-b3e5-70c2-aded-fa4404f92cdb:telegram-message-proof-repair-2\" -- .local/run-telegram-message-proof.sh`\n- Passed: `src/commands/telegram-user.test.ts`, `src/cli/telegram-user-cli.test.ts`, `src/telegram-user/backend.test.ts`\n- Result: 3 files, 107 tests passed.\n- Covered: real multiline text, split-chunk UTF-8, the shared 4 MiB file/stdin bound, stdin-to-Python transport, early backend pipe closure, the exact JSON-stringified bad path, literal backslash-n, backslashes, JSON, code blocks, Windows paths, mutual exclusion, CLI forwarding, and outgoing payload mock preservation.\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"source\",\n  \"completionClaim\": \"declared-boundary-complete\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home mutation is part of this product task.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Exact head 6d13e29874038a0f286a74620fe1c63b917913d8 passed 107 focused CLI, command, and backend tests after rebasing onto current main.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The user explicitly authorized source PR delivery only.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No install, deploy, restart, or runtime mutation is authorized.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No persisted state or compatibility migration changes.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No public product release is authorized in this task.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"Live or installed end-user proof remains outside the source-only boundary.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## Security Impact\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? Yes — one explicit local file/stdin message input option; input is bounded to 4 MiB and no shell is invoked.\n- Data access scope changed? Yes — only the caller-selected local message file is read for this command.\n\n## Compatibility / Recovery\n\n- Backward compatible: Yes; existing inline message and media behavior remains.\n- Config/env changes: No.\n- Migration: First-party generated/multiline commands should use `--message-file`; simple inline text remains unchanged.\n- Rollback: Revert this commit to remove the option and restore backend trimming.\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "source",
+          "completionClaim": "declared-boundary-complete",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation is part of this product task."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Exact head 6d13e29874038a0f286a74620fe1c63b917913d8 passed 107 focused CLI, command, and backend tests after rebasing onto current main."
+            },
+            "packagedArtifact": {
+              "status": "not-applicable",
+              "evidence": "The user explicitly authorized source PR delivery only."
+            },
+            "installedRuntime": {
+              "status": "not-applicable",
+              "evidence": "No install, deploy, restart, or runtime mutation is authorized."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "No persisted state or compatibility migration changes."
+            },
+            "publicRelease": {
+              "status": "not-applicable",
+              "evidence": "No public product release is authorized in this task."
+            },
+            "endUserBehavior": {
+              "status": "not-applicable",
+              "evidence": "Live or installed end-user proof remains outside the source-only boundary."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fe58c-b3e5-70c2-aded-fa4404f92cdb",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe58c-b3e5-70c2-aded-fa4404f92cdb",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "6d13e29874038a0f286a74620fe1c63b917913d8",
+        "diffFingerprint": "sha256:f8264a37b5763777e019df70ec76067b31e4436e7a373e3e82080e08bf682b6b",
+        "closure": "terminal-receipt",
+        "contractId": "52873dbd-7685-447a-b191-13da99cdd73a",
+        "owner": {
+          "threadId": "/root/telegram_message_tester",
+          "hostId": "multi-agent-local"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/telegram_message_reviewer",
+          "hostId": "multi-agent-local"
+        },
+        "headSha": "6d13e29874038a0f286a74620fe1c63b917913d8",
+        "diffFingerprint": "sha256:f8264a37b5763777e019df70ec76067b31e4436e7a373e3e82080e08bf682b6b",
+        "unresolvedFindings": [
+          {
+            "severity": "low",
+            "summary": "EPIPE proof tests the classifier but not a real early-exiting subprocess."
+          },
+          {
+            "severity": "low",
+            "summary": "Direct Python legacy inline and stdin flags are not argparse-mutually-exclusive; supported Node callers cannot construct the conflict."
+          }
+        ]
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1379 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "3c49433d-d45c-46fa-8558-3483ca0cc2cf",
+        "stateDirectory": "/Users/user/.codex/worktrees/ee621fa8-27ed-4d44-b5fe-a1b3c4fea907/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T14:05:40.646Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "c52d1733-3c99-49d0-86aa-e5442bf57a45",
-    "recordedAt": "2026-08-09T13:54:39.066Z"
+    "id": "telegram-multiline-1379-enqueue-6d13e298",
+    "recordedAt": "2026-08-09T14:05:40.646Z"
   },
-  "updatedAt": "2026-08-09T13:54:39.066Z",
+  "updatedAt": "2026-08-09T14:05:40.646Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
