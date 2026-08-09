@@ -12,6 +12,7 @@ const ci = readRepoFile("docs/ci.md");
 const forkGuide = readRepoFile("FORK_CONTRIBUTING.md");
 const prTemplate = readRepoFile(".github/pull_request_template.md");
 const lifecycleCommand = readRepoFile("scripts/pr-lifecycle");
+const lifecycleImplementation = readRepoFile("scripts/pr-lifecycle.mjs");
 const threadRecoverySkill = readRepoFile(".agents/skills/codex-thread-control-recovery/SKILL.md");
 const normalizedWorkflow = workflow.replace(/\s+/g, " ");
 
@@ -96,6 +97,9 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain("archive nothing adjacent");
     expect(normalizedWorkflow).toContain("preserve the one known owner");
     expect(normalizedWorkflow).toContain("unarchive and steer only the exact builder thread");
+    expect(lifecycleImplementation).toContain(
+      '`accept-source-return-${receipt?.attemptId ?? "missing"}-${randomUUID()}`',
+    );
   });
 
   it("keeps CI guidance and PR receipts aligned with the canonical roles", () => {

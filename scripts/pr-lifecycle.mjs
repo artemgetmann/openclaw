@@ -1093,7 +1093,11 @@ function acceptQueueSourceReturn(pr, options) {
       "--expected-diff-fingerprint",
       String(receipt?.candidate?.diffFingerprint ?? ""),
       "--transaction-id",
-      `accept-source-return-${receipt?.attemptId ?? "missing"}`,
+      // Each invocation observes the authoritative ref again. A fresh queue
+      // transaction prevents an earlier rejected lifecycle apply from pinning
+      // every later retry to its now-stale transition result; retired-fence
+      // semantic idempotency still prevents duplicate owners or attempts.
+      `accept-source-return-${receipt?.attemptId ?? "missing"}-${randomUUID()}`,
     ]);
     if (!routed?.sourceReturnReceipt && routed?.action !== "transaction-already-recorded") {
       fail(
