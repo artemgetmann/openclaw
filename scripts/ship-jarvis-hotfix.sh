@@ -417,7 +417,7 @@ release_queue_proves_reviewed_merge() {
   printf '%s\n' "${item}" | "${JQ_BIN}" -e --argjson pr "${pr}" --arg commit "${commit_sha}" '
     (.state | IN("merged", "delivery-barrier", "delivered", "closed")) and
     (.candidate.pr == $pr) and
-    ((.candidate.url // "") | test("^https://github\\.com/[^/]+/[^/]+/pull/[1-9][0-9]*$")) and
+    (.candidate.url == ("https://github.com/artemgetmann/openclaw/pull/" + ($pr | tostring))) and
     ((.candidate.title // "") | test("\\S")) and
     ((.candidate.prContract // "") | test("\\S")) and
     (.candidate.baseBranch == "main") and
@@ -590,7 +590,7 @@ dry_run_reviewed_remote_main() {
 
 normal_package_build() {
   local app_version="$1"
-  if [[ -n "${OPENCLAW_SHIP_NORMAL_PACKAGE_BUILD:-}" ]]; then
+  if [[ "${SHIP_TEST_MODE}" == "1" && -n "${OPENCLAW_SHIP_NORMAL_PACKAGE_BUILD:-}" ]]; then
     printf '%s\n' "${OPENCLAW_SHIP_NORMAL_PACKAGE_BUILD}"
     return 0
   fi
@@ -602,7 +602,10 @@ normal_package_build() {
     # shellcheck source=scripts/lib/validated-node.sh
     local git_count=""
     local canonical_build="0"
-    local node_bin="${OPENCLAW_NODE_BIN:-}"
+    local node_bin=""
+    if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+      node_bin="${OPENCLAW_NODE_BIN:-}"
+    fi
     if [[ -z "${node_bin}" ]]; then
       source "${MAIN_REPO}/scripts/lib/validated-node.sh"
       openclaw_use_validated_node "${MAIN_REPO}" >/dev/null
@@ -626,7 +629,10 @@ normal_package_build() {
 }
 
 select_hotfix_version() {
-  local installed_version="${OPENCLAW_SHIP_INSTALLED_APP_VERSION:-}"
+  local installed_version=""
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+    installed_version="${OPENCLAW_SHIP_INSTALLED_APP_VERSION:-}"
+  fi
   if [[ -z "${installed_version}" ]]; then
     [[ -r "${INSTALLED_JARVIS_INFO_PLIST}" ]] || \
       die "installed Jarvis Info.plist is not readable: ${INSTALLED_JARVIS_INFO_PLIST}"
@@ -661,6 +667,10 @@ package_hotfix() {
   local host_arch="$3"
   local command=(
     /usr/bin/env
+    -i
+    "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    "HOME=/Users/user"
+    "TMPDIR=${TMPDIR:-/tmp}"
     "APP_BUILD=${app_build}"
     "APP_VERSION=${app_version}"
     "BUILD_ARCHS=${host_arch}"
@@ -672,8 +682,11 @@ package_hotfix() {
     "SKIP_PNPM_INSTALL=0"
     "SKIP_TSC=0"
     "SKIP_UI_BUILD=0"
-    /bin/bash "${PACKAGE_SCRIPT}"
   )
+  if [[ "${SHIP_TEST_MODE}" == "1" && -n "${PACKAGE_MARKER:-}" ]]; then
+    command+=("PACKAGE_MARKER=${PACKAGE_MARKER}")
+  fi
+  command+=(/bin/bash "${PACKAGE_SCRIPT}")
 
   if (( DRY_RUN == 1 )); then
     print_main_command "${command[@]}"
@@ -683,7 +696,13 @@ package_hotfix() {
 }
 
 require_hotfix_disk_preflight() {
-  local required_kib="${JARVIS_RELEASE_DISK_REQUIRED_KIB:-$(jarvis_release_disk_default_required_kib)}"
+  local required_kib=""
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+    required_kib="${JARVIS_RELEASE_DISK_REQUIRED_KIB:-$(jarvis_release_disk_default_required_kib)}"
+  else
+    required_kib="$(jarvis_release_disk_default_required_kib)"
+    unset JARVIS_RELEASE_DISK_PROBE_COMMAND JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE
+  fi
 
   # The hotfix package writes its final app under dist/ and performs its heavy
   # CLI/runtime staging under TMPDIR. The repo checkout, dependency install,
@@ -755,6 +774,9 @@ run_offline_seeded_protection() {
   local action="$2"
   local command=(
     /usr/bin/env
+    -i
+    "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    "HOME=/Users/user"
     "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}"
     "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
     "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
@@ -839,12 +861,18 @@ launch_seed_and_restart() {
     print_main_command /bin/bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}"
     log "dry-run: wait for ${JARVIS_MANIFEST} commit=${expected_commit} version=${app_version} build=${app_build}"
     print_command /usr/bin/env \
+      -i \
+      "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" \
+      "HOME=/Users/user" \
       "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}" \
       "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}" \
       "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}" \
       /bin/bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
       --offline-seeded-fallback --apply
     print_command /usr/bin/env \
+      -i \
+      "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" \
+      "HOME=/Users/user" \
       "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}" \
       "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}" \
       "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}" \
@@ -859,7 +887,11 @@ launch_seed_and_restart() {
   /bin/chmod 700 "${TRANSACTION_LAUNCH_RECEIPT_DIR}"
   launch_receipt="${TRANSACTION_LAUNCH_RECEIPT_DIR}/launched-app-path"
   (cd "${MAIN_REPO}" && \
-    OPENCLAW_APP_LAUNCH_RECEIPT="${launch_receipt}" \
+    /usr/bin/env -i \
+      PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
+      HOME=/Users/user \
+      TMPDIR="${TMPDIR:-/tmp}" \
+      OPENCLAW_APP_LAUNCH_RECEIPT="${launch_receipt}" \
       /bin/bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}") || open_status=$?
 
   # The helper can launch the app successfully and then fail while preparing
@@ -972,6 +1004,9 @@ protect_runtime() {
   local expected_commit="$1"
   local base_command=(
     /usr/bin/env
+    -i
+    "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    "HOME=/Users/user"
     "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}"
     "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
     "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
@@ -1047,6 +1082,9 @@ prove_break_glass_runtime() {
   # contract. Keep the wrapper's legacy summary keys as aliases only; the
   # canonical helper owns all source, protection, daemon, listener, and RPC checks.
   proof_output="$(
+    /usr/bin/env -i \
+    PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
+    HOME=/Users/user \
     OPENCLAW_JARVIS_HOME="${JARVIS_HOME}" \
     OPENCLAW_JARVIS_STATE_DIR="${JARVIS_STATE_DIR}" \
     OPENCLAW_JARVIS_CONFIG_PATH="${JARVIS_CONFIG_PATH}" \

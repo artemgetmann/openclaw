@@ -28,13 +28,35 @@ EOF
 chmod +x "${PROBE_SCRIPT}" "${PACKAGE_SCRIPT_FIXTURE}"
 
 export OPENCLAW_SHIP_JARVIS_HOTFIX_LIB_ONLY=1
+export OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE=1
+export OPENCLAW_MAIN_REPO="${ROOT_DIR}"
+export OPENCLAW_EXPECTED_MAIN_REPO="${ROOT_DIR}"
 # shellcheck source=scripts/ship-jarvis-hotfix.sh
 source "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh"
 
-[[ "${SHIP_TEST_MODE}" == "0" ]] || fail "ordinary worktree load unexpectedly enabled test mode"
-[[ "${PLISTBUDDY_BIN}" == "/usr/libexec/PlistBuddy" ]] || fail "production PlistBuddy was redirected"
-[[ "${JARVIS_HOME}" == "/Users/user/Library/Application Support/Jarvis" ]] || \
-  fail "production Jarvis home was redirected"
+[[ "${SHIP_TEST_MODE}" == "1" ]] || fail "self-contained fixture did not enable test mode"
+
+production_probe="$(
+  OPENCLAW_SHIP_JARVIS_HOTFIX_LIB_ONLY=1 \
+    OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE=1 \
+    OPENCLAW_MAIN_REPO=/Users/user/Programming_Projects/openclaw \
+    OPENCLAW_EXPECTED_MAIN_REPO="${ROOT_DIR}" \
+    OPENCLAW_JARVIS_HOME=/tmp/redirected-jarvis \
+    OPENCLAW_PLISTBUDDY_BIN=/tmp/fake-plistbuddy \
+    JARVIS_RELEASE_DISK_REQUIRED_KIB=1 \
+    JARVIS_RELEASE_DISK_PROBE_COMMAND=/tmp/fake-probe \
+    /bin/bash -c '
+      source "$0"
+      printf "%s|%s|%s" "$SHIP_TEST_MODE" "$JARVIS_HOME" "$PLISTBUDDY_BIN"
+      jarvis_release_disk_preflight_targets() {
+        printf "|%s|%s\n" "$1" "${JARVIS_RELEASE_DISK_PROBE_COMMAND:-unset}"
+      }
+      require_hotfix_disk_preflight
+    ' \
+    "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh"
+)"
+[[ "${production_probe}" == "0|/Users/user/Library/Application Support/Jarvis|/usr/libexec/PlistBuddy|26214400|unset" ]] || \
+  fail "production authority accepted ambient test/runtime overrides: ${production_probe}"
 
 PR_NUMBER=42
 if (assert_pr_can_ship '{"baseRefName":"main","state":"OPEN"}') >/dev/null 2>&1; then
@@ -144,6 +166,7 @@ for mutation in \
   '.ownershipReceipt.leaseId = "wrong"' \
   '.ownershipReceipt.fence = 99' \
   '.terminalReceipts += [.terminalReceipts[0] | .mergeSha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"]' \
+  '.candidate.url = "https://github.com/artemgetmann/openclaw/pull/99"' \
   '.candidate.changedPaths = [" scripts/ship-jarvis-hotfix.sh"]'; do
   QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq "${mutation}")"
   if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
