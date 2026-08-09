@@ -766,6 +766,32 @@ describe("withOpenComputerUseLock", () => {
     ]);
   });
 
+  it("budgets waiting from a predecessor's larger execution timeout", async () => {
+    const directory = await temporaryDirectory();
+    const command = path.join(directory, "OpenComputerUse");
+    await trackedLockTarget(command);
+    let ownerStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      ownerStarted = resolve;
+    });
+    const owner = withOpenComputerUseLock({
+      command,
+      timeoutMs: 1_200,
+      run: async () => {
+        ownerStarted();
+        await new Promise((resolve) => setTimeout(resolve, 1_150));
+      },
+    });
+    await started;
+
+    const waiter = withOpenComputerUseLock({
+      command,
+      timeoutMs: 100,
+      run: async () => "waiter-completed",
+    });
+    await expect(Promise.all([owner, waiter])).resolves.toEqual([undefined, "waiter-completed"]);
+  });
+
   it("prevents duplicate startup across processes and lets one caller recover stale agent state", async () => {
     const directory = await temporaryDirectory();
     const command = path.join(directory, "OpenComputerUse");

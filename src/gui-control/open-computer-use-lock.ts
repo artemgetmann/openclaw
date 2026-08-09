@@ -16,6 +16,7 @@ export class OpenComputerUseLockTimeoutError extends Error {
 type LockPayload = {
   command: string;
   createdAt: string;
+  executionTimeoutMs?: number;
   identity: string;
   orderKey: string;
   pid: number;
@@ -39,6 +40,7 @@ type LockOwnerSnapshot = {
   ageMs?: number;
   auxiliaryPaths?: string[];
   command?: string;
+  executionTimeoutMs?: number;
   identity?: string;
   path?: string;
   phase?: "acquired" | "waiting";
@@ -129,6 +131,10 @@ async function readOwner(ownerPath: string, nowMs: number): Promise<LockOwnerSna
       token: parsed.token,
       identity: parsed.identity,
       command: parsed.command,
+      executionTimeoutMs:
+        typeof parsed.executionTimeoutMs === "number" && parsed.executionTimeoutMs > 0
+          ? parsed.executionTimeoutMs
+          : undefined,
       processStartIdentity: parsed.processStartIdentity,
       path: ownerPath,
       phase: parsed.phase,
@@ -299,11 +305,12 @@ async function acquireCrossProcessLock(input: {
     orderKey,
     command: input.command,
     createdAt: new Date().toISOString(),
+    executionTimeoutMs: input.executionTimeoutMs,
     phase: "waiting",
     ...(processStartIdentity ? { processStartIdentity } : {}),
   };
   const transitions: LockTransition[] = [];
-  const predecessorKeys = new Set<string>();
+  const predecessorBudgets = new Map<string, number>();
   const selfOwner: LockOwnerSnapshot = {
     state: "live",
     path: ownerPath,
@@ -316,11 +323,17 @@ async function acquireCrossProcessLock(input: {
     if (owner.path === ownerPath || owner.state === "missing") {
       return;
     }
-    predecessorKeys.add(owner.token ?? owner.path ?? `pid:${owner.pid ?? "unknown"}`);
+    const key = owner.token ?? owner.path ?? `pid:${owner.pid ?? "unknown"}`;
+    // New v2 records publish their own command budget. Older v2/v1 records do
+    // not, so preserve bounded compatibility with the waiter's budget rather
+    // than inventing an unbounded migration rule.
+    predecessorBudgets.set(key, owner.executionTimeoutMs ?? input.executionTimeoutMs);
   };
   const waitBudgetMs = () =>
     input.explicitLockTimeoutMs ??
-    (predecessorKeys.size + 1) * input.executionTimeoutMs + LOCK_HANDOFF_GRACE_MS;
+    input.executionTimeoutMs +
+      [...predecessorBudgets.values()].reduce((total, budget) => total + budget, 0) +
+      LOCK_HANDOFF_GRACE_MS;
   let lastTransitionKey = "";
   const record = (phase: LockTransition["phase"], owner: LockOwnerSnapshot) => {
     const key = `${phase}:${owner.path}:${owner.state}:${owner.pid}:${owner.token}`;
