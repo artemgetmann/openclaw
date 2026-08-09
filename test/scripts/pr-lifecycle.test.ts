@@ -1360,7 +1360,7 @@ describe("scripts/pr-lifecycle", () => {
       ]);
       expect(rejected.status).toBe(1);
       expect(rejected.stderr).toMatch(
-        /must bind the exact repo-backed lifecycle|ownerless repo-backed release contract/,
+        /exact active authoritative recovery attempt|must bind the exact repo-backed lifecycle|ownerless repo-backed release contract/,
       );
     }
   });
