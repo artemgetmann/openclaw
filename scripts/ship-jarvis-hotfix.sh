@@ -12,12 +12,6 @@ set -euo pipefail
 
 SCRIPT_NAME="ship-jarvis-hotfix"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=scripts/lib/heavy-local-slot.sh
-source "${ROOT_DIR}/scripts/lib/heavy-local-slot.sh"
-# shellcheck source=scripts/lib/jarvis-release-lock.sh
-source "${ROOT_DIR}/scripts/lib/jarvis-release-lock.sh"
-# shellcheck source=scripts/lib/jarvis-release-disk-preflight.sh
-source "${ROOT_DIR}/scripts/lib/jarvis-release-disk-preflight.sh"
 CANONICAL_MAIN_REPO="/Users/user/Programming_Projects/openclaw"
 MAIN_REPO_RAW="${OPENCLAW_MAIN_REPO:-${CANONICAL_MAIN_REPO}}"
 MAIN_REPO="${MAIN_REPO_RAW}"
@@ -126,6 +120,34 @@ TRANSACTION_ARMED=0
 TRANSACTION_EXPECTED_COMMIT=""
 TRANSACTION_LAUNCH_RECEIPT_DIR=""
 CONFIRMED_PR_MERGE_COMMIT=""
+
+assert_source_checkout_safe() {
+  local branch=""
+  [[ "${ROOT_DIR}" == "${CANONICAL_MAIN_REPO}" ]] || \
+    die "production entry must be the sacred main wrapper at ${CANONICAL_MAIN_REPO}"
+  [[ "$(pwd -P)" == "${CANONICAL_MAIN_REPO}" ]] || \
+    die "run from clean sacred main: cd ${CANONICAL_MAIN_REPO}"
+  branch="$(/usr/bin/git -C "${CANONICAL_MAIN_REPO}" branch --show-current)"
+  [[ "${branch}" == "main" ]] || die "sacred repo must be on main, got ${branch:-detached}"
+  [[ -z "$(/usr/bin/git -C "${CANONICAL_MAIN_REPO}" status --porcelain)" ]] || \
+    die "sacred main has local changes; refusing to load release helpers"
+  /usr/bin/git -C "${CANONICAL_MAIN_REPO}" diff --quiet HEAD -- \
+    scripts/ship-jarvis-hotfix.sh \
+    scripts/lib/heavy-local-slot.sh \
+    scripts/lib/jarvis-release-lock.sh \
+    scripts/lib/jarvis-release-disk-preflight.sh || \
+    die "release wrapper or helper differs from sacred main HEAD"
+}
+
+load_release_helpers() {
+  # Source only after the source-free sacred checkout gate has passed.
+  # shellcheck source=scripts/lib/heavy-local-slot.sh
+  source "${ROOT_DIR}/scripts/lib/heavy-local-slot.sh"
+  # shellcheck source=scripts/lib/jarvis-release-lock.sh
+  source "${ROOT_DIR}/scripts/lib/jarvis-release-lock.sh"
+  # shellcheck source=scripts/lib/jarvis-release-disk-preflight.sh
+  source "${ROOT_DIR}/scripts/lib/jarvis-release-disk-preflight.sh"
+}
 
 log() {
   printf '[%s] %s\n' "${SCRIPT_NAME}" "$*"
@@ -1135,8 +1157,10 @@ prove_break_glass_runtime() {
 }
 
 main() {
-  trap transaction_exit_guard EXIT
   parse_args "$@"
+  assert_source_checkout_safe
+  load_release_helpers
+  trap transaction_exit_guard EXIT
   if (( DRY_RUN != 1 )); then
     # Fleet admission must wrap the entire live hotfix transaction and precede
     # the narrower release/runtime mutex acquired below. Dry-run remains a

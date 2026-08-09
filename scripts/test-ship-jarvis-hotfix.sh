@@ -38,6 +38,21 @@ fi
 [[ ! -e "${ENTRY_MARKER}" ]] || fail "ambient source function ran before clean-entry rejection"
 pass "clean-entry sentinel rejects explicit bash and imported functions"
 
+DIRTY_FIXTURE="${TMP_ROOT}/dirty-checkout"
+DIRTY_MARKER="${TMP_ROOT}/dirty-helper-ran"
+mkdir -p "${DIRTY_FIXTURE}/scripts/lib"
+cp "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh" "${DIRTY_FIXTURE}/scripts/ship-jarvis-hotfix.sh"
+cp "${ROOT_DIR}/scripts/lib/heavy-local-slot.sh" "${DIRTY_FIXTURE}/scripts/lib/heavy-local-slot.sh"
+cp "${ROOT_DIR}/scripts/lib/jarvis-release-lock.sh" "${DIRTY_FIXTURE}/scripts/lib/jarvis-release-lock.sh"
+cp "${ROOT_DIR}/scripts/lib/jarvis-release-disk-preflight.sh" "${DIRTY_FIXTURE}/scripts/lib/jarvis-release-disk-preflight.sh"
+printf ': >%q\n' "${DIRTY_MARKER}" >>"${DIRTY_FIXTURE}/scripts/lib/heavy-local-slot.sh"
+chmod +x "${DIRTY_FIXTURE}/scripts/ship-jarvis-hotfix.sh"
+if "${DIRTY_FIXTURE}/scripts/ship-jarvis-hotfix.sh" --pr 1 >/dev/null 2>&1; then
+  fail "noncanonical dirty wrapper unexpectedly passed the source-free gate"
+fi
+[[ ! -e "${DIRTY_MARKER}" ]] || fail "dirty release helper executed before checkout rejection"
+pass "source-free checkout gate rejects dirty helpers before loading them"
+
 export OPENCLAW_SHIP_JARVIS_HOTFIX_LIB_ONLY=1
 export OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE=1
 export OPENCLAW_MAIN_REPO="${ROOT_DIR}"
@@ -45,6 +60,7 @@ export OPENCLAW_EXPECTED_MAIN_REPO="${ROOT_DIR}"
 export OPENCLAW_HOTFIX_CLEAN_ENTRY=1
 # shellcheck source=scripts/ship-jarvis-hotfix.sh
 source "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh"
+load_release_helpers
 
 [[ "${SHIP_TEST_MODE}" == "1" ]] || fail "self-contained fixture did not enable test mode"
 
@@ -61,6 +77,7 @@ production_probe="$(
     /bin/bash -c '
       source "$0"
       printf "%s|%s|%s" "$SHIP_TEST_MODE" "$JARVIS_HOME" "$PLISTBUDDY_BIN"
+      jarvis_release_disk_default_required_kib() { printf "26214400\n"; }
       jarvis_release_disk_preflight_targets() {
         printf "|%s|%s\n" "$1" "${JARVIS_RELEASE_DISK_PROBE_COMMAND:-unset}"
       }
