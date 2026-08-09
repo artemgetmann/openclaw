@@ -131,6 +131,41 @@ Use normal GitHub merge mechanics without admin or branch-protection bypass.
 After an ambiguous merge response, inspect PR and target-branch state before any
 retry.
 
+### GitHub transport fallback
+
+Use host `gh` while its authenticated API probe is healthy. If the restricted
+probe is indeterminate, repeat that read-only probe once in authorized host
+context. If host `gh` is still unavailable and the installed GitHub connector
+can read the required PR state, collect fresh secret-free connector evidence
+with only the capabilities the operation needs. Verify it through the canonical
+adapter before relying on the candidate:
+
+```bash
+OPENCLAW_GITHUB_REPOSITORY=owner/repo \
+OPENCLAW_GITHUB_PR=123 \
+scripts/github-connector-transport.mjs verify evidence.json
+```
+
+The adapter binds connector metadata to GitHub's public HTTPS metadata, remote
+head and base refs, exact patch, and changed paths. A missing capability returns
+a capability-specific blocker. Do not improvise credentials, copy secrets into
+the evidence file, or treat connector authentication as blanket permission.
+
+For an already-authorized normal merge, request the connector mutation only
+after all review, proof, CI, ownership, and current-base gates pass:
+
+```bash
+OPENCLAW_GITHUB_REPOSITORY=owner/repo \
+OPENCLAW_GITHUB_PR=123 \
+scripts/github-connector-transport.mjs merge-request evidence.json EXPECTED_HEAD_SHA
+```
+
+Execute exactly the emitted connector tool and arguments. They bind the normal
+squash merge to the expected head. After an ambiguous mutation, read PR state
+once and stop without retrying. If the connector lacks the emitted operation,
+use the reported next action; never fall through to a different mutation
+transport in the same process.
+
 ## Delivery after merge
 
 Source merge, package, installed runtime, public release, and end-user behavior
