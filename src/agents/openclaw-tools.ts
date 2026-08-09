@@ -312,6 +312,7 @@ export function createOpenClawTools(
       agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      senderIsOwner: options?.senderIsOwner,
       workspaceDir: spawnWorkspaceDir,
     }),
     createSubagentsTool({

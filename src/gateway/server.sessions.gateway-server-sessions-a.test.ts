@@ -396,6 +396,16 @@ describe("gateway server sessions", () => {
     expect(labelPatched.ok).toBe(true);
     expect(labelPatched.payload?.entry.label).toBe("Briefing");
 
+    const monitorDelegationPatched = await rpcReq<{
+      ok: true;
+      entry: { subagentMonitorToolDelegation?: boolean };
+    }>(ws, "sessions.patch", {
+      key: "agent:main:subagent:one",
+      subagentMonitorToolDelegation: true,
+    });
+    expect(monitorDelegationPatched.ok).toBe(true);
+    expect(monitorDelegationPatched.payload?.entry.subagentMonitorToolDelegation).toBe(true);
+
     const labelPatchedDuplicate = await rpcReq(ws, "sessions.patch", {
       key: "agent:main:discord:group:dev",
       label: "Briefing",

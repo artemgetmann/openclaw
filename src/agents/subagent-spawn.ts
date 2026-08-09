@@ -75,6 +75,8 @@ export type SpawnSubagentContext = {
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   requesterAgentIdOverride?: string;
+  /** Verified owner authority of the turn invoking sessions_spawn. */
+  senderIsOwner?: boolean;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
 };
@@ -442,6 +444,9 @@ export async function spawnSubagentDirect(
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
+    // Persist the verified delegation before the child starts. A false or
+    // absent value must never be upgraded by the child or its prompt.
+    subagentMonitorToolDelegation: ctx.senderIsOwner === true,
   });
   if (spawnDepthPatchError) {
     return {

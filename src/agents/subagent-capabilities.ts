@@ -15,6 +15,7 @@ type SessionCapabilityEntry = {
   spawnDepth?: unknown;
   subagentRole?: unknown;
   subagentControlScope?: unknown;
+  subagentMonitorToolDelegation?: unknown;
 };
 
 function normalizeSessionKey(value: unknown): string | undefined {
@@ -153,4 +154,29 @@ export function resolveStoredSubagentCapabilities(
     canSpawn: role === "main" || role === "orchestrator",
     canControlChildren: controlScope === "children",
   };
+}
+
+/**
+ * Resolve the narrow monitor-tool delegation attached by sessions_spawn.
+ *
+ * The marker is deliberately strict: only the literal boolean true grants
+ * authority. Missing, malformed, or inaccessible session state fails closed.
+ */
+export function resolveStoredSubagentMonitorToolDelegation(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: Record<string, SessionCapabilityEntry>;
+  },
+): boolean {
+  const normalizedSessionKey = normalizeSessionKey(sessionKey);
+  if (!normalizedSessionKey || !isSubagentSessionKey(normalizedSessionKey)) {
+    return false;
+  }
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store: opts?.store,
+  });
+  return entry?.subagentMonitorToolDelegation === true;
 }

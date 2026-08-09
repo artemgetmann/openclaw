@@ -139,6 +139,31 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     setupGatewayMock();
   });
 
+  it("persists verified owner-tool delegation before starting the child", async () => {
+    const result = await spawnSubagentDirect(
+      { task: "create one monitor" },
+      {
+        agentSessionKey: "agent:main:main",
+        senderIsOwner: true,
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const calls = hoisted.callGatewayMock.mock.calls.map(
+      (call) => call[0] as { method?: string; params?: Record<string, unknown> },
+    );
+    const capabilityPatch = calls.find(
+      (call) => call.method === "sessions.patch" && call.params?.spawnDepth === 1,
+    );
+    const agentStart = calls.findIndex((call) => call.method === "agent");
+    const capabilityPatchIndex = calls.indexOf(capabilityPatch!);
+
+    expect(capabilityPatch?.params).toMatchObject({ subagentMonitorToolDelegation: true });
+    expect(capabilityPatchIndex).toBeGreaterThanOrEqual(0);
+    expect(capabilityPatchIndex).toBeLessThan(agentStart);
+  });
+
   it("uses the target agent workspace for cross-agent spawns", async () => {
     hoisted.configOverride = createConfigOverride({
       agents: {

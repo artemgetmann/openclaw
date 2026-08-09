@@ -272,6 +272,11 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /**
+   * Monitor-tool authority inherited from the verified owner turn that spawned
+   * this subagent. This is core-written session metadata, never model input.
+   */
+  subagentMonitorToolDelegation?: boolean;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /**

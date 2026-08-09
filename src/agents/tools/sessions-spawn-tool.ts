@@ -77,6 +77,8 @@ export function createSessionsSpawnTool(
     sandboxed?: boolean;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    /** Verified owner authority of the current turn. */
+    senderIsOwner?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   return {
@@ -204,6 +206,7 @@ export function createSessionsSpawnTool(
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+          senderIsOwner: opts?.senderIsOwner,
           workspaceDir: opts?.workspaceDir,
         },
       );
