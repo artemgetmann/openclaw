@@ -706,3 +706,31 @@ describe("telegram-user backend defaults", () => {
     expect(read.message).toContain("may be retried");
   });
 });
+
+describe("telegram-user backend stdin errors", () => {
+  it("defers expected early-close pipe errors to the child close result", async () => {
+    const { handleTelegramUserBackendStdinError } = await import("./backend.js");
+    const reject = vi.fn();
+
+    handleTelegramUserBackendStdinError(
+      Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+      reject,
+    );
+    handleTelegramUserBackendStdinError(
+      Object.assign(new Error("stream destroyed"), { code: "ERR_STREAM_DESTROYED" }),
+      reject,
+    );
+
+    expect(reject).not.toHaveBeenCalled();
+  });
+
+  it("rejects unexpected stdin stream errors", async () => {
+    const { handleTelegramUserBackendStdinError } = await import("./backend.js");
+    const reject = vi.fn();
+    const error = Object.assign(new Error("unexpected stream failure"), { code: "EIO" });
+
+    handleTelegramUserBackendStdinError(error, reject);
+
+    expect(reject).toHaveBeenCalledWith(error);
+  });
+});

@@ -856,6 +856,19 @@ function readExecErrorStderr(error: unknown): string {
   return "";
 }
 
+export function handleTelegramUserBackendStdinError(
+  error: NodeJS.ErrnoException,
+  reject: (error: Error) => void,
+): void {
+  if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") {
+    // The backend can fail credential/session validation before reading a
+    // message payload. Its close event owns the structured stderr result;
+    // consuming this expected pipe error prevents an unhandled process crash.
+    return;
+  }
+  reject(error);
+}
+
 /**
  * Preserve timeout semantics that Node's execFile reports out-of-band instead
  * of on stderr. Without this branch a timed-out Telegram command collapses to
@@ -922,6 +935,9 @@ async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
       };
       child.stdout?.setEncoding("utf8");
       child.stderr?.setEncoding("utf8");
+      child.stdin?.once("error", (error: NodeJS.ErrnoException) => {
+        handleTelegramUserBackendStdinError(error, reject);
+      });
       child.stdout?.on("data", (chunk: string) => {
         try {
           stdout = appendBounded(stdout, chunk);
