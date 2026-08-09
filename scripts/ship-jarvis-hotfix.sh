@@ -285,12 +285,77 @@ pull_and_confirm_merge() {
   valid_commit "${merge_sha}" || die "merged PR is missing a valid mergeCommit.oid"
   head_sha="$(${GIT_BIN} -C "${MAIN_REPO}" rev-parse HEAD)"
   valid_commit "${head_sha}" || die "sacred main HEAD is not a valid git commit"
-  # Refetch after merge+pull is authoritative for both initially OPEN and
-  # already-MERGED PRs. An ancestor check is insufficient: a newer main HEAD
-  # would package unrelated commits under a misleading "ship this PR" action.
-  commit_matches "${merge_sha}" "${head_sha}" || \
-    die "sacred main advanced beyond requested PR merge ${merge_sha}; HEAD=${head_sha}. Refusing to package unrelated newer commits; start a new ship run for the intended PR or release."
-  CONFIRMED_PR_MERGE_COMMIT="${merge_sha}"
+  # Exact equality remains the fast path. When main advanced, preserve the
+  # user's moving-main hotfix authority only after every intervening commit is
+  # attributable to one reviewed merged PR whose required checks still pass.
+  # Missing association or receipt data is ambiguity, so it fails closed.
+  if ! commit_matches "${merge_sha}" "${head_sha}"; then
+    confirm_intervening_reviewed_main "${merge_sha}" "${head_sha}"
+  fi
+  CONFIRMED_PR_MERGE_COMMIT="${head_sha}"
+}
+
+associated_main_pr_json() {
+  local commit_sha="$1"
+  local repo=""
+  local associated=""
+  local pr_number=""
+  repo="$(${GH_BIN} repo view --json nameWithOwner --jq '.nameWithOwner')"
+  [[ -n "${repo}" ]] || die "could not resolve GitHub repository for reviewed-main proof"
+  associated="$(${GH_BIN} api \
+    -H 'Accept: application/vnd.github+json' \
+    "repos/${repo}/commits/${commit_sha}/pulls")"
+  pr_number="$(printf '%s\n' "${associated}" | "${JQ_BIN}" -r \
+    --arg commit "${commit_sha}" \
+    '[.[] | select(.merged_at != null and .base.ref == "main" and .merge_commit_sha == $commit)] | if length == 1 then .[0].number else empty end')"
+  [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]] || \
+    die "main commit ${commit_sha} is not attributable to exactly one merged main PR"
+  "${GH_BIN}" pr view "${pr_number}" \
+    --json number,state,baseRefName,mergeCommit,reviewDecision,body
+}
+
+reviewed_pr_receipt_valid() {
+  local json="$1"
+  local review_decision=""
+  local body=""
+  review_decision="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.reviewDecision // empty')"
+  body="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.body // empty')"
+
+  # GitHub approval is sufficient. The fork's canonical worker lifecycle also
+  # records independent reviewer and tester PASS receipts in Review Fast Path;
+  # require both when repository policy uses those receipts instead of a GitHub
+  # approval decision.
+  [[ "${review_decision}" == "APPROVED" ]] && return 0
+  printf '%s\n' "${body}" | grep -Eq '^- Independent (code )?review(er)?:.*PASS' || return 1
+  printf '%s\n' "${body}" | grep -Eq '^- Independent tester:.*PASS' || return 1
+}
+
+confirm_intervening_reviewed_main() {
+  local merge_sha="$1"
+  local head_sha="$2"
+  local commit_sha=""
+  local pr=""
+  local json=""
+  local pr_merge_sha=""
+
+  "${GIT_BIN}" -C "${MAIN_REPO}" merge-base --is-ancestor "${merge_sha}" "${head_sha}" || \
+    die "requested PR merge ${merge_sha} is not an ancestor of current main ${head_sha}"
+  while IFS= read -r commit_sha; do
+    [[ -n "${commit_sha}" ]] || continue
+    json="$(associated_main_pr_json "${commit_sha}")"
+    pr="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.number // empty')"
+    pr_merge_sha="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.mergeCommit.oid // empty')"
+    [[ "$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state // empty')" == "MERGED" ]] || \
+      die "main commit ${commit_sha} PR #${pr:-unknown} is not merged"
+    [[ "$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.baseRefName // empty')" == "main" ]] || \
+      die "main commit ${commit_sha} PR #${pr:-unknown} does not target main"
+    commit_matches "${commit_sha}" "${pr_merge_sha}" || \
+      die "main commit ${commit_sha} does not match PR #${pr:-unknown} merge receipt"
+    reviewed_pr_receipt_valid "${json}" || \
+      die "main commit ${commit_sha} PR #${pr:-unknown} lacks approved review or independent reviewer+tester PASS receipts"
+    "${PR_REQUIRED_SCRIPT}" --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
+    log "accepted reviewed newer main commit ${commit_sha} from PR #${pr}"
+  done < <("${GIT_BIN}" -C "${MAIN_REPO}" rev-list --reverse "${merge_sha}..${head_sha}")
 }
 
 normal_package_build() {

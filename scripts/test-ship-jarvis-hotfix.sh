@@ -63,4 +63,14 @@ package_line="$(grep -n 'package.sh' "${TMP_ROOT}/dry-run.out" | head -n 1 | cut
   fail "dry-run package plan appeared before disk pass receipt"
 pass "dry run proves disk before printing package plan"
 
+approved_json='{"reviewDecision":"APPROVED","body":""}'
+review_receipt_json='{"reviewDecision":"","body":"- Independent reviewer: PASS with no findings\n- Independent tester: PASS on exact head"}'
+missing_tester_json='{"reviewDecision":"","body":"- Independent reviewer: PASS with no findings"}'
+reviewed_pr_receipt_valid "${approved_json}" || fail "GitHub approval was not accepted"
+reviewed_pr_receipt_valid "${review_receipt_json}" || fail "canonical review receipts were not accepted"
+if reviewed_pr_receipt_valid "${missing_tester_json}"; then
+  fail "reviewer-only receipt unexpectedly passed"
+fi
+pass "reviewed-main gate accepts approval or complete canonical receipts only"
+
 printf 'All ship-jarvis-hotfix disk preflight tests passed.\n'
