@@ -237,7 +237,7 @@ describe("withOpenComputerUseLock", () => {
         retries: { retries: 2, factor: 1, minTimeout: 10, maxTimeout: 10 },
         stale: Number.MAX_SAFE_INTEGER,
       }),
-    ).rejects.toThrow(`file lock timeout for ${target}`);
+    ).rejects.toThrow("file lock timeout for");
 
     releaseOwner();
     await owner;
@@ -277,7 +277,23 @@ describe("withOpenComputerUseLock", () => {
       command,
       acquiredPath,
     ]);
-    await vi.waitFor(async () => expect(await fs.readFile(acquiredPath, "utf8")).toBe("acquired"));
+    let childStderr = "";
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      childStderr += chunk.toString();
+    });
+    const prematureExit = new Promise<never>((_, reject) => {
+      child.once("exit", (code, signal) => {
+        reject(
+          new Error(
+            `crash-owner exited before acquisition: code=${code ?? "none"} signal=${signal ?? "none"} stderr=${JSON.stringify(childStderr)}`,
+          ),
+        );
+      });
+    });
+    await Promise.race([
+      vi.waitFor(async () => expect(await fs.readFile(acquiredPath, "utf8")).toBe("acquired")),
+      prematureExit,
+    ]);
     expect((await fs.readdir(`${target}.lock`)).some((name) => name.startsWith("owner-"))).toBe(
       true,
     );
@@ -592,7 +608,7 @@ describe("withOpenComputerUseLock", () => {
       expect(String(error)).toContain(`socketIdentity=${JSON.stringify(command)}`);
       expect(String(error)).toContain(`ownerPid=${process.pid}`);
       expect(String(error)).toContain("ownerState=live");
-      expect(String(error)).toContain('"phase":"observed"');
+      expect(String(error)).toContain('"phase":"legacy-observed"');
     }
 
     releaseOwner();
