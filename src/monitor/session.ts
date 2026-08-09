@@ -1,7 +1,17 @@
+import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/session-manager-init.js";
+import {
+  forkSessionFromParent,
+  resolveParentForkMaxTokens,
+} from "../auto-reply/reply/session-fork.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStorePath, updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  updateSessionStore,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { CronDelivery } from "../cron/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -197,11 +207,32 @@ export async function seedMonitorSession(params: {
   originDelivery?: CronDelivery;
 }) {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+  // A monitor remains a separate durable session so autonomous turns cannot
+  // interleave with the live chat. Branch it from the origin transcript once,
+  // though, so the first wake starts with the evidence and decisions the user
+  // already shared instead of behaving like a context-free mini-agent.
+  const existingStore = loadSessionStore(storePath, { skipCache: true });
+  const originEntry = existingStore[params.originSessionKey];
+  const parentForkMaxTokens = resolveParentForkMaxTokens(params.cfg);
+  const originTokens = originEntry?.totalTokens ?? 0;
+  const originWithinForkLimit = parentForkMaxTokens === 0 || originTokens <= parentForkMaxTokens;
+  const forked =
+    originEntry && params.originSessionKey !== params.sessionKey && originWithinForkLimit
+      ? forkSessionFromParent({
+          parentEntry: originEntry,
+          agentId: params.agentId,
+          sessionsDir: path.dirname(storePath),
+        })
+      : null;
   const sessionStore: Record<string, SessionEntry> = {};
   const entry: SessionEntry = {
-    sessionId: params.sessionId,
+    sessionId: forked?.sessionId ?? params.sessionId,
     updatedAt: Date.now(),
     label: params.label,
+    // Persist the branched path explicitly. The shared branch helper copies the
+    // resolved conversation path into a new transcript without rewriting the
+    // user's origin transcript.
+    ...(forked ? { sessionFile: forked.sessionFile, forkedFromParent: true } : {}),
   };
 
   await updateSessionStore(storePath, (store) => {
@@ -212,7 +243,7 @@ export async function seedMonitorSession(params: {
   });
 
   const resolved = await resolveSessionTranscriptFile({
-    sessionId: params.sessionId,
+    sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: sessionStore[params.sessionKey],
     sessionStore,
@@ -231,7 +262,7 @@ export async function seedMonitorSession(params: {
     sessionManager,
     sessionFile,
     hadSessionFile,
-    sessionId: params.sessionId,
+    sessionId: entry.sessionId,
     cwd: process.cwd(),
   });
   sessionManager.appendMessage({
