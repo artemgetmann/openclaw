@@ -820,17 +820,25 @@ function acceptQueueSourceReturn(pr, options) {
       "regenerate-release-packet",
       "refresh-release-queue",
     ]);
+    const requiredConstraints = new Set([
+      "exact builder only",
+      "no conflict resolution or overlapping semantic changes",
+      "no admin, bypass, deploy, runtime mutation, packaging, signing, or public release",
+    ]);
     const allowedActions = receipt?.standingAuthority?.allowedActions;
+    const constraints = receipt?.standingAuthority?.constraints;
     const validAuthority =
       receipt?.standingAuthority?.source === "queue-base-drift-recovery" &&
+      receipt?.standingAuthority?.scope ===
+        `PR #${pr} source refresh from ${state?.candidate?.baseSha} to ${receipt?.targetBase?.sha}` &&
       Array.isArray(allowedActions) &&
       allowedActions.length === requiredActions.size &&
+      new Set(allowedActions).size === requiredActions.size &&
       allowedActions.every((action) => requiredActions.has(action)) &&
-      Array.isArray(receipt?.standingAuthority?.constraints) &&
-      receipt.standingAuthority.constraints.includes("exact builder only") &&
-      receipt.standingAuthority.constraints.includes(
-        "no conflict resolution or overlapping semantic changes",
-      );
+      Array.isArray(constraints) &&
+      constraints.length === requiredConstraints.size &&
+      new Set(constraints).size === requiredConstraints.size &&
+      constraints.every((constraint) => requiredConstraints.has(constraint));
     const validReceipt =
       receipt?.schemaVersion === SCHEMA_VERSION &&
       receipt?.role === "queue-base-drift-source-return" &&

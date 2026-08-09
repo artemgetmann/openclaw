@@ -510,7 +510,7 @@ function writeQueueSourceReturnReceipt(
     },
     standingAuthority: {
       source: "queue-base-drift-recovery",
-      scope: `PR #42 source refresh to ${targetBaseSha}`,
+      scope: `PR #42 source refresh from ${fixture.metadata.baseRefOid} to ${targetBaseSha}`,
       allowedActions: [
         "rebase-exact-builder-worktree",
         "push-expected-old-head",

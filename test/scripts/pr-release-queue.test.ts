@@ -1044,6 +1044,22 @@ describe("scripts/pr-release-queue", () => {
       "e".repeat(40),
       currentBaseSha,
     );
+    const wrongBasePacket = JSON.parse(fs.readFileSync(repairedPacketPath, "utf8"));
+    wrongBasePacket.candidate.testedBaseSha = "0".repeat(40);
+    fs.writeFileSync(repairedPacketPath, JSON.stringify(wrongBasePacket));
+    const mismatchedRefresh = runFailure(fixture, [
+      "refresh",
+      "--packet",
+      repairedPacketPath,
+      "--recovery-attempt-id",
+      String((routed.recovery as { attemptId: string }).attemptId),
+      "--transaction-id",
+      "refresh-wrong-base-45",
+    ]);
+    expect(mismatchedRefresh.status).toBe(1);
+    expect(mismatchedRefresh.stderr).toContain("exact active base-drift attempt");
+    wrongBasePacket.candidate.testedBaseSha = currentBaseSha;
+    fs.writeFileSync(repairedPacketPath, JSON.stringify(wrongBasePacket));
 
     const refreshed = run(fixture, [
       "refresh",
