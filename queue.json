@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 78,
+  "sequence": 79,
   "nextFence": 24,
   "mergeLease": null,
   "items": {
@@ -1951,6 +1951,108 @@
         "recordedAt": "2026-08-08T11:48:24.194Z"
       }
     },
+    "1373": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1373,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1373",
+        "headSha": "b51f281fbac1628e22a4ac86e115ea9cdd9e0163",
+        "baseBranch": "main",
+        "testedBaseSha": "b6243a67867df61e1d7bb4274013ed8c9333d228",
+        "diffFingerprint": "sha256:af4516c848352ba6431e709a9c002ee15931467f9c676b70b73a130aa46b2dc5",
+        "changedPaths": [
+          ".github/pull_request_template.md",
+          "docs/agent-guides/release-queue.md",
+          "docs/agent-guides/workflow.md",
+          "scripts/pr-lifecycle.mjs",
+          "scripts/pr-release-queue.mjs",
+          "test/pr-worker-lifecycle-contract.test.ts",
+          "test/scripts/pr-lifecycle.test.ts",
+          "test/scripts/pr-release-queue.test.ts"
+        ],
+        "title": "fix(workflow): automate safe base-drift recovery",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: a fenced release executor that sees stable, disjoint main drift atomically releases its stale fence, durably returns the exact builder with bounded rebase/reproof/requeue authority, and eventually merges only after fresh exact-head review/test; overlap, conflict, or ambiguous diffs stop automatic churn.\n- Exact head + builder proof: `b51f281fbac1628e22a4ac86e115ea9cdd9e0163` on base `b6243a67867df61e1d7bb4274013ed8c9333d228`; Node syntax, oxlint, oxfmt, and commit hooks pass.\n- Independent code review: PASS at exact head/diff `sha256:af4516c848352ba6431e709a9c002ee15931467f9c676b70b73a130aa46b2dc5`; the reviewer-discovered typed terminal-cause gap and all earlier P2 findings were fixed before this receipt.\n- Independent tester: PASS on the exact head/base/diff above; the canonical capacity retry preserved the same candidate after a pre-workload `heavy_slot_occupied` receipt, then passed 3 files / 82 tests in 133.73s under the single guarded waiter.\n- Release worker: Pending repo-backed fenced lease.\n- Dependencies / merge order / overlap: PR #1365 merged first. This branch rebased afterward and preserves its delivery-boundary fields. No dependency remains; recheck current `main` before immutable proof.\n- Remaining proof / cleanup / rollback: focused queue/lifecycle/contract tests, independent review/test, normal source merge; no package, install, runtime, deploy, restart, Telegram, or public-release proof is in scope. Roll back by reverting this PR or route a later candidate through documented `--queue direct`; never erase queue history.\n- Still hurts: GitHub compare evidence beyond 100 commits, 300 files, renames, binaries, or missing textual patches deliberately requires semantic inspection.\n\n## Why This Matters\n\n- Concurrent unrelated merges currently fail closed correctly but hand routine recovery back to the founder.\n- The missing queue-to-lifecycle bridge means durable `refresh` exists without a durable way to reopen the exact builder's proof loop.\n\n## Scope Boundary\n\n- Work scope: Product-wide repository workflow automation.\n- Delivery target: Source merge to this fork's `main` only.\n- Adds authenticated path/diff classification, one-attempt-per-fence recovery history, authoritative queue receipt verification, same-builder lifecycle resume, fresh-packet regeneration, and one same-candidate nested read-only retry after a proven pre-workload `heavy_slot_occupied` refusal.\n- Does not change packaging, signing, any installed runtime, shared services, deployment, restart, external messaging, credentials, admin/bypass, or public release.\n\n## Verification\n\n- `node --check scripts/pr-release-queue.mjs`\n- `node --check scripts/pr-lifecycle.mjs`\n- Commit hooks: oxlint 0 warnings/errors; oxfmt passed on changed files.\n- Guarded focused suite: independent exact-head PASS, 3 files / 82 tests, 133.73s, `--maxWorkers 1`, under fleet-resource-control. The preserved capacity receipt proved the first tester never acquired the slot or started workload; the one authorized same-candidate retry later admitted and ran once.\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted exact-head proof complete\n",
+        "jarvisDeliveryBoundary": null
+      },
+      "builder": {
+        "threadId": "019fe052-ad05-7071-85e7-290beea79196",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe052-ad05-7071-85e7-290beea79196",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "b51f281fbac1628e22a4ac86e115ea9cdd9e0163",
+        "diffFingerprint": "sha256:af4516c848352ba6431e709a9c002ee15931467f9c676b70b73a130aa46b2dc5",
+        "closure": "archived",
+        "contractId": "391df476-e18e-421d-8d69-c3739f358194",
+        "owner": {
+          "threadId": "019fe6ac-ff30-71f2-908e-e9f6f1e6f1bc",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/base_drift_code_review",
+          "hostId": "nested-agent"
+        },
+        "headSha": "b51f281fbac1628e22a4ac86e115ea9cdd9e0163",
+        "diffFingerprint": "sha256:af4516c848352ba6431e709a9c002ee15931467f9c676b70b73a130aa46b2dc5",
+        "unresolvedFindings": [],
+        "evidence": [
+          "GitHub PR #1373 headRefOid exactly matched b51f281fbac1628e22a4ac86e115ea9cdd9e0163",
+          "GitHub reported PR open, draft, mergeable, and based on b6243a67867df61e1d7bb4274013ed8c9333d228",
+          "Local and GitHub changed-path lists matched across eight files",
+          "Nested capacity retry requires the terminal tester receipt and recovery receipt to attest the same typed heavy-slot cause",
+          "Pre-workload source/test failures remain rejected even when paired with an occupied-slot recovery packet",
+          "Continued-drift refresh verifies the live PR base before classifying the additional delta",
+          "The stale-fence test now reaches and proves the queue fencing rejection",
+          "git diff --check origin/main...8a83e4fb5ded4f41f158f803396d0cad2d741aba passed",
+          "node --check passed for scripts/pr-lifecycle.mjs and scripts/pr-release-queue.mjs",
+          "Independent static review closed all discovered P2 findings"
+        ],
+        "limitations": [
+          "Static exact-head review only",
+          "Focused execution proof belongs to the independent tester"
+        ]
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1373 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "1d2e9285-c456-44c2-a9f4-633b6885b002",
+        "stateDirectory": "/Users/user/.codex/worktrees/750e1f22-d88a-445a-9267-4130524da357/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T13:45:43.725Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
+    },
     "1374": {
       "state": "blocked",
       "candidate": {
@@ -2543,10 +2645,10 @@
     }
   },
   "lastTransaction": {
-    "id": "9cd960ce-503e-4f91-8fe2-8ad78b281378",
-    "recordedAt": "2026-08-09T13:43:05.562Z"
+    "id": "pr1373-enqueue-b51f281f",
+    "recordedAt": "2026-08-09T13:45:43.725Z"
   },
-  "updatedAt": "2026-08-09T13:43:05.562Z",
+  "updatedAt": "2026-08-09T13:45:43.725Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
