@@ -1581,6 +1581,7 @@ function mutateRouteBaseDrift(state, options, expected, transactionId, now) {
       action: "base-drift-requires-semantic-resolution",
       pr: item.candidate.pr,
       recovery,
+      sourceReturnReceipt: null,
       builder: item.builder,
       callbackRequiredForCorrectness: false,
     };
