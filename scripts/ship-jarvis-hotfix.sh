@@ -16,36 +16,55 @@ if [[ -d "${MAIN_REPO_RAW}" ]]; then
   MAIN_REPO="$(cd -- "${MAIN_REPO_RAW}" && pwd -P)"
 fi
 
-if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+SHIP_TEST_MODE=0
+# Test indirection is accepted only outside the canonical production checkout.
+# An ambient variable in the sacred clone must never replace release authority.
+if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" && "${ROOT_DIR}" != "${CANONICAL_MAIN_REPO}" ]]; then
+  SHIP_TEST_MODE=1
+fi
+
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
   GH_BIN="${OPENCLAW_GH_BIN:-gh}"
   GIT_BIN="${OPENCLAW_GIT_BIN:-git}"
   JQ_BIN="${OPENCLAW_JQ_BIN:-jq}"
+  LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-launchctl}"
+  LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
+  ID_BIN="${OPENCLAW_ID_BIN:-id}"
+  UNAME_BIN="${OPENCLAW_UNAME_BIN:-uname}"
+  SHASUM_BIN="${OPENCLAW_SHASUM_BIN:-shasum}"
 else
   GH_BIN="/opt/homebrew/bin/gh"
   GIT_BIN="/usr/bin/git"
   JQ_BIN="/usr/bin/jq"
+  LAUNCHCTL_BIN="/bin/launchctl"
+  LSOF_BIN="/usr/sbin/lsof"
+  ID_BIN="/usr/bin/id"
+  UNAME_BIN="/usr/bin/uname"
+  SHASUM_BIN="/usr/bin/shasum"
 fi
-LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-launchctl}"
-LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
-ID_BIN="${OPENCLAW_ID_BIN:-id}"
-UNAME_BIN="${OPENCLAW_UNAME_BIN:-uname}"
-SHASUM_BIN="${OPENCLAW_SHASUM_BIN:-shasum}"
 PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
 
-if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
   PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-required-status.sh}"
 else
   PR_REQUIRED_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-required-status.sh"
 fi
-if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
   PR_RELEASE_QUEUE_SCRIPT="${OPENCLAW_SHIP_PR_RELEASE_QUEUE_SCRIPT:-${MAIN_REPO}/scripts/pr-release-queue}"
 else
   PR_RELEASE_QUEUE_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-release-queue.mjs"
 fi
-PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
-OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
-PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
-PROVE_RUNTIME_SCRIPT="${OPENCLAW_SHIP_PROVE_RUNTIME_SCRIPT:-${MAIN_REPO}/scripts/prove-jarvis-runtime.sh}"
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+  PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
+  OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
+  PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
+  PROVE_RUNTIME_SCRIPT="${OPENCLAW_SHIP_PROVE_RUNTIME_SCRIPT:-${MAIN_REPO}/scripts/prove-jarvis-runtime.sh}"
+else
+  PACKAGE_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh"
+  OPEN_APP_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/open-consumer-mac-app.sh"
+  PROTECT_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh"
+  PROVE_RUNTIME_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/prove-jarvis-runtime.sh"
+fi
 
 JARVIS_APP_PATH="${OPENCLAW_SHIP_JARVIS_APP_PATH:-${MAIN_REPO}/dist/Jarvis.app}"
 INSTALLED_JARVIS_APP_PATH="${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}"
@@ -154,11 +173,30 @@ require_preflight_tools() {
   [[ -x "${PROVE_RUNTIME_SCRIPT}" ]] || die "runtime-proof helper is missing or not executable: ${PROVE_RUNTIME_SCRIPT}"
 }
 
+run_pr_required() {
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+    "${PR_REQUIRED_SCRIPT}" "$@"
+    return
+  fi
+
+  # Required-check authority runs with a minimal, explicit environment. This
+  # prevents ambient helper overrides from substituting GitHub evidence.
+  local -a required_env=(/usr/bin/env -i
+    PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+    HOME="${HOME}"
+    OPENCLAW_GH_BIN="${GH_BIN}")
+  [[ -n "${GH_TOKEN:-}" ]] && required_env+=(GH_TOKEN="${GH_TOKEN}")
+  [[ -n "${GITHUB_TOKEN:-}" ]] && required_env+=(GITHUB_TOKEN="${GITHUB_TOKEN}")
+  [[ -n "${NO_COLOR:-}" ]] && required_env+=(NO_COLOR="${NO_COLOR}")
+  [[ -n "${TERM:-}" ]] && required_env+=(TERM="${TERM}")
+  "${required_env[@]}" "${PR_REQUIRED_SCRIPT}" "$@"
+}
+
 expected_main_repo() {
   # Tests may exercise every fail-closed stage in a temporary git repository.
   # Production callers cannot redirect the sacred-path check with an ambient
   # variable alone; the explicit test-mode gate keeps the operator invariant.
-  if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
     local test_root="${OPENCLAW_EXPECTED_MAIN_REPO:-${MAIN_REPO}}"
     if [[ -d "${test_root}" ]]; then
       (cd -- "${test_root}" && pwd -P)
@@ -251,7 +289,7 @@ merge_or_confirm_pr() {
   if [[ "${state}" == "OPEN" && "${is_draft}" == "true" ]]; then
     "${GH_BIN}" pr ready "${PR_NUMBER}"
   fi
-  "${PR_REQUIRED_SCRIPT}" --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
+  run_pr_required --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
   if [[ "${state}" == "MERGED" ]]; then
     log "PR #${PR_NUMBER} is already merged; required checks confirmed"
     return 0
@@ -333,7 +371,7 @@ associated_main_pr_json() {
 release_queue_item_json() {
   local pr="$1"
   local status=""
-  if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
     status="$("${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
   else
     local node_bin=""
@@ -347,10 +385,10 @@ release_queue_item_json() {
       [[ -x "${gh_bin}" ]] && break
     done
     [[ -x "${gh_bin}" ]] || die "trusted gh binary is unavailable for queue proof"
-    env -i PATH=/usr/bin:/bin HOME="${HOME}" /usr/bin/git -C "${MAIN_REPO}" \
+    /usr/bin/env -i PATH=/usr/bin:/bin HOME="${HOME}" /usr/bin/git -C "${MAIN_REPO}" \
       diff --quiet HEAD -- scripts/pr-release-queue.mjs || \
       die "authoritative queue executable differs from sacred main HEAD"
-    queue_env=(env -i
+    queue_env=(/usr/bin/env -i
       PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
       HOME="${HOME}"
       OPENCLAW_PR_RELEASE_QUEUE_REPO=artemgetmann/openclaw
@@ -363,7 +401,7 @@ release_queue_item_json() {
   fi
   # The wrapper emits a secret-silent preflight receipt before the JSON body.
   # Select the first JSON object instead of trusting a fixed line count.
-  printf '%s\n' "${status}" | sed -n '/^{/,$p' | "${JQ_BIN}" -c --arg pr "${pr}" '
+  printf '%s\n' "${status}" | /usr/bin/sed -n '/^{/,$p' | "${JQ_BIN}" -c --arg pr "${pr}" '
     if .action == "status" and
       (.revision | test("^[0-9a-f]{40}$")) and
       .state.schemaVersion == 1 and
@@ -383,12 +421,21 @@ release_queue_proves_reviewed_merge() {
   printf '%s\n' "${item}" | "${JQ_BIN}" -e --argjson pr "${pr}" --arg commit "${commit_sha}" '
     (.state | IN("merged", "delivery-barrier", "delivered", "closed")) and
     (.candidate.pr == $pr) and
+    ((.candidate.url // "") | test("^https://github\\.com/[^/]+/[^/]+/pull/[1-9][0-9]*$")) and
+    ((.candidate.title // "") | test("\\S")) and
+    ((.candidate.prContract // "") | test("\\S")) and
     (.candidate.baseBranch == "main") and
     (.candidate.testedBaseSha | test("^[0-9a-f]{40}$")) and
     (.candidate.headSha | test("^[0-9a-f]{40}$")) and
     (.candidate.diffFingerprint | test("^sha256:[0-9a-f]{64}$")) and
     (.candidate.changedPaths | type == "array" and length > 0) and
-    (all(.candidate.changedPaths[]; type == "string" and test("\\S"))) and
+    (all(.candidate.changedPaths[];
+      type == "string" and
+      test("\\S") and
+      . == gsub("^\\s+|\\s+$"; "") and
+      (startswith("/") | not) and
+      (test("(^|/)\\.\\.(/|$)") | not)
+    )) and
     ((.builder.threadId // "") | test("\\S")) and
     ((.builder.hostId // "") | test("\\S")) and
     (.builder.threadId == (.builder.threadId | gsub("^\\s+|\\s+$"; ""))) and
@@ -429,20 +476,28 @@ release_queue_proves_reviewed_merge() {
     ((.lifecycle.stateDirectory // "") | startswith("/")) and
     (.capabilityPolicy.routine == "routine-release") and
     (.capabilityPolicy.escalation == "reasoning-escalation") and
+    (.ownershipReceipt.mode == "queue-lease") and
+    (.ownershipReceipt.builderSuspended == true) and
+    (.ownershipReceipt.builder.threadId == .builder.threadId) and
+    (.ownershipReceipt.builder.hostId == .builder.hostId) and
+    ((.ownershipReceipt.leaseId // "") | test("\\S")) and
+    (.ownershipReceipt.fence | type == "number" and . > 0) and
+    ((.ownershipReceipt.owner.threadId // "") | test("\\S")) and
+    ((.ownershipReceipt.owner.hostId // "") | test("\\S")) and
+    (.ownershipReceipt.owner.threadId == (.ownershipReceipt.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
+    (.ownershipReceipt.owner.hostId == (.ownershipReceipt.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
+    ((.ownershipReceipt.owner.threadId != .builder.threadId) or (.ownershipReceipt.owner.hostId != .builder.hostId)) and
+    ((.ownershipReceipt.owner.threadId != .reviewReceipt.owner.threadId) or (.ownershipReceipt.owner.hostId != .reviewReceipt.owner.hostId)) and
+    ((.ownershipReceipt.owner.threadId != .testerReceipt.owner.threadId) or (.ownershipReceipt.owner.hostId != .testerReceipt.owner.hostId)) and
     (.ownerHistory | type == "array" and length > 0) and
     (any(.ownerHistory[]?;
-      (.leaseId // "" | test("\\S")) and
-      (.fence | type == "number" and . > 0) and
+      .leaseId == $item.ownershipReceipt.leaseId and
+      .fence == $item.ownershipReceipt.fence and
       .claimedPr == $pr and
-      (.owner.threadId // "" | test("\\S")) and
-      (.owner.hostId // "" | test("\\S")) and
-      (.owner.threadId == (.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
-      (.owner.hostId == (.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
-      ((.owner.threadId != $item.builder.threadId) or (.owner.hostId != $item.builder.hostId)) and
-      ((.owner.threadId != $item.reviewReceipt.owner.threadId) or (.owner.hostId != $item.reviewReceipt.owner.hostId)) and
-      ((.owner.threadId != $item.testerReceipt.owner.threadId) or (.owner.hostId != $item.testerReceipt.owner.hostId))
+      .owner == $item.ownershipReceipt.owner
     )) and
     (.terminalReceipts | type == "array") and
+    ([.terminalReceipts[]? | select(.kind == "source-merge" and .pr == $pr)] | length == 1) and
     (any(.terminalReceipts[]?;
       .kind == "source-merge" and
       .schemaVersion == 1 and
@@ -461,7 +516,7 @@ release_queue_proves_reviewed_merge() {
 moving_main_path_requires_new_approval() {
   local target_path="$1"
   case "${target_path}" in
-    SECURITY.md | .github/* | scripts/* | \
+    SECURITY.md | CODEOWNERS | docs/CODEOWNERS | .github/* | scripts/* | \
       src/security/* | src/secrets/* | src/config/*secret* | src/config/*/*secret* | \
       src/gateway/*auth* | src/gateway/*/*auth* | src/gateway/*secret* | src/gateway/*/*secret* | \
       src/gateway/security-path* | src/gateway/resolve-configured-secret-input-string* | \
@@ -525,7 +580,7 @@ dry_run_reviewed_remote_main() {
       die "dry-run main commit ${commit_sha} PR #${pr:-unknown} lacks exact-head fenced receipts"
     release_queue_paths_are_routine "${pr}" || \
       die "dry-run main commit ${commit_sha} PR #${pr:-unknown} touches security/release-class paths"
-    "${PR_REQUIRED_SCRIPT}" --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
+    run_pr_required --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
   done < <(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.commits[].sha')
   printf '%s\n' "${head_sha}"
 }
