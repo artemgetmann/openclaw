@@ -482,7 +482,7 @@ describe("withOpenComputerUseLock", () => {
       const originalRm = fs.rm.bind(fs);
       const originalRmdir = fs.rmdir.bind(fs);
       let injected = false;
-      const rm = vi.spyOn(fs, "rm").mockImplementation(async (targetPath, options) => {
+      const rm = vi.spyOn(fs, "rm").mockImplementation(async (targetPath) => {
         if (
           failureMode === "marker-rm" &&
           !injected &&
@@ -492,14 +492,14 @@ describe("withOpenComputerUseLock", () => {
           injected = true;
           throw Object.assign(new Error("injected marker removal failure"), { code: "EIO" });
         }
-        return await originalRm(targetPath, options);
+        return await originalRm(targetPath);
       });
-      const rmdir = vi.spyOn(fs, "rmdir").mockImplementation(async (targetPath, options) => {
+      const rmdir = vi.spyOn(fs, "rmdir").mockImplementation(async (targetPath) => {
         if (failureMode === "rmdir" && !injected && String(targetPath).endsWith(".lock")) {
           injected = true;
           throw Object.assign(new Error("injected rmdir failure"), { code: "EIO" });
         }
-        return await originalRmdir(targetPath, options);
+        return await originalRmdir(targetPath);
       });
 
       try {
@@ -528,8 +528,8 @@ describe("withOpenComputerUseLock", () => {
       successorStarted = resolve;
     });
     let intercepted = false;
-    const rmdir = vi.spyOn(fs, "rmdir").mockImplementation(async (targetPath, options) => {
-      await originalRmdir(targetPath, options);
+    const rmdir = vi.spyOn(fs, "rmdir").mockImplementation(async (targetPath) => {
+      await originalRmdir(targetPath);
       if (!intercepted && String(targetPath) === `${target}.lock`) {
         intercepted = true;
         await successorHasLock;
