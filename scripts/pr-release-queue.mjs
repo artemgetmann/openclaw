@@ -944,6 +944,21 @@ function readBaseDriftCandidate(repo, item) {
   };
 }
 
+function readAuthoritativeBaseHead(repo, branch) {
+  // A PR's baseRefOid is a compare snapshot and can lag the branch tip even
+  // while GitHub correctly reports the PR as BEHIND. Classification must bind
+  // to the protected branch ref that the eventual merge will target.
+  const ref = runGhJson(
+    ["api", `repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`],
+    `GitHub base ref ${branch}`,
+  );
+  const sha = ref?.object?.sha;
+  if (!/^[0-9a-f]{40}$/i.test(sha ?? "") || ref?.object?.type !== "commit") {
+    fail(`GitHub base ref ${branch} is ambiguous`, 75);
+  }
+  return sha;
+}
+
 function readExactBaseDelta(repo, fromBaseSha, toBaseSha) {
   const comparison = runGhJson(
     ["api", `repos/${repo}/compare/${fromBaseSha}...${toBaseSha}?per_page=100`],
@@ -1028,12 +1043,14 @@ function readLiveBaseDriftEvidence(item, now) {
   ) {
     fail(`GitHub PR #${item.candidate.pr} candidate drifted from the immutable queue packet`);
   }
-  if (before.baseSha === item.candidate.testedBaseSha) {
+  const beforeBaseSha = readAuthoritativeBaseHead(repo, before.baseBranch);
+  if (beforeBaseSha === item.candidate.testedBaseSha) {
     fail(`GitHub PR #${item.candidate.pr} base has not advanced`);
   }
-  const baseDelta = readExactBaseDelta(repo, item.candidate.testedBaseSha, before.baseSha);
+  const baseDelta = readExactBaseDelta(repo, item.candidate.testedBaseSha, beforeBaseSha);
   const after = readBaseDriftCandidate(repo, item);
-  if (JSON.stringify(before) !== JSON.stringify(after)) {
+  const afterBaseSha = readAuthoritativeBaseHead(repo, after.baseBranch);
+  if (JSON.stringify(before) !== JSON.stringify(after) || beforeBaseSha !== afterBaseSha) {
     fail(`GitHub PR #${item.candidate.pr} changed during base-drift classification`);
   }
 
@@ -1060,7 +1077,7 @@ function readLiveBaseDriftEvidence(item, now) {
       diffFingerprint: item.candidate.diffFingerprint,
       changedPaths: candidatePaths,
     },
-    currentBase: { branch: before.baseBranch, sha: before.baseSha },
+    currentBase: { branch: before.baseBranch, sha: beforeBaseSha },
     baseDelta,
     overlapPaths,
     mergeable: before.mergeable,

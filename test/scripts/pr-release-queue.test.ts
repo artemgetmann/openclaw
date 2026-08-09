@@ -52,6 +52,7 @@ const heads = JSON.parse(process.env.TEST_PR_HEADS ?? "{}");
 const bases = JSON.parse(process.env.TEST_PR_BASES ?? "{}");
 const paths = JSON.parse(process.env.TEST_PR_PATHS ?? "{}");
 const patches = JSON.parse(process.env.TEST_PR_PATCHES ?? "{}");
+const branchHeads = JSON.parse(process.env.TEST_BRANCH_HEADS ?? "{}");
 if (args[0] === "pr" && args[1] === "view") {
   const afterChecks = fs.existsSync(process.env.TEST_GH_CHECK_MARKER);
   const afterCompare = fs.existsSync(process.env.TEST_GH_COMPARE_MARKER);
@@ -75,6 +76,12 @@ if (args[0] === "pr" && args[1] === "view") {
   if (endpoint.includes("/compare/")) {
     fs.writeFileSync(process.env.TEST_GH_COMPARE_MARKER, "queried");
     process.stdout.write(process.env.TEST_BASE_COMPARISON);
+  } else if (endpoint.includes("/git/ref/heads/")) {
+    const afterCompare = fs.existsSync(process.env.TEST_GH_COMPARE_MARKER);
+    const sha = afterCompare && process.env.TEST_BRANCH_HEAD_AFTER_COMPARE
+      ? process.env.TEST_BRANCH_HEAD_AFTER_COMPARE
+      : branchHeads.main;
+    process.stdout.write(JSON.stringify({ object: { type: "commit", sha } }));
   } else if (endpoint.includes("/protection/required_status_checks")) {
     if (process.env.TEST_LEGACY_PROTECTION === "404") {
       process.stderr.write("HTTP 404: branch protection not found");
@@ -112,6 +119,7 @@ if (args[0] === "pr" && args[1] === "view") {
       TEST_PR_BASES: "{}",
       TEST_PR_PATHS: "{}",
       TEST_PR_PATCHES: "{}",
+      TEST_BRANCH_HEADS: JSON.stringify({ main: "0".repeat(40) }),
       TEST_GH_CHECK_MARKER: path.join(root, "checks-queried"),
       TEST_GH_COMPARE_MARKER: path.join(root, "compare-queried"),
       TEST_LEGACY_PROTECTION: JSON.stringify({
@@ -322,8 +330,11 @@ function configureBaseDrift(
   const fromBaseSha = options.fromBaseSha ?? packet.candidate.testedBaseSha;
   const basePaths = options.basePaths ?? ["src/unrelated.ts"];
   const bases = JSON.parse(fixture.env.TEST_PR_BASES);
-  bases[String(pr)] = currentBaseSha;
+  // GitHub may retain the PR's tested base snapshot while the protected branch
+  // ref advances. This mirrors the live BEHIND state that triggered dogfood.
+  bases[String(pr)] = fromBaseSha;
   fixture.env.TEST_PR_BASES = JSON.stringify(bases);
+  fixture.env.TEST_BRANCH_HEADS = JSON.stringify({ main: currentBaseSha });
   fixture.env.TEST_PR_MERGEABLE = options.mergeable ?? "MERGEABLE";
   fixture.env.TEST_BASE_COMPARISON = JSON.stringify({
     status: "ahead",
@@ -1356,7 +1367,7 @@ describe("scripts/pr-release-queue", () => {
       [
         80,
         (fixture: ReturnType<typeof makeFixture>) => {
-          fixture.env.TEST_PR_BASE_AFTER_COMPARE = "1".repeat(40);
+          fixture.env.TEST_BRANCH_HEAD_AFTER_COMPARE = "1".repeat(40);
         },
         "changed during base-drift classification",
       ],
