@@ -27,10 +27,22 @@ cat >"${PACKAGE_SCRIPT_FIXTURE}" <<'EOF'
 EOF
 chmod +x "${PROBE_SCRIPT}" "${PACKAGE_SCRIPT_FIXTURE}"
 
+if /bin/bash "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh" --help >/dev/null 2>&1; then
+  fail "explicit bash launch bypassed the clean-entry sentinel"
+fi
+ENTRY_MARKER="${TMP_ROOT}/unsafe-source-ran"
+if /usr/bin/env "BASH_FUNC_source%%=() { : >\"${ENTRY_MARKER}\"; builtin source \"\$@\"; }" \
+    /bin/bash "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh" --help >/dev/null 2>&1; then
+  fail "function-injected explicit bash launch bypassed the clean-entry sentinel"
+fi
+[[ ! -e "${ENTRY_MARKER}" ]] || fail "ambient source function ran before clean-entry rejection"
+pass "clean-entry sentinel rejects explicit bash and imported functions"
+
 export OPENCLAW_SHIP_JARVIS_HOTFIX_LIB_ONLY=1
 export OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE=1
 export OPENCLAW_MAIN_REPO="${ROOT_DIR}"
 export OPENCLAW_EXPECTED_MAIN_REPO="${ROOT_DIR}"
+export OPENCLAW_HOTFIX_CLEAN_ENTRY=1
 # shellcheck source=scripts/ship-jarvis-hotfix.sh
 source "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh"
 
@@ -45,6 +57,7 @@ production_probe="$(
     OPENCLAW_PLISTBUDDY_BIN=/tmp/fake-plistbuddy \
     JARVIS_RELEASE_DISK_REQUIRED_KIB=1 \
     JARVIS_RELEASE_DISK_PROBE_COMMAND=/tmp/fake-probe \
+    OPENCLAW_HOTFIX_CLEAN_ENTRY=1 \
     /bin/bash -c '
       source "$0"
       printf "%s|%s|%s" "$SHIP_TEST_MODE" "$JARVIS_HOME" "$PLISTBUDDY_BIN"

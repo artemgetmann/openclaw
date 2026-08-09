@@ -1,13 +1,14 @@
-#!/usr/bin/env -S -i PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin HOME=/Users/user /bin/bash
-set -euo pipefail
+#!/usr/bin/env -S -i PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin HOME=/Users/user OPENCLAW_HOTFIX_CLEAN_ENTRY=1 /bin/bash
 
-# Direct execution enters through the clean shebang above. An explicit
-# `bash script` launch can import BASH_ENV before this file starts; refuse to
-# perform wrapper actions in that mode and direct operators to the safe entry.
-if [[ -n "${BASH_ENV:-}" || -n "${ENV:-}" ]]; then
-  printf '[ship-jarvis-hotfix] ERROR: unsafe shell startup environment; execute scripts/ship-jarvis-hotfix.sh directly\n' >&2
-  exit 126
+# This sentinel exists only in the env-clean shebang. Check it using builtins
+# before any source, command substitution, or path resolution so `bash script`
+# cannot import functions and reach wrapper authority.
+if [[ "${OPENCLAW_HOTFIX_CLEAN_ENTRY:-}" != "1" ]]; then
+  builtin printf '[ship-jarvis-hotfix] ERROR: unsafe shell entry; execute scripts/ship-jarvis-hotfix.sh directly\n' >&2
+  builtin exit 126
 fi
+builtin unset OPENCLAW_HOTFIX_CLEAN_ENTRY
+set -euo pipefail
 
 SCRIPT_NAME="ship-jarvis-hotfix"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
