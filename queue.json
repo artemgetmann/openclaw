@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 57,
+  "sequence": 58,
   "nextFence": 17,
   "mergeLease": null,
   "items": {
@@ -677,6 +677,89 @@
         "fence": 9,
         "recordedAt": "2026-08-08T08:07:08.111Z"
       }
+    },
+    "1361": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1361,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1361",
+        "headSha": "517fb8c471250b570b0f358cf780d65fd166cd94",
+        "baseBranch": "main",
+        "testedBaseSha": "46145ab4632d9c34ac7ed051a368ac39db9136d7",
+        "diffFingerprint": "sha256:619674d6355fcc2b867f030de1c2f050496a97bd58148cfb1a7cdaf4249bdf4a",
+        "changedPaths": [
+          "apps/macos/README.md",
+          "docs/agent-guides/fleet-resource-control.md",
+          "scripts/lib/heavy-local-slot.sh",
+          "scripts/package-mac-app.sh",
+          "scripts/test-heavy-local-slot.sh",
+          "scripts/tsdown-build.mjs",
+          "scripts/with-heavy-local-slot.sh",
+          "src/scripts/tsdown-build-memory.test.ts",
+          "test/scripts/package-mac-memory-profile.test.ts",
+          "tsdown.config.ts"
+        ]
+      },
+      "builder": {
+        "threadId": "019fc24d-3571-72a3-8332-46057b26107e",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fc24d-3571-72a3-8332-46057b26107e",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "517fb8c471250b570b0f358cf780d65fd166cd94",
+        "diffFingerprint": "sha256:619674d6355fcc2b867f030de1c2f050496a97bd58148cfb1a7cdaf4249bdf4a",
+        "closure": "archived",
+        "contractId": "ddc3a6bd-8700-4c31-b49f-a85e4e7d6488",
+        "owner": {
+          "threadId": "019fe4d1-9ccc-7e53-8f6c-028c2bc3e596",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "pr1361_exact_head_review",
+          "hostId": "nested-agent"
+        },
+        "headSha": "517fb8c471250b570b0f358cf780d65fd166cd94",
+        "diffFingerprint": "sha256:619674d6355fcc2b867f030de1c2f050496a97bd58148cfb1a7cdaf4249bdf4a",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1361 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "5b0434aa-379e-40f2-84fb-c82b243365a7",
+        "stateDirectory": "/Users/user/.codex/worktrees/59187d28-f06b-4335-b8da-96f47bd5edec/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T05:39:21.516Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     },
     "1362": {
       "state": "closed",
@@ -1535,10 +1618,10 @@
     }
   },
   "lastTransaction": {
-    "id": "218dddbf-78d7-41c0-aadc-8583fa2c1875",
-    "recordedAt": "2026-08-08T12:34:18.664Z"
+    "id": "03362b5f-053f-46af-895c-cb5a2387fe3d",
+    "recordedAt": "2026-08-09T05:39:21.516Z"
   },
-  "updatedAt": "2026-08-08T12:34:18.664Z",
+  "updatedAt": "2026-08-09T05:39:21.516Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
