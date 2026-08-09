@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 69,
+  "sequence": 70,
   "nextFence": 21,
   "mergeLease": null,
   "items": {
@@ -2069,13 +2069,133 @@
         "fence": 20,
         "recordedAt": "2026-08-09T08:14:08.883Z"
       }
+    },
+    "1376": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1376,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1376",
+        "headSha": "d0ef5e6624bcb88d0d55f75386d0eab686c791fa",
+        "baseBranch": "main",
+        "testedBaseSha": "b6243a67867df61e1d7bb4274013ed8c9333d228",
+        "diffFingerprint": "sha256:570eab87134b88ee1b6759029c8e5c38e74c3b7fb828889f3926f4dfa523bedb",
+        "changedPaths": [
+          "extensions/telegram/src/bot-handlers.ts",
+          "extensions/telegram/src/bot-message-dispatch.test.ts",
+          "extensions/telegram/src/bot-message-dispatch.ts",
+          "src/auto-reply/reply/followup-runner.test.ts",
+          "src/auto-reply/reply/restart-recovery.ts",
+          "src/channels/typing.test.ts",
+          "src/channels/typing.ts",
+          "src/infra/restart-continuation.ts"
+        ],
+        "title": "fix(jarvis): preserve interrupted turn intent",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: A restarted Jarvis turn resumes the newest interrupted request without reviving older approval/completion state; draft/review/read-only scope survives recovery; Telegram activity remains visible through the default ten-minute turn; queued follow-ups say they are automatic and do not promise steering when unavailable.\n- Exact head + builder proof: `d0ef5e6624bcb88d0d55f75386d0eab686c791fa`; focused changed-behavior tests PASS (3 passed); durable-turn review-fix test PASS (1 passed), formatter/lint-on-commit PASS, `git diff --check` PASS. Wider Telegram selection: 209 passed, 3 unrelated preview/GIF assertions failed.\n- Independent tester: Pending lifecycle handoff on this immutable head.\n- Jarvis delivery boundary: Product-wide / public-release receipt below; source, package, installed runtime, public release, and live end-user proof remain separate.\n- Release worker: Pending exact-head tester PASS and lifecycle handoff.\n- Dependencies / merge order / overlap: PR #1360 must also be present in the shipped runtime; it is already merged into `main` but was absent from the installed runtime during the incident.\n- Remaining proof / cleanup / rollback: Independent exact-head test, CI, merge, package/public release, installed-runtime adoption, and one bounded live restart-continuation check. Revert this commit for rollback.\n- Still hurts: The incident already sent two WhatsApp messages from a draft-only request; external sends cannot be undone.\n\n## Why This Matters\n\n- A generic restart heartbeat selected stale transcript state after a real gateway restart.\n- It asked an unrelated verification question, then interpreted the answer as authority to send two WhatsApp messages even though the interrupted request asked only for drafts.\n- The same long turn lost Telegram typing after 60 seconds and rendered a Steer action that could not work during non-streaming recovery.\n\n## Scope Boundary\n\n- Direct-turn restart recovery now targets the newest pre-restart user request and preserves its original action boundary.\n- Generic explicit gateway-sentinel recovery retains its existing prompt.\n- No config, credentials, provider routing, dependency, or external-send implementation changed.\n\n## Verification\n\n- `pnpm exec vitest run src/channels/typing.test.ts src/auto-reply/reply/followup-runner.test.ts extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/bot.create-telegram-bot.test.ts --maxWorkers 1 -t \"keeps typing alive through|routes a staged restart blocker|shows an exact Queue receipt|leaves one exact queued message safely queued\"` — 3 passed, 209 skipped.\n- `pnpm exec oxfmt --check ...` — PASS on all eight changed files.\n- Commit hooks — 0 warnings, 0 errors.\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"public-release\",\n  \"completionClaim\": \"blocked-at-boundary\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": { \"status\": \"not-applicable\", \"evidence\": \"No personal-home mutation is part of this product task.\" },\n    \"source\": { \"status\": \"proven\", \"evidence\": \"Exact head d0ef5e6624bcb88d0d55f75386d0eab686c791fa passed focused changed-behavior tests and formatting.\" },\n    \"packagedArtifact\": { \"status\": \"pending\", \"evidence\": \"Package proof remains after merge.\" },\n    \"installedRuntime\": { \"status\": \"pending\", \"evidence\": \"Installed Jarvis still predates this source head.\" },\n    \"upgradeMigration\": { \"status\": \"not-applicable\", \"evidence\": \"No persistent data or configuration schema changes.\" },\n    \"publicRelease\": { \"status\": \"pending\", \"evidence\": \"Public Jarvis release remains required for product-wide delivery.\" },\n    \"endUserBehavior\": { \"status\": \"pending\", \"evidence\": \"One bounded post-package restart-continuation scenario remains.\" }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted\n\n\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "public-release",
+          "completionClaim": "blocked-at-boundary",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation is part of this product task."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Exact head d0ef5e6624bcb88d0d55f75386d0eab686c791fa passed focused changed-behavior tests and formatting."
+            },
+            "packagedArtifact": {
+              "status": "pending",
+              "evidence": "Package proof remains after merge."
+            },
+            "installedRuntime": {
+              "status": "pending",
+              "evidence": "Installed Jarvis still predates this source head."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "No persistent data or configuration schema changes."
+            },
+            "publicRelease": {
+              "status": "pending",
+              "evidence": "Public Jarvis release remains required for product-wide delivery."
+            },
+            "endUserBehavior": {
+              "status": "pending",
+              "evidence": "One bounded post-package restart-continuation scenario remains."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fe604-e953-7c11-97e6-3d8c50061014",
+        "hostId": "local",
+        "wakeRoute": {
+          "threadId": "019fe604-e953-7c11-97e6-3d8c50061014",
+          "hostId": "local"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "d0ef5e6624bcb88d0d55f75386d0eab686c791fa",
+        "diffFingerprint": "sha256:570eab87134b88ee1b6759029c8e5c38e74c3b7fb828889f3926f4dfa523bedb",
+        "closure": "terminal-receipt",
+        "contractId": "56313dff-0242-41b8-b92d-b67491a86fe7",
+        "owner": {
+          "threadId": "/root/test_pr1376",
+          "hostId": "local"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "headSha": "d0ef5e6624bcb88d0d55f75386d0eab686c791fa",
+        "diffFingerprint": "sha256:570eab87134b88ee1b6759029c8e5c38e74c3b7fb828889f3926f4dfa523bedb",
+        "owner": {
+          "threadId": "/root/review_pr1376",
+          "hostId": "local"
+        },
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1376 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "f9aca134-eed9-4081-94b1-bfd0e25c824c",
+        "stateDirectory": "/Users/user/.codex/worktrees/903861d6-8b8f-4f4b-b4ee-365a77c6b013/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T10:45:23.913Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "3abc2b0c-adc9-473d-bc61-ba2066b9ff3d",
-    "recordedAt": "2026-08-09T08:18:28.788Z"
+    "id": "pr1376-enqueue-d0ef5e66",
+    "recordedAt": "2026-08-09T10:45:23.913Z"
   },
-  "updatedAt": "2026-08-09T08:18:28.788Z",
+  "updatedAt": "2026-08-09T10:45:23.913Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
