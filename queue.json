@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 81,
+  "sequence": 82,
   "nextFence": 25,
-  "mergeLease": {
-    "leaseId": "06ef8540-c83c-4b9a-a063-ef5f403f9d21",
-    "fence": 24,
-    "owner": {
-      "threadId": "/root/pr1373_release_executor",
-      "hostId": "nested-agent"
-    },
-    "claimedPr": 1373,
-    "claimedAt": "2026-08-09T13:47:07.330Z",
-    "heartbeatAt": "2026-08-09T13:47:07.330Z",
-    "expiresAt": "2026-08-09T14:17:07.330Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -1963,7 +1952,7 @@
       }
     },
     "1373": {
-      "state": "claimed",
+      "state": "blocked",
       "candidate": {
         "pr": 1373,
         "url": "https://github.com/artemgetmann/openclaw/pull/1373",
@@ -2055,7 +2044,13 @@
         "stateDirectory": "/Users/user/.codex/worktrees/750e1f22-d88a-445a-9267-4130524da357/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [],
+      "discoveredBlockers": [
+        {
+          "kind": "source-changed",
+          "details": "dogfood found stale PR baseRefOid; builder advanced head to authoritative protected-ref fix e60b80bb84be64fe3991705f895e54bcd5080bcb",
+          "observedAt": "2026-08-09T13:54:39.066Z"
+        }
+      ],
       "readyAt": "2026-08-09T13:45:43.725Z",
       "ownerHistory": [
         {
@@ -2684,10 +2679,10 @@
     }
   },
   "lastTransaction": {
-    "id": "9d720006-2890-48fd-bdd7-fe364263aeb5",
-    "recordedAt": "2026-08-09T13:47:07.330Z"
+    "id": "c52d1733-3c99-49d0-86aa-e5442bf57a45",
+    "recordedAt": "2026-08-09T13:54:39.066Z"
   },
-  "updatedAt": "2026-08-09T13:47:07.330Z",
+  "updatedAt": "2026-08-09T13:54:39.066Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
