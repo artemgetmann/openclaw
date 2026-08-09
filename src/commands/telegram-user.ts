@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import type { ListenerHealthSnapshot } from "../monitor/listener-health.js";
@@ -172,6 +173,41 @@ async function readLoginSecretFromStdin(kind: string | undefined): Promise<{
     throw new Error("Telegram user login received an empty local secret.");
   }
   return kind === "code" ? { code: value } : { password: value };
+}
+
+async function resolveTelegramSendMessage(
+  opts: Record<string, unknown>,
+): Promise<string | undefined> {
+  const inlineMessage = readExactStringOpt(opts, "message");
+  const messageFile = readStringOpt(opts, "messageFile");
+  if (inlineMessage !== undefined && messageFile !== undefined) {
+    throw new Error("Telegram user send accepts only one of --message or --message-file.");
+  }
+  if (messageFile !== undefined) {
+    const message =
+      messageFile === "-"
+        ? await readTelegramMessageFromStdin()
+        : await fs.readFile(messageFile, { encoding: "utf8" });
+    if (!message.trim()) {
+      throw new Error("Telegram user send received an empty --message-file.");
+    }
+    return message;
+  }
+  return inlineMessage;
+}
+
+async function readTelegramMessageFromStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw new Error("Telegram user send --message-file - requires a pipe, not a terminal.");
+  }
+  let message = "";
+  for await (const chunk of process.stdin) {
+    message += chunk.toString();
+    if (Buffer.byteLength(message, "utf8") > 4 * 1024 * 1024) {
+      throw new Error("Telegram user send message input exceeded the local limit.");
+    }
+  }
+  return message;
 }
 
 function assertNever(value: never, context: string): never {
@@ -1016,7 +1052,7 @@ export async function telegramUserOwnerClaimCommand(
 
 export async function telegramUserSendCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
   const chat = readStringOpt(opts, "chat");
-  const message = readStringOpt(opts, "message");
+  const message = await resolveTelegramSendMessage(opts);
   const media = readStringOpt(opts, "media");
   const caption = readStringOpt(opts, "caption");
   if (!chat || (!message && !media)) {

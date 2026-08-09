@@ -1338,10 +1338,13 @@ async def run_owner_claim(args: argparse.Namespace) -> int:
 
 async def run_send(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
-  message_text = str(args.message or "").strip()
+  # argv is already a lossless string boundary when Node uses execFile. Keep
+  # exact whitespace here so file/stdin-backed multiline messages arrive at
+  # Telegram byte-for-byte instead of being normalized by the adapter.
+  message_text = str(args.message or "")
   media = str(args.media or "").strip()
-  caption = str(args.caption or "").strip()
-  if not message_text and not media:
+  caption = str(args.caption or "")
+  if not message_text.strip() and not media:
     return fail("E_USAGE", "Telegram send requires --message or --media.")
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)

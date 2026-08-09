@@ -193,6 +193,13 @@ openclaw telegram-user send \
   --message "hello from the Telegram user CLI" \
   --json
 
+# Multiline or generated text must cross a file/stdin boundary. Do not place
+# JSON.stringify(message) inside a shell command: that sends visible \\n text.
+printf '%s' "$message" | openclaw telegram-user send \
+  --chat @jarvis_tester_1_bot \
+  --message-file - \
+  --json
+
 openclaw telegram-user topic-create \
   --chat -1003783709877 \
   --title "voice proof $(date +%s)" \

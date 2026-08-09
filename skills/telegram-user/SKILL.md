@@ -277,6 +277,8 @@ Default Commands
   `openclaw media transcribe --file /tmp/openclaw-media/telegram-jarvis_tester_1_bot-52830.oga --json`
 - Send a message:
   `openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello" --json`
+- Send multiline, generated, JSON, code, path, or escape-sensitive text:
+  `printf '%s' "$message" | openclaw telegram-user send --chat @jarvis_tester_1_bot --message-file - --json`
 - Reply to a specific message:
   `openclaw telegram-user send --chat @jarvis_tester_1_bot --reply-to 12345 --message "on it" --json`
 - Create a forum topic:
@@ -297,6 +299,10 @@ Default Commands
 Behavior Notes
 
 - This surface reads and writes as the user's real Telegram account.
+- Use `--message` only for simple inline text. Use `--message-file <path>` or
+  `--message-file -` for generated or multiline text. Never concatenate
+  `JSON.stringify(message)` into a shell command: JSON escaping turns real
+  newlines into visible `\\n` characters before Telegram receives the value.
 - `telegram-user login` persists pending login state so the caller does not
   manage `phone_code_hash` by hand.
 - Use `inbox` for discovery and unread triage across chats.
