@@ -115,6 +115,21 @@ function canonicalJson(value) {
   return value;
 }
 
+function readAuthoritativeBaseHead(branch) {
+  const raw = runGh(["api", `repos/{owner}/{repo}/git/ref/heads/${encodeURIComponent(branch)}`]);
+  let ref;
+  try {
+    ref = JSON.parse(raw);
+  } catch {
+    fail(`GitHub returned invalid base ref JSON for ${branch}`);
+  }
+  const sha = ref?.object?.sha;
+  if (!/^[0-9a-f]{40}$/i.test(sha ?? "") || ref?.object?.type !== "commit") {
+    fail(`GitHub base ref ${branch} is ambiguous`);
+  }
+  return sha;
+}
+
 function fetchCandidate(pr) {
   const raw = runGh([
     "pr",
@@ -184,7 +199,9 @@ function fetchCandidate(pr) {
     headRefName: metadata.headRefName,
     headSha: metadata.headRefOid,
     baseRefName: metadata.baseRefName,
-    baseSha: metadata.baseRefOid,
+    // baseRefOid is an advisory PR compare snapshot and can lag the protected
+    // branch tip. Review/test proof must bind the branch the merge targets.
+    baseSha: readAuthoritativeBaseHead(metadata.baseRefName),
     title: metadata.title,
     diffFingerprint: `sha256:${sha256(patch)}`,
     changedPaths,
@@ -1061,42 +1078,39 @@ function acceptQueueSourceReturn(pr, options) {
     fail(`cannot read queue source-return receipt: ${error.message}`);
   }
   receipt = verifyAuthoritativeQueueSourceReturn(pr, receipt);
-  const liveCandidate = fetchCandidate(pr);
-  // Re-run the fenced classification before granting source authority. If
-  // main moved again, route-base-drift atomically supersedes the old attempt
-  // and returns a receipt for the new exact base; substantive overlap stops
-  // here without ever granting the builder permission to rebase it away.
-  if (liveCandidate.baseSha !== receipt?.targetBase?.sha) {
-    try {
-      const routed = runAuthoritativeQueue([
-        "route-base-drift",
-        "--lease-id",
-        String(receipt?.sourceLease?.leaseId ?? ""),
-        "--fence",
-        String(receipt?.sourceLease?.fence ?? ""),
-        "--expected-head-sha",
-        String(receipt?.candidate?.headSha ?? ""),
-        "--expected-diff-fingerprint",
-        String(receipt?.candidate?.diffFingerprint ?? ""),
-        "--transaction-id",
-        `accept-source-return-${receipt?.attemptId ?? "missing"}-${liveCandidate.baseSha}`,
-      ]);
-      if (!routed?.sourceReturnReceipt && routed?.action !== "transaction-already-recorded") {
-        fail(
-          "continued base drift now requires semantic resolution; source authority was not granted",
-        );
-      }
-      if (routed?.sourceReturnReceipt) {
-        receipt = routed.sourceReturnReceipt;
-      }
-    } catch (error) {
-      if (error instanceof LifecycleError) {
-        throw error;
-      }
-      fail(`cannot refresh authoritative queue source return: ${error.message}`, 75);
+  // Always re-run the fenced classifier before granting source authority.
+  // A PR's baseRefOid can lag the protected branch tip, so it cannot decide
+  // whether the queue receipt needs a continued-drift refresh.
+  try {
+    const routed = runAuthoritativeQueue([
+      "route-base-drift",
+      "--lease-id",
+      String(receipt?.sourceLease?.leaseId ?? ""),
+      "--fence",
+      String(receipt?.sourceLease?.fence ?? ""),
+      "--expected-head-sha",
+      String(receipt?.candidate?.headSha ?? ""),
+      "--expected-diff-fingerprint",
+      String(receipt?.candidate?.diffFingerprint ?? ""),
+      "--transaction-id",
+      `accept-source-return-${receipt?.attemptId ?? "missing"}`,
+    ]);
+    if (!routed?.sourceReturnReceipt && routed?.action !== "transaction-already-recorded") {
+      fail(
+        "continued base drift now requires semantic resolution; source authority was not granted",
+      );
     }
-    receipt = verifyAuthoritativeQueueSourceReturn(pr, receipt);
+    if (routed?.sourceReturnReceipt) {
+      receipt = routed.sourceReturnReceipt;
+    }
+  } catch (error) {
+    if (error instanceof LifecycleError) {
+      throw error;
+    }
+    fail(`cannot refresh authoritative queue source return: ${error.message}`, 75);
   }
+  receipt = verifyAuthoritativeQueueSourceReturn(pr, receipt);
+  const liveCandidate = fetchCandidate(pr);
   return withStateLock(pr, (state) =>
     applyQueueSourceReturnToState(state, pr, receipt, liveCandidate),
   );

@@ -92,6 +92,10 @@ if (args[0] === "pr" && args[1] === "view") {
   process.stdout.write(process.env.TEST_PR_METADATA);
 } else if (args[0] === "pr" && args[1] === "diff") {
   process.stdout.write(process.env.TEST_PR_PATCH);
+} else if (args[0] === "api" && args[1].includes("/git/ref/heads/")) {
+  const metadata = JSON.parse(process.env.TEST_PR_METADATA);
+  const sha = process.env.TEST_BRANCH_HEAD ?? metadata.baseRefOid;
+  process.stdout.write(JSON.stringify({ object: { type: "commit", sha } }));
 } else {
   process.stderr.write("unexpected fake gh call: " + args.join(" "));
   process.exit(2);
@@ -158,7 +162,7 @@ function runQueueAcceptance(fixture: ReturnType<typeof makeFixture>, args: strin
     const liveCandidate = {
       headSha: fixture.metadata.headRefOid,
       baseRefName: fixture.metadata.baseRefName,
-      baseSha: fixture.metadata.baseRefOid,
+      baseSha: fixture.env.TEST_BRANCH_HEAD ?? fixture.metadata.baseRefOid,
       diffFingerprint: `sha256:${createHash("sha256")
         .update(fixture.env.TEST_PR_PATCH)
         .digest("hex")}`,
@@ -1344,8 +1348,9 @@ describe("scripts/pr-lifecycle", () => {
     const fixture = makeFixture();
     const release = beginRepoBackedRelease(fixture);
     const receiptPath = writeQueueSourceReturnReceipt(fixture, release);
-    fixture.metadata.baseRefOid = "f".repeat(40);
-    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    // Keep GitHub's PR compare snapshot stale. The authoritative queue receipt
+    // already binds the protected branch tip at the target base.
+    fixture.env.TEST_BRANCH_HEAD = "f".repeat(40);
 
     const accepted = run(fixture, ["accept-queue-source-return", "42", "--receipt", receiptPath]);
     expect(accepted).toMatchObject({

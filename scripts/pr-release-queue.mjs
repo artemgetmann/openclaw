@@ -730,8 +730,9 @@ function mutateRefresh(state, packet, options, transactionId, now) {
             testedBaseSha: activeRecovery.evidence.currentBase.sha,
           },
         };
-        const livePacket = readBaseDriftCandidate(parseRepoSlug(), continuedItem);
-        if (livePacket.baseSha !== packet.candidate.testedBaseSha) {
+        const repo = parseRepoSlug();
+        const authoritativeBaseSha = readAuthoritativeBaseHead(repo, packet.candidate.baseBranch);
+        if (authoritativeBaseSha === activeRecovery.evidence.currentBase.sha) {
           fail(
             "refreshed packet must close the exact active base-drift attempt on the live base and lifecycle",
           );

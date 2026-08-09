@@ -398,9 +398,8 @@ function rewriteFreshCandidate(
   const heads = JSON.parse(fixture.env.TEST_PR_HEADS);
   heads[String(pr)] = headSha;
   fixture.env.TEST_PR_HEADS = JSON.stringify(heads);
-  const bases = JSON.parse(fixture.env.TEST_PR_BASES);
-  bases[String(pr)] = testedBaseSha;
-  fixture.env.TEST_PR_BASES = JSON.stringify(bases);
+  // Preserve the PR compare snapshot while the authoritative branch ref moves.
+  // Refresh must not require GitHub to synchronize this advisory field first.
   const patches = JSON.parse(fixture.env.TEST_PR_PATCHES);
   patches[String(pr)] = patch;
   fixture.env.TEST_PR_PATCHES = JSON.stringify(patches);
