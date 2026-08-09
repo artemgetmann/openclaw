@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 83,
-  "nextFence": 25,
-  "mergeLease": null,
+  "sequence": 84,
+  "nextFence": 26,
+  "mergeLease": {
+    "leaseId": "e855ec33-ed92-4fe2-aeaf-29289ac73942",
+    "fence": 25,
+    "owner": {
+      "threadId": "/root/telegram_message_release",
+      "hostId": "multi-agent-local"
+    },
+    "claimedPr": 1379,
+    "claimedAt": "2026-08-09T14:06:46.424Z",
+    "heartbeatAt": "2026-08-09T14:06:46.424Z",
+    "expiresAt": "2026-08-09T14:26:46.424Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -2678,7 +2689,7 @@
       }
     },
     "1379": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1379,
         "url": "https://github.com/artemgetmann/openclaw/pull/1379",
@@ -2802,17 +2813,45 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-09T14:05:40.646Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "e855ec33-ed92-4fe2-aeaf-29289ac73942",
+          "fence": 25,
+          "owner": {
+            "threadId": "/root/telegram_message_release",
+            "hostId": "multi-agent-local"
+          },
+          "claimedPr": 1379,
+          "claimedAt": "2026-08-09T14:06:46.424Z",
+          "heartbeatAt": "2026-08-09T14:06:46.424Z",
+          "expiresAt": "2026-08-09T14:26:46.424Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [],
-      "terminalReceipts": []
+      "terminalReceipts": [],
+      "ownershipReceipt": {
+        "mode": "queue-lease",
+        "owner": {
+          "threadId": "/root/telegram_message_release",
+          "hostId": "multi-agent-local"
+        },
+        "builder": {
+          "threadId": "019fe58c-b3e5-70c2-aded-fa4404f92cdb",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "builderSuspended": true,
+        "leaseId": "e855ec33-ed92-4fe2-aeaf-29289ac73942",
+        "fence": 25,
+        "recordedAt": "2026-08-09T14:06:46.424Z"
+      }
     }
   },
   "lastTransaction": {
-    "id": "telegram-multiline-1379-enqueue-6d13e298",
-    "recordedAt": "2026-08-09T14:05:40.646Z"
+    "id": "release-1379-6d13e298-telegram-message-release-v1",
+    "recordedAt": "2026-08-09T14:06:46.424Z"
   },
-  "updatedAt": "2026-08-09T14:05:40.646Z",
+  "updatedAt": "2026-08-09T14:06:46.424Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
