@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -36,7 +36,8 @@ function usage() {
   scripts/pr-release-queue.mjs reconcile-rollout
   scripts/pr-release-queue.mjs explain-order
   scripts/pr-release-queue.mjs enqueue --packet <FILE>
-  scripts/pr-release-queue.mjs refresh --packet <FILE>
+  scripts/pr-release-queue.mjs refresh --packet <FILE> [--recovery-attempt-id <ID>]
+  scripts/pr-release-queue.mjs route-base-drift --lease-id <ID> --fence <NUMBER> --expected-head-sha <SHA> --expected-diff-fingerprint <SHA256>
   scripts/pr-release-queue.mjs recover-transient-blocker --pr <NUMBER> --head-sha <SHA> --diff-fingerprint <SHA256> --kind checks-pending
   scripts/pr-release-queue.mjs claim --thread-id <ID> --host-id <ID> [--pr <NUMBER>] [--ttl-seconds <SECONDS>]
   scripts/pr-release-queue.mjs heartbeat --lease-id <ID> --fence <NUMBER> [--ttl-seconds <SECONDS>]
@@ -107,6 +108,10 @@ function nowDate() {
 
 function isoAfter(date, seconds) {
   return new Date(date.valueOf() + seconds * 1000).toISOString();
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function emptyState(timestamp) {
@@ -646,13 +651,15 @@ function mutateEnqueue(state, packet, transactionId, now) {
       ownerHistory: [],
       mutationIntent: null,
       candidateHistory: [],
+      activeBaseDriftRecovery: null,
+      baseDriftRecoveryHistory: [],
       terminalReceipts: [],
     };
     return { action: "enqueued", pr: packet.candidate.pr };
   });
 }
 
-function mutateRefresh(state, packet, transactionId, now) {
+function mutateRefresh(state, packet, options, transactionId, now) {
   return transition(state, transactionId, now, (next) => {
     const item = next.items[String(packet.candidate.pr)];
     // An unowned schema-1 packet queued before review receipts existed can be
@@ -665,7 +672,8 @@ function mutateRefresh(state, packet, transactionId, now) {
       item.capabilityPolicy === undefined;
     if (
       !item ||
-      (!legacyUnreviewedQueued && !["blocked", "awaiting-decision"].includes(item.state))
+      (!legacyUnreviewedQueued &&
+        !["blocked", "awaiting-decision", "awaiting-builder-refresh"].includes(item.state))
     ) {
       fail(`PR #${packet.candidate.pr} is not waiting for a repaired candidate`);
     }
@@ -685,6 +693,94 @@ function mutateRefresh(state, packet, transactionId, now) {
       fail("refreshed packet must bind a new candidate head or diff");
     }
 
+    let activeRecovery = item.activeBaseDriftRecovery ?? null;
+    if (item.state === "awaiting-builder-refresh") {
+      const recoveryAttemptId = requireOption(options, "recoveryAttemptId");
+      if (
+        activeRecovery?.attemptId !== recoveryAttemptId ||
+        activeRecovery?.classification !== "automatic-safe-refresh" ||
+        activeRecovery?.status !== "awaiting-builder-refresh" ||
+        !/^[0-9a-f]{40}$/i.test(activeRecovery?.evidence?.currentBase?.sha ?? "") ||
+        typeof activeRecovery?.sourceLease?.leaseId !== "string" ||
+        !Number.isSafeInteger(activeRecovery?.sourceLease?.fence) ||
+        packet.lifecycle.contractId !== activeRecovery?.lifecycle?.contractId ||
+        packet.lifecycle.stateDirectory !== activeRecovery?.lifecycle?.stateDirectory
+      ) {
+        fail(
+          "refreshed packet must close the exact active base-drift attempt on its observed base and lifecycle",
+        );
+      }
+      const onlyActiveDriftBlocker =
+        Array.isArray(item.discoveredBlockers) &&
+        item.discoveredBlockers.length === 1 &&
+        item.discoveredBlockers[0]?.kind === "base-drift" &&
+        item.discoveredBlockers[0]?.attemptId === activeRecovery.attemptId;
+      if (!onlyActiveDriftBlocker || dependencyBlockers(item, next).length > 0) {
+        fail("base-drift refresh refuses mixed or newly active semantic blockers");
+      }
+      if (packet.candidate.testedBaseSha !== activeRecovery.evidence?.currentBase?.sha) {
+        // Main may advance while the exact builder is rebasing or re-proving.
+        // Classify only that additional base delta against the fresh packet;
+        // ambiguity leaves the old attempt retryable, while semantic overlap
+        // becomes a durable terminal record instead of a manual queue wedge.
+        const continuedItem = {
+          ...item,
+          candidate: {
+            ...packet.candidate,
+            testedBaseSha: activeRecovery.evidence.currentBase.sha,
+          },
+        };
+        const repo = parseRepoSlug();
+        const authoritativeBaseSha = readAuthoritativeBaseHead(repo, packet.candidate.baseBranch);
+        if (authoritativeBaseSha === activeRecovery.evidence.currentBase.sha) {
+          fail(
+            "refreshed packet must close the exact active base-drift attempt on the live base and lifecycle",
+          );
+        }
+        const evidence = readLiveBaseDriftEvidence(continuedItem, now);
+        if (evidence.currentBase.sha !== packet.candidate.testedBaseSha) {
+          fail("fresh packet is not bound to the exact newly classified base", 75);
+        }
+        item.baseDriftRecoveryHistory ??= [];
+        item.baseDriftRecoveryHistory.push({
+          ...activeRecovery,
+          status: "superseded-by-base-drift",
+          supersededAt: now.toISOString(),
+          supersededByBaseSha: evidence.currentBase.sha,
+        });
+        const continuedRecovery = makeBaseDriftRecovery(
+          item,
+          evidence,
+          activeRecovery.sourceLease,
+          transactionId,
+          now,
+        );
+        if (continuedRecovery.classification !== "automatic-safe-refresh") {
+          item.activeBaseDriftRecovery = null;
+          item.baseDriftRecoveryHistory.push(continuedRecovery);
+          item.state = "blocked";
+          item.discoveredBlockers = [
+            {
+              kind: "base-drift",
+              classification: continuedRecovery.classification,
+              attemptId: continuedRecovery.attemptId,
+              overlapPaths: evidence.overlapPaths,
+              observedAt: now.toISOString(),
+            },
+          ];
+          return {
+            action: "base-drift-requires-semantic-resolution",
+            pr: item.candidate.pr,
+            recovery: continuedRecovery,
+          };
+        }
+        activeRecovery = continuedRecovery;
+        item.activeBaseDriftRecovery = continuedRecovery;
+      }
+    } else if (options.recoveryAttemptId !== undefined) {
+      fail("--recovery-attempt-id is legal only for an active automatic base-drift recovery");
+    }
+
     // Preserve the old immutable attempt and its release-time findings. The
     // repaired packet becomes a fresh queued attempt only after its own exact
     // tester PASS has already been validated by validatePacket.
@@ -694,6 +790,7 @@ function mutateRefresh(state, packet, transactionId, now) {
       testerReceipt: item.testerReceipt,
       reviewReceipt: item.reviewReceipt,
       discoveredBlockers: item.discoveredBlockers,
+      baseDriftRecovery: activeRecovery,
       replacedAt: now.toISOString(),
     });
     item.candidate = packet.candidate;
@@ -705,6 +802,16 @@ function mutateRefresh(state, packet, transactionId, now) {
     item.lifecycle = packet.lifecycle;
     item.declaredDependencies = packet.declaredDependencies ?? [];
     item.discoveredBlockers = [];
+    if (activeRecovery) {
+      item.baseDriftRecoveryHistory ??= [];
+      item.baseDriftRecoveryHistory.push({
+        ...activeRecovery,
+        status: "completed",
+        completedAt: now.toISOString(),
+        repairedCandidate: packet.candidate,
+      });
+      item.activeBaseDriftRecovery = null;
+    }
     item.readyAt = now.toISOString();
     item.state = "queued";
     return { action: "candidate-refreshed", pr: packet.candidate.pr };
@@ -753,7 +860,7 @@ function runGhJson(args, label) {
     // Authentication, transport, and non-success check commands are all
     // indeterminate evidence. Do not copy stderr into queue output because an
     // external CLI error is not guaranteed to be secret-free.
-    fail(`${label} failed; transient blocker recovery evidence is indeterminate`, 75);
+    fail(`${label} failed; GitHub evidence is indeterminate`, 75);
   }
   if (output.trim() === "") {
     fail(`${label} returned empty evidence`, 75);
@@ -763,6 +870,289 @@ function runGhJson(args, label) {
   } catch {
     fail(`${label} returned malformed JSON`, 75);
   }
+}
+
+function runGhText(args, label) {
+  try {
+    return execFileSync(GH_BIN, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    // Match the JSON path's secret-silent failure boundary. External CLI
+    // stderr is not durable evidence and may contain credential-adjacent text.
+    fail(`${label} failed; base-drift evidence is indeterminate`, 75);
+  }
+}
+
+function parseBaseDriftOptions(options) {
+  const expectedHeadSha = requireOption(options, "expectedHeadSha");
+  const expectedDiffFingerprint = requireOption(options, "expectedDiffFingerprint");
+  if (!/^[0-9a-f]{40}$/i.test(expectedHeadSha)) {
+    fail("--expected-head-sha must be a 40-character commit SHA", 2);
+  }
+  if (!/^sha256:[0-9a-f]{64}$/i.test(expectedDiffFingerprint)) {
+    fail("--expected-diff-fingerprint must be a SHA-256 lifecycle fingerprint", 2);
+  }
+  return { expectedHeadSha, expectedDiffFingerprint };
+}
+
+function readBaseDriftCandidate(repo, item) {
+  const metadata = runGhJson(
+    [
+      "pr",
+      "view",
+      String(item.candidate.pr),
+      "--repo",
+      repo,
+      "--json",
+      "headRefOid,baseRefName,baseRefOid,mergeable,files",
+    ],
+    `GitHub PR #${item.candidate.pr} base-drift query`,
+  );
+  const changedPaths = Array.isArray(metadata?.files)
+    ? metadata.files.map((file) => file?.path).toSorted()
+    : null;
+  if (
+    !/^[0-9a-f]{40}$/i.test(metadata?.headRefOid ?? "") ||
+    typeof metadata?.baseRefName !== "string" ||
+    metadata.baseRefName.trim() === "" ||
+    !/^[0-9a-f]{40}$/i.test(metadata?.baseRefOid ?? "") ||
+    !["MERGEABLE", "CONFLICTING"].includes(metadata?.mergeable) ||
+    !Array.isArray(changedPaths) ||
+    changedPaths.length === 0 ||
+    changedPaths.some((changedPath) => typeof changedPath !== "string" || changedPath === "")
+  ) {
+    fail(`GitHub PR #${item.candidate.pr} base-drift identity is ambiguous`, 75);
+  }
+  if (JSON.stringify(changedPaths) !== JSON.stringify(item.candidate.changedPaths.toSorted())) {
+    fail(`GitHub PR #${item.candidate.pr} changed paths drifted from the immutable packet`);
+  }
+  const patch = runGhText(
+    ["pr", "diff", String(item.candidate.pr), "--repo", repo, "--patch"],
+    `GitHub PR #${item.candidate.pr} patch query`,
+  );
+  if (patch.trim() === "") {
+    fail(`GitHub PR #${item.candidate.pr} returned an empty patch`);
+  }
+  return {
+    headSha: metadata.headRefOid,
+    baseBranch: metadata.baseRefName,
+    baseSha: metadata.baseRefOid,
+    mergeable: metadata.mergeable,
+    changedPaths,
+    diffFingerprint: `sha256:${sha256(patch)}`,
+  };
+}
+
+function readAuthoritativeBaseHead(repo, branch) {
+  // A PR's baseRefOid is a compare snapshot and can lag the branch tip even
+  // while GitHub correctly reports the PR as BEHIND. Classification must bind
+  // to the protected branch ref that the eventual merge will target.
+  const ref = runGhJson(
+    ["api", `repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`],
+    `GitHub base ref ${branch}`,
+  );
+  const sha = ref?.object?.sha;
+  if (!/^[0-9a-f]{40}$/i.test(sha ?? "") || ref?.object?.type !== "commit") {
+    fail(`GitHub base ref ${branch} is ambiguous`, 75);
+  }
+  return sha;
+}
+
+function readExactBaseDelta(repo, fromBaseSha, toBaseSha) {
+  const comparison = runGhJson(
+    ["api", `repos/${repo}/compare/${fromBaseSha}...${toBaseSha}?per_page=100`],
+    `GitHub base comparison ${fromBaseSha}...${toBaseSha}`,
+  );
+  const commits = comparison?.commits;
+  const files = comparison?.files;
+  if (
+    comparison?.status !== "ahead" ||
+    comparison?.behind_by !== 0 ||
+    !Number.isSafeInteger(comparison?.ahead_by) ||
+    comparison.ahead_by <= 0 ||
+    comparison?.merge_base_commit?.sha !== fromBaseSha ||
+    comparison?.base_commit?.sha !== fromBaseSha ||
+    !Array.isArray(commits) ||
+    commits.length !== comparison.ahead_by ||
+    commits.some((commit) => !/^[0-9a-f]{40}$/i.test(commit?.sha ?? "")) ||
+    !Array.isArray(files) ||
+    files.length === 0 ||
+    // GitHub caps compare-file output at 300. Exactly hitting the cap cannot
+    // prove that no path was omitted, so large drift requires human inspection.
+    files.length >= 300
+  ) {
+    fail("GitHub base comparison is incomplete, non-linear, or ambiguous", 75);
+  }
+
+  const normalizedFiles = files
+    .map((file) => ({
+      filename: file?.filename,
+      previousFilename: file?.previous_filename ?? null,
+      status: file?.status,
+      additions: file?.additions,
+      deletions: file?.deletions,
+      changes: file?.changes,
+      patch: file?.patch,
+    }))
+    .toSorted((left, right) => String(left.filename).localeCompare(String(right.filename)));
+  if (
+    normalizedFiles.some(
+      (file) =>
+        typeof file.filename !== "string" ||
+        file.filename === "" ||
+        file.previousFilename !== null ||
+        !["added", "modified", "removed"].includes(file.status) ||
+        !Number.isSafeInteger(file.additions) ||
+        !Number.isSafeInteger(file.deletions) ||
+        !Number.isSafeInteger(file.changes) ||
+        typeof file.patch !== "string" ||
+        file.patch === "",
+    )
+  ) {
+    // Renames, binaries, and patch-truncated files can hide semantic overlap.
+    // They are deliberately not classified as benign from path names alone.
+    fail("GitHub base comparison contains rename, binary, or incomplete diff evidence", 75);
+  }
+  const paths = normalizedFiles.map((file) => file.filename);
+  if (new Set(paths).size !== paths.length) {
+    fail("GitHub base comparison contains duplicate changed paths", 75);
+  }
+  const fingerprintInput = JSON.stringify({
+    fromBaseSha,
+    toBaseSha,
+    commits: commits.map((commit) => commit.sha),
+    files: normalizedFiles,
+  });
+  return {
+    fromBaseSha,
+    toBaseSha,
+    commitShas: commits.map((commit) => commit.sha),
+    changedPaths: paths,
+    diffFingerprint: `sha256:${sha256(fingerprintInput)}`,
+  };
+}
+
+function readLiveBaseDriftEvidence(item, now) {
+  const repo = parseRepoSlug();
+  const before = readBaseDriftCandidate(repo, item);
+  if (
+    before.headSha !== item.candidate.headSha ||
+    before.baseBranch !== item.candidate.baseBranch ||
+    before.diffFingerprint !== item.candidate.diffFingerprint
+  ) {
+    fail(`GitHub PR #${item.candidate.pr} candidate drifted from the immutable queue packet`);
+  }
+  const beforeBaseSha = readAuthoritativeBaseHead(repo, before.baseBranch);
+  if (beforeBaseSha === item.candidate.testedBaseSha) {
+    fail(`GitHub PR #${item.candidate.pr} base has not advanced`);
+  }
+  const baseDelta = readExactBaseDelta(repo, item.candidate.testedBaseSha, beforeBaseSha);
+  const after = readBaseDriftCandidate(repo, item);
+  const afterBaseSha = readAuthoritativeBaseHead(repo, after.baseBranch);
+  if (JSON.stringify(before) !== JSON.stringify(after) || beforeBaseSha !== afterBaseSha) {
+    fail(`GitHub PR #${item.candidate.pr} changed during base-drift classification`);
+  }
+
+  const candidatePaths = item.candidate.changedPaths.toSorted();
+  const candidatePathSet = new Set(candidatePaths);
+  const overlapPaths = baseDelta.changedPaths.filter((changedPath) =>
+    candidatePathSet.has(changedPath),
+  );
+  const classification =
+    before.mergeable === "CONFLICTING"
+      ? "substantive-conflict"
+      : overlapPaths.length > 0
+        ? "substantive-overlap"
+        : "automatic-safe-refresh";
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    source: "github-live-base-drift",
+    repository: repo,
+    observedAt: now.toISOString(),
+    candidate: {
+      pr: item.candidate.pr,
+      headSha: item.candidate.headSha,
+      testedBaseSha: item.candidate.testedBaseSha,
+      diffFingerprint: item.candidate.diffFingerprint,
+      changedPaths: candidatePaths,
+    },
+    currentBase: { branch: before.baseBranch, sha: beforeBaseSha },
+    baseDelta,
+    overlapPaths,
+    mergeable: before.mergeable,
+    classification,
+  };
+}
+
+function makeStandingBaseDriftAuthority(item, evidence) {
+  return {
+    source: "queue-base-drift-recovery",
+    // The queue reclassifies every later base advance before acceptance or
+    // refresh. This standing scope lets the exact builder survive benign churn
+    // without authorizing it to resolve an overlap or conflict on its own.
+    scope: `PR #${item.candidate.pr} source refresh from ${item.candidate.testedBaseSha} to ${evidence.currentBase.sha}`,
+    allowedActions: [
+      "rebase-exact-builder-worktree",
+      "push-expected-old-head",
+      "fresh-code-review",
+      "fresh-independent-test",
+      "regenerate-release-packet",
+      "refresh-release-queue",
+    ],
+    constraints: [
+      "exact builder only",
+      "no conflict resolution or overlapping semantic changes",
+      "no admin, bypass, deploy, runtime mutation, packaging, signing, or public release",
+    ],
+  };
+}
+
+function makeBaseDriftRecovery(item, evidence, sourceLease, transactionId, now) {
+  const automatic = evidence.classification === "automatic-safe-refresh";
+  const attemptId = randomUUID();
+  const standingAuthority = automatic ? makeStandingBaseDriftAuthority(item, evidence) : null;
+  const sourceReturnReceipt = automatic
+    ? {
+        schemaVersion: SCHEMA_VERSION,
+        role: "queue-base-drift-source-return",
+        status: "awaiting-builder-refresh",
+        attemptId,
+        candidate: evidence.candidate,
+        targetBase: evidence.currentBase,
+        classification: evidence.classification,
+        builder: { threadId: item.builder.threadId, hostId: item.builder.hostId },
+        lifecycle: item.lifecycle,
+        sourceLease: {
+          leaseId: sourceLease.leaseId,
+          fence: sourceLease.fence,
+          owner: sourceLease.owner,
+          released: true,
+        },
+        standingAuthority,
+        observedAt: now.toISOString(),
+      }
+    : null;
+  return {
+    attemptId,
+    attemptNumber: (item.baseDriftRecoveryHistory?.length ?? 0) + 1,
+    classification: evidence.classification,
+    status: automatic ? "awaiting-builder-refresh" : "semantic-resolution-required",
+    sourceLease: {
+      leaseId: sourceLease.leaseId,
+      fence: sourceLease.fence,
+      owner: sourceLease.owner,
+      releasedAt: sourceLease.releasedAt ?? now.toISOString(),
+    },
+    builder: item.builder,
+    lifecycle: item.lifecycle,
+    evidence,
+    standingAuthority,
+    sourceReturnReceipt,
+    transactionId,
+    recordedAt: now.toISOString(),
+  };
 }
 
 function runGhJsonAllowNotFound(args, label) {
@@ -1184,9 +1574,195 @@ function mutateHeartbeat(state, options, transactionId, now) {
   });
 }
 
+function mutateRouteBaseDrift(state, options, expected, transactionId, now) {
+  return transition(state, transactionId, now, (next) => {
+    const requestedLeaseId = requireOption(options, "leaseId");
+    const requestedFence = parsePositiveInteger(requireOption(options, "fence"), "--fence");
+
+    // A released fence remains the credential for this one recovery chain.
+    // Replaying it on an unchanged base is idempotent; replaying after another
+    // base advance performs a new exact classification and supersedes the old
+    // receipt instead of leaving an ownerless item wedged on a stale base.
+    for (const item of Object.values(next.items)) {
+      const attempts = [
+        ...(Array.isArray(item.baseDriftRecoveryHistory) ? item.baseDriftRecoveryHistory : []),
+        item.activeBaseDriftRecovery,
+      ].filter(Boolean);
+      const prior = attempts
+        .toReversed()
+        .find(
+          (attempt) =>
+            attempt?.sourceLease?.leaseId === requestedLeaseId &&
+            attempt.sourceLease.fence === requestedFence,
+        );
+      if (
+        prior &&
+        prior.evidence?.candidate?.headSha === expected.expectedHeadSha &&
+        prior.evidence?.candidate?.diffFingerprint === expected.expectedDiffFingerprint
+      ) {
+        if (prior === item.activeBaseDriftRecovery) {
+          const onlyActiveDriftBlocker =
+            Array.isArray(item.discoveredBlockers) &&
+            item.discoveredBlockers.length === 1 &&
+            item.discoveredBlockers[0]?.kind === "base-drift" &&
+            item.discoveredBlockers[0]?.attemptId === prior.attemptId;
+          if (!onlyActiveDriftBlocker || dependencyBlockers(item, next).length > 0) {
+            fail("continued base drift refuses mixed or newly active semantic blockers");
+          }
+          const evidence = readLiveBaseDriftEvidence(item, now);
+          if (evidence.currentBase.sha !== prior.evidence?.currentBase?.sha) {
+            item.baseDriftRecoveryHistory ??= [];
+            item.baseDriftRecoveryHistory.push({
+              ...prior,
+              status: "superseded-by-base-drift",
+              supersededAt: now.toISOString(),
+              supersededByBaseSha: evidence.currentBase.sha,
+            });
+            const recovery = makeBaseDriftRecovery(
+              item,
+              evidence,
+              prior.sourceLease,
+              transactionId,
+              now,
+            );
+            item.activeBaseDriftRecovery = null;
+            if (recovery.classification === "automatic-safe-refresh") {
+              item.activeBaseDriftRecovery = recovery;
+              item.state = "awaiting-builder-refresh";
+              item.discoveredBlockers = [
+                {
+                  kind: "base-drift",
+                  classification: recovery.classification,
+                  attemptId: recovery.attemptId,
+                  observedAt: now.toISOString(),
+                },
+              ];
+              return {
+                action: "base-drift-return-updated",
+                pr: item.candidate.pr,
+                recovery,
+                sourceReturnReceipt: recovery.sourceReturnReceipt,
+                builder: item.builder,
+                callbackRequiredForCorrectness: false,
+              };
+            }
+            item.baseDriftRecoveryHistory.push(recovery);
+            item.state = "blocked";
+            item.discoveredBlockers = [
+              {
+                kind: "base-drift",
+                classification: recovery.classification,
+                attemptId: recovery.attemptId,
+                overlapPaths: evidence.overlapPaths,
+                observedAt: now.toISOString(),
+              },
+            ];
+            return {
+              action: "base-drift-requires-semantic-resolution",
+              pr: item.candidate.pr,
+              recovery,
+              sourceReturnReceipt: null,
+            };
+          }
+        }
+        return {
+          action: "base-drift-already-routed",
+          pr: item.candidate.pr,
+          recovery: prior,
+          sourceReturnReceipt: prior.sourceReturnReceipt ?? null,
+        };
+      }
+    }
+
+    const lease = requireLease(next, options, now);
+    const item = next.items[String(lease.claimedPr)];
+    if (
+      item.candidate.headSha !== expected.expectedHeadSha ||
+      item.candidate.diffFingerprint !== expected.expectedDiffFingerprint
+    ) {
+      fail("base-drift routing identity does not match the immutable queue candidate");
+    }
+    if (item.state !== "claimed") {
+      fail(`PR #${item.candidate.pr} is not held by the active claimed release lease`);
+    }
+    if (
+      !Array.isArray(item.discoveredBlockers) ||
+      item.discoveredBlockers.length > 0 ||
+      dependencyBlockers(item, next).length > 0
+    ) {
+      fail("base-drift routing refuses mixed or newly active semantic blockers");
+    }
+    if (item.activeBaseDriftRecovery) {
+      fail(`PR #${item.candidate.pr} already has an active base-drift recovery attempt`);
+    }
+
+    const evidence = readLiveBaseDriftEvidence(item, now);
+    const automatic = evidence.classification === "automatic-safe-refresh";
+    const recovery = makeBaseDriftRecovery(item, evidence, lease, transactionId, now);
+    const { attemptId, sourceReturnReceipt } = recovery;
+
+    item.ownershipReceipt = null;
+    next.mergeLease = null;
+    if (automatic) {
+      item.activeBaseDriftRecovery = recovery;
+      item.state = "awaiting-builder-refresh";
+      item.discoveredBlockers = [
+        {
+          kind: "base-drift",
+          classification: evidence.classification,
+          attemptId,
+          observedAt: now.toISOString(),
+        },
+      ];
+      return {
+        action: "base-drift-returned-to-builder",
+        pr: item.candidate.pr,
+        recovery,
+        sourceReturnReceipt,
+        builder: item.builder,
+        lifecycleTool: {
+          sequence: [
+            "pr-lifecycle accept-queue-source-return",
+            "exact builder rebase and fresh review/test",
+            "pr-release-queue refresh",
+          ],
+        },
+        callbackRequiredForCorrectness: false,
+      };
+    }
+
+    // Any real conflict or path overlap terminates automatic churn immediately.
+    // The exact evidence stays auditable and a later fresh packet may still be
+    // accepted after explicit semantic resolution by the same builder.
+    item.baseDriftRecoveryHistory ??= [];
+    item.baseDriftRecoveryHistory.push(recovery);
+    item.state = "blocked";
+    item.discoveredBlockers = [
+      {
+        kind: "base-drift",
+        classification: evidence.classification,
+        attemptId,
+        overlapPaths: evidence.overlapPaths,
+        observedAt: now.toISOString(),
+      },
+    ];
+    return {
+      action: "base-drift-requires-semantic-resolution",
+      pr: item.candidate.pr,
+      recovery,
+      sourceReturnReceipt: null,
+      builder: item.builder,
+      callbackRequiredForCorrectness: false,
+    };
+  });
+}
+
 function mutateBlock(state, options, transactionId, now) {
   const kind = requireOption(options, "kind");
   const details = requireOption(options, "details");
+  if (kind === "base-drift") {
+    fail("base-drift requires the authenticated route-base-drift transition", 2);
+  }
   return transition(state, transactionId, now, (next) => {
     const lease = requireLease(next, options, now);
     const item = next.items[String(lease.claimedPr)];
@@ -1549,7 +2125,16 @@ function main() {
         store,
         transactionId,
         `chore(release-queue): refresh PR #${packet.candidate.pr}`,
-        (state) => mutateRefresh(state, packet, transactionId, now),
+        (state) => mutateRefresh(state, packet, options, transactionId, now),
+      );
+    }
+    case "route-base-drift": {
+      const expected = parseBaseDriftOptions(options);
+      return performMutation(
+        store,
+        transactionId,
+        "chore(release-queue): route typed base drift",
+        (state) => mutateRouteBaseDrift(state, options, expected, transactionId, now),
       );
     }
     case "recover-transient-blocker": {

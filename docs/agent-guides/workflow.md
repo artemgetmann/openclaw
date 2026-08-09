@@ -197,19 +197,29 @@ identity. `handoff-release` refuses a stale, failed, incomplete, or unclosed
 tester receipt.
 
 A capacity or managed-Jarvis health guard refusal before workload start is not
-source proof and is not a generic retry license. After the failed user-visible
+source proof and is not a generic retry license. After a failed user-visible
 tester is archived, the same builder may pass its exact contract plus a typed
 capacity-owner recovery receipt to `handoff-test --capacity-retry-contract ...
---capacity-recovery-receipt ...`. The receipt must bind that closed `FAIL`,
-record `workloadStarted=false`, prove the exact failed gate recovered (the disk
-floor or managed Jarvis health), prove empty heavy/release lock directories,
-and preserve the same immutable candidate and test contract. Cleanup may be
-`not-required`, or `complete` only when the terminal receipt also records that
-the workload never started. The command moves the failed tester unchanged into
-the attempt ledger and atomically reserves exactly one fresh tester. Repeating
-the command returns the existing reservation; a source failure, completed
-workload, missing archive, unrecovered host gate, occupied lock, release owner,
-or different candidate fails closed.
+--capacity-recovery-receipt ...`. One additional shape is legal: a
+`nested-read-only` tester terminally closed by `terminal-receipt` may retry on
+the same nested transport only when its sole recovered gate is
+`heavy_slot_occupied`. Its terminal tester receipt must carry the same typed
+`terminalCause` as the recovery receipt; free-text evidence or an independently
+asserted recovery cause cannot turn a source/test failure into a capacity
+retry. Nested disk, Jarvis-health, transport-changing, or post-workload retries
+remain forbidden.
+
+The receipt must bind that closed `FAIL`, record `workloadStarted=false`, prove
+the exact failed gate recovered, prove empty heavy/release lock directories,
+and preserve the same immutable candidate and test contract. The terminal
+tester receipt must independently record `workloadStarted=false`; cleanup may
+be `not-required`, or `complete` only when the workload never started. The
+command moves the failed tester unchanged into the attempt ledger and
+atomically reserves exactly one fresh tester. Repeating the command returns the
+existing reservation; a source/test failure, completed workload, wrong closure
+or transport, missing recovery proof, unrecovered host gate, occupied lock,
+release owner, repeated retry, identity drift, or different candidate fails
+closed.
 
 ### 4. One release operator owns merge
 
@@ -266,11 +276,32 @@ Direct rollback instead proves its recorded thread and host, archives the exact
 builder, and records `release-handoff-accepted`. Both transitions are
 idempotent [safe to retry] and fail closed for stale or adjacent identities.
 
-Behavior-bearing repair belongs to the builder. A repo-backed executor records
-the blocker and releases its lease before the same builder supplies a refreshed
-packet with fresh tester proof. A direct rollback worker may unarchive and steer
-only the exact builder thread. Neither path may create a duplicate builder,
-tester, or release owner.
+Behavior-bearing repair belongs to the builder. For base drift, a repo-backed
+executor runs `pr-release-queue route-base-drift` with its active lease/fence
+and immutable head/diff. The queue reads GitHub itself, brackets the head/base
+observation, proves the old tested base is the exact ancestor of the current
+base, fingerprints the complete base delta, and intersects its paths with the
+candidate paths. Disjoint, stable evidence atomically releases the lease and
+records one `automatic-safe-refresh` attempt for the exact builder. Any overlap,
+conflict, rename, binary/truncated diff, non-linear ancestry, changing identity,
+or malformed evidence stops automatic recovery and preserves the exact reason.
+Generic free-text `base-drift` blockers are forbidden.
+
+The builder feeds the emitted receipt to
+`pr-lifecycle accept-queue-source-return`. That transition validates the same
+builder, lifecycle contract, state directory, stale candidate, target base, and
+released fence against canonical repo-backed queue state before opening
+`awaiting-source`; fixed Git/`gh` paths and a minimal child environment prevent
+caller PATH, Git config, proxy/preload, or local queue/repository/branch/binary
+overrides from redirecting this authority boundary. The receipt grants only the
+bounded source sequence: rebase the exact isolated builder worktree onto that
+base, push with expected-old-head protection, obtain fresh review and tester
+proof, regenerate the packet, and refresh the queue. A callback may wake the
+builder but is not required for correctness; queue and lifecycle state preserve
+the attempt across compaction, callback loss, or guarded capacity waiting.
+
+A direct rollback worker may unarchive and steer only the exact builder thread.
+Neither path may create a duplicate builder, tester, or release owner.
 
 Mechanically, the release worker verifies `archived=false`, records the exact
 finding and identities with `return-source`, sends that finding to the same
@@ -279,16 +310,31 @@ different finding or identity fails closed instead of silently widening the
 repair. `handoff-test --returning-release-contract` is legal only after this
 source-return receipt.
 
-For that repair loop, the builder passes the exact active release contract to
+For either repair loop, the builder passes the exact active release contract to
 `handoff-test --returning-release-contract`. After the repaired head receives a
-fresh tester receipt and closure, `handoff-release` emits
-`action=resume-thread` for the already-recorded release task; it never emits a
-second `create_thread` action. The resumed release owner re-archives the same
-builder and records a fresh `accept-release-handoff` receipt before continuing.
-If a tester finds another source defect before release resumes, the same builder
-may repeat this cycle from `awaiting-retest` with that exact release contract and
-a closed tester. Every retired candidate stays in lifecycle history; tester and
-release identities are never reused or duplicated.
+fresh tester receipt and closure, repo-backed `handoff-release` emits
+`action=refresh-release-packet` for the same contract; direct rollback emits
+`action=resume-thread` for its already-recorded release task. Neither mode emits
+a second release owner. The queue refresh must close the exact recovery attempt
+on its observed base before a later claim receives a higher fence. A direct
+release owner re-archives the same builder and records a fresh
+`accept-release-handoff` receipt before continuing.
+If a tester finds another source defect, or benign main drift recurs after the
+queue is reclaimed, the same builder repeats this cycle with that exact release
+contract and a fresh tester. One active attempt is allowed per lease/candidate/
+observed-base tuple; completed attempts remain in order. Benign drift has no
+arbitrary retry cap, while any substantive overlap or conflict immediately
+terminates automatic churn. Every retired candidate stays in lifecycle and
+queue history; tester and release identities are never reused or duplicated.
+
+If main moves again before the builder accepts the receipt, the same retired
+fence performs a new exact cumulative classification and replaces the active
+receipt. If it moves after acceptance but before the fresh packet reaches the
+queue, `refresh` classifies only the added base range against that fresh
+candidate. Each superseded attempt remains auditable. Disjoint drift continues;
+ambiguous evidence remains safely retryable; overlap or conflict records the
+principled semantic terminal state without returning routine coordination to
+the user.
 
 If main advances again after a tester reservation was definitely cancelled
 before owner creation, the same accepted release contract may return source from

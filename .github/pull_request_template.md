@@ -45,6 +45,7 @@ Describe the problem and fix in 2–5 bullets:
 - Release worker: (repo-backed lease ID + fence + distinct owner, or direct rollback task ID + host ID; include typed task-authority packet)
 - Release acceptance: (queue `builderSuspended=true` ownership receipt, or direct rollback exact builder `archived=true` receipt)
 - Source return / re-acceptance: (`None`, or exact finding + same-builder `archived=false` receipt + repaired-head re-archive receipt)
+- Base-drift recovery: (`None`, or typed attempt ID + old/new base + classification + fresh review/test/queue-refresh receipts)
 - GitHub mutation transport: (`host-gh` or authenticated connector + expected head; exactly one)
 - Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
 - Proof still required after merge: (`None — source-only` or exact package/deploy/provider/backend/runtime/GUI/real-user work)

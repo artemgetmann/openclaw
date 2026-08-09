@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { exampleJarvisDeliveryReceipt } from "../../scripts/lib/jarvis-delivery-boundary.mjs";
+import {
+  applyQueueSourceReturnToState,
+  authoritativeQueueEnvironment,
+  resolveQueueSourceReturnFromStatus,
+} from "../../scripts/pr-lifecycle.mjs";
 
 const ROOT = process.cwd();
 const SCRIPT = path.join(ROOT, "scripts", "pr-lifecycle.mjs");
@@ -25,6 +30,7 @@ type LifecycleOutput = {
   };
   queueTool?: { sequence: string[] };
   optionalCoordination?: { nativeThread: string; establishesOwnership: boolean };
+  optionalCallback?: { route: { threadId: string; hostId: string }; establishesOwnership: boolean };
   capabilityPolicy?: { routine: string; escalation: string };
   owner?: { threadId: string; hostId: string } | null;
   prompt?: string;
@@ -43,6 +49,7 @@ type LifecycleOutput = {
       title: string;
       prContract: string;
       jarvisDeliveryBoundary?: unknown;
+      testedBaseSha: string;
     };
     builder: { threadId: string; hostId: string; wakeRoute: { threadId: string; hostId: string } };
     testerReceipt: { status: string; closure: string };
@@ -52,6 +59,8 @@ type LifecycleOutput = {
     declaredDependencies: Array<{ pr: number; relation: string; reason: string }>;
     lifecycle: { contractId: string; stateDirectory: string };
   };
+  standingAuthority?: { source: string; allowedActions: string[]; constraints: string[] };
+  attemptId?: string;
 };
 
 function makeFixture() {
@@ -77,11 +86,16 @@ function makeFixture() {
   fs.writeFileSync(
     gh,
     `#!/usr/bin/env node
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") {
   process.stdout.write(process.env.TEST_PR_METADATA);
 } else if (args[0] === "pr" && args[1] === "diff") {
   process.stdout.write(process.env.TEST_PR_PATCH);
+} else if (args[0] === "api" && args[1].includes("/git/ref/heads/")) {
+  const metadata = JSON.parse(process.env.TEST_PR_METADATA);
+  const sha = process.env.TEST_BRANCH_HEAD ?? metadata.baseRefOid;
+  process.stdout.write(JSON.stringify({ object: { type: "commit", sha } }));
 } else {
   process.stderr.write("unexpected fake gh call: " + args.join(" "));
   process.exit(2);
@@ -124,8 +138,68 @@ function withReviewReceipt(fixture: ReturnType<typeof makeFixture>, args: string
   return [...args, "--review-receipt", reviewPath];
 }
 
+function runQueueAcceptance(fixture: ReturnType<typeof makeFixture>, args: string[]) {
+  const receiptIndex = args.indexOf("--receipt");
+  const receiptPath = args[receiptIndex + 1];
+  if (receiptIndex < 0 || !receiptPath) {
+    throw new Error("queue acceptance test requires --receipt");
+  }
+  const prior = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(fixture.env)) {
+    prior.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    const queueStatePath = fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE;
+    if (!queueStatePath) {
+      throw new Error("repo-backed queue fixture was not initialized");
+    }
+    const suppliedReceipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+    const receipt = resolveQueueSourceReturnFromStatus(Number(args[1]), suppliedReceipt, {
+      action: "status",
+      state: JSON.parse(fs.readFileSync(queueStatePath, "utf8")),
+    });
+    const liveCandidate = {
+      headSha: fixture.metadata.headRefOid,
+      baseRefName: fixture.metadata.baseRefName,
+      baseSha: fixture.env.TEST_BRANCH_HEAD ?? fixture.metadata.baseRefOid,
+      diffFingerprint: `sha256:${createHash("sha256")
+        .update(fixture.env.TEST_PR_PATCH)
+        .digest("hex")}`,
+      changedPaths: fixture.metadata.files.map((file) => file.path).toSorted(),
+    };
+    const lifecyclePath = path.join(
+      fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
+      `pr-${Number(args[1])}.json`,
+    );
+    const lifecycleState = JSON.parse(fs.readFileSync(lifecyclePath, "utf8"));
+    const result = applyQueueSourceReturnToState(
+      lifecycleState,
+      Number(args[1]),
+      receipt,
+      liveCandidate,
+    );
+    fs.writeFileSync(lifecyclePath, JSON.stringify(result.state));
+    return {
+      ...result.output,
+      stateDirectory: fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
+    } as LifecycleOutput;
+  } finally {
+    for (const [key, value] of prior) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
   const reviewedArgs = withReviewReceipt(fixture, args);
+  if (reviewedArgs[0] === "accept-queue-source-return") {
+    return runQueueAcceptance(fixture, reviewedArgs);
+  }
   const commandArgs =
     reviewedArgs[0] === "handoff-release" &&
     !reviewedArgs.includes("--queue") &&
@@ -142,6 +216,14 @@ function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
 
 function runFailure(fixture: ReturnType<typeof makeFixture>, args: string[]) {
   const reviewedArgs = withReviewReceipt(fixture, args);
+  if (reviewedArgs[0] === "accept-queue-source-return") {
+    try {
+      runQueueAcceptance(fixture, reviewedArgs);
+      return { status: 0, stderr: "" };
+    } catch (error) {
+      return { status: 1, stderr: error instanceof Error ? error.message : String(error) };
+    }
+  }
   const commandArgs =
     reviewedArgs[0] === "handoff-release" &&
     !reviewedArgs.includes("--queue") &&
@@ -218,6 +300,7 @@ function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
       headSha: tester.candidate?.headSha,
       diffFingerprint: tester.candidate?.diffFingerprint,
       owner: { threadId: "capacity-blocked-tester", hostId: "tester-host" },
+      workloadStarted: false,
       evidence: ["heavy guard refused disk pressure before workload start"],
       cleanup: { status: "not-required", evidence: "workload never started" },
       limitations: [],
@@ -310,6 +393,68 @@ function writeCapacityRecovery(
   return receiptPath;
 }
 
+function completeNestedOccupiedSlotFailure(fixture: ReturnType<typeof makeFixture>) {
+  const tester = run(fixture, [
+    "handoff-test",
+    "42",
+    "--test-kind",
+    "read-only",
+    "--transport",
+    "nested-read-only",
+    "--owner-thread",
+    "builder-thread",
+    "--owner-host",
+    "builder-host",
+  ]);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "nested-capacity-tester",
+    "--host-id",
+    "nested-agent",
+  ]);
+  const receiptPath = path.join(fixture.root, "nested-capacity-fail.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "FAIL",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "nested-capacity-tester", hostId: "nested-agent" },
+      workloadStarted: false,
+      terminalCause: {
+        class: "host_capacity",
+        code: "heavy_slot_occupied",
+        workloadStarted: false,
+      },
+      evidence: ["bounded heavy-slot wait expired before workload start"],
+      cleanup: { status: "not-required", evidence: "workload never started" },
+      limitations: [],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "nested-capacity-tester",
+    "--host-id",
+    "nested-agent",
+    "--closure",
+    "terminal-receipt",
+  ]);
+  return tester;
+}
+
 function writeJarvisHealthRecovery(
   fixture: ReturnType<typeof makeFixture>,
   priorTesterContractId: string,
@@ -336,6 +481,7 @@ function capacityRetryArgs(
   priorTesterContractId: string,
   recoveryPath: string,
   testKind: "read-only" | "live-external" = "read-only",
+  transport: "nested-read-only" | "user-visible-task" = "user-visible-task",
 ) {
   return [
     "handoff-test",
@@ -343,7 +489,7 @@ function capacityRetryArgs(
     "--test-kind",
     testKind,
     "--transport",
-    "user-visible-task",
+    transport,
     "--owner-thread",
     "builder-thread",
     "--owner-host",
@@ -441,6 +587,108 @@ function completeTesterPass(fixture: ReturnType<typeof makeFixture>) {
     "--closure",
     "archived",
   ]);
+}
+
+function beginRepoBackedRelease(fixture: ReturnType<typeof makeFixture>) {
+  completeTesterPass(fixture);
+  const queueState = path.join(fixture.root, "queue.json");
+  fs.writeFileSync(
+    queueState,
+    JSON.stringify({
+      schemaVersion: 1,
+      sequence: 0,
+      nextFence: 1,
+      mergeLease: null,
+      items: {},
+      rollout: { phase: "dogfood", threshold: 3, successfulPrs: [], pausedReason: null },
+      lastTransaction: null,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    }),
+  );
+  fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = queueState;
+  return run(fixture, [
+    "handoff-release",
+    "42",
+    "--transport",
+    "queue-lease",
+    "--authority",
+    "normal-merge",
+    "--owner-thread",
+    "builder-thread",
+    "--owner-host",
+    "builder-host",
+    "--queue",
+    "repo-backed",
+  ]);
+}
+
+function writeQueueSourceReturnReceipt(
+  fixture: ReturnType<typeof makeFixture>,
+  release: LifecycleOutput,
+  targetBaseSha = "f".repeat(40),
+) {
+  const receiptPath = path.join(fixture.root, `queue-source-return-${randomUUID()}.json`);
+  const receipt = {
+    schemaVersion: 1,
+    role: "queue-base-drift-source-return",
+    status: "awaiting-builder-refresh",
+    attemptId: randomUUID(),
+    candidate: {
+      pr: 42,
+      headSha: release.releasePacket?.candidate.headSha,
+      testedBaseSha: fixture.metadata.baseRefOid,
+      diffFingerprint: release.releasePacket?.candidate.diffFingerprint,
+      changedPaths: release.releasePacket?.candidate.changedPaths,
+    },
+    targetBase: { branch: "main", sha: targetBaseSha },
+    classification: "automatic-safe-refresh",
+    builder: { threadId: "builder-thread", hostId: "builder-host" },
+    lifecycle: release.releasePacket?.lifecycle,
+    sourceLease: {
+      leaseId: randomUUID(),
+      fence: 1,
+      owner: { threadId: "release-queue-owner", hostId: "release-host" },
+      released: true,
+    },
+    standingAuthority: {
+      source: "queue-base-drift-recovery",
+      scope: `PR #42 source refresh from ${fixture.metadata.baseRefOid} to ${targetBaseSha}`,
+      allowedActions: [
+        "rebase-exact-builder-worktree",
+        "push-expected-old-head",
+        "fresh-code-review",
+        "fresh-independent-test",
+        "regenerate-release-packet",
+        "refresh-release-queue",
+      ],
+      constraints: [
+        "exact builder only",
+        "no conflict resolution or overlapping semantic changes",
+        "no admin, bypass, deploy, runtime mutation, packaging, signing, or public release",
+      ],
+    },
+    observedAt: "2026-08-05T00:00:00.000Z",
+  };
+  fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+  const queueStatePath = fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE;
+  if (!queueStatePath) {
+    throw new Error("repo-backed queue fixture was not initialized");
+  }
+  const queueState = JSON.parse(fs.readFileSync(queueStatePath, "utf8"));
+  queueState.items["42"] = {
+    state: "awaiting-builder-refresh",
+    candidate: release.releasePacket?.candidate,
+    builder: release.releasePacket?.builder,
+    lifecycle: release.releasePacket?.lifecycle,
+    activeBaseDriftRecovery: {
+      attemptId: receipt.attemptId,
+      sourceReturnReceipt: receipt,
+    },
+    ownerHistory: [],
+    terminalReceipts: [],
+  };
+  fs.writeFileSync(queueStatePath, JSON.stringify(queueState));
+  return receiptPath;
 }
 
 describe("scripts/pr-lifecycle", () => {
@@ -662,6 +910,60 @@ describe("scripts/pr-lifecycle", () => {
     });
   });
 
+  it("permits one same-transport nested retry after a terminal pre-workload occupied-slot refusal", () => {
+    const fixture = makeFixture();
+    const priorTester = completeNestedOccupiedSlotFailure(fixture);
+    const recoveryPath = writeOccupiedSlotRecovery(fixture, priorTester.contractId);
+    const retryArgs = capacityRetryArgs(
+      priorTester.contractId,
+      recoveryPath,
+      "read-only",
+      "nested-read-only",
+    );
+
+    const retry = run(fixture, retryArgs);
+    expect(retry).toMatchObject({
+      action: "spawn_nested_read_only",
+      retryOfContractId: priorTester.contractId,
+      routing: { decision: "nested-eligible" },
+    });
+    expect(run(fixture, retryArgs)).toMatchObject({
+      action: "do-not-create",
+      contractId: retry.contractId,
+    });
+  });
+
+  it("rejects nested capacity retry for a non-slot gate or any started workload", () => {
+    for (const variant of ["disk-gate", "source-failure", "workload-started"] as const) {
+      const fixture = makeFixture();
+      const priorTester = completeNestedOccupiedSlotFailure(fixture);
+      if (variant !== "disk-gate") {
+        const statePath = path.join(fixture.root, "state", "pr-42.json");
+        const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+        if (variant === "workload-started") {
+          state.tester.receipt.workloadStarted = true;
+        } else {
+          state.tester.receipt.terminalCause = {
+            class: "source_test",
+            code: "assertion_failed",
+            workloadStarted: false,
+          };
+        }
+        fs.writeFileSync(statePath, JSON.stringify(state));
+      }
+      const recoveryPath =
+        variant === "disk-gate"
+          ? writeCapacityRecovery(fixture, priorTester.contractId)
+          : writeOccupiedSlotRecovery(fixture, priorTester.contractId);
+      const rejected = runFailure(
+        fixture,
+        capacityRetryArgs(priorTester.contractId, recoveryPath, "read-only", "nested-read-only"),
+      );
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toContain("terminal pre-workload capacity FAIL");
+    }
+  });
+
   it("reserves one fresh tester after pre-workload Jarvis health recovery", () => {
     const fixture = makeFixture();
     const priorTester = completeJarvisHealthFailure(fixture);
@@ -723,6 +1025,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: replacement.candidate?.headSha,
         diffFingerprint: replacement.candidate?.diffFingerprint,
         owner: { threadId: "replacement-tester", hostId: "tester-host" },
+        workloadStarted: false,
         evidence: ["heavy guard again refused disk pressure before workload start"],
         cleanup: { status: "not-required", evidence: "workload never started" },
         limitations: [],
@@ -1039,6 +1342,180 @@ describe("scripts/pr-lifecycle", () => {
         stateDirectory: fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
       },
     });
+  });
+
+  it("accepts one exact queue base-drift receipt and regenerates a fresh repo-backed packet", () => {
+    const fixture = makeFixture();
+    const release = beginRepoBackedRelease(fixture);
+    const receiptPath = writeQueueSourceReturnReceipt(fixture, release);
+    // Keep GitHub's PR compare snapshot stale. The authoritative queue receipt
+    // already binds the protected branch tip at the target base.
+    fixture.env.TEST_BRANCH_HEAD = "f".repeat(40);
+
+    const accepted = run(fixture, ["accept-queue-source-return", "42", "--receipt", receiptPath]);
+    expect(accepted).toMatchObject({
+      action: "queue-source-return-accepted",
+      contractId: release.contractId,
+      builder: { threadId: "builder-thread", hostId: "builder-host" },
+      optionalCallback: {
+        route: { threadId: "builder-thread", hostId: "builder-host" },
+        establishesOwnership: false,
+      },
+      standingAuthority: {
+        source: "queue-base-drift-recovery",
+        allowedActions: expect.arrayContaining([
+          "rebase-exact-builder-worktree",
+          "fresh-independent-test",
+        ]),
+      },
+    });
+    expect(
+      run(fixture, ["accept-queue-source-return", "42", "--receipt", receiptPath]),
+    ).toMatchObject({ action: "queue-source-already-returned", attemptId: accepted.attemptId });
+
+    fixture.metadata.headRefOid = "c".repeat(40);
+    fixture.env.TEST_PR_PATCH = "diff --git a/AGENTS.md b/AGENTS.md\n+rebased policy\n";
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    const freshTester = run(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "read-only",
+      "--transport",
+      "nested-read-only",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--returning-release-contract",
+      release.contractId,
+    ]);
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      freshTester.contractId,
+      "--thread-id",
+      "fresh-tester",
+      "--host-id",
+      "nested-agent",
+    ]);
+    const testerReceiptPath = path.join(fixture.root, "fresh-queue-tester.json");
+    fs.writeFileSync(
+      testerReceiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: freshTester.routing,
+        contractId: freshTester.contractId,
+        status: "PASS",
+        headSha: freshTester.candidate?.headSha,
+        diffFingerprint: freshTester.candidate?.diffFingerprint,
+        owner: { threadId: "fresh-tester", hostId: "nested-agent" },
+        evidence: ["fresh exact-head proof passed after rebase"],
+        cleanup: { status: "not-required" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", testerReceiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      freshTester.contractId,
+      "--thread-id",
+      "fresh-tester",
+      "--host-id",
+      "nested-agent",
+      "--closure",
+      "terminal-receipt",
+    ]);
+    const refreshed = run(fixture, [
+      "handoff-release",
+      "42",
+      "--transport",
+      "queue-lease",
+      "--authority",
+      "normal-merge",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--queue",
+      "repo-backed",
+    ]);
+    expect(refreshed).toMatchObject({
+      action: "refresh-release-packet",
+      contractId: release.contractId,
+      releasePacket: {
+        candidate: { headSha: "c".repeat(40), testedBaseSha: "f".repeat(40) },
+        testerReceipt: { status: "PASS", closure: "terminal-receipt" },
+      },
+      optionalCoordination: { establishesOwnership: false },
+    });
+  });
+
+  it("rejects forged queue source returns, adjacent builders, stale candidates, and direct mode", () => {
+    for (const variant of ["builder", "base", "lifecycle", "direct"] as const) {
+      const fixture = makeFixture();
+      const release = beginRepoBackedRelease(fixture);
+      const receiptPath = writeQueueSourceReturnReceipt(fixture, release);
+      const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+      if (variant === "builder") {
+        receipt.builder.threadId = "adjacent-builder";
+      } else if (variant === "base") {
+        receipt.candidate.headSha = "d".repeat(40);
+      } else if (variant === "lifecycle") {
+        receipt.lifecycle.stateDirectory = path.join(fixture.root, "adjacent-ledger");
+      } else {
+        const statePath = path.join(fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR, "pr-42.json");
+        const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+        state.release.queueMode = null;
+        fs.writeFileSync(statePath, JSON.stringify(state));
+      }
+      fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+      fixture.metadata.baseRefOid = "f".repeat(40);
+      fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+      const rejected = runFailure(fixture, [
+        "accept-queue-source-return",
+        "42",
+        "--receipt",
+        receiptPath,
+      ]);
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toMatch(
+        /exact active authoritative recovery attempt|must bind the exact repo-backed lifecycle|ownerless repo-backed release contract/,
+      );
+    }
+  });
+
+  it("pins canonical queue reads despite caller PATH, Git config, and local-store overrides", () => {
+    const injected = {
+      PATH: process.env.PATH,
+      GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT,
+      OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE: process.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE,
+    };
+    process.env.PATH = "/tmp/forged-bin";
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = "/tmp/forged-queue.json";
+    try {
+      const env = authoritativeQueueEnvironment();
+      expect(env).toMatchObject({
+        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        OPENCLAW_PR_RELEASE_QUEUE_REPO: "artemgetmann/openclaw",
+      });
+      expect(env.OPENCLAW_PR_RELEASE_QUEUE_GH).toMatch(/^\/(?:opt|usr)\//);
+      expect(env).not.toHaveProperty("GIT_CONFIG_COUNT");
+      expect(env).not.toHaveProperty("OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE");
+    } finally {
+      for (const [key, value] of Object.entries(injected)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   });
 
   it("routes ordinary post-graduation handoff through the queue and preserves direct rollback", () => {

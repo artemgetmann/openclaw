@@ -12,6 +12,7 @@ const ci = readRepoFile("docs/ci.md");
 const forkGuide = readRepoFile("FORK_CONTRIBUTING.md");
 const prTemplate = readRepoFile(".github/pull_request_template.md");
 const lifecycleCommand = readRepoFile("scripts/pr-lifecycle");
+const lifecycleImplementation = readRepoFile("scripts/pr-lifecycle.mjs");
 const threadRecoverySkill = readRepoFile(".agents/skills/codex-thread-control-recovery/SKILL.md");
 const normalizedWorkflow = workflow.replace(/\s+/g, " ");
 
@@ -47,7 +48,13 @@ describe("canonical PR worker lifecycle policy", () => {
       "records the exact finding and identities with `return-source`",
     );
     expect(normalizedWorkflow).toContain(
-      "repeat this cycle from `awaiting-retest` with that exact release contract",
+      "repeats this cycle with that exact release contract and a fresh tester",
+    );
+    expect(normalizedWorkflow).toContain("`pr-release-queue route-base-drift`");
+    expect(normalizedWorkflow).toContain("`pr-lifecycle accept-queue-source-return`");
+    expect(normalizedWorkflow).toContain("callback may wake the builder but is not required");
+    expect(normalizedWorkflow).toContain(
+      "any substantive overlap or conflict immediately terminates",
     );
   });
 
@@ -83,9 +90,16 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain("typed capacity-owner recovery receipt");
     expect(normalizedWorkflow).toContain("atomically reserves exactly one fresh tester");
     expect(normalizedWorkflow).toContain("record `workloadStarted=false`");
+    expect(normalizedWorkflow).toContain("`nested-read-only` tester terminally closed");
+    expect(normalizedWorkflow).toContain("same nested transport only");
+    expect(normalizedWorkflow).toContain("same typed `terminalCause`");
+    expect(normalizedWorkflow).toContain("Nested disk, Jarvis-health, transport-changing");
     expect(normalizedWorkflow).toContain("archive nothing adjacent");
     expect(normalizedWorkflow).toContain("preserve the one known owner");
     expect(normalizedWorkflow).toContain("unarchive and steer only the exact builder thread");
+    expect(lifecycleImplementation).toContain(
+      '`accept-source-return-${receipt?.attemptId ?? "missing"}-${randomUUID()}`',
+    );
   });
 
   it("keeps CI guidance and PR receipts aligned with the canonical roles", () => {
@@ -104,6 +118,7 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(prTemplate).toContain("repo-backed lease ID + fence + distinct owner");
     expect(prTemplate).toContain("queue `builderSuspended=true` ownership receipt");
     expect(prTemplate).toContain("same-builder `archived=false` receipt");
+    expect(prTemplate).toContain("typed attempt ID + old/new base + classification");
   });
 
   it("preserves direct user authority without weakening protected gates", () => {
