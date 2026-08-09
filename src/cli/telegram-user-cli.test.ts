@@ -77,6 +77,7 @@ describe("telegram-user cli", () => {
     expect(help).toContain("openclaw telegram-user status --json");
     expect(help).toContain("openclaw telegram-user doctor --json");
     expect(help).toContain("openclaw telegram-user send --chat @jarvis_tester_1_bot");
+    expect(help).toContain("--message-file -");
     expect(help).toContain("openclaw telegram-user send --chat -1003783709877 --topic-anchor");
     expect(help).toContain("openclaw telegram-user topic-delete --chat -1003783709877");
     expect(help).toContain("openclaw telegram-user topic-resolve --chat -1003783709877");
@@ -102,6 +103,33 @@ describe("telegram-user cli", () => {
     );
     expect(help).toContain("openclaw telegram-user monitor-service install --hook-url");
     expect(help).not.toContain("pnpm openclaw:local telegram-user");
+  });
+
+  it("forwards file-backed message input without shell reinterpretation", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "send",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--message-file",
+        "/tmp/message.txt",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserSendCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "@jarvis_tester_1_bot",
+        json: true,
+        messageFile: "/tmp/message.txt",
+      }),
+      expect.anything(),
+    );
   });
 
   it("registers button-click and forwards every exact selector", async () => {

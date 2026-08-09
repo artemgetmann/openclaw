@@ -866,8 +866,10 @@ def build_parser() -> argparse.ArgumentParser:
   send = subparsers.add_parser("send", help = "Send a message as the Telegram user")
   send.add_argument("--chat", required = True, help = "Target chat username or id")
   send.add_argument("--message", help = "Message text, or caption when --media is present")
+  send.add_argument("--message-stdin", action = "store_true", help = "Read exact message text from stdin")
   send.add_argument("--media", help = "Media path or URL to upload")
   send.add_argument("--caption", help = "Caption for --media; overrides --message")
+  send.add_argument("--caption-stdin", action = "store_true", help = "Read exact media caption from stdin")
   send.add_argument("--reply-to", type = int, default = 0, help = "Reply-to message id")
   send.add_argument(
     "--voice",
@@ -1338,10 +1340,15 @@ async def run_owner_claim(args: argparse.Namespace) -> int:
 
 async def run_send(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
-  message_text = str(args.message or "").strip()
+  if args.message_stdin and args.caption_stdin:
+    return fail("E_USAGE", "Telegram send accepts only one stdin text payload.")
+  stdin_text = sys.stdin.read() if args.message_stdin or args.caption_stdin else ""
+  # Preserve exact whitespace. Node deliberately carries message text over
+  # stdin so multiline and large values never depend on OS argv limits.
+  message_text = stdin_text if args.message_stdin else str(args.message or "")
   media = str(args.media or "").strip()
-  caption = str(args.caption or "").strip()
-  if not message_text and not media:
+  caption = stdin_text if args.caption_stdin else str(args.caption or "")
+  if not message_text.strip() and not media:
     return fail("E_USAGE", "Telegram send requires --message or --media.")
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)

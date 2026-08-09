@@ -55,6 +55,10 @@ export function registerTelegramUserCli(program: Command) {
             "Send as the Telegram user account.",
           ],
           [
+            "printf '%s' \"$message\" | openclaw telegram-user send --chat @jarvis_tester_1_bot --message-file -",
+            "Send generated or multiline text without shell escape rewriting.",
+          ],
+          [
             'openclaw telegram-user send --chat -1003783709877 --topic-anchor 15250 --message "hello topic" --json',
             "Send into a forum topic by using the topic anchor returned by topic-create.",
           ],
@@ -231,7 +235,11 @@ export function registerTelegramUserCli(program: Command) {
       .command("send")
       .description("Send a Telegram DM or message as the user account")
       .requiredOption("--chat <target>", "Target chat username or id")
-      .option("--message <text>", "Message body, or caption when --media is present"),
+      .option("--message <text>", "Single-line message body, or caption when --media is present")
+      .option(
+        "--message-file <path>",
+        "Read the exact message body from a UTF-8 file; use - for stdin",
+      ),
   )
     .option("--media <path-or-url>", "Upload this media file or URL")
     .option("--caption <text>", "Caption for --media; overrides --message when both are present")

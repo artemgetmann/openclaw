@@ -69,6 +69,7 @@ const {
   telegramUserTopicDeleteCommand,
   telegramUserTopicResolveCommand,
   telegramUserWaitCommand,
+  readTelegramMessageStream,
 } = await import("./telegram-user.js");
 
 describe("telegram-user commands", () => {
@@ -499,6 +500,99 @@ describe("telegram-user commands", () => {
       voice: false,
       replyTo: undefined,
     });
+  });
+
+  it("reads multiline and escape-sensitive message files without rewriting content", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-message-"));
+    const messageFile = path.join(root, "message.txt");
+    const message = [
+      "Heading",
+      "",
+      "- real multiline item",
+      String.raw`literal \\n stays literal`,
+      String.raw`JSON: {"path":"C:\\Users\\name","value":"\\n"}`,
+      "```js",
+      String.raw`const source = "\\n";`,
+      "```",
+    ].join("\n");
+    await fs.writeFile(messageFile, message, "utf8");
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: { message_id: 125, text: message },
+    });
+
+    try {
+      await telegramUserSendCommand({ chat: "@jarvis_tester_1_bot", messageFile }, runtime);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
+      expect.objectContaining({ message }),
+    );
+  });
+
+  it("stream-decodes UTF-8 when a multibyte character crosses chunk boundaries", async () => {
+    const encoded = Buffer.from("before 🦞 after", "utf8");
+    const splitInsideEmoji = encoded.indexOf(Buffer.from("🦞")) + 2;
+    async function* chunks() {
+      yield encoded.subarray(0, splitInsideEmoji);
+      yield encoded.subarray(splitInsideEmoji);
+    }
+
+    await expect(readTelegramMessageStream(chunks(), "test")).resolves.toBe("before 🦞 after");
+  });
+
+  it("applies the same 4 MiB byte bound to streamed message sources", async () => {
+    async function* chunks() {
+      yield Buffer.alloc(4 * 1024 * 1024, "a");
+      yield Buffer.from("b");
+    }
+
+    await expect(readTelegramMessageStream(chunks(), "test")).rejects.toThrow(
+      /exceeded the 4 MiB local limit/i,
+    );
+  });
+
+  it("reproduces JSON-stringified multiline text as literal inline shell input", async () => {
+    const serializedForShell = JSON.stringify("Heading\n\n- item").slice(1, -1);
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: { message_id: 126, text: serializedForShell },
+    });
+
+    await telegramUserSendCommand(
+      { chat: "@jarvis_tester_1_bot", message: serializedForShell },
+      runtime,
+    );
+
+    expect(serializedForShell).toBe(String.raw`Heading\n\n- item`);
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
+      expect.objectContaining({ message: serializedForShell }),
+    );
+  });
+
+  it("preserves ordinary inline JSON, code, and paths that contain no newline escape", async () => {
+    const message = String.raw`{"path":"C:\\Users\\name","regex":"\\d+"}`;
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: { message_id: 127, text: message },
+    });
+
+    await telegramUserSendCommand({ chat: "@jarvis_tester_1_bot", message }, runtime);
+
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
+      expect.objectContaining({ message }),
+    );
+  });
+
+  it("rejects combining inline and file-backed message input", async () => {
+    await expect(
+      telegramUserSendCommand(
+        { chat: "@jarvis_tester_1_bot", message: "hello", messageFile: "/tmp/message.txt" },
+        runtime,
+      ),
+    ).rejects.toThrow(/only one of --message or --message-file/i);
   });
 
   it("sends media with optional caption and explicit voice mode", async () => {
