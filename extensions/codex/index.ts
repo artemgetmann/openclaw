@@ -79,6 +79,7 @@ type ToolParams = {
 const APPROVAL_NAMESPACE = "codexpilot";
 const BINDING_KIND = "codex-app-server-pilot";
 const JARVIS_RELAY_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
+const CODEX_RELAY_OVERDUE_PROGRESS_MS = 3 * 60 * 1000;
 const MONITOR_READ_ONLY_ACTIONS = new Set(["status", "fleet", "list", "search", "read"]);
 
 type CodexMonitorScope =
@@ -733,6 +734,27 @@ async function startAsyncRelay(params: {
     turnId: started.turnId,
   });
 
+  // Native callbacks are useful worker-authored detail, but they are not a
+  // correctness-grade progress primitive: a worker can simply omit one. Keep
+  // one launcher-owned overdue check so the originating Jarvis session gets a
+  // bounded update without polling, starting another worker, or changing the
+  // native thread identity. The registry re-check below suppresses this update
+  // after any terminal/callback owner has already claimed the relay.
+  const overdueTimer = setTimeout(() => {
+    void dispatchCodexOverdueProgress({
+      api: params.api,
+      registry,
+      callbackRoutes: params.callbackRoutes,
+      callbackRouteId: callbackRoute.routeId,
+      delegationId,
+    }).catch((error: unknown) => {
+      params.api.logger.error(
+        `Codex relay ${delegationId} overdue progress handback failed closed: ${formatError(error)}`,
+      );
+    });
+  }, CODEX_RELAY_OVERDUE_PROGRESS_MS);
+  overdueTimer.unref?.();
+
   // The completion handler deliberately does not send to Telegram directly.
   // It starts a new delivered Jarvis turn in the exact originating session, so
   // Jarvis can understand the Codex result, continue coordinating, and decide
@@ -740,18 +762,19 @@ async function startAsyncRelay(params: {
   void started.completion
     .then(
       async (completed) => {
-        await params.callbackRoutes.finishTurn(callbackRoute.routeId, completed.turnId);
         const durableState = await registry.get(delegationId);
         if (!durableState) {
           throw new Error(`Codex relay ${delegationId} disappeared before terminal handback`);
         }
         if (durableState.lifecycle === "delivered" && durableState.deliveryKind === "callback") {
+          await params.callbackRoutes.finishTurn(callbackRoute.routeId, completed.turnId);
           return;
         }
         if (
           durableState.lifecycle === "delivery-started" &&
           durableState.deliveryKind === "callback"
         ) {
+          await params.callbackRoutes.finishTurn(callbackRoute.routeId, completed.turnId);
           await claimAndDispatchCodexDecisionNeededToJarvis({
             api: params.api,
             registry,
@@ -762,6 +785,7 @@ async function startAsyncRelay(params: {
           return;
         }
         await registry.markTerminal(delegationId, "completed");
+        await params.callbackRoutes.finishTurn(callbackRoute.routeId, completed.turnId);
         const claimed = await registry.claimTerminalDelivery(delegationId);
         if (!claimed) {
           return;
@@ -778,14 +802,20 @@ async function startAsyncRelay(params: {
         }
       },
       async (error: unknown) => {
-        await params.callbackRoutes.finishTurn(callbackRoute.routeId, started.turnId);
         if (error instanceof CodexTurnTerminalError) {
           await registry.markTerminal(delegationId, error.terminalStatus);
+        } else {
+          // An ambiguous listener error has no terminal status to persist. Use
+          // a non-consuming marker so the overdue timer stops, while restart
+          // reconciliation retains its accepted-turn recovery path if local
+          // callback-route cleanup fails before dispatch.
+          await registry.suppressOverdueProgress(delegationId);
         }
         const record = await registry.get(delegationId);
         if (!record) {
           throw new Error(`Codex relay ${delegationId} disappeared before failure handback`);
         }
+        await params.callbackRoutes.finishTurn(callbackRoute.routeId, started.turnId);
         await claimAndDispatchCodexDecisionNeededToJarvis({
           api: params.api,
           registry,
@@ -801,7 +831,8 @@ async function startAsyncRelay(params: {
       params.api.logger.error(
         `Codex relay ${delegationId} terminal handback failed closed: ${formatError(error)}`,
       );
-    });
+    })
+    .finally(() => clearTimeout(overdueTimer));
 
   return {
     mode: "native-codex-async-relay",
@@ -811,6 +842,61 @@ async function startAsyncRelay(params: {
     turnId: started.turnId,
     ...buildCodexLaunchReceipt(started.threadId, params.execution),
   };
+}
+
+async function dispatchCodexOverdueProgress(params: {
+  api: OpenClawPluginApi;
+  registry: CodexDelegationRegistry;
+  callbackRoutes: CodexCallbackRouteRegistry;
+  callbackRouteId: string;
+  delegationId: string;
+}): Promise<void> {
+  const record = await params.registry.get(params.delegationId);
+  if (!record || record.lifecycle !== "accepted" || !record.turnId) {
+    return;
+  }
+  if (
+    !(await params.callbackRoutes.isSilentActiveTurn({
+      routeId: params.callbackRouteId,
+      relayId: record.delegationId,
+      turnId: record.turnId,
+    }))
+  ) {
+    return;
+  }
+  const claimed = await params.registry.claimOverdueProgress(record.delegationId);
+  if (!claimed) {
+    return;
+  }
+
+  // This is deliberately an observation-only handback. It neither claims the
+  // terminal delivery slot nor touches the callback sequence, so a late native
+  // callback and the launcher-owned terminal listener retain their exact-once
+  // authority. The stable idempotency key also makes accidental duplicate
+  // timer execution collapse at the Jarvis run boundary.
+  const event = [
+    `Codex relay ${claimed.delegationId} is overdue for a worker-authored progress callback.`,
+    `Trusted source: native Codex thread ${claimed.threadId}, turn ${claimed.turnId}.`,
+    "The exact accepted turn is still owned by the existing native thread; no replacement or replay was started.",
+    "Proactively tell the owner that Codex is still working and that Jarvis will report the terminal result or failure when it arrives.",
+    "Do not create a new thread, do not send a receipt-only acknowledgement, and do not claim completion.",
+  ].join("\n\n");
+  const contextKey = `${claimed.deliveryKey}:overdue-progress`;
+
+  const outcome = await dispatchJarvisEvent({
+    api: params.api,
+    record: claimed,
+    purpose: "callback",
+    event,
+    contextKey,
+    idempotencyKey: `${contextKey}:${claimed.threadId}:${claimed.turnId}`,
+    sourceSessionKey: `codex:thread:${claimed.threadId}:turn:${claimed.turnId}`,
+    sourceTool: "codex_threads",
+    fallbackLabel: `Codex relay ${claimed.delegationId} overdue progress`,
+  });
+  if (outcome === "completed") {
+    await params.registry.markOverdueProgressDelivered(claimed.delegationId);
+  }
 }
 
 export function buildCodexLaunchReceipt(
@@ -1123,9 +1209,9 @@ async function claimAndDispatchCodexDecisionNeededToJarvis(params: {
   record: CodexRelayRecord;
   reason: string;
 }): Promise<void> {
-  // Persist the irreversible decision-only classification and sole dispatch
-  // claim before crossing into Jarvis. A crash after this point must not make
-  // the native turn eligible for later inspection or result delivery.
+  // Keep the irreversible sole delivery claim immediately adjacent to the
+  // external Jarvis dispatch. All fallible local cleanup must happen first so
+  // a crash cannot permanently consume a handback that was never attempted.
   const claimed = await params.registry.claimDecisionDelivery(params.record.delegationId);
   if (!claimed) {
     return;
