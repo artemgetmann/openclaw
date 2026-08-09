@@ -458,24 +458,31 @@ async function acquireCrossProcessLock(input: {
               }
               // Each cleanup is retried once. A transient partial failure must
               // not leave a live same-PID queue record that blocks this process.
-              await fs.rm(ownerPath, { force: true }).catch(() => undefined);
-              await removeOwnedLegacySentinel({
-                legacyPath,
-                markerPath: legacyMarkerPath,
-                pid: process.pid,
-                token,
-              }).catch(() => undefined);
-              await fs.rm(ownerPath, { force: true });
-              await removeOwnedLegacySentinel({
-                legacyPath,
-                markerPath: legacyMarkerPath,
-                pid: process.pid,
-                token,
-              }).catch(async (error: unknown) => {
+              try {
+                await fs.rm(ownerPath, { force: true });
+              } catch {
+                await fs.rm(ownerPath, { force: true });
+              }
+              const removeLegacySentinel = async () =>
+                await removeOwnedLegacySentinel({
+                  legacyPath,
+                  markerPath: legacyMarkerPath,
+                  pid: process.pid,
+                  token,
+                });
+              try {
+                await removeLegacySentinel();
+              } catch (error) {
                 if ((error as { code?: string }).code !== "ENOENT") {
-                  throw error;
+                  // Retry only a failed cleanup. An unconditional second pass can
+                  // race a successor that has already published its own sentinel.
+                  await removeLegacySentinel().catch(async (retryError: unknown) => {
+                    if ((retryError as { code?: string }).code !== "ENOENT") {
+                      throw retryError;
+                    }
+                  });
                 }
-              });
+              }
               record("released", { state: "missing", path: ownerPath });
             },
           };

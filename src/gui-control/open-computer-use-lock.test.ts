@@ -493,6 +493,52 @@ describe("withOpenComputerUseLock", () => {
     },
   );
 
+  it("does not clean a successor sentinel after a contested handoff succeeds", async () => {
+    const directory = await temporaryDirectory();
+    const command = path.join(directory, "OpenComputerUse");
+    const target = await trackedLockTarget(command);
+    const originalRmdir = fs.rmdir.bind(fs);
+    let successorStarted!: () => void;
+    const successorHasLock = new Promise<void>((resolve) => {
+      successorStarted = resolve;
+    });
+    let intercepted = false;
+    const rmdir = vi.spyOn(fs, "rmdir").mockImplementation(async (targetPath, options) => {
+      await originalRmdir(targetPath, options);
+      if (!intercepted && String(targetPath) === `${target}.lock`) {
+        intercepted = true;
+        await successorHasLock;
+      }
+    });
+
+    try {
+      let releaseFirst!: () => void;
+      const firstCanFinish = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const first = withOpenComputerUseLock({
+        command,
+        timeoutMs: 500,
+        run: async () => await firstCanFinish,
+      });
+      await vi.waitFor(async () => expect(await fs.readdir(`${target}.lock`)).not.toHaveLength(0));
+      const second = withOpenComputerUseLock({
+        command,
+        timeoutMs: 500,
+        run: async () => {
+          successorStarted();
+          return "second";
+        },
+      });
+
+      releaseFirst();
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, "second"]);
+      expect(intercepted).toBe(true);
+    } finally {
+      rmdir.mockRestore();
+    }
+  });
+
   it("never age-steals a lock from a live caller with a longer operation", async () => {
     const directory = await temporaryDirectory();
     const command = path.join(directory, "OpenComputerUse");
