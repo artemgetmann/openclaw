@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 66,
+  "sequence": 67,
   "nextFence": 20,
   "mergeLease": null,
   "items": {
@@ -1950,13 +1950,98 @@
         "fence": 15,
         "recordedAt": "2026-08-08T11:48:24.194Z"
       }
+    },
+    "1374": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1374,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1374",
+        "headSha": "c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d",
+        "baseBranch": "main",
+        "testedBaseSha": "b6243a67867df61e1d7bb4274013ed8c9333d228",
+        "diffFingerprint": "sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4",
+        "changedPaths": [
+          "docs/agent-guides/workflow.md",
+          "scripts/github-connector-transport.mjs",
+          "scripts/lib/github-auth-preflight.sh",
+          "scripts/lib/github-connector-evidence.mjs",
+          "scripts/pr-lifecycle",
+          "scripts/pr-lifecycle.mjs",
+          "test/scripts/github-connector-transport.test.ts"
+        ]
+      },
+      "builder": {
+        "threadId": "019fe4fa-b5de-7070-b823-529e2aa815c9",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe4fa-b5de-7070-b823-529e2aa815c9",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d",
+        "diffFingerprint": "sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4",
+        "closure": "terminal-receipt",
+        "contractId": "53370aa4-0a01-4f7d-b303-a61470adddd4",
+        "owner": {
+          "threadId": "/root/pr1374_exact_tester",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/exact_head_review",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "headSha": "c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d",
+        "diffFingerprint": "sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4",
+        "unresolvedFindings": [],
+        "evidence": [
+          "Fixed production Git and curl witnesses with caller configuration disabled",
+          "Git replacement objects disabled for every trusted Git invocation",
+          "Host-gh default, capability gates, expected-head merge, and ambiguity no-retry preserved"
+        ]
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1374 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "808a43c0-2dde-432b-988d-5c5140ea63b6",
+        "stateDirectory": "/Users/user/.codex/worktrees/4c83028d-43c0-4a0c-8622-0e445fdfb690/openclaw/.local/pr-lifecycle-1374"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T08:10:58.195Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "3e5572b5-df77-4e15-813b-bc29629f026b",
-    "recordedAt": "2026-08-09T06:18:25.927Z"
+    "id": "be1cab7a-dcb9-4401-bac8-bdd7ca353777",
+    "recordedAt": "2026-08-09T08:10:58.195Z"
   },
-  "updatedAt": "2026-08-09T06:18:25.927Z",
+  "updatedAt": "2026-08-09T08:10:58.195Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
