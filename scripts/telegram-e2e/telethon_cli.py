@@ -869,8 +869,10 @@ def build_parser() -> argparse.ArgumentParser:
   send.add_argument("--media", help = "Media path or URL to upload")
   send.add_argument("--caption", help = "Caption for --media; overrides --message")
   send.add_argument("--reply-to", type = int, default = 0, help = "Reply-to message id")
-  send.add_argument("--topic-anchor", type = int, default = 0, help = "Forum topic anchor to validate")
-  send.add_argument("--topic-title", default = "", help = "Expected exact forum topic title")
+  # Preserve absence as None. The send backend uses presence to distinguish a
+  # named-topic assertion from an ordinary DM or message reply.
+  send.add_argument("--topic-anchor", type = int, help = "Forum topic anchor to validate")
+  send.add_argument("--topic-title", help = "Expected exact forum topic title")
   send.add_argument(
     "--voice",
     "--audio-as-voice",

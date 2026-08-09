@@ -2416,6 +2416,34 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(fake_client.send_file_calls, [])
     self.assertTrue(fake_client.disconnected)
 
+  async def test_run_send_without_topic_assertion_preserves_ordinary_send(self) -> None:
+    fake_client = FakeSendClient()
+    emitted: dict[str, object] = {}
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      args = telethon_cli.build_parser().parse_args([
+        "--session", str(session_path),
+        "send", "--chat", "me", "--message", "ordinary message",
+      ])
+      self.assertIsNone(args.topic_anchor)
+      self.assertIsNone(args.topic_title)
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_send(args)
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(len(fake_client.send_message_calls), 1)
+    self.assertEqual(fake_client.send_message_calls[0]["message"], "ordinary message")
+    self.assertEqual(fake_client.send_file_calls, [])
+    self.assertTrue(fake_client.disconnected)
+
   async def test_run_send_requires_exact_topic_title_case_before_mutation(self) -> None:
     fake_client = FakeSendClient(topic = SimpleNamespace(id = 5335, title = "Jarvis Outreach"))
     emitted: dict[str, object] = {}
