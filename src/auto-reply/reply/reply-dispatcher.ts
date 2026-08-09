@@ -239,7 +239,6 @@ export function createReplyDispatcherWithTyping(
 ): ReplyDispatcherWithTypingResult {
   const { typingCallbacks, onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
   const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
-  const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
   const signalDispatchIdle = () => {
@@ -250,11 +249,16 @@ export function createReplyDispatcherWithTyping(
       // markRunComplete(); its cleanup hook then stops the channel keepalive
       // exactly once at the honest terminal boundary.
       typingController.markDispatchIdle();
-      return;
     }
-    // Preserve the legacy direct-dispatcher fallback for callers that do not
-    // install a run-aware typing controller.
-    resolvedOnIdle?.();
+    // Explicit dispatcher-idle hooks can finalize resources unrelated to
+    // typing (for example, a streaming card). They must still run when the
+    // delivery queue drains. Only the typing callback fallback is deferred to
+    // the run-aware controller's terminal cleanup.
+    if (onIdle) {
+      onIdle();
+    } else if (!typingController) {
+      typingCallbacks?.onIdle?.();
+    }
   };
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,

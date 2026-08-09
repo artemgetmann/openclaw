@@ -1788,7 +1788,10 @@ describe("createReplyDispatcher", () => {
     };
     const result = createReplyDispatcherWithTyping({
       deliver: async () => await Promise.resolve(),
-      onIdle,
+      typingCallbacks: {
+        onReplyStart: async () => await Promise.resolve(),
+        onIdle,
+      },
     });
     result.replyOptions.onTypingController?.(typingController as unknown as TypingController);
 
@@ -1798,6 +1801,24 @@ describe("createReplyDispatcher", () => {
 
     expect(typingController.markDispatchIdle).toHaveBeenCalledTimes(1);
     expect(onIdle).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit non-typing idle finalizers when a typing controller is installed", () => {
+    const onIdle = vi.fn();
+    const typingController = {
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    };
+    const result = createReplyDispatcherWithTyping({
+      deliver: async () => await Promise.resolve(),
+      onIdle,
+    });
+    result.replyOptions.onTypingController?.(typingController as unknown as TypingController);
+
+    result.markDispatchIdle();
+
+    expect(typingController.markDispatchIdle).toHaveBeenCalledTimes(1);
+    expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
   it("keeps direct dispatcher idle cleanup when no typing controller is installed", () => {
