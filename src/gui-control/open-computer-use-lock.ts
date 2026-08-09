@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 
 const LOCK_POLL_INTERVAL_MS = 25;
@@ -257,15 +257,16 @@ export async function resolveOpenComputerUseLockTarget(
   socketIdentity?: string,
 ): Promise<string> {
   const identity = socketIdentity?.trim() || (await canonicalCommand(command));
-  // os.tmpdir() can resolve to a shared namespace on multi-user hosts while
-  // each login session owns a different OCU agent socket. Bind the lock hash to
-  // the effective user so another account can neither block nor reclaim ours.
+  // The shared OCU lock must live below OpenClaw's ownership-checked temp root,
+  // never directly below a caller-controlled or world-writable OS temp path.
+  // Keep the effective user in the hash as defense in depth for platforms where
+  // the preferred root cannot encode a numeric uid.
   const effectiveUser = typeof process.geteuid === "function" ? process.geteuid() : "unknown";
   const digest = createHash("sha256")
     .update(`${effectiveUser}\0${identity}`)
     .digest("hex")
     .slice(0, 24);
-  return path.join(os.tmpdir(), "openclaw-gui-control", `open-computer-use-${digest}`);
+  return path.join(resolvePreferredOpenClawTmpDir(), "gui-control", `open-computer-use-${digest}`);
 }
 
 function compareOwners(left: LockOwnerSnapshot, right: LockOwnerSnapshot): number {
