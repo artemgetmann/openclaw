@@ -90,6 +90,10 @@ export function createTelegramWorkingPresenceManager(params: {
         releaseRouteIfEmpty(key, promise, route);
         return;
       }
+      // Publish route ownership before the best-effort refresh. The lease is
+      // already alive for this route, so a transient pulse failure must not let
+      // another worker's completion stop presence for this still-active owner.
+      route.owners.add(ownerId);
       if (!created) {
         await route.lease.refresh();
       }
@@ -100,7 +104,6 @@ export function createTelegramWorkingPresenceManager(params: {
         releaseRouteIfEmpty(key, promise, route);
         return;
       }
-      route.owners.add(ownerId);
     },
     refresh: async (ownerId: string) => {
       const key = owners.get(ownerId);

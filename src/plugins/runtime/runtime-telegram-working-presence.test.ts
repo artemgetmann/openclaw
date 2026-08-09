@@ -83,6 +83,30 @@ describe("telegram working presence", () => {
     await vi.waitFor(() => expect(lease.stop).toHaveBeenCalledTimes(1));
   });
 
+  it("keeps an active shared owner when its best-effort refresh fails", async () => {
+    const lease = {
+      refresh: vi.fn(async () => {
+        throw new Error("telegram unavailable");
+      }),
+      stop: vi.fn(),
+    };
+    const manager = createTelegramWorkingPresenceManager({
+      startTyping: vi.fn(async () => lease),
+    });
+    const route = { to: "-1001", messageThreadId: 42 };
+
+    await manager.start({ ownerId: "worker-a", ...route });
+    await expect(manager.start({ ownerId: "worker-b", ...route })).rejects.toThrow(
+      "telegram unavailable",
+    );
+    manager.stop("worker-a");
+    await Promise.resolve();
+    expect(lease.stop).not.toHaveBeenCalled();
+
+    manager.stop("worker-b");
+    await vi.waitFor(() => expect(lease.stop).toHaveBeenCalledTimes(1));
+  });
+
   it.each(["owner stop", "gateway stop"])(
     "consumes pending provider rejection during %s cleanup",
     async (cleanup) => {
