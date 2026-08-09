@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 75,
+  "sequence": 76,
   "nextFence": 23,
   "mergeLease": null,
   "items": {
@@ -2385,13 +2385,127 @@
         "fence": 22,
         "recordedAt": "2026-08-09T12:14:20.820Z"
       }
+    },
+    "1378": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1378,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1378",
+        "headSha": "a7a46c8deb586ebc6e6b8d29ff162a6c13484190",
+        "baseBranch": "main",
+        "testedBaseSha": "cb735d2b4e9da00e7554b404d4e3d5f95ae800ce",
+        "diffFingerprint": "sha256:5272b5eb6502454056c205915c34ac1b2973f08728aefa0aa3f935c36065d9e2",
+        "changedPaths": [
+          "src/monitor/session.test.ts",
+          "src/monitor/session.ts"
+        ],
+        "title": "fix(monitors): inherit origin chat context",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: New Jarvis monitors inherit the model-visible conversation context of the originating Telegram topic while keeping autonomous wake turns in a distinct durable monitor session; oversized or unavailable origins retain the existing fresh-session fallback.\n- Exact head + builder proof: `a7a46c8deb586ebc6e6b8d29ff162a6c13484190`; `pnpm vitest run src/monitor/session.test.ts src/gateway/server-methods/monitor.test.ts src/gateway/server-cron.test.ts --maxWorkers 1` (64 passed); `pnpm tsgo`; focused oxfmt + oxlint; independent source review PASS.\n- Independent tester: PASS — nested read-only tester `/root/pr1378_exact_head_tester` on exact head `a7a46c8deb586ebc6e6b8d29ff162a6c13484190`, diff `sha256:5272b5eb6502454056c205915c34ac1b2973f08728aefa0aa3f935c36065d9e2`, contract `9a473a88-18d5-4a6c-a446-374c3a6439b4`; lifecycle closed by terminal receipt.\n- Jarvis delivery boundary: Product-wide, source target; validated receipt below.\n- Release worker: Pending tester PASS and repo-backed fenced queue lease.\n- Dependencies / merge order / overlap: None — standalone.\n- Remaining proof / cleanup / rollback: Exact-head tester, protected merge lifecycle, and real end-user monitor behavior after future package/public release. Rollback is one source revert.\n- Still hurts: Existing monitors created before this change remain isolated from their origin history; over-limit chats intentionally fall back to fresh context.\n\n## Why This Matters\n\n- A monitor could detect a new email yet ask for evidence already present in the Telegram topic because its durable session started context-free.\n- The fix makes monitor judgment start from the user's actual case history without interleaving autonomous turns into the live chat.\n\n## Scope Boundary\n\n- Branches a new monitor transcript from the origin session at monitor creation using the existing bounded parent-fork mechanism.\n- Keeps the distinct monitor session, manual reset behavior, tool policy, routing, cadence, and delivery semantics unchanged.\n- Does not package, deploy, restart, mutate the installed Jarvis runtime, call a provider, or send Telegram messages.\n\n## Verification\n\n- `pnpm vitest run src/monitor/session.test.ts src/gateway/server-methods/monitor.test.ts src/gateway/server-cron.test.ts --maxWorkers 1` — 64 passed.\n- `pnpm tsgo` — passed.\n- `pnpm exec oxfmt --write src/monitor/session.ts src/monitor/session.test.ts` — clean.\n- `pnpm exec oxlint src/monitor/session.ts src/monitor/session.test.ts` — 0 warnings/errors.\n- Independent read-only review — PASS, no correctness or isolation blocker.\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"source\",\n  \"completionClaim\": \"declared-boundary-complete\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home mutation is part of this product task.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Head a7a46c8deb586ebc6e6b8d29ff162a6c13484190 passes 64 focused monitor/gateway tests, full tsgo, formatter, lint, and independent source review.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The user explicitly requested a source PR; packaging is outside this delivery target.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No installed runtime mutation is authorized or claimed.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No schema or configuration migration is required; existing monitor records remain readable.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"Public release is outside the explicitly requested source PR boundary.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"pending\",\n      \"evidence\": \"Real end-user behavior requires a future package/public release and a newly created monitor.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "source",
+          "completionClaim": "declared-boundary-complete",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation is part of this product task."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Head a7a46c8deb586ebc6e6b8d29ff162a6c13484190 passes 64 focused monitor/gateway tests, full tsgo, formatter, lint, and independent source review."
+            },
+            "packagedArtifact": {
+              "status": "not-applicable",
+              "evidence": "The user explicitly requested a source PR; packaging is outside this delivery target."
+            },
+            "installedRuntime": {
+              "status": "not-applicable",
+              "evidence": "No installed runtime mutation is authorized or claimed."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "No schema or configuration migration is required; existing monitor records remain readable."
+            },
+            "publicRelease": {
+              "status": "not-applicable",
+              "evidence": "Public release is outside the explicitly requested source PR boundary."
+            },
+            "endUserBehavior": {
+              "status": "pending",
+              "evidence": "Real end-user behavior requires a future package/public release and a newly created monitor."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fe679-1728-71f2-b16d-2f8f367fc866",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe679-1728-71f2-b16d-2f8f367fc866",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "a7a46c8deb586ebc6e6b8d29ff162a6c13484190",
+        "diffFingerprint": "sha256:5272b5eb6502454056c205915c34ac1b2973f08728aefa0aa3f935c36065d9e2",
+        "closure": "terminal-receipt",
+        "contractId": "9a473a88-18d5-4a6c-a446-374c3a6439b4",
+        "owner": {
+          "threadId": "/root/pr1378_exact_head_tester",
+          "hostId": "nested-agent"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/monitor_context_review",
+          "hostId": "nested-agent"
+        },
+        "headSha": "a7a46c8deb586ebc6e6b8d29ff162a6c13484190",
+        "diffFingerprint": "sha256:5272b5eb6502454056c205915c34ac1b2973f08728aefa0aa3f935c36065d9e2",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1378 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "d51326c8-2209-4d62-8773-c8deabb79502",
+        "stateDirectory": "/Users/user/.codex/worktrees/91718973-5ffe-4f32-a67c-646b52facd8c/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T13:39:46.296Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "pr1377-record-merge-cb735d2b",
-    "recordedAt": "2026-08-09T12:18:00.002Z"
+    "id": "59dcc06b-4cb5-4467-9bfd-547e93e090aa",
+    "recordedAt": "2026-08-09T13:39:46.296Z"
   },
-  "updatedAt": "2026-08-09T12:18:00.002Z",
+  "updatedAt": "2026-08-09T13:39:46.296Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
