@@ -152,10 +152,10 @@ Treat authorization and temporary availability as different states:
   not once per routine stage.
 - The approval may bind to the current CI-green `main` at execution time rather
   than one soon-stale commit when the user explicitly authorizes that moving
-  target. Ordinary advancement by merged PRs with GitHub approval or canonical
-  independent reviewer and tester PASS receipts, plus green required checks,
-  then does not require another prompt. Missing or ambiguous review attribution
-  fails closed. Stop for a security/release-class change, failed or missing
+  target. Ordinary advancement by merged PRs with exact-head fenced reviewer,
+  tester-closure, landed-tree, and green required-check receipts then does not
+  require another prompt. Missing or ambiguous review attribution fails closed.
+  Stop for a security/release-class change, failed or missing
   required checks, a new external destination, broader destructive cleanup, or
   any mutation class that the original approval did not name.
 - After that explicit approval succeeds, retain ownership through deployment,
@@ -202,8 +202,8 @@ read-only Jarvis proof. It:
   even when GitHub already reports it merged, merges when needed, then
   fast-forwards with `git pull --ff-only`
 - when `main` advanced beyond the requested PR, requires every intervening
-  commit to map to exactly one merged `main` PR with GitHub approval or canonical
-  independent reviewer and tester PASS receipts and green required checks
+  commit to map to exactly one merged `main` PR with exact-head fenced reviewer,
+  tester-closure, landed-tree, and green required-check receipts
 - rejects before packaging or runtime mutation when `/Applications/Jarvis.app`
   already bundles the merged commit; that is a managed-runtime proof case, not
   a break-glass hotfix

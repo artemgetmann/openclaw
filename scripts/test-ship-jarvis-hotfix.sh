@@ -63,14 +63,25 @@ package_line="$(grep -n 'package.sh' "${TMP_ROOT}/dry-run.out" | head -n 1 | cut
   fail "dry-run package plan appeared before disk pass receipt"
 pass "dry run proves disk before printing package plan"
 
-approved_json='{"reviewDecision":"APPROVED","body":""}'
-review_receipt_json='{"reviewDecision":"","body":"- Independent reviewer: PASS with no findings\n- Independent tester: PASS on exact head"}'
-missing_tester_json='{"reviewDecision":"","body":"- Independent reviewer: PASS with no findings"}'
-reviewed_pr_receipt_valid "${approved_json}" || fail "GitHub approval was not accepted"
-reviewed_pr_receipt_valid "${review_receipt_json}" || fail "canonical review receipts were not accepted"
-if reviewed_pr_receipt_valid "${missing_tester_json}"; then
-  fail "reviewer-only receipt unexpectedly passed"
+moving_main_path_requires_new_approval "scripts/ship-jarvis-hotfix.sh" || \
+  fail "release tooling was not classified as protected"
+moving_main_path_requires_new_approval "src/gateway/auth-handler.ts" || \
+  fail "security-owned auth path was not classified as protected"
+if moving_main_path_requires_new_approval "src/agents/tool-policy.ts"; then
+  fail "ordinary source path was classified as protected"
 fi
-pass "reviewed-main gate accepts approval or complete canonical receipts only"
+pass "moving-main path gate separates routine from security/release scope"
+
+QUEUE_ITEM_FIXTURE='{"state":"closed","candidate":{"pr":42,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:test","changedPaths":["src/agents/tool-policy.ts"]},"reviewReceipt":{"schemaVersion":1,"role":"code-reviewer","status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:test","owner":{"threadId":"reviewer","hostId":"host"},"unresolvedFindings":[]},"testerReceipt":{"status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:test","closure":"terminal-receipt"},"terminalReceipts":[{"kind":"source-merge","pr":42,"reviewedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:test","mergeSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","normalNonAdmin":true,"expectedHeadProtected":true,"landedTreeMatchesReviewed":true,"targetAncestryProven":true}]}'
+release_queue_item_json() {
+  printf '%s\n' "${QUEUE_ITEM_FIXTURE}"
+}
+release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb || \
+  fail "complete exact-head queue receipt was rejected"
+QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${QUEUE_ITEM_FIXTURE}" | jq '.reviewReceipt.unresolvedFindings = [{"severity":"high"}]')"
+if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
+  fail "high review finding unexpectedly passed"
+fi
+pass "moving-main review gate requires exact-head fenced PASS receipts"
 
 printf 'All ship-jarvis-hotfix disk preflight tests passed.\n'

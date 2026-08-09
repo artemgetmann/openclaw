@@ -27,6 +27,7 @@ SHASUM_BIN="${OPENCLAW_SHASUM_BIN:-shasum}"
 PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
 
 PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-required-status.sh}"
+PR_RELEASE_QUEUE_SCRIPT="${OPENCLAW_SHIP_PR_RELEASE_QUEUE_SCRIPT:-${MAIN_REPO}/scripts/pr-release-queue}"
 PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
 OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
 PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
@@ -132,6 +133,7 @@ require_preflight_tools() {
   require_command "${UNAME_BIN}"
   require_command "${PLISTBUDDY_BIN}"
   [[ -x "${PR_REQUIRED_SCRIPT}" ]] || die "required-check helper is missing or not executable: ${PR_REQUIRED_SCRIPT}"
+  [[ -x "${PR_RELEASE_QUEUE_SCRIPT}" ]] || die "release-queue helper is missing or not executable: ${PR_RELEASE_QUEUE_SCRIPT}"
   [[ -x "${PACKAGE_SCRIPT}" ]] || die "package helper is missing or not executable: ${PACKAGE_SCRIPT}"
   [[ -x "${OPEN_APP_SCRIPT}" ]] || die "app-open helper is missing or not executable: ${OPEN_APP_SCRIPT}"
   [[ -x "${PROTECT_SCRIPT}" ]] || die "runtime-protection helper is missing or not executable: ${PROTECT_SCRIPT}"
@@ -310,24 +312,80 @@ associated_main_pr_json() {
     '[.[] | select(.merged_at != null and .base.ref == "main" and .merge_commit_sha == $commit)] | if length == 1 then .[0].number else empty end')"
   [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]] || \
     die "main commit ${commit_sha} is not attributable to exactly one merged main PR"
-  "${GH_BIN}" pr view "${pr_number}" \
-    --json number,state,baseRefName,mergeCommit,reviewDecision,body
+  "${GH_BIN}" pr view "${pr_number}" --json number,state,baseRefName,mergeCommit
 }
 
-reviewed_pr_receipt_valid() {
-  local json="$1"
-  local review_decision=""
-  local body=""
-  review_decision="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.reviewDecision // empty')"
-  body="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.body // empty')"
+release_queue_item_json() {
+  local pr="$1"
+  local status=""
+  status="$("${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
+  # The wrapper emits a secret-silent preflight receipt before the JSON body.
+  # Select the first JSON object instead of trusting a fixed line count.
+  printf '%s\n' "${status}" | sed -n '/^{/,$p' | "${JQ_BIN}" -c --arg pr "${pr}" '.state.items[$pr] // empty'
+}
 
-  # GitHub approval is sufficient. The fork's canonical worker lifecycle also
-  # records independent reviewer and tester PASS receipts in Review Fast Path;
-  # require both when repository policy uses those receipts instead of a GitHub
-  # approval decision.
-  [[ "${review_decision}" == "APPROVED" ]] && return 0
-  printf '%s\n' "${body}" | grep -Eq '^- Independent (code )?review(er)?:.*PASS' || return 1
-  printf '%s\n' "${body}" | grep -Eq '^- Independent tester:.*PASS' || return 1
+release_queue_proves_reviewed_merge() {
+  local pr="$1"
+  local commit_sha="$2"
+  local item=""
+  item="$(release_queue_item_json "${pr}")"
+  [[ -n "${item}" ]] || return 1
+  printf '%s\n' "${item}" | "${JQ_BIN}" -e --argjson pr "${pr}" --arg commit "${commit_sha}" '
+    (.state | IN("merged", "delivery-barrier", "delivered", "closed")) and
+    (.candidate.pr == $pr) and
+    (.reviewReceipt.schemaVersion == 1) and
+    (.reviewReceipt.role == "code-reviewer") and
+    (.reviewReceipt.status == "PASS") and
+    (.reviewReceipt.headSha == .candidate.headSha) and
+    (.reviewReceipt.diffFingerprint == .candidate.diffFingerprint) and
+    ((.reviewReceipt.owner.threadId // "") | length > 0) and
+    ((.reviewReceipt.owner.hostId // "") | length > 0) and
+    ([.reviewReceipt.unresolvedFindings[]? | select(.severity == "high" or .severity == "critical")] | length == 0) and
+    (.testerReceipt.status == "PASS") and
+    (.testerReceipt.headSha == .candidate.headSha) and
+    (.testerReceipt.diffFingerprint == .candidate.diffFingerprint) and
+    (.testerReceipt.closure | IN("archived", "terminal-receipt")) and
+    (any(.terminalReceipts[]?;
+      .kind == "source-merge" and
+      .pr == $pr and
+      .reviewedHeadSha == $item.candidate.headSha and
+      .diffFingerprint == $item.candidate.diffFingerprint and
+      .mergeSha == $commit and
+      .normalNonAdmin == true and
+      .expectedHeadProtected == true and
+      .landedTreeMatchesReviewed == true and
+      .targetAncestryProven == true
+    ))
+  ' --argjson item "${item}" >/dev/null
+}
+
+moving_main_path_requires_new_approval() {
+  local target_path="$1"
+  case "${target_path}" in
+    SECURITY.md | .github/CODEOWNERS | .github/dependabot.yml | .github/codeql/* | .github/workflows/* | \
+      src/security/* | src/secrets/* | src/config/*secret* | src/config/*/*secret* | \
+      src/gateway/*auth* | src/gateway/*/*auth* | src/gateway/*secret* | src/gateway/*/*secret* | \
+      src/agents/*auth* | src/agents/*/*auth* | src/agents/sandbox.ts | src/agents/sandbox-* | \
+      src/agents/sandbox/* | src/infra/secret-file* | docs/security/* | \
+      scripts/openclaw-npm-publish.sh | scripts/openclaw-npm-release-check.ts | \
+      scripts/release-check.ts | scripts/ship-jarvis-hotfix.sh | docs/reference/RELEASING.md)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+release_queue_paths_are_routine() {
+  local pr="$1"
+  local item=""
+  local target_path=""
+  item="$(release_queue_item_json "${pr}")"
+  [[ -n "${item}" ]] || return 1
+  while IFS= read -r target_path; do
+    [[ -n "${target_path}" ]] || continue
+    moving_main_path_requires_new_approval "${target_path}" && return 1
+  done < <(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths[]?')
+  return 0
 }
 
 confirm_intervening_reviewed_main() {
@@ -351,11 +409,52 @@ confirm_intervening_reviewed_main() {
       die "main commit ${commit_sha} PR #${pr:-unknown} does not target main"
     commit_matches "${commit_sha}" "${pr_merge_sha}" || \
       die "main commit ${commit_sha} does not match PR #${pr:-unknown} merge receipt"
-    reviewed_pr_receipt_valid "${json}" || \
-      die "main commit ${commit_sha} PR #${pr:-unknown} lacks approved review or independent reviewer+tester PASS receipts"
-    "${PR_REQUIRED_SCRIPT}" --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
+    release_queue_proves_reviewed_merge "${pr}" "${commit_sha}" || \
+      die "main commit ${commit_sha} PR #${pr:-unknown} lacks exact-head fenced reviewer, tester, and landed-tree receipts"
+    release_queue_paths_are_routine "${pr}" || \
+      die "main commit ${commit_sha} PR #${pr:-unknown} touches security/release-class paths and requires new approval"
+    "${PR_REQUIRED_SCRIPT}" --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
     log "accepted reviewed newer main commit ${commit_sha} from PR #${pr}"
   done < <("${GIT_BIN}" -C "${MAIN_REPO}" rev-list --reverse "${merge_sha}..${head_sha}")
+  return 0
+}
+
+dry_run_reviewed_remote_main() {
+  local merge_sha="$1"
+  local repo=""
+  local head_sha=""
+  local compare=""
+  local total=""
+  local returned=""
+  local commit_sha=""
+  local pr=""
+  local json=""
+
+  repo="$(${GH_BIN} repo view --json nameWithOwner --jq '.nameWithOwner')"
+  [[ -n "${repo}" ]] || die "could not resolve GitHub repository for dry-run main proof"
+  head_sha="$(${GH_BIN} api "repos/${repo}/commits/main" --jq '.sha')"
+  valid_commit "${head_sha}" || die "remote main HEAD is missing or invalid in dry-run"
+  commit_matches "${merge_sha}" "${head_sha}" && {
+    printf '%s\n' "${head_sha}"
+    return 0
+  }
+  compare="$(${GH_BIN} api "repos/${repo}/compare/${merge_sha}...${head_sha}")"
+  [[ "$(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.status // empty')" == "ahead" ]] || \
+    die "remote main is not a strict descendant of requested PR merge in dry-run"
+  total="$(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.total_commits // -1')"
+  returned="$(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.commits | length')"
+  [[ "${total}" =~ ^[0-9]+$ && "${total}" == "${returned}" ]] || \
+    die "dry-run compare did not return every intervening main commit"
+  while IFS= read -r commit_sha; do
+    json="$(associated_main_pr_json "${commit_sha}")"
+    pr="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.number // empty')"
+    release_queue_proves_reviewed_merge "${pr}" "${commit_sha}" || \
+      die "dry-run main commit ${commit_sha} PR #${pr:-unknown} lacks exact-head fenced receipts"
+    release_queue_paths_are_routine "${pr}" || \
+      die "dry-run main commit ${commit_sha} PR #${pr:-unknown} touches security/release-class paths"
+    "${PR_REQUIRED_SCRIPT}" --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
+  done < <(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.commits[].sha')
+  printf '%s\n' "${head_sha}"
 }
 
 normal_package_build() {
@@ -906,13 +1005,13 @@ main() {
     expected_commit="<post-merge-main>"
     log "OPEN PR dry-run uses prospective commit ${expected_commit}; real commit resolves after merge and git pull"
   elif (( DRY_RUN == 1 )); then
-    # A MERGED PR has immutable remote merge truth even when sacred main has
-    # not fast-forwarded yet. Model comparisons and the package/seed plan from
-    # that merge commit instead of silently substituting stale local HEAD.
+    # Resolve remote main without mutating the sacred checkout, then apply the
+    # same review, scope, and required-check gates as the live post-pull path.
     expected_commit="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.mergeCommit.oid // empty')"
     [[ "${expected_commit}" =~ ^[0-9a-fA-F]{7,40}$ ]] || \
       die "merged PR is missing a valid mergeCommit.oid for dry-run"
-    log "MERGED PR dry-run models remote merge commit ${expected_commit}; local main advances only in the live git pull"
+    expected_commit="$(dry_run_reviewed_remote_main "${expected_commit}")"
+    log "MERGED PR dry-run models reviewed remote main ${expected_commit}; local main advances only in the live git pull"
     assert_installed_app_needs_hotfix "${expected_commit}"
   else
     # Live packaging is pinned to the refetched PR receipt, not a fresh HEAD
