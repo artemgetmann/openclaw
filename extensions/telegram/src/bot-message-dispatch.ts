@@ -3197,7 +3197,7 @@ export const dispatchTelegramMessage = async ({
           // render. The shorter fallback still makes the queue state explicit
           // to both a person and an agent reading message history.
           const queueReceiptText = queueKeyboard
-            ? "Queued behind the current task. Tap Steer to send it to the current task now."
+            ? "Queued as the next task — no action needed. Steer works only while the current task can accept live changes."
             : "Queued behind the current task.";
           const sent = await bot.api.sendMessage(chatId, queueReceiptText, {
             ...buildTelegramThreadParams(threadSpec),

@@ -1687,9 +1687,12 @@ export const registerTelegramHandlers = ({
         }
         if (promotion.status === "still-queued" && promotion.reason === "not-streaming") {
           const keyboard = buildInlineKeyboard(buildTelegramQueuedButtons(queueCallback.durableId));
-          await editCallbackMessage("Still queued — the current task can’t be steered right now.", {
-            reply_markup: keyboard ?? { inline_keyboard: [] },
-          });
+          await editCallbackMessage(
+            "Queued as the next task — no action needed. The current task can’t accept live changes right now.",
+            {
+              reply_markup: keyboard ?? { inline_keyboard: [] },
+            },
+          );
           return;
         }
 
