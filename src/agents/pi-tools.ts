@@ -48,6 +48,7 @@ import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.sc
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { isXaiProvider } from "./schema/clean-for-xai.js";
+import { resolveStoredSubagentMonitorToolDelegation } from "./subagent-capabilities.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
   applyToolPolicyPipeline,
@@ -602,8 +603,20 @@ export function createOpenClawCodingTools(options?: {
     modelId: options?.modelId,
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
+  // A child spawned by a verified owner turn may inherit only monitor authority.
+  // Other owner-only tools remain filtered, and the ordinary subagent policy
+  // still removes gateway, cron, nodes, login, and session-control tools.
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  const delegatedOwnerTools = resolveStoredSubagentMonitorToolDelegation(options?.sessionKey, {
+    cfg: options?.config,
+  })
+    ? new Set(["monitor"])
+    : new Set<string>();
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(
+    toolsForModelProvider,
+    senderIsOwner,
+    delegatedOwnerTools,
+  );
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),

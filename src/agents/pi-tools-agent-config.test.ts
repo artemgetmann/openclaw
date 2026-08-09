@@ -343,6 +343,56 @@ describe("Agent-specific tool filtering", () => {
     expect(nonOwnerTools.map((t) => t.name)).not.toContain("monitor");
   });
 
+  it("keeps delegated monitor authority for an owner-spawned subagent", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-owner-subagent-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const delegatedKey = "agent:main:subagent:delegated-owner";
+    const undelegatedKey = "agent:main:subagent:ordinary-caller";
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [delegatedKey]: {
+          sessionId: "delegated-owner",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+          subagentMonitorToolDelegation: true,
+        },
+        [undelegatedKey]: {
+          sessionId: "ordinary-caller",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+          subagentMonitorToolDelegation: false,
+        },
+      }),
+      "utf8",
+    );
+
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      tools: { profile: "coding" },
+    };
+    const toolNames = (sessionKey: string) =>
+      createOpenClawCodingTools({
+        config: cfg,
+        sessionKey,
+        workspaceDir: tempDir,
+        agentDir: tempDir,
+        messageProvider: "telegram",
+        senderIsOwner: false,
+      }).map((tool) => tool.name);
+
+    expect(toolNames(delegatedKey)).toContain("monitor");
+    expect(toolNames(delegatedKey)).not.toContain("cron");
+    expect(toolNames(delegatedKey)).not.toContain("gateway");
+    expect(toolNames(delegatedKey)).not.toContain("nodes");
+    expect(toolNames(undelegatedKey)).not.toContain("monitor");
+  });
+
   it("should allow different tool policies for different agents", () => {
     const cfg: OpenClawConfig = {
       agents: {

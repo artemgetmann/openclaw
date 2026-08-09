@@ -44,17 +44,24 @@ function isOwnerOnlyTool(tool: AnyAgentTool) {
   return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
 }
 
-export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+export function applyOwnerOnlyToolPolicy(
+  tools: AnyAgentTool[],
+  senderIsOwner: boolean,
+  delegatedOwnerTools: ReadonlySet<string> = new Set(),
+) {
   const withGuard = tools.map((tool) => {
     if (!isOwnerOnlyTool(tool)) {
       return tool;
     }
-    return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
+    const delegated = delegatedOwnerTools.has(normalizeToolName(tool.name));
+    return wrapOwnerOnlyToolExecution(tool, senderIsOwner || delegated);
   });
   if (senderIsOwner) {
     return withGuard;
   }
-  return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
+  return withGuard.filter(
+    (tool) => !isOwnerOnlyTool(tool) || delegatedOwnerTools.has(normalizeToolName(tool.name)),
+  );
 }
 
 export type ToolPolicyLike = {

@@ -105,6 +105,31 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
 }
 
 describe("gateway sessions patch", () => {
+  test("persists immutable monitor delegation only on subagent sessions", async () => {
+    const subagentKey = "agent:main:subagent:monitor-delegation";
+    const store: Record<string, SessionEntry> = {};
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        storeKey: subagentKey,
+        patch: { key: subagentKey, subagentMonitorToolDelegation: true },
+      }),
+    );
+    expect(entry.subagentMonitorToolDelegation).toBe(true);
+
+    const changed = await runPatch({
+      store,
+      storeKey: subagentKey,
+      patch: { key: subagentKey, subagentMonitorToolDelegation: false },
+    });
+    expect(changed.ok).toBe(false);
+
+    const mainSession = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, subagentMonitorToolDelegation: true },
+    });
+    expect(mainSession.ok).toBe(false);
+  });
+
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({

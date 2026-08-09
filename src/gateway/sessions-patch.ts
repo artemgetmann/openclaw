@@ -272,6 +272,29 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("subagentMonitorToolDelegation" in patch) {
+    const raw = patch.subagentMonitorToolDelegation;
+    if (raw === null) {
+      if (typeof existing?.subagentMonitorToolDelegation === "boolean") {
+        return invalid("subagentMonitorToolDelegation cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!isSubagentSessionKey(storeKey)) {
+        return invalid("subagentMonitorToolDelegation is only supported for subagent sessions");
+      }
+      if (
+        typeof existing?.subagentMonitorToolDelegation === "boolean" &&
+        existing.subagentMonitorToolDelegation !== raw
+      ) {
+        return invalid("subagentMonitorToolDelegation cannot be changed once set");
+      }
+      // This capability is stamped by the core spawn path before the child
+      // starts. Keeping it immutable prevents a later child turn from changing
+      // the verified owner decision that created the session.
+      next.subagentMonitorToolDelegation = raw;
+    }
+  }
+
   if ("label" in patch) {
     const raw = patch.label;
     if (raw === null) {

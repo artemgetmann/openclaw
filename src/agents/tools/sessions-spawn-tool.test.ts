@@ -79,6 +79,20 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("passes verified owner authority only through the trusted tool context", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:telegram:direct:1336356696",
+      senderIsOwner: true,
+    });
+
+    await tool.execute("call-owner", { task: "create one monitor" });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ senderIsOwner: true }),
+    );
+  });
+
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
