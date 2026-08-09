@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 68,
+  "sequence": 69,
   "nextFence": 21,
-  "mergeLease": {
-    "leaseId": "b3750037-bfb9-4745-bef6-8f1fd89b9f39",
-    "fence": 20,
-    "owner": {
-      "threadId": "/root/pr1374_release",
-      "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
-    },
-    "claimedPr": 1374,
-    "claimedAt": "2026-08-09T08:14:08.883Z",
-    "heartbeatAt": "2026-08-09T08:14:08.883Z",
-    "expiresAt": "2026-08-09T08:34:08.883Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -1963,7 +1952,7 @@
       }
     },
     "1374": {
-      "state": "claimed",
+      "state": "blocked",
       "candidate": {
         "pr": 1374,
         "url": "https://github.com/artemgetmann/openclaw/pull/1374",
@@ -2040,7 +2029,13 @@
         "stateDirectory": "/Users/user/.codex/worktrees/4c83028d-43c0-4a0c-8622-0e445fdfb690/openclaw/.local/pr-lifecycle-1374"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [],
+      "discoveredBlockers": [
+        {
+          "kind": "mergeability-conflict",
+          "details": "PR #1374 head c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d and trusted Git diff sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4 remain exact against main b6243a67867df61e1d7bb4274013ed8c9333d228, but GitHub reports mergeable=CONFLICTING and mergeStateStatus=DIRTY. The candidate merge base is 46145ab4632d9c34ac7ed051a368ac39db9136d7 and it is four commits behind strict main; intervening main changes overlap scripts/pr-lifecycle.mjs. Active ruleset 17215923 requires strict pr-required and actionlint, and both contexts are missing on the exact head; only non-required Labeler checks exist. Reviews require zero approvals, connector and gh show zero unresolved review threads, declared dependencies are empty, and draft PR #1373 overlaps workflow.md and pr-lifecycle.mjs as a warning only. Builder must resolve/rebase on current main, obtain fresh exact-head review/test/lifecycle packet, and rerun required CI; normal merge is forbidden on this lease.",
+          "observedAt": "2026-08-09T08:18:28.788Z"
+        }
+      ],
       "readyAt": "2026-08-09T08:10:58.195Z",
       "ownerHistory": [
         {
@@ -2077,10 +2072,10 @@
     }
   },
   "lastTransaction": {
-    "id": "51e26799-8221-43d5-a1ff-402f0e81ba90",
-    "recordedAt": "2026-08-09T08:14:08.883Z"
+    "id": "3abc2b0c-adc9-473d-bc61-ba2066b9ff3d",
+    "recordedAt": "2026-08-09T08:18:28.788Z"
   },
-  "updatedAt": "2026-08-09T08:14:08.883Z",
+  "updatedAt": "2026-08-09T08:18:28.788Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
