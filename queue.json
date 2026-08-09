@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 72,
+  "sequence": 73,
   "nextFence": 22,
   "mergeLease": null,
   "items": {
@@ -2230,13 +2230,127 @@
         "fence": 21,
         "recordedAt": "2026-08-09T10:46:19.302Z"
       }
+    },
+    "1377": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1377,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1377",
+        "headSha": "ab81c06796928b32bdd1074fee72b1bdf1f44033",
+        "baseBranch": "main",
+        "testedBaseSha": "18b5e5fa6342518dfe171c798bfcb96719cb0975",
+        "diffFingerprint": "sha256:faff3bfca9ba5dd7eb93f7b4d279d56df68a26099cb31fc8c66773a411423aaa",
+        "changedPaths": [
+          "skills/tldr/SKILL.md",
+          "src/agents/skills.tldr-contract.test.ts"
+        ],
+        "title": "fix(skills): expose TLDR to Jarvis",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: Jarvis lists TLDR in its active model catalog, so both `/tldr` and natural-language requests such as `Use TLDR skill` select the shipped TLDR instructions instead of falling back to summarize.\n- Exact head + builder proof: `ab81c06796928b32bdd1074fee72b1bdf1f44033`; `pnpm exec vitest run src/agents/skills.tldr-contract.test.ts --maxWorkers=1` passed 2/2; `git diff --check` passed; commit hooks passed.\n- Independent tester: Pending canonical handoff.\n- Jarvis delivery boundary: Product-wide, public-release target; validated receipt below.\n- Release worker: Pending tester PASS and canonical release handoff.\n- Dependencies / merge order / overlap: None — standalone follow-up to #1364.\n- Remaining proof / cleanup / rollback: Independent exact-head test, merge, package/install/public-release/end-user proof. Revert this commit to restore slash-only TLDR discovery.\n- Still hurts: Existing installed Jarvis keeps slash-only metadata until a new package/runtime adopts this change.\n\n## Why This Matters\n\n- The skill already ships, but `disable-model-invocation: true` hides it from Jarvis's active catalog.\n- Users naturally say `Use TLDR skill`; forcing them to know a slash-only policy makes the shipped capability look absent.\n\n## Scope Boundary\n\n- Product-wide behavior change.\n- Keeps TLDR directly user-invocable and adds natural-language model selection.\n- No command execution, permissions, network, state migration, or external side effects.\n\n## Verification\n\n- Exact-head TLDR contract test: 2 passed.\n- Diff whitespace validation: passed.\n- Commit formatter/linter hooks: passed.\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"public-release\",\n  \"completionClaim\": \"blocked-at-boundary\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home mutation is part of this product task.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Head ab81c06796928b32bdd1074fee72b1bdf1f44033 passes the focused TLDR contract test 2/2 and git diff --check.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"pending\",\n      \"evidence\": \"A release package must include the updated TLDR metadata.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"pending\",\n      \"evidence\": \"An installed Jarvis runtime must adopt the released package.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The change removes one skill discovery flag and does not alter persisted state.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"pending\",\n      \"evidence\": \"The signed and published Jarvis update remains to be released.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"pending\",\n      \"evidence\": \"The shipped runtime must prove a natural-language TLDR request selects the TLDR skill.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## Security Impact\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "public-release",
+          "completionClaim": "blocked-at-boundary",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation is part of this product task."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Head ab81c06796928b32bdd1074fee72b1bdf1f44033 passes the focused TLDR contract test 2/2 and git diff --check."
+            },
+            "packagedArtifact": {
+              "status": "pending",
+              "evidence": "A release package must include the updated TLDR metadata."
+            },
+            "installedRuntime": {
+              "status": "pending",
+              "evidence": "An installed Jarvis runtime must adopt the released package."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "The change removes one skill discovery flag and does not alter persisted state."
+            },
+            "publicRelease": {
+              "status": "pending",
+              "evidence": "The signed and published Jarvis update remains to be released."
+            },
+            "endUserBehavior": {
+              "status": "pending",
+              "evidence": "The shipped runtime must prove a natural-language TLDR request selects the TLDR skill."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fe65f-f79d-7060-96a9-ebdf4010386d",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe65f-f79d-7060-96a9-ebdf4010386d",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "ab81c06796928b32bdd1074fee72b1bdf1f44033",
+        "diffFingerprint": "sha256:faff3bfca9ba5dd7eb93f7b4d279d56df68a26099cb31fc8c66773a411423aaa",
+        "closure": "terminal-receipt",
+        "contractId": "99d7d0cb-995e-4e2f-bf39-47bce132cd12",
+        "owner": {
+          "threadId": "agent:pr1377_tester",
+          "hostId": "nested"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "019fe669-9474-7c52-a43c-54125cb044ad",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "headSha": "ab81c06796928b32bdd1074fee72b1bdf1f44033",
+        "diffFingerprint": "sha256:faff3bfca9ba5dd7eb93f7b4d279d56df68a26099cb31fc8c66773a411423aaa",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1377 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "d48503dd-7c6c-4b33-8c27-7c53fcd13152",
+        "stateDirectory": "/Users/user/.codex/worktrees/9949b026-4f83-4078-8046-4fc4990a59de/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T12:12:48.606Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "pr1376-record-merge-18b5e5fa-f21",
-    "recordedAt": "2026-08-09T10:48:39.814Z"
+    "id": "pr1377-enqueue-d48503dd",
+    "recordedAt": "2026-08-09T12:12:48.606Z"
   },
-  "updatedAt": "2026-08-09T10:48:39.814Z",
+  "updatedAt": "2026-08-09T12:12:48.606Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
