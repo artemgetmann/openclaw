@@ -358,6 +358,36 @@ describe("withOpenComputerUseLock", () => {
     }
   });
 
+  it("removes a published queue owner when candidate cleanup fails", async () => {
+    const directory = await temporaryDirectory();
+    const command = path.join(directory, "OpenComputerUse");
+    const target = await trackedLockTarget(command);
+    const originalRm = fs.rm.bind(fs);
+    let injected = false;
+    const rm = vi.spyOn(fs, "rm").mockImplementation(async (targetPath, options) => {
+      if (!injected && String(targetPath).endsWith(".candidate")) {
+        injected = true;
+        throw Object.assign(new Error("injected candidate cleanup failure"), { code: "EIO" });
+      }
+      return await originalRm(targetPath, options);
+    });
+
+    try {
+      await expect(
+        withOpenComputerUseLock({ command, timeoutMs: 500, run: async () => "must-not-run" }),
+      ).rejects.toThrow("injected candidate cleanup failure");
+    } finally {
+      rm.mockRestore();
+    }
+    expect((await fs.readdir(`${target}.queue`)).filter((name) => name.endsWith(".json"))).toEqual(
+      [],
+    );
+    await expect(
+      withOpenComputerUseLock({ command, timeoutMs: 500, run: async () => "recovered" }),
+    ).resolves.toBe("recovered");
+    await expect(fs.stat(`${target}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("cleans the token candidate when legacy marker publication fails", async () => {
     const directory = await temporaryDirectory();
     const command = path.join(directory, "OpenComputerUse");

@@ -313,17 +313,19 @@ async function acquireCrossProcessLock(input: {
   };
 
   await fs.mkdir(queuePath, { recursive: true });
-  // Publish a complete contender atomically. Every contender has a unique,
-  // token-bound path, so stale cleanup can never name or unlink a successor.
-  await fs.writeFile(candidatePath, JSON.stringify(payload), { flag: "wx", mode: 0o600 });
-  await fs.link(candidatePath, ownerPath);
-  await fs.rm(candidatePath);
-  // Let already-racing contenders publish before ordering the initial queue.
-  // A genuinely later contender will instead observe this contender's
-  // `acquired` phase and can never outrank the incumbent.
-  await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
-
   try {
+    // Publish a complete contender atomically. Every contender has a unique,
+    // token-bound path, so stale cleanup can never name or unlink a successor.
+    // Keep the whole sequence inside the cleanup scope: once link() publishes
+    // ownerPath, any later setup failure must remove that live-looking record.
+    await fs.writeFile(candidatePath, JSON.stringify(payload), { flag: "wx", mode: 0o600 });
+    await fs.link(candidatePath, ownerPath);
+    await fs.rm(candidatePath);
+    // Let already-racing contenders publish before ordering the initial queue.
+    // A genuinely later contender will instead observe this contender's
+    // `acquired` phase and can never outrank the incumbent.
+    await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
+
     while (true) {
       const nowMs = Date.now();
       const legacyOwner = await readLegacyOwner(legacyPath, nowMs);
