@@ -67,6 +67,10 @@ moving_main_path_requires_new_approval "scripts/ship-jarvis-hotfix.sh" || \
   fail "release tooling was not classified as protected"
 moving_main_path_requires_new_approval "src/gateway/auth-handler.ts" || \
   fail "security-owned auth path was not classified as protected"
+moving_main_path_requires_new_approval "scripts/lib/validated-node.sh" || \
+  fail "post-pull helper was not classified as protected"
+moving_main_path_requires_new_approval "src/gateway/security-path-policy.ts" || \
+  fail "security-path policy was not classified as protected"
 if moving_main_path_requires_new_approval "src/agents/pi-tools.ts"; then
   fail "ordinary source path was classified as protected"
 fi
@@ -78,9 +82,22 @@ release_queue_item_json() {
 }
 release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb || \
   fail "complete exact-head queue receipt was rejected"
+VALID_QUEUE_ITEM_FIXTURE="${QUEUE_ITEM_FIXTURE}"
 QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${QUEUE_ITEM_FIXTURE}" | jq '.reviewReceipt.unresolvedFindings = [{"severity":"high"}]')"
 if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
   fail "high review finding unexpectedly passed"
+fi
+QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq 'del(.builder)')"
+if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
+  fail "missing builder unexpectedly passed"
+fi
+QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq '.candidate.changedPaths = ["   "]')"
+if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
+  fail "whitespace-only changed path unexpectedly passed"
+fi
+QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq '.testerReceipt.owner = {"threadId":"reviewer","hostId":"host","extra":"different-object"}')"
+if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
+  fail "same reviewer/tester identity unexpectedly passed"
 fi
 pass "moving-main review gate requires exact-head fenced PASS receipts"
 

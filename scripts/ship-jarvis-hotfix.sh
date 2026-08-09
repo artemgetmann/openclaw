@@ -27,7 +27,11 @@ SHASUM_BIN="${OPENCLAW_SHASUM_BIN:-shasum}"
 PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
 
 PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-required-status.sh}"
-PR_RELEASE_QUEUE_SCRIPT="${OPENCLAW_SHIP_PR_RELEASE_QUEUE_SCRIPT:-${MAIN_REPO}/scripts/pr-release-queue}"
+if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+  PR_RELEASE_QUEUE_SCRIPT="${OPENCLAW_SHIP_PR_RELEASE_QUEUE_SCRIPT:-${MAIN_REPO}/scripts/pr-release-queue}"
+else
+  PR_RELEASE_QUEUE_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-release-queue"
+fi
 PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
 OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
 PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
@@ -319,7 +323,12 @@ associated_main_pr_json() {
 release_queue_item_json() {
   local pr="$1"
   local status=""
-  status="$(env -u OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE \
+  status="$(env \
+    -u OPENCLAW_PR_RELEASE_QUEUE_BRANCH \
+    -u OPENCLAW_PR_RELEASE_QUEUE_GH \
+    -u OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE \
+    -u OPENCLAW_PR_RELEASE_QUEUE_NOW \
+    -u OPENCLAW_PR_RELEASE_QUEUE_REPO \
     "${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
   # The wrapper emits a secret-silent preflight receipt before the JSON body.
   # Select the first JSON object instead of trusting a fixed line count.
@@ -346,14 +355,16 @@ release_queue_proves_reviewed_merge() {
     (.candidate.headSha | test("^[0-9a-f]{40}$")) and
     (.candidate.diffFingerprint | test("^sha256:[0-9a-f]{64}$")) and
     (.candidate.changedPaths | type == "array" and length > 0) and
-    (all(.candidate.changedPaths[]; type == "string" and length > 0)) and
+    (all(.candidate.changedPaths[]; type == "string" and test("\\S"))) and
+    ((.builder.threadId // "") | test("\\S")) and
+    ((.builder.hostId // "") | test("\\S")) and
     (.reviewReceipt.schemaVersion == 1) and
     (.reviewReceipt.role == "code-reviewer") and
     (.reviewReceipt.status == "PASS") and
     (.reviewReceipt.headSha == .candidate.headSha) and
     (.reviewReceipt.diffFingerprint == .candidate.diffFingerprint) and
-    ((.reviewReceipt.owner.threadId // "") | length > 0) and
-    ((.reviewReceipt.owner.hostId // "") | length > 0) and
+    ((.reviewReceipt.owner.threadId // "") | test("\\S")) and
+    ((.reviewReceipt.owner.hostId // "") | test("\\S")) and
     (.reviewReceipt.unresolvedFindings | type == "array") and
     (all(.reviewReceipt.unresolvedFindings[]; .severity | IN("low", "medium", "high", "critical"))) and
     ([.reviewReceipt.unresolvedFindings[]? | select(.severity == "high" or .severity == "critical")] | length == 0) and
@@ -361,10 +372,10 @@ release_queue_proves_reviewed_merge() {
     (.testerReceipt.headSha == .candidate.headSha) and
     (.testerReceipt.diffFingerprint == .candidate.diffFingerprint) and
     (.testerReceipt.closure | IN("archived", "terminal-receipt")) and
-    ((.testerReceipt.contractId // "") | length > 0) and
-    ((.testerReceipt.owner.threadId // "") | length > 0) and
-    ((.testerReceipt.owner.hostId // "") | length > 0) and
-    (.reviewReceipt.owner != .testerReceipt.owner) and
+    ((.testerReceipt.contractId // "") | test("\\S")) and
+    ((.testerReceipt.owner.threadId // "") | test("\\S")) and
+    ((.testerReceipt.owner.hostId // "") | test("\\S")) and
+    ((.reviewReceipt.owner.threadId != .testerReceipt.owner.threadId) or (.reviewReceipt.owner.hostId != .testerReceipt.owner.hostId)) and
     ((.reviewReceipt.owner.threadId != .builder.threadId) or (.reviewReceipt.owner.hostId != .builder.hostId)) and
     ((.testerReceipt.owner.threadId != .builder.threadId) or (.testerReceipt.owner.hostId != .builder.hostId)) and
     (any(.terminalReceipts[]?;
@@ -385,15 +396,16 @@ release_queue_proves_reviewed_merge() {
 moving_main_path_requires_new_approval() {
   local target_path="$1"
   case "${target_path}" in
-    SECURITY.md | .github/* | \
+    SECURITY.md | .github/* | scripts/* | \
       src/security/* | src/secrets/* | src/config/*secret* | src/config/*/*secret* | \
       src/gateway/*auth* | src/gateway/*/*auth* | src/gateway/*secret* | src/gateway/*/*secret* | \
+      src/gateway/security-path* | src/gateway/resolve-configured-secret-input-string* | \
+      src/gateway/protocol/*/*secret* | src/gateway/server-methods/secrets* | \
       src/agents/*auth* | src/agents/*/*auth* | src/agents/tool-policy.ts | src/agents/sandbox.ts | src/agents/sandbox-* | \
-      src/agents/sandbox/* | src/infra/secret-file* | docs/security/* | \
-      scripts/*release* | scripts/package* | scripts/open-consumer-mac-app.sh | \
-      scripts/protect-jarvis-runtime-from-app-reseed.sh | scripts/prove-jarvis-runtime.sh | \
-      scripts/pr-release-queue | scripts/pr-release-queue.mjs | scripts/pr-required-status.sh | \
-      scripts/ship-jarvis-hotfix.sh | docs/reference/RELEASING.md)
+      src/agents/sandbox/* | src/infra/secret-file* | src/cron/stagger.ts | src/cron/service/jobs.ts | \
+      docs/security/* | docs/gateway/*auth* | docs/gateway/*sandbox* | docs/gateway/*secret* | \
+      docs/cli/approvals.md | docs/cli/sandbox.md | docs/cli/security.md | docs/cli/secrets.md | \
+      docs/reference/secretref-* | docs/reference/RELEASING.md)
       return 0
       ;;
   esac
