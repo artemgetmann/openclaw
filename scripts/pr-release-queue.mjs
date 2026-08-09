@@ -1461,6 +1461,13 @@ function mutateRouteBaseDrift(state, options, expected, transactionId, now) {
     if (item.state !== "claimed") {
       fail(`PR #${item.candidate.pr} is not held by the active claimed release lease`);
     }
+    if (
+      !Array.isArray(item.discoveredBlockers) ||
+      item.discoveredBlockers.length > 0 ||
+      dependencyBlockers(item, next).length > 0
+    ) {
+      fail("base-drift routing refuses mixed or newly active semantic blockers");
+    }
     if (item.activeBaseDriftRecovery) {
       fail(`PR #${item.candidate.pr} already has an active base-drift recovery attempt`);
     }

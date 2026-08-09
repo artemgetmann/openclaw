@@ -1202,6 +1202,40 @@ describe("scripts/pr-release-queue", () => {
     expect(stale.stderr).toContain("lease identity or fencing number is stale");
   });
 
+  it("refuses to hide a mixed semantic blocker behind automatic base drift", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 81);
+    configureBaseDrift(fixture, 81);
+    const owner = claim(fixture, "release-drift-81", 81);
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    state.items["81"].discoveredBlockers.push({
+      kind: "source-finding",
+      details: "review found behavior-bearing work",
+      observedAt: "2026-08-05T00:00:00.000Z",
+    });
+    fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+    const packet = JSON.parse(fs.readFileSync(path.join(fixture.root, "packet-81.json"), "utf8"));
+    const rejected = runFailure(fixture, [
+      "route-base-drift",
+      "--lease-id",
+      owner.lease!.leaseId,
+      "--fence",
+      String(owner.lease!.fence),
+      "--expected-head-sha",
+      packet.candidate.headSha,
+      "--expected-diff-fingerprint",
+      packet.candidate.diffFingerprint,
+      "--transaction-id",
+      "route-mixed-drift-81",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("mixed or newly active semantic blockers");
+    expect(run(fixture, ["status"]).state?.mergeLease).toMatchObject({
+      leaseId: owner.lease!.leaseId,
+      fence: owner.lease!.fence,
+    });
+  });
+
   it("fails closed on incomplete or changing base comparison evidence and keeps the lease", () => {
     for (const [pr, configure, expected] of [
       [
