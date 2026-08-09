@@ -172,6 +172,27 @@ must not be used to recompute candidate identity. The emitted tester prompt
 records this algorithm so independent validation fails closed for real drift,
 not a formatting mismatch.
 
+A fresh user-visible tester must complete the emitted credential-free warm
+adoption command before test collection or any dependency-requiring workload.
+That command attaches a contract-unique branch at the immutable PR head,
+installs repository-pinned dependencies, creates an empty isolated baseline,
+and proves `worktree-ready-check.sh --mode warm` without copying Telegram,
+model, or runtime credentials. The tester receipt binds that environment proof
+to the same owner, head, diff fingerprint, and tester contract.
+Fresh exact-head reviewers use the same credential-free warm adoption before
+any dependency-requiring review command; a purely static GitHub patch review
+does not need local dependencies.
+
+If canonical adoption fails, or collection reports
+`test_environment/dependencies_unavailable` before behavioral work starts, the
+tester returns `BLOCKED` with `preCollection=true` and
+`workloadStarted=false`. That exact archived environment block does not consume
+the behavioral tester attempt. `handoff-test --environment-retry-contract`
+may atomically reserve one replacement on the unchanged candidate; the attempt
+ledger prevents a second environment retry. Any other failure, source drift,
+active or ambiguous owner, incomplete cleanup, or post-collection failure
+remains fail-closed and cannot use this recovery path.
+
 A user-visible live tester additionally proves exact immutable source and
 runtime provenance, uses stable isolated identities, and runs exactly one bounded
 scenario when the acceptance contract says one. Its handoff must grant the exact

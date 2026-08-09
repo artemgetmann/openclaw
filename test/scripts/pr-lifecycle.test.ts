@@ -35,6 +35,15 @@ type LifecycleOutput = {
   owner?: { threadId: string; hostId: string } | null;
   prompt?: string;
   retryOfContractId?: string | null;
+  environmentContract?: {
+    contractId: string;
+    method: string;
+    credentialMode: string;
+    readyMode: string;
+    branchName: string;
+    command: string;
+    readinessCommand: string;
+  } | null;
   routing?: {
     dispatcher: { role: string; threadId: string; hostId: string };
     decision: string;
@@ -265,6 +274,29 @@ function beginLiveTester(fixture: ReturnType<typeof makeFixture>) {
   ]);
 }
 
+function readyEnvironment(tester: LifecycleOutput) {
+  return {
+    status: "ready",
+    contractId: tester.contractId,
+    method: tester.environmentContract?.method,
+    credentialMode: "none",
+    readyMode: "warm",
+    laneReady: true,
+  };
+}
+
+function capacityBlockedEnvironment(tester: LifecycleOutput) {
+  return {
+    status: "blocked",
+    contractId: tester.contractId,
+    class: "bootstrap_guard",
+    code: "guard_refused",
+    preCollection: true,
+    workloadStarted: false,
+    bootstrapAttempted: true,
+  };
+}
+
 function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
   const tester = run(fixture, [
     "handoff-test",
@@ -300,7 +332,7 @@ function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
       headSha: tester.candidate?.headSha,
       diffFingerprint: tester.candidate?.diffFingerprint,
       owner: { threadId: "capacity-blocked-tester", hostId: "tester-host" },
-      workloadStarted: false,
+      environment: capacityBlockedEnvironment(tester),
       evidence: ["heavy guard refused disk pressure before workload start"],
       cleanup: { status: "not-required", evidence: "workload never started" },
       limitations: [],
@@ -346,6 +378,7 @@ function completeJarvisHealthFailure(fixture: ReturnType<typeof makeFixture>) {
       headSha: tester.candidate?.headSha,
       diffFingerprint: tester.candidate?.diffFingerprint,
       owner: { threadId: "health-blocked-tester", hostId: "tester-host" },
+      environment: capacityBlockedEnvironment(tester),
       workloadStarted: false,
       evidence: ["heavy guard refused unhealthy Jarvis before workload start"],
       cleanup: { status: "complete", evidence: "partial dependency bootstrap removed" },
@@ -360,6 +393,60 @@ function completeJarvisHealthFailure(fixture: ReturnType<typeof makeFixture>) {
     tester.contractId,
     "--thread-id",
     "health-blocked-tester",
+    "--host-id",
+    "tester-host",
+    "--closure",
+    "archived",
+  ]);
+  return tester;
+}
+
+function completeEnvironmentOnlyBlock(fixture: ReturnType<typeof makeFixture>) {
+  const tester = beginLiveTester(fixture);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "environment-blocked-tester",
+    "--host-id",
+    "tester-host",
+  ]);
+  const receiptPath = path.join(fixture.root, "environment-blocked.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "BLOCKED",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "environment-blocked-tester", hostId: "tester-host" },
+      environment: {
+        status: "blocked",
+        contractId: tester.contractId,
+        class: "test_environment",
+        code: "dependencies_unavailable",
+        preCollection: true,
+        workloadStarted: false,
+        bootstrapAttempted: true,
+      },
+      evidence: ["canonical warm adoption failed before test collection"],
+      cleanup: { status: "not-required", evidence: "behavioral workload never started" },
+      limitations: ["behavioral acceptance was not attempted"],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "environment-blocked-tester",
     "--host-id",
     "tester-host",
     "--closure",
@@ -501,6 +588,23 @@ function capacityRetryArgs(
   ];
 }
 
+function environmentRetryArgs(priorTesterContractId: string) {
+  return [
+    "handoff-test",
+    "42",
+    "--test-kind",
+    "live-external",
+    "--transport",
+    "user-visible-task",
+    "--owner-thread",
+    "builder-thread",
+    "--owner-host",
+    "builder-host",
+    "--environment-retry-contract",
+    priorTesterContractId,
+  ];
+}
+
 function acceptReleaseHandoff(fixture: ReturnType<typeof makeFixture>, contractId: string) {
   return run(fixture, [
     "accept-release-handoff",
@@ -569,6 +673,7 @@ function completeTesterPass(fixture: ReturnType<typeof makeFixture>) {
       headSha: tester.candidate?.headSha,
       diffFingerprint: tester.candidate?.diffFingerprint,
       owner: { threadId: "tester-thread", hostId: "tester-host" },
+      environment: readyEnvironment(tester),
       evidence: ["exact-head lifecycle proof passed"],
       cleanup: { status: "complete" },
       limitations: [],
@@ -823,6 +928,18 @@ describe("scripts/pr-lifecycle", () => {
       "Never route live/external testing or release through a nested sub-agent",
     );
     expect(first.prompt).toContain("gh pr diff 42 --patch");
+    expect(first.environmentContract).toMatchObject({
+      contractId: first.contractId,
+      method: "canonical-warm-adoption",
+      credentialMode: "none",
+      readyMode: "warm",
+    });
+    expect(first.environmentContract?.branchName).toBe(
+      `pr-42-tester-${first.contractId.slice(0, 8)}`,
+    );
+    expect(first.prompt).toContain("before test collection or any dependency-requiring command");
+    expect(first.prompt).toContain("--credential-mode none");
+    expect(first.prompt).toContain("test_environment/dependencies_unavailable");
 
     // The crash window between contract emission and native task acceptance is
     // deliberately one-shot. A compacted builder sees the pending claim and
@@ -896,6 +1013,91 @@ describe("scripts/pr-lifecycle", () => {
     expect(state.testerHistory).toHaveLength(1);
     expect(state.testerHistory[0].tester.contractId).toBe(priorTester.contractId);
     expect(state.tester.retryOfContractId).toBe(priorTester.contractId);
+  });
+
+  it("does not consume the behavioral attempt for one exact pre-collection environment block", () => {
+    const fixture = makeFixture();
+    const blocked = completeEnvironmentOnlyBlock(fixture);
+    const retryArgs = environmentRetryArgs(blocked.contractId);
+
+    const retry = run(fixture, retryArgs);
+    expect(retry).toMatchObject({
+      action: "create_thread",
+      retryOfContractId: blocked.contractId,
+    });
+    expect(retry.contractId).not.toBe(blocked.contractId);
+
+    const repeated = run(fixture, retryArgs);
+    expect(repeated).toMatchObject({ action: "do-not-create", contractId: retry.contractId });
+
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.testerHistory).toHaveLength(1);
+    expect(state.testerHistory[0]).toMatchObject({
+      environmentRetry: true,
+      behavioralAttemptConsumed: false,
+      tester: { contractId: blocked.contractId, receipt: { status: "BLOCKED" } },
+    });
+  });
+
+  it("rejects malformed or recursive environment retry claims", () => {
+    const fixture = makeFixture();
+    const blocked = completeEnvironmentOnlyBlock(fixture);
+    const replacement = run(fixture, environmentRetryArgs(blocked.contractId));
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      replacement.contractId,
+      "--thread-id",
+      "replacement-environment-tester",
+      "--host-id",
+      "tester-host",
+    ]);
+    const receiptPath = path.join(fixture.root, "replacement-environment-blocked.json");
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: replacement.routing,
+        contractId: replacement.contractId,
+        status: "BLOCKED",
+        headSha: replacement.candidate?.headSha,
+        diffFingerprint: replacement.candidate?.diffFingerprint,
+        owner: { threadId: "replacement-environment-tester", hostId: "tester-host" },
+        environment: {
+          status: "blocked",
+          contractId: replacement.contractId,
+          class: "test_environment",
+          code: "dependencies_unavailable",
+          preCollection: true,
+          workloadStarted: false,
+          bootstrapAttempted: true,
+        },
+        evidence: ["replacement canonical warm adoption also failed before collection"],
+        cleanup: { status: "not-required" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      replacement.contractId,
+      "--thread-id",
+      "replacement-environment-tester",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+
+    const recursive = runFailure(fixture, environmentRetryArgs(replacement.contractId));
+    expect(recursive.status).toBe(1);
+    expect(recursive.stderr).toContain("environment retry was already consumed");
   });
 
   it("permits one replacement after a bounded occupied-slot refusal is proven cleared", () => {
@@ -1025,7 +1227,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: replacement.candidate?.headSha,
         diffFingerprint: replacement.candidate?.diffFingerprint,
         owner: { threadId: "replacement-tester", hostId: "tester-host" },
-        workloadStarted: false,
+        environment: capacityBlockedEnvironment(replacement),
         evidence: ["heavy guard again refused disk pressure before workload start"],
         cleanup: { status: "not-required", evidence: "workload never started" },
         limitations: [],
@@ -1101,6 +1303,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: tester.candidate?.headSha,
         diffFingerprint: tester.candidate?.diffFingerprint,
         owner: { threadId: "tester-thread", hostId: "tester-host" },
+        environment: readyEnvironment(tester),
         evidence: ["focused lifecycle tests passed"],
         cleanup: { status: "complete", evidence: "no runtime state created" },
         limitations: ["source-only proof"],
@@ -1764,6 +1967,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: tester.candidate?.headSha,
         diffFingerprint: tester.candidate?.diffFingerprint,
         owner: { threadId: "tester-thread", hostId: "tester-host" },
+        environment: readyEnvironment(tester),
         evidence: ["old proof"],
         cleanup: { status: "complete" },
         limitations: [],
@@ -1991,6 +2195,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: firstTester.candidate?.headSha,
         diffFingerprint: firstTester.candidate?.diffFingerprint,
         owner: { threadId: "first-tester", hostId: "tester-host" },
+        environment: readyEnvironment(firstTester),
         evidence: ["first candidate passed"],
         cleanup: { status: "complete" },
         limitations: [],
@@ -2248,6 +2453,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: replacementTester.candidate?.headSha,
         diffFingerprint: replacementTester.candidate?.diffFingerprint,
         owner: { threadId: "replacement-tester", hostId: "tester-host" },
+        environment: readyEnvironment(replacementTester),
         evidence: ["tester found a second source repair"],
         cleanup: { status: "complete" },
         limitations: [],
@@ -2324,6 +2530,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: secondRepairedTester.candidate?.headSha,
         diffFingerprint: secondRepairedTester.candidate?.diffFingerprint,
         owner: { threadId: "second-repaired-tester", hostId: "tester-host" },
+        environment: readyEnvironment(secondRepairedTester),
         evidence: ["second repaired candidate passed"],
         cleanup: { status: "complete" },
         limitations: [],

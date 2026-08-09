@@ -39,7 +39,8 @@ Describe the problem and fix in 2–5 bullets:
 - Builder owner: (exact thread ID + host ID when required)
 - Tester transport: (`nested-read-only` for short deterministic proof, otherwise `user-visible-task`)
 - Tester dispatcher + eligibility rationale: (`builder` + why nested was eligible, or why a user-visible task was required)
-- Independent tester: (`PASS`/`FAIL` + exact worker identity/head/diff + receipt)
+- Tester environment: (credential-free warm adoption/readiness receipt, or exact pre-collection `BLOCKED` classification)
+- Independent tester: (`PASS`/`FAIL`/environment-only `BLOCKED` + exact worker identity/head/diff + receipt)
 - Tester/runtime cleanup:
 - Tester lifecycle closure: (exact task archive, or exact nested-agent terminal receipt)
 - Release worker: (repo-backed lease ID + fence + distinct owner, or direct rollback task ID + host ID; include typed task-authority packet)

@@ -18,6 +18,7 @@ Options:
   --allow-dirty              Allow existing local changes while adopting.
   --no-home-refresh          Do not fast-forward the sacred home clone first.
   --thread-id <id>           Optional native Codex thread receipt (secret-free).
+  --credential-mode <mode>   copy (default) or none for source-only workers.
 EOF
 }
 
@@ -147,6 +148,7 @@ ALLOW_STALE_HEAD=0
 ALLOW_DIRTY=0
 REFRESH_HOME=1
 THREAD_ID="${CODEX_THREAD_ID:-unavailable}"
+CREDENTIAL_MODE="copy"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -182,6 +184,11 @@ while [[ $# -gt 0 ]]; do
       THREAD_ID="$2"
       shift 2
       ;;
+    --credential-mode)
+      [[ $# -ge 2 ]] || fail "--credential-mode requires a value."
+      CREDENTIAL_MODE="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -205,6 +212,11 @@ done
 [[ "$FEATURE_NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || fail "feature name must match [a-zA-Z0-9_-]+."
 [[ "$THREAD_ID" =~ ^[a-zA-Z0-9:_-]+$ ]] || fail "thread id must match [a-zA-Z0-9:_-]+."
 [[ "$LANE_MODE" == "clean" || "$LANE_MODE" == "warm" ]] || fail "--mode must be one of: clean, warm."
+[[ "$CREDENTIAL_MODE" == "copy" || "$CREDENTIAL_MODE" == "none" ]] ||
+  fail "--credential-mode must be one of: copy, none."
+if [[ "$CREDENTIAL_MODE" == "none" && "$LANE_MODE" != "warm" ]]; then
+  fail "--credential-mode none is valid only with --mode warm."
+fi
 
 if [[ -z "$ROOT" ]]; then
   ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || fail "run from inside a git worktree or pass --root."
@@ -368,7 +380,12 @@ process.stdout.write(String(port));
 NODE
 )"
 
-if [[ "$LANE_MODE" == "clean" ]]; then
+if [[ "$CREDENTIAL_MODE" == "none" ]]; then
+  # Source-only reviewers and testers need repository tools, not Telegram or
+  # model credentials. Preserve the canonical adoption/ownership path while
+  # skipping every credential-copying bootstrap before dependency readiness.
+  TELEGRAM_BOOTSTRAP_STATUS="skipped-no-credentials"
+elif [[ "$LANE_MODE" == "clean" ]]; then
   (cd "$ROOT" && bash scripts/bootstrap-worktree-telegram.sh --optional)
   TELEGRAM_BOOTSTRAP_STATUS="optional"
 else
@@ -376,7 +393,20 @@ else
   TELEGRAM_BOOTSTRAP_STATUS="copy-only"
 fi
 
-BASELINE_OUTPUT="$(bash "$ROOT/scripts/bootstrap-worktree-tester-baseline.sh" --root "$ROOT")"
+if [[ "$CREDENTIAL_MODE" == "none" ]]; then
+  # The baseline helper also copies sanitized config and auth snapshots by
+  # default. Point it at a deliberately absent lane-local source so it still
+  # creates the isolated empty config required by .dev-launch.env without
+  # reading any user or runtime credential state.
+  NO_CREDENTIAL_SOURCE_ROOT="$ROOT/.local/no-credential-baseline-source"
+  BASELINE_OUTPUT="$(
+    OPENCLAW_WORKTREE_BASELINE_SOURCE_CONFIG_PATH="$NO_CREDENTIAL_SOURCE_ROOT/openclaw.json" \
+      OPENCLAW_WORKTREE_BASELINE_SOURCE_STATE_DIR="$NO_CREDENTIAL_SOURCE_ROOT" \
+      bash "$ROOT/scripts/bootstrap-worktree-tester-baseline.sh" --root "$ROOT"
+  )"
+else
+  BASELINE_OUTPUT="$(bash "$ROOT/scripts/bootstrap-worktree-tester-baseline.sh" --root "$ROOT")"
+fi
 BASELINE_STATE_DIR="$(printf '%s\n' "$BASELINE_OUTPUT" | sed -n 's/^baseline_state_dir=//p' | tail -n 1)"
 BASELINE_CONFIG_PATH="$(printf '%s\n' "$BASELINE_OUTPUT" | sed -n 's/^baseline_config_path=//p' | tail -n 1)"
 BASELINE_META_PATH="$(printf '%s\n' "$BASELINE_OUTPUT" | sed -n 's/^baseline_meta_path=//p' | tail -n 1)"
@@ -406,6 +436,8 @@ READY_OUTPUT="$(bash "$ROOT/scripts/worktree-ready-check.sh" --root "$ROOT" --mo
 
 if [[ "$LANE_MODE" == "clean" ]] && [[ -f "$ROOT/.env.local" ]]; then
   run_ensure_with_timeout "$ROOT"
+elif [[ "$CREDENTIAL_MODE" == "none" ]]; then
+  echo "info: credential-free warm mode skips Telegram and auth copying; dependencies are installed in-place" >&2
 elif [[ "$LANE_MODE" == "warm" ]]; then
   echo "info: warm mode copies canonical Telegram userbot files but skips Telegram lane claim/ensure and the build step; dependencies are installed in-place" >&2
 else
@@ -413,7 +445,7 @@ else
 fi
 
 BOT_FINGERPRINT="none"
-if [[ -f "$ROOT/.env.local" ]]; then
+if [[ "$CREDENTIAL_MODE" == "copy" && -f "$ROOT/.env.local" ]]; then
   token_value="$(read_last_env_value "$ROOT/.env.local" "TELEGRAM_BOT_TOKEN")"
   if [[ -n "$token_value" ]]; then
     BOT_FINGERPRINT="$(mask_token "$token_value")"
@@ -424,6 +456,7 @@ echo "worktree=${ROOT}"
 echo "branch=${BRANCH_NAME}"
 echo "base_branch=${BASE_BRANCH}"
 echo "lane_mode=${LANE_MODE}"
+echo "credential_mode=${CREDENTIAL_MODE}"
 echo "bot_fingerprint=${BOT_FINGERPRINT}"
 echo "dev_port=${DEV_PORT}"
 echo "telegram_bootstrap=${TELEGRAM_BOOTSTRAP_STATUS}"
