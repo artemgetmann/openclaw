@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 93,
+  "sequence": 94,
   "nextFence": 28,
-  "mergeLease": {
-    "leaseId": "1ef50418-8da1-4732-8f73-56a5665d8be4",
-    "fence": 27,
-    "owner": {
-      "threadId": "/root/pr1372_release",
-      "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
-    },
-    "claimedPr": 1372,
-    "claimedAt": "2026-08-09T15:24:47.663Z",
-    "heartbeatAt": "2026-08-09T15:26:19.257Z",
-    "expiresAt": "2026-08-09T15:46:19.257Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -1963,7 +1952,7 @@
       }
     },
     "1372": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1372,
         "url": "https://github.com/artemgetmann/openclaw/pull/1372",
@@ -2121,7 +2110,20 @@
       "candidateHistory": [],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1372,
+          "reviewedHeadSha": "31b6090bcfa88cb54cb59f08888cd6b3e837b57a",
+          "diffFingerprint": "sha256:077e6752f144a2f4235f2e3a3f5e74d10551405841c9d5a232c6e787f1b2161d",
+          "mergeSha": "7a1a36fd8ce1f89348eaed924e571e24a1becbab",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -3127,10 +3129,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1372-release-heartbeat-premerge-20260809",
-    "recordedAt": "2026-08-09T15:26:19.257Z"
+    "id": "pr1372-release-record-merge-20260809",
+    "recordedAt": "2026-08-09T15:27:00.258Z"
   },
-  "updatedAt": "2026-08-09T15:26:19.257Z",
+  "updatedAt": "2026-08-09T15:27:00.258Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -3146,6 +3148,7 @@
       1365,
       1366,
       1369,
+      1372,
       1373,
       1376,
       1377,
