@@ -297,18 +297,19 @@ host_health_reason() {
       printf '%s' \
         'host_unhealthy|jarvis_unhealthy|managed Jarvis health check failed|metric=jarvis_health observed=unhealthy expected=healthy'
     fi
-  elif [[ "$test_health_sample" == "memory-warning" ]]; then
-    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=warn memory_pressure_level=2 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 paging_status=observed paging_enforcement=telemetry_only thermal_state=normal next_action=observe_pageout_swapout_trend\n' \
+  elif [[ "$test_health_sample" == "memory-warning-stable" ]]; then
+    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=warn memory_pressure_level=2 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 runtime_swapout_growth_pages=0 runtime_pageout_interval_pages=0 runtime_swapout_interval_pages=0 paging_status=observed paging_enforcement=warn_active_paging_two_strike thermal_state=normal next_action=observe_pageout_swapout_trend\n' \
       "$sample_phase" >&2
+  elif [[ "$test_health_sample" == "memory-active-paging" ]]; then
     printf '%s' \
-      'host_unhealthy|memory_pressure_state|macOS memory pressure is warn|metric=memory_pressure_state observed=warn expected=normal'
+      'host_unhealthy|active_paging_growth|yellow memory pressure has active pageout and swapout growth|metric=active_paging_growth pageouts_delta=145 swapouts_delta=10032 threshold=stable unit=pages'
   elif [[ "$test_health_sample" == "memory-critical" ]]; then
-    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=critical memory_pressure_level=4 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 paging_status=observed paging_enforcement=telemetry_only thermal_state=normal next_action=observe_pageout_swapout_trend\n' \
+    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=critical memory_pressure_level=4 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 runtime_swapout_growth_pages=0 runtime_pageout_interval_pages=0 runtime_swapout_interval_pages=0 paging_status=observed paging_enforcement=warn_active_paging_two_strike thermal_state=normal next_action=observe_pageout_swapout_trend\n' \
       "$sample_phase" >&2
     printf '%s' \
       'host_unhealthy|memory_pressure_state|macOS memory pressure is critical|metric=memory_pressure_state observed=critical expected=normal'
   elif [[ "$test_health_sample" == "thermal-warning" ]]; then
-    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=normal memory_pressure_level=1 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 paging_status=observed paging_enforcement=telemetry_only thermal_state=pressure next_action=observe_pageout_swapout_trend\n' \
+    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=normal memory_pressure_level=1 swap_used_kib=1024 swap_free_kib=2048 pageouts_total=10 swapouts_total=5 runtime_swapout_growth_pages=0 runtime_pageout_interval_pages=0 runtime_swapout_interval_pages=0 paging_status=observed paging_enforcement=warn_active_paging_two_strike thermal_state=pressure next_action=observe_pageout_swapout_trend\n' \
       "$sample_phase" >&2
     printf '%s' \
       'host_unhealthy|thermal_pressure|macOS reports thermal or performance pressure|metric=thermal_pressure observed=pressure expected=normal'
@@ -332,7 +333,7 @@ host_health_reason() {
     printf '%s' \
       'guard_internal|fanout_measurement_failed|could not measure the guarded process group|metric=guarded_group_fanout status=unavailable'
   elif [[ "$test_health_sample" == "resource-advisory" ]]; then
-    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=normal memory_pressure_level=1 swap_used_kib=2048 swap_free_kib=1024 pageouts_total=20 swapouts_total=10 paging_status=observed paging_enforcement=telemetry_only thermal_state=normal next_action=observe_pageout_swapout_trend\n' \
+    printf 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent phase=%s memory_pressure=normal memory_pressure_level=1 swap_used_kib=2048 swap_free_kib=1024 pageouts_total=20 swapouts_total=10 runtime_swapout_growth_pages=0 runtime_pageout_interval_pages=0 runtime_swapout_interval_pages=0 paging_status=observed paging_enforcement=warn_active_paging_two_strike thermal_state=normal next_action=observe_pageout_swapout_trend\n' \
       "$sample_phase" >&2
   elif [[ "$test_health_sample" == "fanout-observed" ]]; then
     printf '%s\n' \
@@ -999,6 +1000,25 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   local sample="" expected_class="" expected_code="" expected_action=""
   local status=0
 
+  # Exercise the production classifier directly. Fixture health samples below
+  # validate orchestration and cleanup; this table validates the exact decision
+  # used by the production sampler.
+  # shellcheck source=scripts/lib/heavy-local-slot.sh
+  source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+  openclaw_heavy_local_slot_active_paging 145 10032 ||
+    fail "production classifier missed simultaneous pageout and swapout growth"
+  if openclaw_heavy_local_slot_active_paging 145 0; then
+    fail "production classifier treated pageouts alone as active swap pressure"
+  fi
+  if openclaw_heavy_local_slot_active_paging 0 10032; then
+    fail "production classifier treated swapouts alone as active paging"
+  fi
+  set +e
+  openclaw_heavy_local_slot_active_paging invalid 1
+  status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || fail "production classifier accepted invalid counters"
+
   # pmset writes error text containing both monitored keywords. The production
   # sampler must preserve its exit status so an unavailable thermal backend is
   # an internal measurement failure, never a false host-pressure reading.
@@ -1008,6 +1028,22 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   grep -Fq 'if [ "$thermal_status" -ne 0 ]; then' \
     "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
     fail "thermal sampler does not fail closed on native command failure"
+  if grep -Eq 'MIN_RUNTIME_SWAP_FREE|MAX_RUNTIME_SWAPOUT_GROWTH' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh"; then
+    fail "yellow-pressure policy retained an unsupported absolute swap threshold"
+  fi
+  grep -Fq 'runtime_previous_pageouts_total' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "yellow-pressure policy does not track pageout intervals"
+  grep -Fq 'confirmation_pressure_level' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "yellow admission does not recheck kernel pressure after confirmation"
+  grep -Fq 'confirmation_memory_free' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "yellow admission does not recheck the 25% floor after confirmation"
+  grep -Fq 'runtime_baseline_swapouts_total' \
+    "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
+    fail "runtime warn policy is not transaction-relative"
   grep -Fq 'managed Jarvis health endpoint returned HTTP %s' \
     "$ROOT_DIR/scripts/with-heavy-local-slot.sh" ||
     fail "reachable non-200 Jarvis health response is not a concrete health failure"
@@ -1023,7 +1059,7 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   # unavailable required backend is guard_internal rather than a retryable host
   # reading, so a broken sampler cannot silently weaken the dedicated profile.
   for sample in \
-    memory-warning \
+    memory-active-paging \
     memory-critical \
     thermal-warning \
     jarvis-identity-mismatch \
@@ -1034,10 +1070,15 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
     disk-unavailable \
     resource-unavailable; do
     case "$sample" in
-      memory-warning | memory-critical)
+      memory-critical)
         expected_class=host_unhealthy
         expected_code=memory_pressure_state
         expected_action=wait_for_memory_pressure_normal
+        ;;
+      memory-active-paging)
+        expected_class=host_unhealthy
+        expected_code=active_paging_growth
+        expected_action=wait_for_paging_pressure_recovery
         ;;
       thermal-warning)
         expected_class=host_unhealthy
@@ -1103,27 +1144,21 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
     fi
   done
 
-  # A retryable host hazard pauses only new admission, names the root cause,
-  # and wakes automatically after a healthy sample without holding the lease.
+  # Yellow pressure with flat paging counters admits honestly. Kernel yellow is
+  # provisional; it is not by itself proof of active memory exhaustion.
   {
-    printf 'memory-warning\n'
-    printf 'healthy\n'
+    printf 'memory-warning-stable\n'
     printf 'healthy\n'
   } >"$health_path"
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
     "$FIXTURE_WRAPPER" \
       --cpu-policy dedicated-agent \
-      --wait-seconds 3 \
-      --label "resource-pause-root-cause" \
+      --label "resource-yellow-stable" \
       -- /usr/bin/true >"$output" 2>&1
-  grep -Fq \
-    'HEAVY_LOCAL_SLOT_PAUSED class=host_unhealthy code=memory_pressure_state metric=memory_pressure_state observed=warn expected=normal phase=admission outcome=paused next_action=wait_for_memory_pressure_normal' \
-    "$output" || fail "memory pressure pause omitted root cause and wake condition"
-  grep -Fq \
-    'Paused new admission: macOS memory pressure is warn. Next safe action: wait_for_memory_pressure_normal; the bounded waiter will retry.' \
-    "$output" || fail "memory pressure pause omitted actionable human output"
-  [[ ! -e "$lock_path" ]] || fail "recovered admission pause leaked the lease"
+  grep -Fq 'memory_pressure=warn' "$output" ||
+    fail "stable yellow admission omitted its pressure telemetry"
+  [[ ! -e "$lock_path" ]] || fail "stable yellow admission leaked the lease"
 
   # Paging totals and fanout/RSS are observations, not arbitrary kill limits.
   # A healthy advisory sample must admit the command and redact its argument.
@@ -1145,7 +1180,7 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   grep -Fq 'HEAVY_LOCAL_RESOURCE_TELEMETRY cpu_policy=dedicated-agent' "$output" ||
     fail "paging trend telemetry was not emitted"
   grep -Fq \
-    'paging_status=observed paging_enforcement=telemetry_only thermal_state=normal next_action=observe_pageout_swapout_trend' \
+    'paging_status=observed paging_enforcement=warn_active_paging_two_strike thermal_state=normal next_action=observe_pageout_swapout_trend' \
     "$output" || fail "paging observations look like an enforced universal threshold"
   grep -Fq 'HEAVY_LOCAL_GROUP_TELEMETRY cpu_policy=dedicated-agent' "$output" ||
     fail "fanout/RSS telemetry was not emitted"
@@ -1155,6 +1190,67 @@ test_dedicated_resource_guardrails_are_fail_safe_and_observable() {
   if grep -Fq "$secret_argument" "$output"; then
     fail "resource telemetry exposed a guarded command argument"
   fi
+  /bin/rm -f "$marker"
+
+  # Repeated yellow samples remain admissible while both paging counters stay
+  # flat. No absolute swap allocation or arbitrary page threshold is enforced.
+  {
+    printf 'healthy\n'
+    printf 'memory-warning-stable\n'
+    printf 'memory-warning-stable\n'
+    printf 'healthy\n'
+  } >"$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --label "memory-warning-stable" \
+      -- bash -c 'sleep 0.2; touch "$1"' _ "$marker" >"$output" 2>&1
+  [[ -f "$marker" && ! -e "$lock_path" ]] ||
+    fail "stable runtime yellow pressure killed admitted work or leaked the lease"
+  /bin/rm -f "$marker"
+
+  {
+    printf 'healthy\n'
+    printf 'memory-active-paging\n'
+    printf 'memory-active-paging\n'
+  } >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --label "memory-active-paging" \
+      -- bash -c 'sleep 1; touch "$1"' _ "$marker" >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 && ! -e "$marker" && ! -e "$lock_path" ]] ||
+    fail "repeated active paging did not stop and clean the guarded tree"
+  grep -Fq 'code=active_paging_growth' "$output" ||
+    fail "runtime active-paging stop lost its structured reason"
+  grep -Fq 'next_action=wait_for_paging_pressure_recovery' "$output" ||
+    fail "runtime swapout stop omitted its recovery condition"
+
+  # A single paging burst followed by a healthy sample is not a permanent
+  # transaction failure. This mirrors long package/signing work: cumulative
+  # growth remains observable, while only fresh interval growth can add a new
+  # strike after recovery.
+  {
+    printf 'healthy\n'
+    printf 'memory-active-paging\n'
+    printf 'healthy\n'
+    printf 'memory-warning-stable\n'
+    printf 'memory-warning-stable\n'
+    printf 'healthy\n'
+  } >"$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --cpu-policy dedicated-agent \
+      --label "memory-swapout-recovered" \
+      -- bash -c 'sleep 0.5; touch "$1"' _ "$marker" >"$output" 2>&1
+  [[ -f "$marker" && ! -e "$lock_path" ]] ||
+    fail "recovered runtime swapout burst poisoned later bounded warnings"
   /bin/rm -f "$marker"
 
   # One transient thermal sample is advisory to admitted work. A healthy next
