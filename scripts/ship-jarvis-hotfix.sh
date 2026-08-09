@@ -16,9 +16,15 @@ if [[ -d "${MAIN_REPO_RAW}" ]]; then
   MAIN_REPO="$(cd -- "${MAIN_REPO_RAW}" && pwd -P)"
 fi
 
-GH_BIN="${OPENCLAW_GH_BIN:-gh}"
-GIT_BIN="${OPENCLAW_GIT_BIN:-git}"
-JQ_BIN="${OPENCLAW_JQ_BIN:-jq}"
+if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+  GH_BIN="${OPENCLAW_GH_BIN:-gh}"
+  GIT_BIN="${OPENCLAW_GIT_BIN:-git}"
+  JQ_BIN="${OPENCLAW_JQ_BIN:-jq}"
+else
+  GH_BIN="/opt/homebrew/bin/gh"
+  GIT_BIN="/usr/bin/git"
+  JQ_BIN="/usr/bin/jq"
+fi
 LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-launchctl}"
 LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
 ID_BIN="${OPENCLAW_ID_BIN:-id}"
@@ -26,7 +32,11 @@ UNAME_BIN="${OPENCLAW_UNAME_BIN:-uname}"
 SHASUM_BIN="${OPENCLAW_SHASUM_BIN:-shasum}"
 PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
 
-PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-required-status.sh}"
+if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+  PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-required-status.sh}"
+else
+  PR_REQUIRED_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-required-status.sh"
+fi
 if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
   PR_RELEASE_QUEUE_SCRIPT="${OPENCLAW_SHIP_PR_RELEASE_QUEUE_SCRIPT:-${MAIN_REPO}/scripts/pr-release-queue}"
 else
@@ -381,6 +391,8 @@ release_queue_proves_reviewed_merge() {
     (all(.candidate.changedPaths[]; type == "string" and test("\\S"))) and
     ((.builder.threadId // "") | test("\\S")) and
     ((.builder.hostId // "") | test("\\S")) and
+    (.builder.threadId == (.builder.threadId | gsub("^\\s+|\\s+$"; ""))) and
+    (.builder.hostId == (.builder.hostId | gsub("^\\s+|\\s+$"; ""))) and
     (.builder.wakeRoute.threadId == .builder.threadId) and
     (.builder.wakeRoute.hostId == .builder.hostId) and
     (.reviewReceipt.schemaVersion == 1) and
@@ -390,6 +402,8 @@ release_queue_proves_reviewed_merge() {
     (.reviewReceipt.diffFingerprint == .candidate.diffFingerprint) and
     ((.reviewReceipt.owner.threadId // "") | test("\\S")) and
     ((.reviewReceipt.owner.hostId // "") | test("\\S")) and
+    (.reviewReceipt.owner.threadId == (.reviewReceipt.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
+    (.reviewReceipt.owner.hostId == (.reviewReceipt.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
     (.reviewReceipt.unresolvedFindings | type == "array") and
     (all(.reviewReceipt.unresolvedFindings[]; .severity | IN("low", "medium", "high", "critical"))) and
     ([.reviewReceipt.unresolvedFindings[]? | select(.severity == "high" or .severity == "critical")] | length == 0) and
@@ -400,25 +414,33 @@ release_queue_proves_reviewed_merge() {
     ((.testerReceipt.contractId // "") | test("\\S")) and
     ((.testerReceipt.owner.threadId // "") | test("\\S")) and
     ((.testerReceipt.owner.hostId // "") | test("\\S")) and
+    (.testerReceipt.owner.threadId == (.testerReceipt.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
+    (.testerReceipt.owner.hostId == (.testerReceipt.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
     ((.reviewReceipt.owner.threadId != .testerReceipt.owner.threadId) or (.reviewReceipt.owner.hostId != .testerReceipt.owner.hostId)) and
     ((.reviewReceipt.owner.threadId != .builder.threadId) or (.reviewReceipt.owner.hostId != .builder.hostId)) and
     ((.testerReceipt.owner.threadId != .builder.threadId) or (.testerReceipt.owner.hostId != .builder.hostId)) and
     (.authority.schemaVersion == 1) and
     (.authority.source == "builder-handoff") and
     (.authority.scope == ("PR #" + ($pr | tostring) + " source merge only")) and
-    (.authority.allowedActions | type == "array" and index("normal-merge") != null) and
-    (.authority.constraints | type == "array" and length > 0) and
+    (.authority.allowedActions == ["normal-merge"]) and
+    (.authority.constraints | type == "array") and
+    ((.authority.constraints | sort) == (["no admin or bypass", "no credentials or OTP", "no irreversible or public release", "no new scope"] | sort)) and
     ((.lifecycle.contractId // "") | test("\\S")) and
-    ((.lifecycle.stateDirectory // "") | test("\\S")) and
-    ((.capabilityPolicy.routine // "") | test("\\S")) and
-    ((.capabilityPolicy.escalation // "") | test("\\S")) and
+    ((.lifecycle.stateDirectory // "") | startswith("/")) and
+    (.capabilityPolicy.routine == "routine-release") and
+    (.capabilityPolicy.escalation == "reasoning-escalation") and
     (.ownerHistory | type == "array" and length > 0) and
     (any(.ownerHistory[]?;
       (.leaseId // "" | test("\\S")) and
       (.fence | type == "number" and . > 0) and
       .claimedPr == $pr and
       (.owner.threadId // "" | test("\\S")) and
-      (.owner.hostId // "" | test("\\S"))
+      (.owner.hostId // "" | test("\\S")) and
+      (.owner.threadId == (.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
+      (.owner.hostId == (.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
+      ((.owner.threadId != $item.builder.threadId) or (.owner.hostId != $item.builder.hostId)) and
+      ((.owner.threadId != $item.reviewReceipt.owner.threadId) or (.owner.hostId != $item.reviewReceipt.owner.hostId)) and
+      ((.owner.threadId != $item.testerReceipt.owner.threadId) or (.owner.hostId != $item.testerReceipt.owner.hostId))
     )) and
     (.terminalReceipts | type == "array") and
     (any(.terminalReceipts[]?;

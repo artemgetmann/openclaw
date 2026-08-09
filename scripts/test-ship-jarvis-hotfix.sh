@@ -76,7 +76,7 @@ if moving_main_path_requires_new_approval "src/agents/pi-tools.ts"; then
 fi
 pass "moving-main path gate separates routine from security/release scope"
 
-QUEUE_ITEM_FIXTURE='{"state":"closed","candidate":{"pr":42,"baseBranch":"main","testedBaseSha":"dddddddddddddddddddddddddddddddddddddddd","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","changedPaths":["src/agents/pi-tools.ts"]},"builder":{"threadId":"builder","hostId":"host","wakeRoute":{"threadId":"builder","hostId":"host"}},"reviewReceipt":{"schemaVersion":1,"role":"code-reviewer","status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","owner":{"threadId":"reviewer","hostId":"host"},"unresolvedFindings":[]},"testerReceipt":{"status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","closure":"terminal-receipt","contractId":"contract","owner":{"threadId":"tester","hostId":"host"}},"authority":{"schemaVersion":1,"source":"builder-handoff","scope":"PR #42 source merge only","allowedActions":["normal-merge"],"constraints":["no admin"]},"lifecycle":{"contractId":"release-contract","stateDirectory":"/tmp/state"},"capabilityPolicy":{"routine":"routine-release","escalation":"reasoning-escalation"},"ownerHistory":[{"leaseId":"lease","fence":1,"claimedPr":42,"owner":{"threadId":"release","hostId":"host"}}],"terminalReceipts":[{"schemaVersion":1,"kind":"source-merge","pr":42,"reviewedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","mergeSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","normalNonAdmin":true,"expectedHeadProtected":true,"landedTreeMatchesReviewed":true,"targetAncestryProven":true}]}'
+QUEUE_ITEM_FIXTURE='{"state":"closed","candidate":{"pr":42,"baseBranch":"main","testedBaseSha":"dddddddddddddddddddddddddddddddddddddddd","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","changedPaths":["src/agents/pi-tools.ts"]},"builder":{"threadId":"builder","hostId":"host","wakeRoute":{"threadId":"builder","hostId":"host"}},"reviewReceipt":{"schemaVersion":1,"role":"code-reviewer","status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","owner":{"threadId":"reviewer","hostId":"host"},"unresolvedFindings":[]},"testerReceipt":{"status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","closure":"terminal-receipt","contractId":"contract","owner":{"threadId":"tester","hostId":"host"}},"authority":{"schemaVersion":1,"source":"builder-handoff","scope":"PR #42 source merge only","allowedActions":["normal-merge"],"constraints":["no admin or bypass","no credentials or OTP","no irreversible or public release","no new scope"]},"lifecycle":{"contractId":"release-contract","stateDirectory":"/tmp/state"},"capabilityPolicy":{"routine":"routine-release","escalation":"reasoning-escalation"},"ownerHistory":[{"leaseId":"lease","fence":1,"claimedPr":42,"owner":{"threadId":"release","hostId":"host"}}],"terminalReceipts":[{"schemaVersion":1,"kind":"source-merge","pr":42,"reviewedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","mergeSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","normalNonAdmin":true,"expectedHeadProtected":true,"landedTreeMatchesReviewed":true,"targetAncestryProven":true}]}'
 release_queue_item_json() {
   printf '%s\n' "${QUEUE_ITEM_FIXTURE}"
 }
@@ -107,6 +107,18 @@ QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq '.termina
 if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
   fail "object-shaped terminal receipts unexpectedly passed"
 fi
+for mutation in \
+  '.capabilityPolicy.routine = "arbitrary"' \
+  '.lifecycle.stateDirectory = "relative/state"' \
+  '.authority.allowedActions += ["admin-bypass"]' \
+  '.authority.constraints = [null]' \
+  '.reviewReceipt.owner.threadId = "builder "' \
+  '.ownerHistory[0].owner = .builder'; do
+  QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq "${mutation}")"
+  if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
+    fail "malformed fenced authority unexpectedly passed: ${mutation}"
+  fi
+done
 pass "moving-main review gate requires exact-head fenced PASS receipts"
 
 printf 'All ship-jarvis-hotfix disk preflight tests passed.\n'
