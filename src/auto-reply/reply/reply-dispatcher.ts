@@ -242,12 +242,23 @@ export function createReplyDispatcherWithTyping(
   const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
+  const signalDispatchIdle = () => {
+    if (typingController) {
+      // Queue idleness is not a terminal boundary. An interim narration or
+      // voice payload can drain while the agent continues through tools and
+      // waits. Let the run-aware controller combine dispatch-idle with
+      // markRunComplete(); its cleanup hook then stops the channel keepalive
+      // exactly once at the honest terminal boundary.
+      typingController.markDispatchIdle();
+      return;
+    }
+    // Preserve the legacy direct-dispatcher fallback for callers that do not
+    // install a run-aware typing controller.
+    resolvedOnIdle?.();
+  };
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
-    onIdle: () => {
-      typingController?.markDispatchIdle();
-      resolvedOnIdle?.();
-    },
+    onIdle: signalDispatchIdle,
   });
 
   return {
@@ -259,10 +270,7 @@ export function createReplyDispatcherWithTyping(
         typingController = typing;
       },
     },
-    markDispatchIdle: () => {
-      typingController?.markDispatchIdle();
-      resolvedOnIdle?.();
-    },
+    markDispatchIdle: signalDispatchIdle,
     markRunComplete: () => {
       typingController?.markRunComplete();
     },
