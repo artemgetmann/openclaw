@@ -265,7 +265,7 @@ describe("withOpenComputerUseLock", () => {
         "  timeoutMs: 5_000,",
         "  run: async () => {",
         "    await fs.writeFile(acquiredPath, 'acquired');",
-        "    await new Promise(() => {});",
+        "    await new Promise(() => setInterval(() => {}, 1_000));",
         "  },",
         "});",
       ].join("\n"),
