@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 80,
-  "nextFence": 24,
-  "mergeLease": null,
+  "sequence": 81,
+  "nextFence": 25,
+  "mergeLease": {
+    "leaseId": "06ef8540-c83c-4b9a-a063-ef5f403f9d21",
+    "fence": 24,
+    "owner": {
+      "threadId": "/root/pr1373_release_executor",
+      "hostId": "nested-agent"
+    },
+    "claimedPr": 1373,
+    "claimedAt": "2026-08-09T13:47:07.330Z",
+    "heartbeatAt": "2026-08-09T13:47:07.330Z",
+    "expiresAt": "2026-08-09T14:17:07.330Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -1952,7 +1963,7 @@
       }
     },
     "1373": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1373,
         "url": "https://github.com/artemgetmann/openclaw/pull/1373",
@@ -2046,12 +2057,40 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-09T13:45:43.725Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "06ef8540-c83c-4b9a-a063-ef5f403f9d21",
+          "fence": 24,
+          "owner": {
+            "threadId": "/root/pr1373_release_executor",
+            "hostId": "nested-agent"
+          },
+          "claimedPr": 1373,
+          "claimedAt": "2026-08-09T13:47:07.330Z",
+          "heartbeatAt": "2026-08-09T13:47:07.330Z",
+          "expiresAt": "2026-08-09T14:17:07.330Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": []
+      "terminalReceipts": [],
+      "ownershipReceipt": {
+        "mode": "queue-lease",
+        "owner": {
+          "threadId": "/root/pr1373_release_executor",
+          "hostId": "nested-agent"
+        },
+        "builder": {
+          "threadId": "019fe052-ad05-7071-85e7-290beea79196",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "builderSuspended": true,
+        "leaseId": "06ef8540-c83c-4b9a-a063-ef5f403f9d21",
+        "fence": 24,
+        "recordedAt": "2026-08-09T13:47:07.330Z"
+      }
     },
     "1374": {
       "state": "blocked",
@@ -2645,10 +2684,10 @@
     }
   },
   "lastTransaction": {
-    "id": "2e724348-4da1-4725-9345-f28f339d3a17",
-    "recordedAt": "2026-08-09T13:46:54.340Z"
+    "id": "9d720006-2890-48fd-bdd7-fe364263aeb5",
+    "recordedAt": "2026-08-09T13:47:07.330Z"
   },
-  "updatedAt": "2026-08-09T13:46:54.340Z",
+  "updatedAt": "2026-08-09T13:47:07.330Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
