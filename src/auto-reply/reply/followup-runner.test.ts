@@ -968,9 +968,13 @@ describe("createFollowupRunner durable delivery recovery", () => {
     expect(firstWake).toEqual([
       expect.objectContaining({
         contextKey: `restart-followup:${input.id}`,
-        text: expect.stringContaining("Continue from the saved conversation"),
+        text: expect.stringContaining(
+          "most recent user-authored request immediately before the restart receipt",
+        ),
       }),
     ]);
+    expect(firstWake[0]?.text).toContain("Do not substitute an older task, completion claim");
+    expect(firstWake[0]?.text).toContain("draft remains draft");
     // The first heartbeat has drained its event but has not delivered yet.
     // A durable queue retry must not enqueue a second recovery run.
     expect(drainSystemEventEntries(restored.run.sessionKey ?? "")).toEqual([]);

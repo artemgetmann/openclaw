@@ -24,7 +24,11 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   const stop = params.stop;
   const keepaliveIntervalMs = params.keepaliveIntervalMs ?? 3_000;
   const maxConsecutiveFailures = Math.max(1, params.maxConsecutiveFailures ?? 2);
-  const maxDurationMs = params.maxDurationMs ?? 60_000; // Default 60s TTL
+  // The default agent turn may legitimately run for ten minutes. Keep the
+  // channel's activity cue alive for that same window so a healthy long turn
+  // does not look abandoned after only one minute. Channel adapters with a
+  // shorter provider-specific ceiling can still override this value.
+  const maxDurationMs = params.maxDurationMs ?? 10 * 60_000;
   let stopSent = false;
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;

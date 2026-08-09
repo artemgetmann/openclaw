@@ -21,6 +21,21 @@ export const RESTART_CONTINUATION_PROMPT = [
   "Preserve every approval gate. If the task is already complete, report that and stop. If no task remains active, do nothing.",
 ].join(" ");
 
+/**
+ * Direct-turn recovery must resume the newest interrupted request, not reopen
+ * an older completion claim that merely remains in the same long transcript.
+ * Keep the request itself in its original user message instead of copying
+ * untrusted user text into a higher-priority system event.
+ */
+export const DIRECT_TURN_RESTART_CONTINUATION_PROMPT = [
+  RESTART_CONTINUATION_PROMPT,
+  "This recovery belongs to the most recent user-authored request immediately before the restart receipt.",
+  "Continue that request automatically from its latest tool results and draft state.",
+  "Do not substitute an older task, completion claim, verification prompt, approval request, heartbeat item, or memory entry just because it remains in the transcript.",
+  "Preserve the interrupted request's action boundary exactly: draft remains draft, review remains review, and read-only remains read-only unless that request itself already authorized the external action.",
+  "Do not ask the user to say continue or repeat an approval that the interrupted request did not require.",
+].join(" ");
+
 export function buildSentinelRestartContinuationContext(operationId: string): string {
   return `${SENTINEL_CONTEXT_PREFIX}${operationId.trim().toLowerCase()}`;
 }

@@ -240,18 +240,18 @@ describe("createTypingCallbacks", () => {
       });
     });
 
-    it("uses default 60s TTL when not specified", async () => {
+    it("keeps typing alive through the default ten-minute agent turn", async () => {
       await withFakeTimers(async () => {
         const { stop, callbacks } = createTypingHarness();
 
         await callbacks.onReplyStart();
 
-        // Should not stop at 59s
-        await vi.advanceTimersByTimeAsync(59_000);
+        // A normal long-running turn must remain visibly active after one minute.
+        await vi.advanceTimersByTimeAsync(60_000);
         expect(stop).not.toHaveBeenCalled();
 
-        // Should stop at 60s
-        await vi.advanceTimersByTimeAsync(1_000);
+        // The safety ceiling still cleans up a genuinely orphaned indicator.
+        await vi.advanceTimersByTimeAsync(9 * 60_000);
         expect(stop).toHaveBeenCalledTimes(1);
       });
     });
