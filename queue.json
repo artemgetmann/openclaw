@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 90,
+  "sequence": 91,
   "nextFence": 27,
   "mergeLease": null,
   "items": {
@@ -1951,6 +1951,154 @@
         "recordedAt": "2026-08-08T11:48:24.194Z"
       }
     },
+    "1372": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1372,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1372",
+        "headSha": "31b6090bcfa88cb54cb59f08888cd6b3e837b57a",
+        "baseBranch": "main",
+        "testedBaseSha": "2a7c1b88cb23a55d8253aa766ef078543ca496c8",
+        "diffFingerprint": "sha256:077e6752f144a2f4235f2e3a3f5e74d10551405841c9d5a232c6e787f1b2161d",
+        "changedPaths": [
+          "apps/macos/Sources/OpenClawProtocol/GatewayModels.swift",
+          "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+          "src/agents/openclaw-tools.ts",
+          "src/agents/pi-tools-agent-config.test.ts",
+          "src/agents/pi-tools.ts",
+          "src/agents/subagent-capabilities.ts",
+          "src/agents/subagent-spawn.ts",
+          "src/agents/subagent-spawn.workspace.test.ts",
+          "src/agents/tool-policy.ts",
+          "src/agents/tools/sessions-spawn-tool.test.ts",
+          "src/agents/tools/sessions-spawn-tool.ts",
+          "src/config/sessions/types.ts",
+          "src/gateway/protocol/schema/sessions.ts",
+          "src/gateway/server.sessions.gateway-server-sessions-a.test.ts",
+          "src/gateway/sessions-patch.test.ts",
+          "src/gateway/sessions-patch.ts"
+        ],
+        "title": "fix(agents): preserve delegated monitor access",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: an owner-authorized `sessions_spawn` child retains the first-class `monitor` tool; non-owner children and every other privileged owner-only tool remain denied.\n- Exact head + builder proof: `31b6090bcfa88cb54cb59f08888cd6b3e837b57a` on base `2a7c1b88cb23a55d8253aa766ef078543ca496c8`; diff fingerprint `sha256:077e6752f144a2f4235f2e3a3f5e74d10551405841c9d5a232c6e787f1b2161d`; `git diff --check` PASS; all GitHub CI PASS.\n- Independent reviewer: PASS with no findings at the exact head and fingerprint above.\n- Independent tester: PASS at the exact head and fingerprint above; focused guarded Vitest run passed 5/5 files and 87/87 tests.\n- Release worker: pending canonical repo-backed fenced release execution.\n- Dependencies / merge order / overlap: rebased cleanly onto PR #1373's landed workflow at `2a7c1b88cb23a55d8253aa766ef078543ca496c8`; no unresolved source overlap.\n- Remaining proof / cleanup / rollback: normal merge, main-Jarvis hotfix deployment, and one bounded live monitor-create acceptance. Revert this commit to roll back.\n- Still hurts: none in source; installed-runtime and live behavior remain separate post-merge proof layers.\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"source\",\n  \"completionClaim\": \"declared-boundary-complete\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home configuration mutation is part of the product source PR.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Exact source head 31b6090bcfa88cb54cb59f08888cd6b3e837b57a passed independent review, focused guarded tests (5 files, 87 tests), and all GitHub CI. Merge remains a separate lifecycle action.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The declared product boundary for this PR is source merge.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"Main-Jarvis hotfix installation is a separate Artem-specific runtime operation after merge.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The optional session metadata is additive and missing state fails closed; no existing-user migration is required.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No public release is included in the declared source boundary.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"Live Jarvis verification follows the separate Artem-specific installed-runtime operation.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## Why This Matters\n\n- Jarvis correctly delegated monitor creation to an isolated child, but the internal spawn dropped the already-verified owner authorization. Policy then removed `monitor`, leaving the requested WhatsApp monitor blocked despite a healthy backend.\n\n## Scope Boundary\n\n- Persist one core-owned boolean only when a verified owner turn spawns the child.\n- Re-enable only `monitor` from that durable marker.\n- Do not expose cron, gateway, nodes, login, session control, or arbitrary plugin owner-only tools.\n- No monitor backend, WhatsApp, Telegram dispatch, runtime config, or dependency changes.\n\n## Verification\n\n- Guarded focused suite: 5 files, 87 tests PASS in 61.69 seconds.\n- GitHub CI: all applicable checks PASS, including both Node test shards, `check`, protocol, install smoke, channels, extensions, secrets, and startup memory.\n- Independent code review: PASS with no unresolved findings.\n- `git diff --check`: PASS.\n\n## Security Impact\n\n- New permissions/capabilities? Yes — narrowly preserves an already verified owner's monitor authority across one internal spawn boundary.\n- Secrets/tokens handling changed? No.\n- New/changed network calls? No.\n- Command/tool execution surface changed? Yes — only the existing `monitor` tool becomes visible to an owner-spawned child; regression tests prove other privileged tools remain absent.\n- Data access scope changed? No.\n- Mitigation: core-written strict boolean, subagent-only resolution, literal `true` requirement, missing/malformed state fails closed, and delegated allow-set contains only `monitor`.\n\n## AI Assistance\n\n- AI-assisted.\n- Testing degree: focused exact-head local tests plus full CI; live proof pending post-merge deployment.\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "source",
+          "completionClaim": "declared-boundary-complete",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home configuration mutation is part of the product source PR."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Exact source head 31b6090bcfa88cb54cb59f08888cd6b3e837b57a passed independent review, focused guarded tests (5 files, 87 tests), and all GitHub CI. Merge remains a separate lifecycle action."
+            },
+            "packagedArtifact": {
+              "status": "not-applicable",
+              "evidence": "The declared product boundary for this PR is source merge."
+            },
+            "installedRuntime": {
+              "status": "not-applicable",
+              "evidence": "Main-Jarvis hotfix installation is a separate Artem-specific runtime operation after merge."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "The optional session metadata is additive and missing state fails closed; no existing-user migration is required."
+            },
+            "publicRelease": {
+              "status": "not-applicable",
+              "evidence": "No public release is included in the declared source boundary."
+            },
+            "endUserBehavior": {
+              "status": "not-applicable",
+              "evidence": "Live Jarvis verification follows the separate Artem-specific installed-runtime operation."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fccd7-6473-72d1-aa48-2c1007fba833",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fccd7-6473-72d1-aa48-2c1007fba833",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "31b6090bcfa88cb54cb59f08888cd6b3e837b57a",
+        "diffFingerprint": "sha256:077e6752f144a2f4235f2e3a3f5e74d10551405841c9d5a232c6e787f1b2161d",
+        "closure": "terminal-receipt",
+        "contractId": "cfc8e6c3-2d89-416d-a05d-0fb4eafb78d8",
+        "owner": {
+          "threadId": "/root/pr1372_tester_fresh",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "owner": {
+          "threadId": "/root/pr1372_rebase_review",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "status": "PASS",
+        "headSha": "31b6090bcfa88cb54cb59f08888cd6b3e837b57a",
+        "baseSha": "2a7c1b88cb23a55d8253aa766ef078543ca496c8",
+        "diffFingerprint": "sha256:077e6752f144a2f4235f2e3a3f5e74d10551405841c9d5a232c6e787f1b2161d",
+        "unresolvedFindings": [],
+        "evidence": [
+          "Local HEAD, the local commit object, and GitHub PR #1372 headRefOid all resolve to 31b6090bcfa88cb54cb59f08888cd6b3e837b57a.",
+          "The local base object, GitHub baseRefOid, and merge-base all resolve to 2a7c1b88cb23a55d8253aa766ef078543ca496c8.",
+          "Two independent raw `gh pr diff 1372 --patch | shasum -a 256` reads produced the identical SHA-256 fingerprint 077e6752f144a2f4235f2e3a3f5e74d10551405841c9d5a232c6e787f1b2161d.",
+          "Reviewed the complete 16-file, 220-insertion/4-deletion base...head diff and the surrounding authorization, session-store, spawn, policy, gateway schema, generated Swift protocol, and regression-test call paths.",
+          "Verified trusted senderIsOwner propagation from createOpenClawTools through sessions_spawn into SpawnSubagentContext, followed by a literal `=== true` immutable session marker persisted before child agent start.",
+          "Verified delegation resolution requires a normalized subagent key plus literal boolean true; missing, malformed, inaccessible, non-subagent, null, false, or undefined metadata does not grant monitor authority.",
+          "Verified applyOwnerOnlyToolPolicy receives only Set([\"monitor\"]); all other owner-only tools remain filtered for non-owner child turns, while the ordinary subagent deny policy independently retains gateway, cron, login, agents/session-control restrictions.",
+          "Verified sessions.patch is admin-scoped, the marker is restricted to subagent keys, and an existing boolean marker cannot be changed or cleared.",
+          "Reviewed focused regression coverage for owner versus non-owner spawn propagation, patch-before-start ordering, delegated monitor visibility, other privileged-tool exclusions, immutable patch behavior, and gateway/protocol persistence.",
+          "`git diff --check 2a7c1b88cb23a55d8253aa766ef078543ca496c8...31b6090bcfa88cb54cb59f08888cd6b3e837b57a` passed with no output; GitHub protocol check, Bun unit suite, channels, extensions, security, and boundary checks were green at review time."
+        ],
+        "limitations": [
+          "Per the reviewer assignment, no local test suite or heavy command was run; this receipt is an independent static code/security review, identity verification, and inspection of existing focused tests/CI state.",
+          "Several GitHub checks, including both Node test shards, repository check, install-smoke, and startup-memory, were still in progress at the review snapshot; release gating must wait for required CI independently of this code-review PASS.",
+          "The PR body still cites pre-rebase head dc9b836178e in its builder/source proof text; this receipt does not treat that stale proof text as current-head executable proof."
+        ]
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1372 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "d5352713-120f-41a5-9a6e-da4635a88052",
+        "stateDirectory": "/Users/user/.codex/worktrees/ac6884cc-b694-4461-9554-7cc864d448b9/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-09T15:23:20.855Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
+    },
     "1373": {
       "state": "closed",
       "candidate": {
@@ -2940,10 +3088,10 @@
     }
   },
   "lastTransaction": {
-    "id": "7da6f21d-774c-45d5-982a-a06c900cb4d0",
-    "recordedAt": "2026-08-09T14:28:02.765Z"
+    "id": "cadb12a6-758b-4bd2-980b-2e2f5083eac1",
+    "recordedAt": "2026-08-09T15:23:20.855Z"
   },
-  "updatedAt": "2026-08-09T14:28:02.765Z",
+  "updatedAt": "2026-08-09T15:23:20.855Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
