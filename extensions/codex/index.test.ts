@@ -551,7 +551,8 @@ describe("Codex natural-language delegation", () => {
     const requestHeartbeatNow = vi.fn();
     const run = vi.fn(async () => ({ runId: "jarvis-relay-run" }));
     const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
-    const startWorkingPresence = vi.fn(async () => undefined);
+    // An unresolved Telegram request must not delay the already-started Codex receipt.
+    const startWorkingPresence = vi.fn(() => new Promise<void>(() => undefined));
     const stopWorkingPresence = vi.fn();
     const state = await createRelayState();
     const sessionStorePath = path.join(state.resolveStateDir(), "sessions.json");

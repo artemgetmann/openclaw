@@ -54,4 +54,28 @@ describe("Telegram subagent working presence", () => {
     await handlers.get("gateway_stop")?.({});
     expect(presence.stopAll).toHaveBeenCalledTimes(1);
   });
+
+  it("does not block worker acceptance on an unresolved Telegram request", () => {
+    const handlers = new Map<string, (event: any) => unknown>();
+    const presence = {
+      start: vi.fn(() => new Promise<void>(() => undefined)),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+    };
+    const api = {
+      logger: { warn: vi.fn() },
+      runtime: { channel: { telegram: { workingPresence: presence } } },
+      on: vi.fn((name: string, handler: (event: any) => unknown) => handlers.set(name, handler)),
+    } as unknown as OpenClawPluginApi;
+    registerTelegramSubagentWorkingPresence(api);
+
+    const result = handlers.get("subagent_spawned")?.({
+      runId: "run-pending",
+      mode: "run",
+      requester: { channel: "telegram", to: "-1001" },
+    });
+
+    expect(result).toBeUndefined();
+    expect(presence.start).toHaveBeenCalledTimes(1);
+  });
 });

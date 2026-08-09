@@ -759,11 +759,11 @@ async function startAsyncRelay(params: {
   const workingPresenceRoute = resolveTelegramWorkingPresenceRoute(sessionKey, params.api.config);
   if (workingPresenceRoute) {
     const presence = params.api.runtime.channel?.telegram?.workingPresence;
-    await presence
+    void presence
       ?.start({ ownerId: workingPresenceOwner, ...workingPresenceRoute })
       .catch((error: unknown) => {
-        // Presence is useful but ephemeral. A provider failure must never turn
-        // an accepted native worker into an ambiguous delegation.
+        // The native worker is already accepted. Presence is useful but
+        // ephemeral, so provider latency or failure must not gate its receipt.
         params.api.logger.warn(
           `Codex relay ${delegationId} could not start Telegram working presence: ${formatError(error)}`,
         );
