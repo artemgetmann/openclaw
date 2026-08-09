@@ -201,6 +201,17 @@ function openComputerUseBundleIdentifier(command: string): string | undefined {
   }
 }
 
+export function resolveOpenComputerUseSocketIdentity(command: string): string | undefined {
+  const bundleIdentifier = openComputerUseBundleIdentifier(command);
+  if (!bundleIdentifier) {
+    return undefined;
+  }
+  // The pinned OCU runtime derives its app-agent socket from the innermost
+  // helper bundle identifier. Keying by that derivation makes separate copies
+  // of one signed helper converge without collapsing production and Dev lanes.
+  return `socket:bundle:${bundleIdentifier}`;
+}
+
 function isDevelopmentOpenComputerUseCommand(command: string): boolean {
   const normalizedCommand = command.replaceAll("\\", "/");
 
@@ -839,17 +850,14 @@ function elementArgs(target: ElementRef): Record<string, unknown> {
 export class OpenComputerUseRuntime implements GuiRuntime {
   readonly name = "open-computer-use" as const;
   private readonly command: string;
-  private readonly appAgentIdentity?: string;
+  private readonly socketIdentity?: string;
   private readonly baseArgs: string[];
   private readonly timeoutMs: number;
   private readonly visualCursorObservationFile?: string;
 
   constructor(options: OpenComputerUseRuntimeOptions = {}) {
     this.command = resolveOpenComputerUseCommand(options.command);
-    const appIdentity = inferOpenComputerUseAppIdentity(this.command);
-    this.appAgentIdentity = appIdentity.recognized
-      ? `bundle:${appIdentity.bundleIdentifier}`
-      : undefined;
+    this.socketIdentity = resolveOpenComputerUseSocketIdentity(this.command);
     this.baseArgs = options.baseArgs ?? [];
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.visualCursorObservationFile = options.visualCursorObservationFile;
@@ -859,7 +867,7 @@ export class OpenComputerUseRuntime implements GuiRuntime {
     const commandArgs = [...this.baseArgs, ...args];
     try {
       const result = await withOpenComputerUseLock({
-        appAgentIdentity: this.appAgentIdentity,
+        socketIdentity: this.socketIdentity,
         command: this.command,
         timeoutMs: this.timeoutMs,
         run: async (remainingTimeoutMs) =>
@@ -878,7 +886,7 @@ export class OpenComputerUseRuntime implements GuiRuntime {
 
   private async runActionJson(args: string[]): Promise<{ ok: boolean; raw: unknown }> {
     const result = await withOpenComputerUseLock({
-      appAgentIdentity: this.appAgentIdentity,
+      socketIdentity: this.socketIdentity,
       command: this.command,
       timeoutMs: this.timeoutMs,
       run: async (remainingTimeoutMs) =>

@@ -12,6 +12,7 @@ import {
   parseOpenComputerUseVirtualPointerEvidence,
   parseOpenComputerUseWindows,
   resolveOpenComputerUseCommand,
+  resolveOpenComputerUseSocketIdentity,
 } from "./open-computer-use-runtime.js";
 
 describe("parseOpenComputerUseApps", () => {
@@ -430,6 +431,16 @@ async function createPackagedOpenComputerUse(
 }
 
 describe("OpenComputerUseRuntime", () => {
+  it("derives the lock socket identity from the resolved OCU bundle metadata", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
+    const packagedCommand = await createPackagedOpenComputerUse(packageRoot);
+
+    expect(resolveOpenComputerUseSocketIdentity(packagedCommand)).toBe(
+      "socket:bundle:com.ifuryst.opencomputeruse",
+    );
+    expect(resolveOpenComputerUseSocketIdentity("open-computer-use")).toBeUndefined();
+  });
+
   it("uses an explicit OCU command before discovery", () => {
     expect(
       resolveOpenComputerUseCommand("/tmp/custom-ocu", {
