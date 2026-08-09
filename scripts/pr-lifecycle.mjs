@@ -583,6 +583,11 @@ function handoffTest(pr, options) {
         priorTester.testKind === "read-only" &&
         testKind === "read-only" &&
         priorTester.closure?.type === "terminal-receipt" &&
+        priorTester.receipt?.terminalCause?.class === "host_capacity" &&
+        priorTester.receipt?.terminalCause?.code === "heavy_slot_occupied" &&
+        priorTester.receipt?.terminalCause?.workloadStarted === false &&
+        priorTester.receipt.terminalCause.class === recoveryReceipt.cause.class &&
+        priorTester.receipt.terminalCause.code === recoveryReceipt.cause.code &&
         recoveryReceipt.cause.code === "heavy_slot_occupied";
       if (
         (!userVisibleRecovery && !nestedOccupiedSlotRecovery) ||

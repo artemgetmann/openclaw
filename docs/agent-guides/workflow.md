@@ -203,8 +203,11 @@ capacity-owner recovery receipt to `handoff-test --capacity-retry-contract ...
 --capacity-recovery-receipt ...`. One additional shape is legal: a
 `nested-read-only` tester terminally closed by `terminal-receipt` may retry on
 the same nested transport only when its sole recovered gate is
-`heavy_slot_occupied`. Nested disk, Jarvis-health, transport-changing, or
-post-workload retries remain forbidden.
+`heavy_slot_occupied`. Its terminal tester receipt must carry the same typed
+`terminalCause` as the recovery receipt; free-text evidence or an independently
+asserted recovery cause cannot turn a source/test failure into a capacity
+retry. Nested disk, Jarvis-health, transport-changing, or post-workload retries
+remain forbidden.
 
 The receipt must bind that closed `FAIL`, record `workloadStarted=false`, prove
 the exact failed gate recovered, prove empty heavy/release lock directories,

@@ -91,6 +91,7 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(normalizedWorkflow).toContain("record `workloadStarted=false`");
     expect(normalizedWorkflow).toContain("`nested-read-only` tester terminally closed");
     expect(normalizedWorkflow).toContain("same nested transport only");
+    expect(normalizedWorkflow).toContain("same typed `terminalCause`");
     expect(normalizedWorkflow).toContain("Nested disk, Jarvis-health, transport-changing");
     expect(normalizedWorkflow).toContain("archive nothing adjacent");
     expect(normalizedWorkflow).toContain("preserve the one known owner");

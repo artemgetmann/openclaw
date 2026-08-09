@@ -425,6 +425,11 @@ function completeNestedOccupiedSlotFailure(fixture: ReturnType<typeof makeFixtur
       diffFingerprint: tester.candidate?.diffFingerprint,
       owner: { threadId: "nested-capacity-tester", hostId: "nested-agent" },
       workloadStarted: false,
+      terminalCause: {
+        class: "host_capacity",
+        code: "heavy_slot_occupied",
+        workloadStarted: false,
+      },
       evidence: ["bounded heavy-slot wait expired before workload start"],
       cleanup: { status: "not-required", evidence: "workload never started" },
       limitations: [],
@@ -925,13 +930,21 @@ describe("scripts/pr-lifecycle", () => {
   });
 
   it("rejects nested capacity retry for a non-slot gate or any started workload", () => {
-    for (const variant of ["disk-gate", "workload-started"] as const) {
+    for (const variant of ["disk-gate", "source-failure", "workload-started"] as const) {
       const fixture = makeFixture();
       const priorTester = completeNestedOccupiedSlotFailure(fixture);
-      if (variant === "workload-started") {
+      if (variant !== "disk-gate") {
         const statePath = path.join(fixture.root, "state", "pr-42.json");
         const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-        state.tester.receipt.workloadStarted = true;
+        if (variant === "workload-started") {
+          state.tester.receipt.workloadStarted = true;
+        } else {
+          state.tester.receipt.terminalCause = {
+            class: "source_test",
+            code: "assertion_failed",
+            workloadStarted: false,
+          };
+        }
         fs.writeFileSync(statePath, JSON.stringify(state));
       }
       const recoveryPath =
