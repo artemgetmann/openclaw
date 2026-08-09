@@ -187,20 +187,18 @@ bash scripts/ship-jarvis-hotfix.sh --pr <number> --dry-run
 bash scripts/ship-jarvis-hotfix.sh --pr <number>
 ```
 
-For an OPEN PR, `--dry-run` cannot know the future merged `main` commit. Its
-commit-dependent package, seed, protection, and proof plan therefore uses the
-explicit `<post-merge-main>` placeholder and resolves the real commit only in
-the live run after merge plus `git pull --ff-only`. Exact installed-app commit
-comparison remains enabled for already-MERGED PR dry-runs.
+The PR must already be merged through the canonical builder → tester → fenced
+release lifecycle. The wrapper never readies or merges an OPEN PR; this keeps
+source-review authority separate from installed-runtime authority.
 
 The wrapper is intentionally narrower than a public release and stronger than
 read-only Jarvis proof. It:
 
 - refuses unless the sacred clone is clean, on `main`, and is the current
   working directory
-- verifies the PR targets `main`, waits through `scripts/pr-required-status.sh`
-  even when GitHub already reports it merged, merges when needed, then
-  fast-forwards with `git pull --ff-only`
+- verifies the PR targets `main` and is already merged, waits through
+  `scripts/pr-required-status.sh`, then fast-forwards with
+  `git pull --ff-only`
 - when `main` advanced beyond the requested PR, requires every intervening
   commit to map to exactly one merged `main` PR with exact-head fenced reviewer,
   tester-closure, landed-tree, and green required-check receipts

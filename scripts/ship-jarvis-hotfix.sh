@@ -19,7 +19,10 @@ fi
 SHIP_TEST_MODE=0
 # Test indirection is accepted only outside the canonical production checkout.
 # An ambient variable in the sacred clone must never replace release authority.
-if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" && "${ROOT_DIR}" != "${CANONICAL_MAIN_REPO}" ]]; then
+if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" &&
+  "${ROOT_DIR}" != "${CANONICAL_MAIN_REPO}" &&
+  "${MAIN_REPO}" == "${ROOT_DIR}" &&
+  "${OPENCLAW_EXPECTED_MAIN_REPO:-}" == "${ROOT_DIR}" ]]; then
   SHIP_TEST_MODE=1
 fi
 
@@ -42,7 +45,11 @@ else
   UNAME_BIN="/usr/bin/uname"
   SHASUM_BIN="/usr/bin/shasum"
 fi
-PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+  PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
+else
+  PLISTBUDDY_BIN="/usr/libexec/PlistBuddy"
+fi
 
 if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
   PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-required-status.sh}"
@@ -66,20 +73,35 @@ else
   PROVE_RUNTIME_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/prove-jarvis-runtime.sh"
 fi
 
-JARVIS_APP_PATH="${OPENCLAW_SHIP_JARVIS_APP_PATH:-${MAIN_REPO}/dist/Jarvis.app}"
-INSTALLED_JARVIS_APP_PATH="${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}"
-INSTALLED_JARVIS_INFO_PLIST="${OPENCLAW_SHIP_INSTALLED_APP_INFO_PLIST:-${INSTALLED_JARVIS_APP_PATH}/Contents/Info.plist}"
-INSTALLED_JARVIS_APP_MANIFEST="${OPENCLAW_SHIP_INSTALLED_APP_MANIFEST:-${INSTALLED_JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/manifest.json}"
-JARVIS_HOME="${OPENCLAW_JARVIS_HOME:-${HOME}/Library/Application Support/Jarvis}"
-JARVIS_STATE_DIR="${OPENCLAW_JARVIS_STATE_DIR:-${JARVIS_HOME}/.jarvis}"
-JARVIS_CONFIG_PATH="${OPENCLAW_JARVIS_CONFIG_PATH:-${JARVIS_STATE_DIR}/openclaw.json}"
-JARVIS_LOG_DIR="${OPENCLAW_JARVIS_LOG_DIR:-${JARVIS_STATE_DIR}/logs}"
-JARVIS_MANIFEST="${OPENCLAW_SHIP_INSTALLED_MANIFEST:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json}"
-JARVIS_PROTECTION_MARKER="${OPENCLAW_SHIP_PROTECTION_MARKER:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json}"
-JARVIS_NODE="${OPENCLAW_JARVIS_NODE_BIN:-${JARVIS_STATE_DIR}/tools/node/bin/node}"
-JARVIS_ENTRYPOINT="${OPENCLAW_JARVIS_ENTRYPOINT:-${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js}"
-JARVIS_LABEL="${OPENCLAW_JARVIS_GATEWAY_LABEL:-ai.jarvis.gateway}"
-PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
+  JARVIS_APP_PATH="${OPENCLAW_SHIP_JARVIS_APP_PATH:-${MAIN_REPO}/dist/Jarvis.app}"
+  INSTALLED_JARVIS_APP_PATH="${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}"
+  JARVIS_HOME="${OPENCLAW_JARVIS_HOME:-${HOME}/Library/Application Support/Jarvis}"
+  JARVIS_STATE_DIR="${OPENCLAW_JARVIS_STATE_DIR:-${JARVIS_HOME}/.jarvis}"
+  JARVIS_CONFIG_PATH="${OPENCLAW_JARVIS_CONFIG_PATH:-${JARVIS_STATE_DIR}/openclaw.json}"
+  JARVIS_LOG_DIR="${OPENCLAW_JARVIS_LOG_DIR:-${JARVIS_STATE_DIR}/logs}"
+  JARVIS_MANIFEST="${OPENCLAW_SHIP_INSTALLED_MANIFEST:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json}"
+  JARVIS_PROTECTION_MARKER="${OPENCLAW_SHIP_PROTECTION_MARKER:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json}"
+  JARVIS_NODE="${OPENCLAW_JARVIS_NODE_BIN:-${JARVIS_STATE_DIR}/tools/node/bin/node}"
+  JARVIS_ENTRYPOINT="${OPENCLAW_JARVIS_ENTRYPOINT:-${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js}"
+  JARVIS_LABEL="${OPENCLAW_JARVIS_GATEWAY_LABEL:-ai.jarvis.gateway}"
+  PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+else
+  JARVIS_APP_PATH="${CANONICAL_MAIN_REPO}/dist/Jarvis.app"
+  INSTALLED_JARVIS_APP_PATH="/Applications/Jarvis.app"
+  JARVIS_HOME="/Users/user/Library/Application Support/Jarvis"
+  JARVIS_STATE_DIR="${JARVIS_HOME}/.jarvis"
+  JARVIS_CONFIG_PATH="${JARVIS_STATE_DIR}/openclaw.json"
+  JARVIS_LOG_DIR="${JARVIS_STATE_DIR}/logs"
+  JARVIS_MANIFEST="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json"
+  JARVIS_PROTECTION_MARKER="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json"
+  JARVIS_NODE="${JARVIS_STATE_DIR}/tools/node/bin/node"
+  JARVIS_ENTRYPOINT="${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js"
+  JARVIS_LABEL="ai.jarvis.gateway"
+  PORT="18789"
+fi
+INSTALLED_JARVIS_INFO_PLIST="${INSTALLED_JARVIS_APP_PATH}/Contents/Info.plist"
+INSTALLED_JARVIS_APP_MANIFEST="${INSTALLED_JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/manifest.json"
 SEED_TIMEOUT_SECONDS="${OPENCLAW_SHIP_SEED_TIMEOUT_SECONDS:-60}"
 SEED_POLL_SECONDS="${OPENCLAW_SHIP_SEED_POLL_SECONDS:-1}"
 GATEWAY_READY_TIMEOUT_SECONDS="${OPENCLAW_SHIP_GATEWAY_READY_TIMEOUT_SECONDS:-120}"
@@ -242,8 +264,8 @@ assert_pr_can_ship() {
   state="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state // empty')"
 
   [[ "${base}" == "main" ]] || die "refusing PR #${PR_NUMBER}: baseRefName=${base:-missing}, expected main"
-  [[ "${state}" == "OPEN" || "${state}" == "MERGED" ]] || \
-    die "refusing PR #${PR_NUMBER}: state=${state:-missing}, expected OPEN or MERGED"
+  [[ "${state}" == "MERGED" ]] || \
+    die "refusing PR #${PR_NUMBER}: state=${state:-missing}; source merge must complete through the fenced builder -> tester -> release lifecycle first"
 }
 
 print_command() {
@@ -258,46 +280,20 @@ print_main_command() {
   printf '\n'
 }
 
-merge_or_confirm_pr() {
+confirm_merged_pr() {
   local json="$1"
   local state=""
-  local is_draft=""
-  local head_sha=""
-  local title=""
   state="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state')"
 
-  is_draft="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.isDraft')"
-  head_sha="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.headRefOid // empty')"
-  title="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.title // empty')"
-
   if (( DRY_RUN == 1 )); then
-    if [[ "${state}" == "OPEN" && "${is_draft}" == "true" ]]; then
-      print_command "${GH_BIN}" pr ready "${PR_NUMBER}"
-    fi
     print_command "${PR_REQUIRED_SCRIPT}" --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
-    if [[ "${state}" == "MERGED" ]]; then
-      log "PR #${PR_NUMBER} is already merged; required checks still remain part of ship proof"
-      return 0
-    fi
-    [[ "${head_sha}" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "PR head commit is missing or invalid"
-    [[ -n "${title}" ]] || die "PR title is missing"
-    print_command "${GH_BIN}" pr merge "${PR_NUMBER}" --squash --delete-branch \
-      --match-head-commit "${head_sha}" --subject "${title} (#${PR_NUMBER})"
+    log "PR #${PR_NUMBER} is already merged; required checks still remain part of ship proof"
     return 0
   fi
 
-  if [[ "${state}" == "OPEN" && "${is_draft}" == "true" ]]; then
-    "${GH_BIN}" pr ready "${PR_NUMBER}"
-  fi
   run_pr_required --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
-  if [[ "${state}" == "MERGED" ]]; then
-    log "PR #${PR_NUMBER} is already merged; required checks confirmed"
-    return 0
-  fi
-  [[ "${head_sha}" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "PR head commit is missing or invalid"
-  [[ -n "${title}" ]] || die "PR title is missing"
-  "${GH_BIN}" pr merge "${PR_NUMBER}" --squash --delete-branch \
-    --match-head-commit "${head_sha}" --subject "${title} (#${PR_NUMBER})"
+  [[ "${state}" == "MERGED" ]] || die "PR #${PR_NUMBER} changed state during required-check proof"
+  log "PR #${PR_NUMBER} is already merged; required checks confirmed"
 }
 
 assert_installed_app_needs_hotfix() {
@@ -1123,7 +1119,7 @@ main() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
   fi
-  merge_or_confirm_pr "${json}"
+  confirm_merged_pr "${json}"
   pull_and_confirm_merge
 
   if (( DRY_RUN == 1 )) && [[ "${pr_state}" == "OPEN" ]]; then

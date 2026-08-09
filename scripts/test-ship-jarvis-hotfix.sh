@@ -31,6 +31,17 @@ export OPENCLAW_SHIP_JARVIS_HOTFIX_LIB_ONLY=1
 # shellcheck source=scripts/ship-jarvis-hotfix.sh
 source "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh"
 
+[[ "${SHIP_TEST_MODE}" == "0" ]] || fail "ordinary worktree load unexpectedly enabled test mode"
+[[ "${PLISTBUDDY_BIN}" == "/usr/libexec/PlistBuddy" ]] || fail "production PlistBuddy was redirected"
+[[ "${JARVIS_HOME}" == "/Users/user/Library/Application Support/Jarvis" ]] || \
+  fail "production Jarvis home was redirected"
+
+PR_NUMBER=42
+if (assert_pr_can_ship '{"baseRefName":"main","state":"OPEN"}') >/dev/null 2>&1; then
+  fail "OPEN PR unexpectedly passed the fenced source-merge boundary"
+fi
+pass "production target and prior-source-merge boundaries fail closed"
+
 export JARVIS_RELEASE_DISK_PROBE_COMMAND="${PROBE_SCRIPT}"
 export JARVIS_RELEASE_DISK_REQUIRED_KIB=100
 export PACKAGE_MARKER
