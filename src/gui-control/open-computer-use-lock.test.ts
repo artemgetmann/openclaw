@@ -291,7 +291,9 @@ describe("withOpenComputerUseLock", () => {
       });
     });
     await Promise.race([
-      vi.waitFor(async () => expect(await fs.readFile(acquiredPath, "utf8")).toBe("acquired")),
+      vi.waitFor(async () =>
+        expect(await fs.readFile(acquiredPath, "utf8").catch(() => undefined)).toBe("acquired"),
+      ),
       prematureExit,
     ]);
     expect((await fs.readdir(`${target}.lock`)).some((name) => name.startsWith("owner-"))).toBe(
