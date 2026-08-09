@@ -183,8 +183,8 @@ repo-native break-glass wrapper. Do not reconstruct these stages by hand:
 
 ```bash
 cd /Users/user/Programming_Projects/openclaw
-bash scripts/ship-jarvis-hotfix.sh --pr <number> --dry-run
-bash scripts/ship-jarvis-hotfix.sh --pr <number>
+scripts/ship-jarvis-hotfix.sh --pr <number> --dry-run
+scripts/ship-jarvis-hotfix.sh --pr <number>
 ```
 
 The PR must already be merged through the canonical builder → tester → fenced

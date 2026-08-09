@@ -1,5 +1,13 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S -i PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin HOME=/Users/user /bin/bash
 set -euo pipefail
+
+# Direct execution enters through the clean shebang above. An explicit
+# `bash script` launch can import BASH_ENV before this file starts; refuse to
+# perform wrapper actions in that mode and direct operators to the safe entry.
+if [[ -n "${BASH_ENV:-}" || -n "${ENV:-}" ]]; then
+  printf '[ship-jarvis-hotfix] ERROR: unsafe shell startup environment; execute scripts/ship-jarvis-hotfix.sh directly\n' >&2
+  exit 126
+fi
 
 SCRIPT_NAME="ship-jarvis-hotfix"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -131,7 +139,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/ship-jarvis-hotfix.sh --pr <number> [--dry-run]
 
-Merge a main-targeted PR and ship it to this Mac's default Jarvis as an
+Ship an already-merged main-targeted PR to this Mac's default Jarvis as an
 explicit app-support break-glass hotfix. The wrapper builds and launches only
 dist/Jarvis.app; it never replaces /Applications/Jarvis.app and never claims a
 public release or managed-bundle steady state.
