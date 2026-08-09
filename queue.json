@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 62,
+  "sequence": 63,
   "nextFence": 19,
-  "mergeLease": {
-    "leaseId": "9c0f8fe5-6404-41ac-bd70-a3db4d61260b",
-    "fence": 18,
-    "owner": {
-      "threadId": "/root/pr1365_fenced_release",
-      "hostId": "subagent-local"
-    },
-    "claimedPr": 1365,
-    "claimedAt": "2026-08-09T05:48:58.276Z",
-    "heartbeatAt": "2026-08-09T05:48:58.276Z",
-    "expiresAt": "2026-08-09T06:08:58.276Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -1415,7 +1404,7 @@
       }
     },
     "1365": {
-      "state": "claimed",
+      "state": "blocked",
       "candidate": {
         "pr": 1365,
         "url": "https://github.com/artemgetmann/openclaw/pull/1365",
@@ -1542,7 +1531,13 @@
         "stateDirectory": "/Users/user/.codex/worktrees/fc550f8b-765c-4e17-9dc9-37640875d84d/openclaw/.local/pr-lifecycle"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [],
+      "discoveredBlockers": [
+        {
+          "kind": "base-drift",
+          "details": "Immutable tester packet binds tested base 46145ab4632d9c34ac7ed051a368ac39db9136d7, but current origin main is 19b43fa53124228a62946fa3413faeb317cbf9e4. Queue ordering also reports substantive changed-path overlap with blocked PR #1357 in scripts/pr-release-queue.mjs, test/scripts/pr-lifecycle.test.ts, and test/scripts/pr-release-queue.test.ts. Candidate head and patch remain exact; all observed checks are terminal success/skipped. Fresh builder rebase, review, test, lifecycle handoff, and refreshed packet are required; normal merge is forbidden.",
+          "observedAt": "2026-08-09T05:49:34.631Z"
+        }
+      ],
       "readyAt": "2026-08-09T05:47:06.678Z",
       "ownerHistory": [
         {
@@ -1833,10 +1828,10 @@
     }
   },
   "lastTransaction": {
-    "id": "76c0e64d-4a1a-4b5e-a910-92f889af0a41",
-    "recordedAt": "2026-08-09T05:48:58.276Z"
+    "id": "f42c6d2d-6780-4d8e-a209-47a4f92d57ea",
+    "recordedAt": "2026-08-09T05:49:34.631Z"
   },
-  "updatedAt": "2026-08-09T05:48:58.276Z",
+  "updatedAt": "2026-08-09T05:49:34.631Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
