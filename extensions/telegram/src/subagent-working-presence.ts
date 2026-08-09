@@ -45,8 +45,23 @@ export function registerTelegramSubagentWorkingPresence(api: OpenClawPluginApi):
   });
   api.on("subagent_ended", (event) => {
     if (event.runId) {
+      const trackedRunIds = runIdsByChildSessionKey.get(event.targetSessionKey);
+      if (trackedRunIds?.has(event.runId)) {
+        api.runtime.channel.telegram.workingPresence.stop(`subagent:${event.runId}`);
+        forgetRun(event.targetSessionKey, event.runId);
+        return;
+      }
+      // A successful steer restarts the child under a replacement runId but
+      // does not emit another spawn hook. If the terminal runId is unknown for
+      // this child, release the original tracked owner(s) as well as stopping
+      // the reported ID defensively.
+      if (trackedRunIds) {
+        for (const trackedRunId of trackedRunIds) {
+          api.runtime.channel.telegram.workingPresence.stop(`subagent:${trackedRunId}`);
+        }
+        runIdsByChildSessionKey.delete(event.targetSessionKey);
+      }
       api.runtime.channel.telegram.workingPresence.stop(`subagent:${event.runId}`);
-      forgetRun(event.targetSessionKey, event.runId);
       return;
     }
     // Session reset/delete events carry only targetSessionKey. Stop every run

@@ -74,6 +74,32 @@ describe("Telegram subagent working presence", () => {
     expect(presence.stopAll).toHaveBeenCalledTimes(1);
   });
 
+  it("releases the original lease when steering replaces the terminal run id", async () => {
+    const handlers = new Map<string, (event: any) => unknown>();
+    const presence = { start: vi.fn(async () => undefined), stop: vi.fn(), stopAll: vi.fn() };
+    const api = {
+      runtime: { channel: { telegram: { workingPresence: presence } } },
+      on: vi.fn((name: string, handler: (event: any) => unknown) => handlers.set(name, handler)),
+    } as unknown as OpenClawPluginApi;
+    registerTelegramSubagentWorkingPresence(api);
+
+    const childSessionKey = "agent:main:subagent:steered-child";
+    await handlers.get("subagent_spawned")?.({
+      runId: "run-before-steer",
+      childSessionKey,
+      mode: "run",
+      requester: { channel: "telegram", to: "-1001" },
+    });
+    await handlers.get("subagent_ended")?.({
+      runId: "run-after-steer",
+      targetSessionKey: childSessionKey,
+      outcome: "ok",
+    });
+
+    expect(presence.stop).toHaveBeenCalledWith("subagent:run-before-steer");
+    expect(presence.stop).toHaveBeenCalledWith("subagent:run-after-steer");
+  });
+
   it("does not block worker acceptance on an unresolved Telegram request", () => {
     const handlers = new Map<string, (event: any) => unknown>();
     const presence = {
