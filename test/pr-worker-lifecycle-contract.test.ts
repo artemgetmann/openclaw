@@ -47,7 +47,13 @@ describe("canonical PR worker lifecycle policy", () => {
       "records the exact finding and identities with `return-source`",
     );
     expect(normalizedWorkflow).toContain(
-      "repeat this cycle from `awaiting-retest` with that exact release contract",
+      "repeats this cycle with that exact release contract and a fresh tester",
+    );
+    expect(normalizedWorkflow).toContain("`pr-release-queue route-base-drift`");
+    expect(normalizedWorkflow).toContain("`pr-lifecycle accept-queue-source-return`");
+    expect(normalizedWorkflow).toContain("callback may wake the builder but is not required");
+    expect(normalizedWorkflow).toContain(
+      "any substantive overlap or conflict immediately terminates",
     );
   });
 
@@ -104,6 +110,7 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(prTemplate).toContain("repo-backed lease ID + fence + distinct owner");
     expect(prTemplate).toContain("queue `builderSuspended=true` ownership receipt");
     expect(prTemplate).toContain("same-builder `archived=false` receipt");
+    expect(prTemplate).toContain("typed attempt ID + old/new base + classification");
   });
 
   it("preserves direct user authority without weakening protected gates", () => {

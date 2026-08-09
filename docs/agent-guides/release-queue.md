@@ -151,15 +151,50 @@ claim, extend, or prove release ownership.
 ## Merge and failure rules
 
 Before merge, independently re-read GitHub and the lifecycle receipt. If main
-advanced, the head changed, checks or review failed, or the diff changed, record
-the blocker and return source work through the canonical lifecycle. A mechanical
-conflict may be refreshed only by the builder under that lifecycle. Any conflict
-that can change behavior requires fresh review and exact-head testing.
+advanced while head and effective diff stayed immutable, use the typed recovery:
 
-After the same builder supplies a repaired packet with fresh tester proof, use
-`scripts/pr-release-queue refresh --packet /path/to/new-packet.json`. The queue
-preserves the old candidate and blocker history, clears those old blockers, and
-returns the new immutable candidate to `queued`.
+```bash
+scripts/pr-release-queue route-base-drift \
+  --lease-id "$LEASE_ID" \
+  --fence "$FENCE" \
+  --expected-head-sha "$HEAD_SHA" \
+  --expected-diff-fingerprint "$DIFF_FINGERPRINT" \
+  --transaction-id "$STABLE_TRANSACTION_ID"
+```
+
+The command brackets authenticated PR reads, proves linear ancestry from the
+tested base, requires a complete textual base diff, fingerprints it, and
+compares exact candidate/base-delta paths. A stable disjoint delta is
+`automatic-safe-refresh`: the command atomically releases the stale lease,
+records one active recovery attempt, and emits the exact builder/lifecycle
+source-return receipt. Feed that receipt to
+`scripts/pr-lifecycle accept-queue-source-return`, then let the same builder
+rebase, re-review, retest, regenerate, and refresh under its bounded standing
+authority. The callback route is optional wake UX; durable state is sufficient
+after callback loss or context compaction.
+
+Any overlapping path or Git conflict is substantive and stops automatic churn.
+Renames, binaries, truncated comparisons, non-ancestor history, changing
+head/base/diff, or malformed GitHub evidence are ambiguous and fail before the
+lease is released. The generic `block --kind base-drift` path is rejected so a
+free-text claim cannot bypass this classification.
+
+After the same builder supplies a repaired packet with fresh review and tester
+proof, close the exact attempt:
+
+```bash
+scripts/pr-release-queue refresh \
+  --packet /path/to/new-packet.json \
+  --recovery-attempt-id "$ATTEMPT_ID"
+```
+
+The queue requires the packet's tested base to equal the attempt's observed
+base, preserves the old candidate and stale receipts, moves the completed
+attempt into ordered history, and returns the new immutable candidate to
+`queued`. The next claim receives a higher fence. Continued benign drift may
+repeat one durable attempt per distinct fence and base advance; substantive
+overlap or conflict is the terminal condition for automatic recovery, not a
+routine founder prompt.
 
 `checks-pending` is the one blocker that may recover without a new candidate.
 Run the explicit recovery transition with the same immutable identity:
@@ -195,9 +230,9 @@ blocker set, malformed or future blocker time, or any blocker other than
 `checks-pending`. Repeating the same transaction or durable queue recovery is
 idempotent and does not re-query GitHub. Stored blocker and recovery timestamps
 must remain valid ISO instants ordered as blocker <= recovery <= command time.
-Decision-required, base-drift, lifecycle ambiguity, source findings, candidate
-drift, and unknown blockers still require their existing repair path; this is
-not a generic unblock command.
+Decision-required, lifecycle ambiguity, source findings, candidate drift, and
+unknown blockers still require their existing repair path. Typed base drift has
+the separate transition above; this command is not a generic unblock path.
 
 A merge receipt must prove the reviewed head and diff, normal non-admin merge,
 expected-head protection, landed-tree equality, and ancestry. Source-only work
@@ -218,6 +253,9 @@ The queue state, GitHub PR, and merge receipt remain the truth.
 - Failed callback: leave durable state unchanged; another operator can inspect it.
 - Ambiguous queue write: read once and match the transaction ID; never repeat an
   unconfirmed mutation.
+- Legacy free-text `base-drift` item: leave it blocked. Do not synthesize modern
+  ancestry/diff evidence from its details; the exact builder must repair it
+  through the pre-existing path or re-enroll a freshly proved candidate.
 - Queue outage: stop merging through this workflow. Existing PRs and lifecycle
   packets remain intact.
 - Rollback: pass `--queue direct` to `scripts/pr-lifecycle handoff-release` for
@@ -225,6 +263,9 @@ The queue state, GitHub PR, and merge receipt remain the truth.
   `ops/release-state`; its receipts remain the audit trail. No PR branch or
   runtime is modified merely by queue enrollment. Environment variables cannot
   select this rollback or disable authoritative rollout checks.
+- Code rollback while an item is `awaiting-builder-refresh`: older executors
+  leave that unknown state unclaimable. Restore the new tooling or complete the
+  documented direct rollback; never erase the attempt history.
 
 Graduation does not weaken GitHub's strict up-to-date-branch rule or authorize
 admin action, deployment, runtime mutation, or public release.

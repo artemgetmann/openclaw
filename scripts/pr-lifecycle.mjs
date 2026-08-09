@@ -39,6 +39,7 @@ function usage() {
   scripts/pr-lifecycle handoff-release <PR> --transport <queue-lease|user-visible-task> --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed|direct] [--declared-dependencies <FILE>]
   scripts/pr-lifecycle accept-release-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle accept-release-handoff <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-archived true
+  scripts/pr-lifecycle accept-queue-source-return <PR> --receipt <FILE>
   scripts/pr-lifecycle return-source <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-unarchived true --finding <TEXT>
   scripts/pr-lifecycle cancel-pending <PR> --role <tester|release> --contract-id <ID> --confirm-no-thread-created
 
@@ -98,6 +99,20 @@ function runGh(args) {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJson);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .toSorted()
+        .map((key) => [key, canonicalJson(value[key])]),
+    );
+  }
+  return value;
 }
 
 function fetchCandidate(pr) {
@@ -753,6 +768,156 @@ function acceptReleaseHandoff(pr, options) {
   });
 }
 
+function verifyAuthoritativeQueueSourceReturn(pr, receipt) {
+  let status;
+  try {
+    const queueScript = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "pr-release-queue.mjs",
+    );
+    status = JSON.parse(
+      execFileSync(process.execPath, [queueScript, "status"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+  } catch (error) {
+    fail(`cannot verify authoritative queue source return: ${error.message}`, 75);
+  }
+  const item = status?.state?.items?.[String(pr)];
+  const active = item?.activeBaseDriftRecovery;
+  if (
+    item?.state !== "awaiting-builder-refresh" ||
+    active?.attemptId !== receipt?.attemptId ||
+    JSON.stringify(canonicalJson(active?.sourceReturnReceipt)) !==
+      JSON.stringify(canonicalJson(receipt)) ||
+    status?.state?.mergeLease?.leaseId === receipt?.sourceLease?.leaseId
+  ) {
+    fail("queue source return is not the exact active authoritative recovery attempt");
+  }
+}
+
+function acceptQueueSourceReturn(pr, options) {
+  let receipt;
+  try {
+    receipt = JSON.parse(fs.readFileSync(path.resolve(requireOption(options, "receipt")), "utf8"));
+  } catch (error) {
+    if (error instanceof LifecycleError) {
+      throw error;
+    }
+    fail(`cannot read queue source-return receipt: ${error.message}`);
+  }
+  verifyAuthoritativeQueueSourceReturn(pr, receipt);
+  const liveCandidate = fetchCandidate(pr);
+  return withStateLock(pr, (state) => {
+    const release = state?.release;
+    const builder = state?.builder;
+    const requiredActions = new Set([
+      "rebase-exact-builder-worktree",
+      "push-expected-old-head",
+      "fresh-code-review",
+      "fresh-independent-test",
+      "regenerate-release-packet",
+      "refresh-release-queue",
+    ]);
+    const allowedActions = receipt?.standingAuthority?.allowedActions;
+    const validAuthority =
+      receipt?.standingAuthority?.source === "queue-base-drift-recovery" &&
+      Array.isArray(allowedActions) &&
+      allowedActions.length === requiredActions.size &&
+      allowedActions.every((action) => requiredActions.has(action)) &&
+      Array.isArray(receipt?.standingAuthority?.constraints) &&
+      receipt.standingAuthority.constraints.includes("exact builder only") &&
+      receipt.standingAuthority.constraints.includes(
+        "no conflict resolution or overlapping semantic changes",
+      );
+    const validReceipt =
+      receipt?.schemaVersion === SCHEMA_VERSION &&
+      receipt?.role === "queue-base-drift-source-return" &&
+      receipt?.status === "awaiting-builder-refresh" &&
+      typeof receipt?.attemptId === "string" &&
+      receipt.attemptId.trim() !== "" &&
+      receipt?.classification === "automatic-safe-refresh" &&
+      receipt?.candidate?.pr === pr &&
+      receipt?.candidate?.headSha === state?.candidate?.headSha &&
+      receipt?.candidate?.testedBaseSha === state?.candidate?.baseSha &&
+      receipt?.candidate?.diffFingerprint === state?.candidate?.diffFingerprint &&
+      JSON.stringify(receipt?.candidate?.changedPaths) ===
+        JSON.stringify(state?.candidate?.changedPaths) &&
+      receipt?.targetBase?.branch === state?.candidate?.baseRefName &&
+      /^[0-9a-f]{40}$/i.test(receipt?.targetBase?.sha ?? "") &&
+      receipt?.builder?.threadId === builder?.threadId &&
+      receipt?.builder?.hostId === builder?.hostId &&
+      receipt?.lifecycle?.contractId === release?.contractId &&
+      receipt?.lifecycle?.stateDirectory === resolveStateRoot() &&
+      receipt?.sourceLease?.released === true &&
+      typeof receipt?.sourceLease?.leaseId === "string" &&
+      Number.isSafeInteger(receipt?.sourceLease?.fence) &&
+      receipt.sourceLease.fence > 0 &&
+      validAuthority;
+    if (!validReceipt) {
+      fail(
+        "queue source return must bind the exact repo-backed lifecycle, builder, stale candidate, released fence, observed base, and bounded standing authority",
+      );
+    }
+    if (
+      liveCandidate.headSha !== state.candidate.headSha ||
+      liveCandidate.baseRefName !== receipt.targetBase.branch ||
+      liveCandidate.baseSha !== receipt.targetBase.sha ||
+      liveCandidate.diffFingerprint !== state.candidate.diffFingerprint ||
+      JSON.stringify(liveCandidate.changedPaths) !== JSON.stringify(state.candidate.changedPaths)
+    ) {
+      fail("live PR identity changed after the queue classified base drift");
+    }
+    if (
+      release?.queueMode !== "repo-backed" ||
+      release.owner !== null ||
+      !testerAllowsCandidateRefresh(state)
+    ) {
+      fail(
+        "queue source return requires the ownerless repo-backed release contract and no live tester",
+      );
+    }
+    if (release.phase === "awaiting-source") {
+      if (release.queueSourceReturn?.attemptId !== receipt.attemptId) {
+        fail("source was already returned by a different queue recovery attempt");
+      }
+      return {
+        state,
+        output: {
+          action: "queue-source-already-returned",
+          contractId: release.contractId,
+          attemptId: receipt.attemptId,
+          builder,
+          standingAuthority: receipt.standingAuthority,
+        },
+      };
+    }
+    if (release.phase !== "handoff-pending") {
+      fail(`repo-backed release handoff is ${release.phase}, not handoff-pending`);
+    }
+
+    release.queueSourceReturn = receipt;
+    release.phase = "awaiting-source";
+    release.returnedAt = new Date().toISOString();
+    state.updatedAt = new Date().toISOString();
+    return {
+      state,
+      output: {
+        action: "queue-source-return-accepted",
+        contractId: release.contractId,
+        attemptId: receipt.attemptId,
+        builder,
+        standingAuthority: receipt.standingAuthority,
+        optionalCallback: {
+          route: builder,
+          establishesOwnership: false,
+        },
+      },
+    };
+  });
+}
+
 function returnSource(pr, options) {
   return withStateLock(pr, (state) => {
     const { contractId, releaseOwner, builder } = exactReleaseAndBuilder(state, options);
@@ -1177,6 +1342,35 @@ function handoffRelease(pr, options) {
     // release model never receives stale "tester pending" or old-head claims.
     state.candidate = candidate;
     if (state.release?.phase === "awaiting-retest") {
+      if (state.release.queueMode === "repo-backed") {
+        // Repo-backed ownership is re-established only by a future fenced
+        // queue claim. Fresh proof closes the builder lane by regenerating the
+        // same lifecycle contract as a refresh packet; no native release task
+        // is created or resumed.
+        state.release.phase = "handoff-pending";
+        state.release.taskAuthority = taskAuthority;
+        state.release.declaredDependencies = declaredDependencies;
+        state.release.refreshedAt = new Date().toISOString();
+        state.updatedAt = new Date().toISOString();
+        return {
+          state,
+          output: {
+            schemaVersion: SCHEMA_VERSION,
+            action: "refresh-release-packet",
+            contractId: state.release.contractId,
+            transport: state.release.transport,
+            releasePacket: makeReleasePacket(state, state.release.contractId),
+            queueTool: { sequence: ["pr-release-queue refresh", "pr-release-queue claim"] },
+            optionalCoordination: {
+              nativeThread: "wake-builder-best-effort",
+              establishesOwnership: false,
+            },
+            capabilityPolicy: RELEASE_CAPABILITY_POLICY,
+            warning:
+              "Refresh the exact active queue recovery attempt. Only a later distinct fenced lease re-establishes release ownership.",
+          },
+        };
+      }
       // The same release owner resumes, but it cannot resume release work until
       // it re-archives the repaired builder and records acceptance again.
       state.release.phase = "owner-recorded";
@@ -1324,6 +1518,9 @@ try {
       break;
     case "accept-release-handoff":
       output = acceptReleaseHandoff(pr, options);
+      break;
+    case "accept-queue-source-return":
+      output = acceptQueueSourceReturn(pr, options);
       break;
     case "return-source":
       output = returnSource(pr, options);

@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +29,9 @@ type CommandOutput = {
     pausedReason: string | null;
     newlyGraduated?: boolean;
   };
+  recovery?: Record<string, unknown>;
+  sourceReturnReceipt?: Record<string, unknown>;
+  builder?: { threadId: string; hostId: string };
 };
 
 function makeFixture() {
@@ -45,15 +49,33 @@ if (process.env.TEST_GH_FAIL === "1") {
 }
 const pr = args[2];
 const heads = JSON.parse(process.env.TEST_PR_HEADS ?? "{}");
+const bases = JSON.parse(process.env.TEST_PR_BASES ?? "{}");
+const paths = JSON.parse(process.env.TEST_PR_PATHS ?? "{}");
+const patches = JSON.parse(process.env.TEST_PR_PATCHES ?? "{}");
 if (args[0] === "pr" && args[1] === "view") {
   const afterChecks = fs.existsSync(process.env.TEST_GH_CHECK_MARKER);
+  const afterCompare = fs.existsSync(process.env.TEST_GH_COMPARE_MARKER);
   const head = afterChecks && process.env.TEST_PR_HEAD_AFTER_CHECK
     ? process.env.TEST_PR_HEAD_AFTER_CHECK
     : heads[pr];
-  process.stdout.write(JSON.stringify({ headRefOid: head, baseRefName: "main" }));
+  const base = afterCompare && process.env.TEST_PR_BASE_AFTER_COMPARE
+    ? process.env.TEST_PR_BASE_AFTER_COMPARE
+    : bases[pr];
+  process.stdout.write(JSON.stringify({
+    headRefOid: head,
+    baseRefName: "main",
+    baseRefOid: base,
+    mergeable: process.env.TEST_PR_MERGEABLE ?? "MERGEABLE",
+    files: (paths[pr] ?? []).map((path) => ({ path })),
+  }));
+} else if (args[0] === "pr" && args[1] === "diff") {
+  process.stdout.write(patches[pr] ?? "");
 } else if (args[0] === "api") {
   const endpoint = args.at(-1);
-  if (endpoint.includes("/protection/required_status_checks")) {
+  if (endpoint.includes("/compare/")) {
+    fs.writeFileSync(process.env.TEST_GH_COMPARE_MARKER, "queried");
+    process.stdout.write(process.env.TEST_BASE_COMPARISON);
+  } else if (endpoint.includes("/protection/required_status_checks")) {
     if (process.env.TEST_LEGACY_PROTECTION === "404") {
       process.stderr.write("HTTP 404: branch protection not found");
       process.exit(1);
@@ -87,7 +109,11 @@ if (args[0] === "pr" && args[1] === "view") {
       OPENCLAW_PR_RELEASE_QUEUE_REPO: "artemgetmann/openclaw",
       OPENCLAW_PR_RELEASE_QUEUE_NOW: "2026-08-05T00:00:00.000Z",
       TEST_PR_HEADS: "{}",
+      TEST_PR_BASES: "{}",
+      TEST_PR_PATHS: "{}",
+      TEST_PR_PATCHES: "{}",
       TEST_GH_CHECK_MARKER: path.join(root, "checks-queried"),
+      TEST_GH_COMPARE_MARKER: path.join(root, "compare-queried"),
       TEST_LEGACY_PROTECTION: JSON.stringify({
         contexts: ["test"],
         checks: [{ context: "test", app_id: 1 }],
@@ -101,6 +127,7 @@ if (args[0] === "pr" && args[1] === "view") {
         },
       ]),
       TEST_STATUS_PAGES: "[[]]",
+      TEST_BASE_COMPARISON: "{}",
     },
   };
 }
@@ -140,10 +167,21 @@ function writePacket(
 ) {
   const headSha = pr.toString(16).padStart(40, "a").slice(-40);
   const baseSha = pr.toString(16).padStart(40, "b").slice(-40);
-  const diffFingerprint = `sha256:${pr.toString(16).padStart(64, "c").slice(-64)}`;
+  const changedPaths = options.paths ?? [`src/feature-${pr}.ts`];
+  const patch = `diff --git a/${changedPaths[0]} b/${changedPaths[0]}\n+feature ${pr}\n`;
+  const diffFingerprint = `sha256:${createHash("sha256").update(patch).digest("hex")}`;
   const heads = JSON.parse(fixture.env.TEST_PR_HEADS);
   heads[String(pr)] = headSha;
   fixture.env.TEST_PR_HEADS = JSON.stringify(heads);
+  const bases = JSON.parse(fixture.env.TEST_PR_BASES);
+  bases[String(pr)] = baseSha;
+  fixture.env.TEST_PR_BASES = JSON.stringify(bases);
+  const paths = JSON.parse(fixture.env.TEST_PR_PATHS);
+  paths[String(pr)] = changedPaths;
+  fixture.env.TEST_PR_PATHS = JSON.stringify(paths);
+  const patches = JSON.parse(fixture.env.TEST_PR_PATCHES);
+  patches[String(pr)] = patch;
+  fixture.env.TEST_PR_PATCHES = JSON.stringify(patches);
   const packetPath = path.join(fixture.root, `packet-${pr}.json`);
   fs.writeFileSync(
     packetPath,
@@ -156,7 +194,7 @@ function writePacket(
         baseBranch: "main",
         testedBaseSha: baseSha,
         diffFingerprint,
-        changedPaths: options.paths ?? [`src/feature-${pr}.ts`],
+        changedPaths,
         title: options.title ?? `fix(feature): deliver PR ${pr}`,
         prContract:
           options.prContract ??
@@ -267,6 +305,89 @@ function checksRecoveryArgs(fixture: ReturnType<typeof makeFixture>, pr: number)
     "--kind",
     "checks-pending",
   ];
+}
+
+function configureBaseDrift(
+  fixture: ReturnType<typeof makeFixture>,
+  pr: number,
+  options: { basePaths?: string[]; currentBaseSha?: string; mergeable?: string } = {},
+) {
+  const packet = JSON.parse(fs.readFileSync(path.join(fixture.root, `packet-${pr}.json`), "utf8"));
+  const currentBaseSha = options.currentBaseSha ?? "f".repeat(40);
+  const basePaths = options.basePaths ?? ["src/unrelated.ts"];
+  const bases = JSON.parse(fixture.env.TEST_PR_BASES);
+  bases[String(pr)] = currentBaseSha;
+  fixture.env.TEST_PR_BASES = JSON.stringify(bases);
+  fixture.env.TEST_PR_MERGEABLE = options.mergeable ?? "MERGEABLE";
+  fixture.env.TEST_BASE_COMPARISON = JSON.stringify({
+    status: "ahead",
+    ahead_by: 1,
+    behind_by: 0,
+    merge_base_commit: { sha: packet.candidate.testedBaseSha },
+    base_commit: { sha: packet.candidate.testedBaseSha },
+    commits: [{ sha: currentBaseSha }],
+    files: basePaths.map((filename) => ({
+      filename,
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      changes: 1,
+      patch: `@@ -1 +1,2 @@\n existing\n+base change in ${filename}`,
+    })),
+  });
+  return { packet, currentBaseSha };
+}
+
+function routeBaseDrift(
+  fixture: ReturnType<typeof makeFixture>,
+  pr: number,
+  transactionId = `route-base-drift-${pr}`,
+) {
+  const owner = claim(fixture, `release-drift-${pr}`, pr);
+  const packet = JSON.parse(fs.readFileSync(path.join(fixture.root, `packet-${pr}.json`), "utf8"));
+  return run(fixture, [
+    "route-base-drift",
+    "--lease-id",
+    owner.lease!.leaseId,
+    "--fence",
+    String(owner.lease!.fence),
+    "--expected-head-sha",
+    packet.candidate.headSha,
+    "--expected-diff-fingerprint",
+    packet.candidate.diffFingerprint,
+    "--transaction-id",
+    transactionId,
+  ]);
+}
+
+function rewriteFreshCandidate(
+  fixture: ReturnType<typeof makeFixture>,
+  pr: number,
+  headSha: string,
+  testedBaseSha: string,
+) {
+  const packetPath = path.join(fixture.root, `packet-${pr}.json`);
+  const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+  const patch = `diff --git a/${packet.candidate.changedPaths[0]} b/${packet.candidate.changedPaths[0]}\n+fresh candidate ${headSha.slice(0, 8)}\n`;
+  const diffFingerprint = `sha256:${createHash("sha256").update(patch).digest("hex")}`;
+  packet.candidate.headSha = headSha;
+  packet.candidate.testedBaseSha = testedBaseSha;
+  packet.candidate.diffFingerprint = diffFingerprint;
+  packet.testerReceipt.headSha = headSha;
+  packet.testerReceipt.diffFingerprint = diffFingerprint;
+  packet.reviewReceipt.headSha = headSha;
+  packet.reviewReceipt.diffFingerprint = diffFingerprint;
+  fs.writeFileSync(packetPath, JSON.stringify(packet));
+  const heads = JSON.parse(fixture.env.TEST_PR_HEADS);
+  heads[String(pr)] = headSha;
+  fixture.env.TEST_PR_HEADS = JSON.stringify(heads);
+  const bases = JSON.parse(fixture.env.TEST_PR_BASES);
+  bases[String(pr)] = testedBaseSha;
+  fixture.env.TEST_PR_BASES = JSON.stringify(bases);
+  const patches = JSON.parse(fixture.env.TEST_PR_PATCHES);
+  patches[String(pr)] = patch;
+  fixture.env.TEST_PR_PATCHES = JSON.stringify(patches);
+  return { packetPath, packet };
 }
 
 function blockChecksPending(fixture: ReturnType<typeof makeFixture>, pr: number) {
@@ -892,50 +1013,238 @@ describe("scripts/pr-release-queue", () => {
     expect(explained.items?.find((item) => item.pr === 41)).toMatchObject({ ready: true });
   });
 
-  it("accepts a newly tested candidate from the same builder after source return", () => {
+  it("routes benign base drift to the exact builder and accepts only its fresh exact-base packet", () => {
     const fixture = makeFixture();
     initAndEnqueue(fixture, 45);
-    const owner = claim(fixture, "release-owner", 45);
-    run(fixture, [
-      "block",
-      "--lease-id",
-      owner.lease!.leaseId,
-      "--fence",
-      String(owner.lease!.fence),
-      "--kind",
-      "base-drift",
-      "--details",
-      "main advanced",
-      "--transaction-id",
-      "block-45",
-    ]);
+    const { currentBaseSha } = configureBaseDrift(fixture, 45);
+    const routed = routeBaseDrift(fixture, 45);
+    expect(routed).toMatchObject({
+      action: "base-drift-returned-to-builder",
+      pr: 45,
+      builder: { threadId: "builder-45", hostId: "builder-host" },
+      recovery: {
+        classification: "automatic-safe-refresh",
+        status: "awaiting-builder-refresh",
+        evidence: {
+          currentBase: { branch: "main", sha: currentBaseSha },
+          overlapPaths: [],
+        },
+      },
+      sourceReturnReceipt: {
+        role: "queue-base-drift-source-return",
+        classification: "automatic-safe-refresh",
+        sourceLease: { released: true },
+      },
+    });
+    expect(run(fixture, ["status"]).state?.mergeLease).toBeNull();
 
-    const repairedPacketPath = writePacket(fixture, 45);
-    const repairedPacket = JSON.parse(fs.readFileSync(repairedPacketPath, "utf8"));
-    repairedPacket.candidate.headSha = "e".repeat(40);
-    repairedPacket.candidate.testedBaseSha = "f".repeat(40);
-    repairedPacket.candidate.diffFingerprint = `sha256:${"1".repeat(64)}`;
-    repairedPacket.testerReceipt.headSha = repairedPacket.candidate.headSha;
-    repairedPacket.testerReceipt.diffFingerprint = repairedPacket.candidate.diffFingerprint;
-    repairedPacket.reviewReceipt.headSha = repairedPacket.candidate.headSha;
-    repairedPacket.reviewReceipt.diffFingerprint = repairedPacket.candidate.diffFingerprint;
-    fs.writeFileSync(repairedPacketPath, JSON.stringify(repairedPacket));
+    const { packetPath: repairedPacketPath } = rewriteFreshCandidate(
+      fixture,
+      45,
+      "e".repeat(40),
+      currentBaseSha,
+    );
 
     const refreshed = run(fixture, [
       "refresh",
       "--packet",
       repairedPacketPath,
+      "--recovery-attempt-id",
+      String((routed.recovery as { attemptId: string }).attemptId),
       "--transaction-id",
       "refresh-45",
     ]);
     expect(refreshed).toMatchObject({ action: "candidate-refreshed", pr: 45 });
 
     const status = run(fixture, ["status"]);
-    expect(status.state?.items["45"]).toMatchObject({ state: "queued" });
+    expect(status.state?.items["45"]).toMatchObject({
+      state: "queued",
+      activeBaseDriftRecovery: null,
+      baseDriftRecoveryHistory: [{ status: "completed" }],
+    });
     expect(claim(fixture, "replacement-owner", 45)).toMatchObject({
       action: "claimed",
       lease: { claimedPr: 45, fence: 2 },
     });
+  });
+
+  it("repeats benign drift with one durable attempt per fence and an eventual higher-fenced claim", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 75);
+    const firstBase = "d".repeat(40);
+    configureBaseDrift(fixture, 75, { currentBaseSha: firstBase });
+    const first = routeBaseDrift(fixture, 75, "route-first-drift-75");
+    rewriteFreshCandidate(fixture, 75, "e".repeat(40), firstBase);
+    run(fixture, [
+      "refresh",
+      "--packet",
+      path.join(fixture.root, "packet-75.json"),
+      "--recovery-attempt-id",
+      String((first.recovery as { attemptId: string }).attemptId),
+      "--transaction-id",
+      "refresh-first-drift-75",
+    ]);
+
+    const secondBase = "f".repeat(40);
+    configureBaseDrift(fixture, 75, { currentBaseSha: secondBase });
+    const second = routeBaseDrift(fixture, 75, "route-second-drift-75");
+    expect(second).toMatchObject({
+      action: "base-drift-returned-to-builder",
+      recovery: { attemptNumber: 2, sourceLease: { fence: 2 } },
+    });
+    rewriteFreshCandidate(fixture, 75, "1".repeat(40), secondBase);
+    run(fixture, [
+      "refresh",
+      "--packet",
+      path.join(fixture.root, "packet-75.json"),
+      "--recovery-attempt-id",
+      String((second.recovery as { attemptId: string }).attemptId),
+      "--transaction-id",
+      "refresh-second-drift-75",
+    ]);
+    const eventualOwner = claim(fixture, "eventual-release-owner-75", 75);
+    expect(eventualOwner).toMatchObject({
+      action: "claimed",
+      lease: { fence: 3, claimedPr: 75 },
+    });
+    expect(
+      run(fixture, [
+        "record-merge",
+        "--lease-id",
+        eventualOwner.lease!.leaseId,
+        "--fence",
+        String(eventualOwner.lease!.fence),
+        "--receipt",
+        writeMergeReceipt(fixture, 75),
+        "--transaction-id",
+        "eventual-expected-head-merge-75",
+      ]),
+    ).toMatchObject({ action: "merge-recorded-closed", pr: 75 });
+    const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+    expect(state.items["75"].baseDriftRecoveryHistory).toHaveLength(2);
+  });
+
+  it("terminates automatic churn for exact path overlap or a real merge conflict", () => {
+    for (const [pr, basePaths, mergeable, classification] of [
+      [76, ["src/feature-76.ts"], "MERGEABLE", "substantive-overlap"],
+      [77, ["src/unrelated.ts"], "CONFLICTING", "substantive-conflict"],
+    ] as const) {
+      const fixture = makeFixture();
+      initAndEnqueue(fixture, pr);
+      configureBaseDrift(fixture, pr, { basePaths: [...basePaths], mergeable });
+      const routed = routeBaseDrift(fixture, pr);
+      expect(routed).toMatchObject({
+        action: "base-drift-requires-semantic-resolution",
+        recovery: { classification, status: "semantic-resolution-required" },
+        sourceReturnReceipt: null,
+      });
+      expect(run(fixture, ["status"]).state?.items[String(pr)]).toMatchObject({
+        state: "blocked",
+        baseDriftRecoveryHistory: [{ classification }],
+      });
+    }
+  });
+
+  it("makes typed base-drift routing lease-fenced and replay-safe without callbacks", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 78);
+    configureBaseDrift(fixture, 78);
+    const owner = claim(fixture, "release-drift-78", 78);
+    const packet = JSON.parse(fs.readFileSync(path.join(fixture.root, "packet-78.json"), "utf8"));
+    const args = [
+      "route-base-drift",
+      "--lease-id",
+      owner.lease!.leaseId,
+      "--fence",
+      String(owner.lease!.fence),
+      "--expected-head-sha",
+      packet.candidate.headSha,
+      "--expected-diff-fingerprint",
+      packet.candidate.diffFingerprint,
+      "--transaction-id",
+    ];
+    expect(run(fixture, [...args, "route-drift-78"])).toMatchObject({
+      action: "base-drift-returned-to-builder",
+      callbackRequiredForCorrectness: false,
+    });
+    fixture.env.TEST_GH_FAIL = "1";
+    expect(run(fixture, [...args, "route-drift-78"])).toMatchObject({
+      action: "transaction-already-recorded",
+    });
+    expect(run(fixture, [...args, "route-drift-78-replay"])).toMatchObject({
+      action: "base-drift-already-routed",
+      sourceReturnReceipt: { attemptId: expect.any(String) },
+    });
+
+    const stale = runFailure(fixture, [
+      ...args.slice(0, args.indexOf("--fence") + 1),
+      String(owner.lease!.fence + 1),
+      ...args.slice(args.indexOf("--fence") + 2, -1),
+      "route-drift-78-stale",
+    ]);
+    expect(stale.status).toBe(1);
+    expect(stale.stderr).toContain("lease identity or fencing number is stale");
+  });
+
+  it("fails closed on incomplete or changing base comparison evidence and keeps the lease", () => {
+    for (const [pr, configure, expected] of [
+      [
+        79,
+        (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_BASE_COMPARISON = JSON.stringify({
+            status: "ahead",
+            ahead_by: 2,
+            behind_by: 0,
+            merge_base_commit: {
+              sha: JSON.parse(fs.readFileSync(path.join(fixture.root, "packet-79.json"), "utf8"))
+                .candidate.testedBaseSha,
+            },
+            base_commit: {
+              sha: JSON.parse(fs.readFileSync(path.join(fixture.root, "packet-79.json"), "utf8"))
+                .candidate.testedBaseSha,
+            },
+            commits: [{ sha: "f".repeat(40) }],
+            files: [],
+          });
+        },
+        "incomplete, non-linear, or ambiguous",
+      ],
+      [
+        80,
+        (fixture: ReturnType<typeof makeFixture>) => {
+          fixture.env.TEST_PR_BASE_AFTER_COMPARE = "1".repeat(40);
+        },
+        "changed during base-drift classification",
+      ],
+    ] as const) {
+      const fixture = makeFixture();
+      initAndEnqueue(fixture, pr);
+      configureBaseDrift(fixture, pr);
+      configure(fixture);
+      const owner = claim(fixture, `release-drift-${pr}`, pr);
+      const packet = JSON.parse(
+        fs.readFileSync(path.join(fixture.root, `packet-${pr}.json`), "utf8"),
+      );
+      const rejected = runFailure(fixture, [
+        "route-base-drift",
+        "--lease-id",
+        owner.lease!.leaseId,
+        "--fence",
+        String(owner.lease!.fence),
+        "--expected-head-sha",
+        packet.candidate.headSha,
+        "--expected-diff-fingerprint",
+        packet.candidate.diffFingerprint,
+        "--transaction-id",
+        `route-ambiguous-${pr}`,
+      ]);
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain(expected);
+      expect(run(fixture, ["status"]).state?.mergeLease).toMatchObject({
+        leaseId: owner.lease!.leaseId,
+        fence: owner.lease!.fence,
+      });
+    }
   });
 
   it("recovers an unchanged candidate after authoritative required-check evidence", () => {
@@ -1343,7 +1652,6 @@ describe("scripts/pr-release-queue", () => {
   it("refuses recovery for decision-required and non-retryable blockers", () => {
     for (const [pr, blockerKind] of [
       [52, "decision-required"],
-      [53, "base-drift"],
       [54, "lifecycle-ambiguity"],
       [55, "source-finding"],
       [56, "unknown-new-blocker"],

@@ -266,11 +266,29 @@ Direct rollback instead proves its recorded thread and host, archives the exact
 builder, and records `release-handoff-accepted`. Both transitions are
 idempotent [safe to retry] and fail closed for stale or adjacent identities.
 
-Behavior-bearing repair belongs to the builder. A repo-backed executor records
-the blocker and releases its lease before the same builder supplies a refreshed
-packet with fresh tester proof. A direct rollback worker may unarchive and steer
-only the exact builder thread. Neither path may create a duplicate builder,
-tester, or release owner.
+Behavior-bearing repair belongs to the builder. For base drift, a repo-backed
+executor runs `pr-release-queue route-base-drift` with its active lease/fence
+and immutable head/diff. The queue reads GitHub itself, brackets the head/base
+observation, proves the old tested base is the exact ancestor of the current
+base, fingerprints the complete base delta, and intersects its paths with the
+candidate paths. Disjoint, stable evidence atomically releases the lease and
+records one `automatic-safe-refresh` attempt for the exact builder. Any overlap,
+conflict, rename, binary/truncated diff, non-linear ancestry, changing identity,
+or malformed evidence stops automatic recovery and preserves the exact reason.
+Generic free-text `base-drift` blockers are forbidden.
+
+The builder feeds the emitted receipt to
+`pr-lifecycle accept-queue-source-return`. That transition validates the same
+builder, lifecycle contract, state directory, stale candidate, target base, and
+released fence before opening `awaiting-source`. The receipt grants only the
+bounded source sequence: rebase the exact isolated builder worktree onto that
+base, push with expected-old-head protection, obtain fresh review and tester
+proof, regenerate the packet, and refresh the queue. A callback may wake the
+builder but is not required for correctness; queue and lifecycle state preserve
+the attempt across compaction, callback loss, or guarded capacity waiting.
+
+A direct rollback worker may unarchive and steer only the exact builder thread.
+Neither path may create a duplicate builder, tester, or release owner.
 
 Mechanically, the release worker verifies `archived=false`, records the exact
 finding and identities with `return-source`, sends that finding to the same
@@ -279,16 +297,22 @@ different finding or identity fails closed instead of silently widening the
 repair. `handoff-test --returning-release-contract` is legal only after this
 source-return receipt.
 
-For that repair loop, the builder passes the exact active release contract to
+For either repair loop, the builder passes the exact active release contract to
 `handoff-test --returning-release-contract`. After the repaired head receives a
-fresh tester receipt and closure, `handoff-release` emits
-`action=resume-thread` for the already-recorded release task; it never emits a
-second `create_thread` action. The resumed release owner re-archives the same
-builder and records a fresh `accept-release-handoff` receipt before continuing.
-If a tester finds another source defect before release resumes, the same builder
-may repeat this cycle from `awaiting-retest` with that exact release contract and
-a closed tester. Every retired candidate stays in lifecycle history; tester and
-release identities are never reused or duplicated.
+fresh tester receipt and closure, repo-backed `handoff-release` emits
+`action=refresh-release-packet` for the same contract; direct rollback emits
+`action=resume-thread` for its already-recorded release task. Neither mode emits
+a second release owner. The queue refresh must close the exact recovery attempt
+on its observed base before a later claim receives a higher fence. A direct
+release owner re-archives the same builder and records a fresh
+`accept-release-handoff` receipt before continuing.
+If a tester finds another source defect, or benign main drift recurs after the
+queue is reclaimed, the same builder repeats this cycle with that exact release
+contract and a fresh tester. One active attempt is allowed per lease/candidate/
+observed-base tuple; completed attempts remain in order. Benign drift has no
+arbitrary retry cap, while any substantive overlap or conflict immediately
+terminates automatic churn. Every retired candidate stays in lifecycle and
+queue history; tester and release identities are never reused or duplicated.
 
 If main advances again after a tester reservation was definitely cancelled
 before owner creation, the same accepted release contract may return source from
