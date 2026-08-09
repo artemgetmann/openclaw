@@ -35,6 +35,7 @@ Every fork PR should start with this section:
 - Observable claim + acceptance criteria:
 - Exact head + builder proof:
 - Independent tester: (`PASS` + exact identity/head/diff/receipt + lifecycle closure)
+- Jarvis delivery boundary: (validated receipt, or `Not required` for non-Jarvis work)
 - Release worker: (fresh user-visible project task + typed task-authority packet + accepted-handoff builder archive receipt)
 - Dependencies / merge order / overlap:
 - Remaining proof / cleanup / rollback:
@@ -86,6 +87,12 @@ Fork PRs should include exact proof, not vague confidence language.
 package, deployment, runtime, GUI, and real-user work in the remaining-proof
 field; keep provider/backend health there too, and never present pending work as
 proof.
+
+Jarvis behavior PRs must also carry the JSON receipt from
+`docs/agent-guides/jarvis-delivery-boundary.md`. The receipt is classification
+and proof state, not another essay: CI validates it when the PR opens, and the
+worker lifecycle rejects handoff until the source receipt and completion claim
+are truthful.
 
 For lifecycle ownership, use `docs/agent-guides/workflow.md` as the source of
 truth. For CI and merge mechanics, use `docs/ci.md`. In short: the builder owns

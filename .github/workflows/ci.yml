@@ -79,6 +79,37 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
+  jarvis-delivery-boundary:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
+
+      - name: Ensure delivery-boundary base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Validate Jarvis delivery receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          changed_paths="${RUNNER_TEMP}/jarvis-delivery-changed-paths.txt"
+          # Three-dot scope excludes unrelated files added only by base-branch
+          # movement after the feature branch was created.
+          git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" > "$changed_paths"
+          node scripts/jarvis-delivery-boundary.mjs validate-pr \
+            --event "$GITHUB_EVENT_PATH" \
+            --changed-paths "$changed_paths" \
+            --stage classification
+
   ci-scope-tests:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_ci_scope_tests == 'true'
@@ -935,6 +966,7 @@ jobs:
     needs:
       - docs-scope
       - changed-scope
+      - jarvis-delivery-boundary
       - checks
       - check
       - startup-memory
@@ -1002,6 +1034,7 @@ jobs:
           // Every PR must classify changed files before this gate trusts any
           // skipped product or platform job.
           requireSuccess("changed-scope", "change scope detection");
+          requireSuccess("jarvis-delivery-boundary", "Jarvis delivery-surface classification");
 
           requireScopedSuccess("check-docs", docsChanged, "docs validation");
           requireScopedSuccess("ci-scope-tests", !docsOnly && runCiScopeTests, "CI scope detector tests");

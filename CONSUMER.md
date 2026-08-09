@@ -27,10 +27,23 @@ Before implementation or shipping, classify the work explicitly:
 - If the classification is unclear or changes during the task, stop and resolve
   it before implementation or shipping.
 
-State the classification and delivery target in the plan, PR, and closeout. A
-merge to `main`, deployment to Artem's main Jarvis, and a shipped Jarvis product
-release are separate claims. Main-Jarvis proof covers one installation only;
-product shipping requires the applicable package/release and fresh-user proof.
+For behavior requests, interpret the smallest amount of language needed:
+
+- Explicit `my Jarvis`, `local`, `on this Mac`, or private customization means
+  Artem-specific unless the request also names users, product, packaging, or a
+  release.
+- Unqualified requests to change, fix, or add Jarvis behavior mean product-wide.
+- An explicit source, PR, package, installed-runtime, or public-release boundary
+  sets the delivery target. Otherwise product-wide behavior targets public
+  release and end-user proof.
+
+State the classification and delivery target in the plan, PR, and closeout.
+Use the enforceable receipt in
+`docs/agent-guides/jarvis-delivery-boundary.md`; CI and `scripts/pr-lifecycle`
+reject missing or inflated Jarvis receipts. A merge to `main`, deployment to
+Artem's main Jarvis, and a shipped Jarvis product release are separate claims.
+Main-Jarvis proof covers one installation only; product shipping requires the
+applicable package, upgrade, release, and end-user receipts.
 
 ## Branch Targets
 
