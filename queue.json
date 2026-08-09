@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 70,
-  "nextFence": 21,
-  "mergeLease": null,
+  "sequence": 71,
+  "nextFence": 22,
+  "mergeLease": {
+    "leaseId": "f9e2e523-468f-4213-9fe0-d8a10139ee03",
+    "fence": 21,
+    "owner": {
+      "threadId": "/root/release_pr1376",
+      "hostId": "local"
+    },
+    "claimedPr": 1376,
+    "claimedAt": "2026-08-09T10:46:19.302Z",
+    "heartbeatAt": "2026-08-09T10:46:19.302Z",
+    "expiresAt": "2026-08-09T11:16:19.302Z"
+  },
   "items": {
     "1354": {
       "state": "closed",
@@ -2071,7 +2082,7 @@
       }
     },
     "1376": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1376,
         "url": "https://github.com/artemgetmann/openclaw/pull/1376",
@@ -2185,17 +2196,45 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-09T10:45:23.913Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "f9e2e523-468f-4213-9fe0-d8a10139ee03",
+          "fence": 21,
+          "owner": {
+            "threadId": "/root/release_pr1376",
+            "hostId": "local"
+          },
+          "claimedPr": 1376,
+          "claimedAt": "2026-08-09T10:46:19.302Z",
+          "heartbeatAt": "2026-08-09T10:46:19.302Z",
+          "expiresAt": "2026-08-09T11:16:19.302Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [],
-      "terminalReceipts": []
+      "terminalReceipts": [],
+      "ownershipReceipt": {
+        "mode": "queue-lease",
+        "owner": {
+          "threadId": "/root/release_pr1376",
+          "hostId": "local"
+        },
+        "builder": {
+          "threadId": "019fe604-e953-7c11-97e6-3d8c50061014",
+          "hostId": "local"
+        },
+        "builderSuspended": true,
+        "leaseId": "f9e2e523-468f-4213-9fe0-d8a10139ee03",
+        "fence": 21,
+        "recordedAt": "2026-08-09T10:46:19.302Z"
+      }
     }
   },
   "lastTransaction": {
-    "id": "pr1376-enqueue-d0ef5e66",
-    "recordedAt": "2026-08-09T10:45:23.913Z"
+    "id": "pr1376-claim-d0ef5e66-local",
+    "recordedAt": "2026-08-09T10:46:19.302Z"
   },
-  "updatedAt": "2026-08-09T10:45:23.913Z",
+  "updatedAt": "2026-08-09T10:46:19.302Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
