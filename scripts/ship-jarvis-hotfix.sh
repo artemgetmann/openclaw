@@ -30,7 +30,7 @@ PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-
 if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
   PR_RELEASE_QUEUE_SCRIPT="${OPENCLAW_SHIP_PR_RELEASE_QUEUE_SCRIPT:-${MAIN_REPO}/scripts/pr-release-queue}"
 else
-  PR_RELEASE_QUEUE_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-release-queue"
+  PR_RELEASE_QUEUE_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-release-queue.mjs"
 fi
 PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
 OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
@@ -137,7 +137,7 @@ require_preflight_tools() {
   require_command "${UNAME_BIN}"
   require_command "${PLISTBUDDY_BIN}"
   [[ -x "${PR_REQUIRED_SCRIPT}" ]] || die "required-check helper is missing or not executable: ${PR_REQUIRED_SCRIPT}"
-  [[ -x "${PR_RELEASE_QUEUE_SCRIPT}" ]] || die "release-queue helper is missing or not executable: ${PR_RELEASE_QUEUE_SCRIPT}"
+  [[ -r "${PR_RELEASE_QUEUE_SCRIPT}" ]] || die "release-queue helper is missing or unreadable: ${PR_RELEASE_QUEUE_SCRIPT}"
   [[ -x "${PACKAGE_SCRIPT}" ]] || die "package helper is missing or not executable: ${PACKAGE_SCRIPT}"
   [[ -x "${OPEN_APP_SCRIPT}" ]] || die "app-open helper is missing or not executable: ${OPEN_APP_SCRIPT}"
   [[ -x "${PROTECT_SCRIPT}" ]] || die "runtime-protection helper is missing or not executable: ${PROTECT_SCRIPT}"
@@ -323,13 +323,34 @@ associated_main_pr_json() {
 release_queue_item_json() {
   local pr="$1"
   local status=""
-  status="$(env \
-    -u OPENCLAW_PR_RELEASE_QUEUE_BRANCH \
-    -u OPENCLAW_PR_RELEASE_QUEUE_GH \
-    -u OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE \
-    -u OPENCLAW_PR_RELEASE_QUEUE_NOW \
-    -u OPENCLAW_PR_RELEASE_QUEUE_REPO \
-    "${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
+  if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+    status="$("${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
+  else
+    local node_bin=""
+    local gh_bin=""
+    local -a queue_env=()
+    for node_bin in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
+      [[ -x "${node_bin}" ]] && break
+    done
+    [[ -x "${node_bin}" ]] || die "trusted Node binary is unavailable for queue proof"
+    for gh_bin in /opt/homebrew/bin/gh /usr/local/bin/gh /usr/bin/gh; do
+      [[ -x "${gh_bin}" ]] && break
+    done
+    [[ -x "${gh_bin}" ]] || die "trusted gh binary is unavailable for queue proof"
+    env -i PATH=/usr/bin:/bin HOME="${HOME}" /usr/bin/git -C "${MAIN_REPO}" \
+      diff --quiet HEAD -- scripts/pr-release-queue.mjs || \
+      die "authoritative queue executable differs from sacred main HEAD"
+    queue_env=(env -i
+      PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+      HOME="${HOME}"
+      OPENCLAW_PR_RELEASE_QUEUE_REPO=artemgetmann/openclaw
+      OPENCLAW_PR_RELEASE_QUEUE_GH="${gh_bin}")
+    [[ -n "${GH_TOKEN:-}" ]] && queue_env+=(GH_TOKEN="${GH_TOKEN}")
+    [[ -n "${GITHUB_TOKEN:-}" ]] && queue_env+=(GITHUB_TOKEN="${GITHUB_TOKEN}")
+    [[ -n "${NO_COLOR:-}" ]] && queue_env+=(NO_COLOR="${NO_COLOR}")
+    [[ -n "${TERM:-}" ]] && queue_env+=(TERM="${TERM}")
+    status="$("${queue_env[@]}" "${node_bin}" "${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
+  fi
   # The wrapper emits a secret-silent preflight receipt before the JSON body.
   # Select the first JSON object instead of trusting a fixed line count.
   printf '%s\n' "${status}" | sed -n '/^{/,$p' | "${JQ_BIN}" -c --arg pr "${pr}" '
@@ -352,12 +373,16 @@ release_queue_proves_reviewed_merge() {
   printf '%s\n' "${item}" | "${JQ_BIN}" -e --argjson pr "${pr}" --arg commit "${commit_sha}" '
     (.state | IN("merged", "delivery-barrier", "delivered", "closed")) and
     (.candidate.pr == $pr) and
+    (.candidate.baseBranch == "main") and
+    (.candidate.testedBaseSha | test("^[0-9a-f]{40}$")) and
     (.candidate.headSha | test("^[0-9a-f]{40}$")) and
     (.candidate.diffFingerprint | test("^sha256:[0-9a-f]{64}$")) and
     (.candidate.changedPaths | type == "array" and length > 0) and
     (all(.candidate.changedPaths[]; type == "string" and test("\\S"))) and
     ((.builder.threadId // "") | test("\\S")) and
     ((.builder.hostId // "") | test("\\S")) and
+    (.builder.wakeRoute.threadId == .builder.threadId) and
+    (.builder.wakeRoute.hostId == .builder.hostId) and
     (.reviewReceipt.schemaVersion == 1) and
     (.reviewReceipt.role == "code-reviewer") and
     (.reviewReceipt.status == "PASS") and
@@ -378,6 +403,24 @@ release_queue_proves_reviewed_merge() {
     ((.reviewReceipt.owner.threadId != .testerReceipt.owner.threadId) or (.reviewReceipt.owner.hostId != .testerReceipt.owner.hostId)) and
     ((.reviewReceipt.owner.threadId != .builder.threadId) or (.reviewReceipt.owner.hostId != .builder.hostId)) and
     ((.testerReceipt.owner.threadId != .builder.threadId) or (.testerReceipt.owner.hostId != .builder.hostId)) and
+    (.authority.schemaVersion == 1) and
+    (.authority.source == "builder-handoff") and
+    (.authority.scope == ("PR #" + ($pr | tostring) + " source merge only")) and
+    (.authority.allowedActions | type == "array" and index("normal-merge") != null) and
+    (.authority.constraints | type == "array" and length > 0) and
+    ((.lifecycle.contractId // "") | test("\\S")) and
+    ((.lifecycle.stateDirectory // "") | test("\\S")) and
+    ((.capabilityPolicy.routine // "") | test("\\S")) and
+    ((.capabilityPolicy.escalation // "") | test("\\S")) and
+    (.ownerHistory | type == "array" and length > 0) and
+    (any(.ownerHistory[]?;
+      (.leaseId // "" | test("\\S")) and
+      (.fence | type == "number" and . > 0) and
+      .claimedPr == $pr and
+      (.owner.threadId // "" | test("\\S")) and
+      (.owner.hostId // "" | test("\\S"))
+    )) and
+    (.terminalReceipts | type == "array") and
     (any(.terminalReceipts[]?;
       .kind == "source-merge" and
       .schemaVersion == 1 and
@@ -403,7 +446,7 @@ moving_main_path_requires_new_approval() {
       src/gateway/protocol/*/*secret* | src/gateway/server-methods/secrets* | \
       src/agents/*auth* | src/agents/*/*auth* | src/agents/tool-policy.ts | src/agents/sandbox.ts | src/agents/sandbox-* | \
       src/agents/sandbox/* | src/infra/secret-file* | src/cron/stagger.ts | src/cron/service/jobs.ts | \
-      docs/security/* | docs/gateway/*auth* | docs/gateway/*sandbox* | docs/gateway/*secret* | \
+      docs/security/* | docs/gateway/security/* | docs/gateway/*auth* | docs/gateway/*sandbox* | docs/gateway/*secret* | \
       docs/cli/approvals.md | docs/cli/sandbox.md | docs/cli/security.md | docs/cli/secrets.md | \
       docs/reference/secretref-* | docs/reference/RELEASING.md)
       return 0
