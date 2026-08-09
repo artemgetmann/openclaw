@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { exampleJarvisDeliveryReceipt } from "../../scripts/lib/jarvis-delivery-boundary.mjs";
+import {
+  applyQueueSourceReturnToState,
+  authoritativeQueueEnvironment,
+  resolveQueueSourceReturnFromStatus,
+} from "../../scripts/pr-lifecycle.mjs";
 
 const ROOT = process.cwd();
 const SCRIPT = path.join(ROOT, "scripts", "pr-lifecycle.mjs");
@@ -81,6 +86,7 @@ function makeFixture() {
   fs.writeFileSync(
     gh,
     `#!/usr/bin/env node
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") {
   process.stdout.write(process.env.TEST_PR_METADATA);
@@ -128,8 +134,68 @@ function withReviewReceipt(fixture: ReturnType<typeof makeFixture>, args: string
   return [...args, "--review-receipt", reviewPath];
 }
 
+function runQueueAcceptance(fixture: ReturnType<typeof makeFixture>, args: string[]) {
+  const receiptIndex = args.indexOf("--receipt");
+  const receiptPath = args[receiptIndex + 1];
+  if (receiptIndex < 0 || !receiptPath) {
+    throw new Error("queue acceptance test requires --receipt");
+  }
+  const prior = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(fixture.env)) {
+    prior.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    const queueStatePath = fixture.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE;
+    if (!queueStatePath) {
+      throw new Error("repo-backed queue fixture was not initialized");
+    }
+    const suppliedReceipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+    const receipt = resolveQueueSourceReturnFromStatus(Number(args[1]), suppliedReceipt, {
+      action: "status",
+      state: JSON.parse(fs.readFileSync(queueStatePath, "utf8")),
+    });
+    const liveCandidate = {
+      headSha: fixture.metadata.headRefOid,
+      baseRefName: fixture.metadata.baseRefName,
+      baseSha: fixture.metadata.baseRefOid,
+      diffFingerprint: `sha256:${createHash("sha256")
+        .update(fixture.env.TEST_PR_PATCH)
+        .digest("hex")}`,
+      changedPaths: fixture.metadata.files.map((file) => file.path).toSorted(),
+    };
+    const lifecyclePath = path.join(
+      fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
+      `pr-${Number(args[1])}.json`,
+    );
+    const lifecycleState = JSON.parse(fs.readFileSync(lifecyclePath, "utf8"));
+    const result = applyQueueSourceReturnToState(
+      lifecycleState,
+      Number(args[1]),
+      receipt,
+      liveCandidate,
+    );
+    fs.writeFileSync(lifecyclePath, JSON.stringify(result.state));
+    return {
+      ...result.output,
+      stateDirectory: fixture.env.OPENCLAW_PR_LIFECYCLE_STATE_DIR,
+    } as LifecycleOutput;
+  } finally {
+    for (const [key, value] of prior) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
   const reviewedArgs = withReviewReceipt(fixture, args);
+  if (reviewedArgs[0] === "accept-queue-source-return") {
+    return runQueueAcceptance(fixture, reviewedArgs);
+  }
   const commandArgs =
     reviewedArgs[0] === "handoff-release" &&
     !reviewedArgs.includes("--queue") &&
@@ -146,6 +212,14 @@ function run(fixture: ReturnType<typeof makeFixture>, args: string[]) {
 
 function runFailure(fixture: ReturnType<typeof makeFixture>, args: string[]) {
   const reviewedArgs = withReviewReceipt(fixture, args);
+  if (reviewedArgs[0] === "accept-queue-source-return") {
+    try {
+      runQueueAcceptance(fixture, reviewedArgs);
+      return { status: 0, stderr: "" };
+    } catch (error) {
+      return { status: 1, stderr: error instanceof Error ? error.message : String(error) };
+    }
+  }
   const commandArgs =
     reviewedArgs[0] === "handoff-release" &&
     !reviewedArgs.includes("--queue") &&
@@ -1288,6 +1362,35 @@ describe("scripts/pr-lifecycle", () => {
       expect(rejected.stderr).toMatch(
         /must bind the exact repo-backed lifecycle|ownerless repo-backed release contract/,
       );
+    }
+  });
+
+  it("pins canonical queue reads despite caller PATH, Git config, and local-store overrides", () => {
+    const injected = {
+      PATH: process.env.PATH,
+      GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT,
+      OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE: process.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE,
+    };
+    process.env.PATH = "/tmp/forged-bin";
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE = "/tmp/forged-queue.json";
+    try {
+      const env = authoritativeQueueEnvironment();
+      expect(env).toMatchObject({
+        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        OPENCLAW_PR_RELEASE_QUEUE_REPO: "artemgetmann/openclaw",
+      });
+      expect(env.OPENCLAW_PR_RELEASE_QUEUE_GH).toMatch(/^\/(?:opt|usr)\//);
+      expect(env).not.toHaveProperty("GIT_CONFIG_COUNT");
+      expect(env).not.toHaveProperty("OPENCLAW_PR_RELEASE_QUEUE_LOCAL_STATE");
+    } finally {
+      for (const [key, value] of Object.entries(injected)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
     }
   });
 

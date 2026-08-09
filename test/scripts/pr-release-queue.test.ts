@@ -310,10 +310,16 @@ function checksRecoveryArgs(fixture: ReturnType<typeof makeFixture>, pr: number)
 function configureBaseDrift(
   fixture: ReturnType<typeof makeFixture>,
   pr: number,
-  options: { basePaths?: string[]; currentBaseSha?: string; mergeable?: string } = {},
+  options: {
+    basePaths?: string[];
+    currentBaseSha?: string;
+    fromBaseSha?: string;
+    mergeable?: string;
+  } = {},
 ) {
   const packet = JSON.parse(fs.readFileSync(path.join(fixture.root, `packet-${pr}.json`), "utf8"));
   const currentBaseSha = options.currentBaseSha ?? "f".repeat(40);
+  const fromBaseSha = options.fromBaseSha ?? packet.candidate.testedBaseSha;
   const basePaths = options.basePaths ?? ["src/unrelated.ts"];
   const bases = JSON.parse(fixture.env.TEST_PR_BASES);
   bases[String(pr)] = currentBaseSha;
@@ -323,8 +329,8 @@ function configureBaseDrift(
     status: "ahead",
     ahead_by: 1,
     behind_by: 0,
-    merge_base_commit: { sha: packet.candidate.testedBaseSha },
-    base_commit: { sha: packet.candidate.testedBaseSha },
+    merge_base_commit: { sha: fromBaseSha },
+    base_commit: { sha: fromBaseSha },
     commits: [{ sha: currentBaseSha }],
     files: basePaths.map((filename) => ({
       filename,
@@ -1140,6 +1146,96 @@ describe("scripts/pr-release-queue", () => {
     expect(state.items["75"].baseDriftRecoveryHistory).toHaveLength(2);
   });
 
+  it("supersedes an ownerless recovery when main advances again before builder acceptance", () => {
+    const fixture = makeFixture();
+    initAndEnqueue(fixture, 82);
+    const firstBase = "d".repeat(40);
+    configureBaseDrift(fixture, 82, { currentBaseSha: firstBase });
+    const owner = claim(fixture, "release-drift-82", 82);
+    const packet = JSON.parse(fs.readFileSync(path.join(fixture.root, "packet-82.json"), "utf8"));
+    const routeArgs = [
+      "route-base-drift",
+      "--lease-id",
+      owner.lease!.leaseId,
+      "--fence",
+      String(owner.lease!.fence),
+      "--expected-head-sha",
+      packet.candidate.headSha,
+      "--expected-diff-fingerprint",
+      packet.candidate.diffFingerprint,
+      "--transaction-id",
+    ];
+    const first = run(fixture, [...routeArgs, "first-ownerless-drift-82"]);
+
+    const secondBase = "e".repeat(40);
+    configureBaseDrift(fixture, 82, { currentBaseSha: secondBase });
+    const second = run(fixture, [...routeArgs, "continued-ownerless-drift-82"]);
+    expect(second).toMatchObject({
+      action: "base-drift-return-updated",
+      recovery: { attemptNumber: 2, evidence: { currentBase: { sha: secondBase } } },
+      sourceReturnReceipt: { targetBase: { sha: secondBase } },
+    });
+    expect(second.sourceReturnReceipt?.attemptId).not.toBe(first.sourceReturnReceipt?.attemptId);
+    expect(run(fixture, ["status"]).state?.items["82"]).toMatchObject({
+      state: "awaiting-builder-refresh",
+      baseDriftRecoveryHistory: [
+        { status: "superseded-by-base-drift", supersededByBaseSha: secondBase },
+      ],
+      activeBaseDriftRecovery: { attemptId: second.sourceReturnReceipt?.attemptId },
+    });
+  });
+
+  it("classifies a later base advance while refreshing and either queues or stops semantically", () => {
+    for (const [pr, basePaths, expectedAction] of [
+      [83, ["src/second-unrelated.ts"], "candidate-refreshed"],
+      [84, ["src/feature-84.ts"], "base-drift-requires-semantic-resolution"],
+    ] as const) {
+      const fixture = makeFixture();
+      initAndEnqueue(fixture, pr);
+      const firstBase = "d".repeat(40);
+      configureBaseDrift(fixture, pr, { currentBaseSha: firstBase });
+      const routed = routeBaseDrift(fixture, pr);
+      const secondBase = "e".repeat(40);
+      configureBaseDrift(fixture, pr, {
+        currentBaseSha: secondBase,
+        fromBaseSha: firstBase,
+        basePaths: [...basePaths],
+      });
+      const { packetPath } = rewriteFreshCandidate(
+        fixture,
+        pr,
+        "c".repeat(39) + String(pr % 10),
+        secondBase,
+      );
+      const refreshed = run(fixture, [
+        "refresh",
+        "--packet",
+        packetPath,
+        "--recovery-attempt-id",
+        String(routed.sourceReturnReceipt?.attemptId),
+        "--transaction-id",
+        `refresh-after-continued-drift-${pr}`,
+      ]);
+      expect(refreshed.action).toBe(expectedAction);
+      const item = run(fixture, ["status"]).state?.items[String(pr)];
+      if (expectedAction === "candidate-refreshed") {
+        expect(item).toMatchObject({
+          state: "queued",
+          baseDriftRecoveryHistory: [
+            { status: "superseded-by-base-drift" },
+            { status: "completed", evidence: { currentBase: { sha: secondBase } } },
+          ],
+        });
+      } else {
+        expect(item).toMatchObject({
+          state: "blocked",
+          activeBaseDriftRecovery: null,
+          discoveredBlockers: [{ classification: "substantive-overlap" }],
+        });
+      }
+    }
+  });
+
   it("terminates automatic churn for exact path overlap or a real merge conflict", () => {
     for (const [pr, basePaths, mergeable, classification] of [
       [76, ["src/feature-76.ts"], "MERGEABLE", "substantive-overlap"],
@@ -1187,6 +1283,7 @@ describe("scripts/pr-release-queue", () => {
     expect(run(fixture, [...args, "route-drift-78"])).toMatchObject({
       action: "transaction-already-recorded",
     });
+    delete fixture.env.TEST_GH_FAIL;
     expect(run(fixture, [...args, "route-drift-78-replay"])).toMatchObject({
       action: "base-drift-already-routed",
       sourceReturnReceipt: { attemptId: expect.any(String) },

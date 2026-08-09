@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { validateJarvisPullRequest } from "./lib/jarvis-delivery-boundary.mjs";
 
 const SCHEMA_VERSION = 1;
@@ -768,33 +768,271 @@ function acceptReleaseHandoff(pr, options) {
   });
 }
 
-function verifyAuthoritativeQueueSourceReturn(pr, receipt) {
-  let status;
+function resolveTrustedQueueRepository() {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  let remote;
   try {
-    const queueScript = path.join(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "pr-release-queue.mjs",
-    );
-    status = JSON.parse(
-      execFileSync(process.execPath, [queueScript, "status"], {
+    remote = execFileSync(
+      "/usr/bin/git",
+      ["-C", repoRoot, "config", "--local", "--get", "remote.origin.url"],
+      {
         encoding: "utf8",
+        env: { PATH: "/usr/bin:/bin" },
         stdio: ["ignore", "pipe", "pipe"],
-      }),
+      },
+    ).trim();
+  } catch (error) {
+    fail(`cannot resolve authoritative queue repository: ${error.message}`, 75);
+  }
+  const match = remote.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (!match) {
+    fail("authoritative queue origin is not a GitHub repository", 75);
+  }
+  return `${match[1]}/${match[2]}`;
+}
+
+function resolveTrustedGhBinary() {
+  // Never consult caller PATH for an authority-bearing GitHub read. These are
+  // the supported system package locations on the macOS operator host and CI.
+  for (const candidate of ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.realpathSync(candidate);
+    } catch {
+      // Try the next fixed installation path.
+    }
+  }
+  fail("cannot find gh in a trusted system installation path", 75);
+}
+
+function authoritativeQueueEnvironment() {
+  // Build a small allowlist instead of copying process.env. In particular,
+  // PATH, GIT_CONFIG_*, GH_HOST, proxies, TLS roots, and Node preload hooks can
+  // redirect an otherwise valid-looking repo-backed status read.
+  const env = {
+    PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+    OPENCLAW_PR_RELEASE_QUEUE_REPO: resolveTrustedQueueRepository(),
+    OPENCLAW_PR_RELEASE_QUEUE_GH: resolveTrustedGhBinary(),
+  };
+  for (const key of ["HOME", "GH_TOKEN", "GITHUB_TOKEN", "NO_COLOR", "TERM"]) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key];
+    }
+  }
+  return env;
+}
+
+function runAuthoritativeQueue(args) {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const queueScript = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "pr-release-queue.mjs",
+  );
+  let committedQueueScript;
+  try {
+    committedQueueScript = execFileSync(
+      "/usr/bin/git",
+      ["-C", repoRoot, "show", "HEAD:scripts/pr-release-queue.mjs"],
+      {
+        encoding: "utf8",
+        env: { PATH: "/usr/bin:/bin" },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
     );
   } catch (error) {
-    fail(`cannot verify authoritative queue source return: ${error.message}`, 75);
+    fail(`cannot verify committed queue executable: ${error.message}`, 75);
   }
+  if (fs.readFileSync(queueScript, "utf8") !== committedQueueScript) {
+    fail("authoritative queue executable differs from the exact worktree HEAD", 75);
+  }
+  return JSON.parse(
+    execFileSync(process.execPath, [queueScript, ...args], {
+      encoding: "utf8",
+      env: authoritativeQueueEnvironment(),
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+}
+
+function resolveQueueSourceReturnFromStatus(pr, receipt, status) {
   const item = status?.state?.items?.[String(pr)];
   const active = item?.activeBaseDriftRecovery;
+  const receiptMatches = (candidate) =>
+    JSON.stringify(canonicalJson(candidate?.sourceReturnReceipt)) ===
+    JSON.stringify(canonicalJson(receipt));
+  const exactActive =
+    item?.state === "awaiting-builder-refresh" &&
+    active?.attemptId === receipt?.attemptId &&
+    receiptMatches(active);
+  const exactSuperseded = Array.isArray(item?.baseDriftRecoveryHistory)
+    ? item.baseDriftRecoveryHistory.find(
+        (attempt) =>
+          attempt?.status === "superseded-by-base-drift" &&
+          attempt?.attemptId === receipt?.attemptId &&
+          receiptMatches(attempt),
+      )
+    : null;
+  const activeSupersedesReceipt =
+    exactSuperseded &&
+    active?.sourceLease?.leaseId === exactSuperseded.sourceLease?.leaseId &&
+    active?.sourceLease?.fence === exactSuperseded.sourceLease?.fence &&
+    active?.evidence?.candidate?.headSha === exactSuperseded.evidence?.candidate?.headSha &&
+    active?.evidence?.candidate?.diffFingerprint ===
+      exactSuperseded.evidence?.candidate?.diffFingerprint;
   if (
     item?.state !== "awaiting-builder-refresh" ||
-    active?.attemptId !== receipt?.attemptId ||
-    JSON.stringify(canonicalJson(active?.sourceReturnReceipt)) !==
-      JSON.stringify(canonicalJson(receipt)) ||
+    (!exactActive && !activeSupersedesReceipt) ||
     status?.state?.mergeLease?.leaseId === receipt?.sourceLease?.leaseId
   ) {
     fail("queue source return is not the exact active authoritative recovery attempt");
   }
+  // A retry may carry the exact receipt that the same fence superseded after
+  // another base advance. Return the protected active receipt so callers
+  // converge on the newest attempt without accepting an invented stale ID.
+  return active.sourceReturnReceipt;
+}
+
+function verifyAuthoritativeQueueSourceReturn(pr, receipt) {
+  let status;
+  try {
+    status = runAuthoritativeQueue(["status"]);
+  } catch (error) {
+    fail(`cannot verify authoritative queue source return: ${error.message}`, 75);
+  }
+  return resolveQueueSourceReturnFromStatus(pr, receipt, status);
+}
+
+function applyQueueSourceReturnToState(state, pr, receipt, liveCandidate) {
+  const release = state?.release;
+  const builder = state?.builder;
+  const requiredActions = new Set([
+    "rebase-exact-builder-worktree",
+    "push-expected-old-head",
+    "fresh-code-review",
+    "fresh-independent-test",
+    "regenerate-release-packet",
+    "refresh-release-queue",
+  ]);
+  const requiredConstraints = new Set([
+    "exact builder only",
+    "no conflict resolution or overlapping semantic changes",
+    "no admin, bypass, deploy, runtime mutation, packaging, signing, or public release",
+  ]);
+  const allowedActions = receipt?.standingAuthority?.allowedActions;
+  const constraints = receipt?.standingAuthority?.constraints;
+  const validAuthority =
+    receipt?.standingAuthority?.source === "queue-base-drift-recovery" &&
+    receipt?.standingAuthority?.scope ===
+      `PR #${pr} source refresh from ${state?.candidate?.baseSha} to ${receipt?.targetBase?.sha}` &&
+    Array.isArray(allowedActions) &&
+    allowedActions.length === requiredActions.size &&
+    new Set(allowedActions).size === requiredActions.size &&
+    allowedActions.every((action) => requiredActions.has(action)) &&
+    Array.isArray(constraints) &&
+    constraints.length === requiredConstraints.size &&
+    new Set(constraints).size === requiredConstraints.size &&
+    constraints.every((constraint) => requiredConstraints.has(constraint));
+  const validReceipt =
+    receipt?.schemaVersion === SCHEMA_VERSION &&
+    receipt?.role === "queue-base-drift-source-return" &&
+    receipt?.status === "awaiting-builder-refresh" &&
+    typeof receipt?.attemptId === "string" &&
+    receipt.attemptId.trim() !== "" &&
+    receipt?.classification === "automatic-safe-refresh" &&
+    receipt?.candidate?.pr === pr &&
+    receipt?.candidate?.headSha === state?.candidate?.headSha &&
+    receipt?.candidate?.testedBaseSha === state?.candidate?.baseSha &&
+    receipt?.candidate?.diffFingerprint === state?.candidate?.diffFingerprint &&
+    JSON.stringify(receipt?.candidate?.changedPaths) ===
+      JSON.stringify(state?.candidate?.changedPaths) &&
+    receipt?.targetBase?.branch === state?.candidate?.baseRefName &&
+    /^[0-9a-f]{40}$/i.test(receipt?.targetBase?.sha ?? "") &&
+    receipt?.builder?.threadId === builder?.threadId &&
+    receipt?.builder?.hostId === builder?.hostId &&
+    receipt?.lifecycle?.contractId === release?.contractId &&
+    receipt?.lifecycle?.stateDirectory === resolveStateRoot() &&
+    receipt?.sourceLease?.released === true &&
+    typeof receipt?.sourceLease?.leaseId === "string" &&
+    Number.isSafeInteger(receipt?.sourceLease?.fence) &&
+    receipt.sourceLease.fence > 0 &&
+    validAuthority;
+  if (!validReceipt) {
+    fail(
+      "queue source return must bind the exact repo-backed lifecycle, builder, stale candidate, released fence, observed base, and bounded standing authority",
+    );
+  }
+  if (
+    liveCandidate.headSha !== state.candidate.headSha ||
+    liveCandidate.baseRefName !== receipt.targetBase.branch ||
+    liveCandidate.baseSha !== receipt.targetBase.sha ||
+    liveCandidate.diffFingerprint !== state.candidate.diffFingerprint ||
+    JSON.stringify(liveCandidate.changedPaths) !== JSON.stringify(state.candidate.changedPaths)
+  ) {
+    fail("live PR identity changed after the queue classified base drift");
+  }
+  if (
+    release?.queueMode !== "repo-backed" ||
+    release.owner !== null ||
+    !testerAllowsCandidateRefresh(state)
+  ) {
+    fail(
+      "queue source return requires the ownerless repo-backed release contract and no live tester",
+    );
+  }
+  if (release.phase === "awaiting-source") {
+    if (release.queueSourceReturn?.attemptId !== receipt.attemptId) {
+      const sameRecoveryFence =
+        release.queueSourceReturn?.sourceLease?.leaseId === receipt.sourceLease.leaseId &&
+        release.queueSourceReturn?.sourceLease?.fence === receipt.sourceLease.fence;
+      if (!sameRecoveryFence) {
+        fail("source was already returned by a different queue recovery fence");
+      }
+      // A protected queue reclassification on the same retired fence may
+      // replace the target base while the builder is waking or rebasing.
+      release.queueSourceReturn = receipt;
+      release.returnedAt = new Date().toISOString();
+      state.updatedAt = new Date().toISOString();
+      return {
+        state,
+        output: {
+          action: "queue-source-return-updated",
+          contractId: release.contractId,
+          attemptId: receipt.attemptId,
+          builder,
+          standingAuthority: receipt.standingAuthority,
+        },
+      };
+    }
+    return {
+      state,
+      output: {
+        action: "queue-source-already-returned",
+        contractId: release.contractId,
+        attemptId: receipt.attemptId,
+        builder,
+        standingAuthority: receipt.standingAuthority,
+      },
+    };
+  }
+  if (release.phase !== "handoff-pending") {
+    fail(`repo-backed release handoff is ${release.phase}, not handoff-pending`);
+  }
+
+  release.queueSourceReturn = receipt;
+  release.phase = "awaiting-source";
+  release.returnedAt = new Date().toISOString();
+  state.updatedAt = new Date().toISOString();
+  return {
+    state,
+    output: {
+      action: "queue-source-return-accepted",
+      contractId: release.contractId,
+      attemptId: receipt.attemptId,
+      builder,
+      standingAuthority: receipt.standingAuthority,
+      optionalCallback: { route: builder, establishesOwnership: false },
+    },
+  };
 }
 
 function acceptQueueSourceReturn(pr, options) {
@@ -807,123 +1045,46 @@ function acceptQueueSourceReturn(pr, options) {
     }
     fail(`cannot read queue source-return receipt: ${error.message}`);
   }
-  verifyAuthoritativeQueueSourceReturn(pr, receipt);
+  receipt = verifyAuthoritativeQueueSourceReturn(pr, receipt);
   const liveCandidate = fetchCandidate(pr);
-  return withStateLock(pr, (state) => {
-    const release = state?.release;
-    const builder = state?.builder;
-    const requiredActions = new Set([
-      "rebase-exact-builder-worktree",
-      "push-expected-old-head",
-      "fresh-code-review",
-      "fresh-independent-test",
-      "regenerate-release-packet",
-      "refresh-release-queue",
-    ]);
-    const requiredConstraints = new Set([
-      "exact builder only",
-      "no conflict resolution or overlapping semantic changes",
-      "no admin, bypass, deploy, runtime mutation, packaging, signing, or public release",
-    ]);
-    const allowedActions = receipt?.standingAuthority?.allowedActions;
-    const constraints = receipt?.standingAuthority?.constraints;
-    const validAuthority =
-      receipt?.standingAuthority?.source === "queue-base-drift-recovery" &&
-      receipt?.standingAuthority?.scope ===
-        `PR #${pr} source refresh from ${state?.candidate?.baseSha} to ${receipt?.targetBase?.sha}` &&
-      Array.isArray(allowedActions) &&
-      allowedActions.length === requiredActions.size &&
-      new Set(allowedActions).size === requiredActions.size &&
-      allowedActions.every((action) => requiredActions.has(action)) &&
-      Array.isArray(constraints) &&
-      constraints.length === requiredConstraints.size &&
-      new Set(constraints).size === requiredConstraints.size &&
-      constraints.every((constraint) => requiredConstraints.has(constraint));
-    const validReceipt =
-      receipt?.schemaVersion === SCHEMA_VERSION &&
-      receipt?.role === "queue-base-drift-source-return" &&
-      receipt?.status === "awaiting-builder-refresh" &&
-      typeof receipt?.attemptId === "string" &&
-      receipt.attemptId.trim() !== "" &&
-      receipt?.classification === "automatic-safe-refresh" &&
-      receipt?.candidate?.pr === pr &&
-      receipt?.candidate?.headSha === state?.candidate?.headSha &&
-      receipt?.candidate?.testedBaseSha === state?.candidate?.baseSha &&
-      receipt?.candidate?.diffFingerprint === state?.candidate?.diffFingerprint &&
-      JSON.stringify(receipt?.candidate?.changedPaths) ===
-        JSON.stringify(state?.candidate?.changedPaths) &&
-      receipt?.targetBase?.branch === state?.candidate?.baseRefName &&
-      /^[0-9a-f]{40}$/i.test(receipt?.targetBase?.sha ?? "") &&
-      receipt?.builder?.threadId === builder?.threadId &&
-      receipt?.builder?.hostId === builder?.hostId &&
-      receipt?.lifecycle?.contractId === release?.contractId &&
-      receipt?.lifecycle?.stateDirectory === resolveStateRoot() &&
-      receipt?.sourceLease?.released === true &&
-      typeof receipt?.sourceLease?.leaseId === "string" &&
-      Number.isSafeInteger(receipt?.sourceLease?.fence) &&
-      receipt.sourceLease.fence > 0 &&
-      validAuthority;
-    if (!validReceipt) {
-      fail(
-        "queue source return must bind the exact repo-backed lifecycle, builder, stale candidate, released fence, observed base, and bounded standing authority",
-      );
-    }
-    if (
-      liveCandidate.headSha !== state.candidate.headSha ||
-      liveCandidate.baseRefName !== receipt.targetBase.branch ||
-      liveCandidate.baseSha !== receipt.targetBase.sha ||
-      liveCandidate.diffFingerprint !== state.candidate.diffFingerprint ||
-      JSON.stringify(liveCandidate.changedPaths) !== JSON.stringify(state.candidate.changedPaths)
-    ) {
-      fail("live PR identity changed after the queue classified base drift");
-    }
-    if (
-      release?.queueMode !== "repo-backed" ||
-      release.owner !== null ||
-      !testerAllowsCandidateRefresh(state)
-    ) {
-      fail(
-        "queue source return requires the ownerless repo-backed release contract and no live tester",
-      );
-    }
-    if (release.phase === "awaiting-source") {
-      if (release.queueSourceReturn?.attemptId !== receipt.attemptId) {
-        fail("source was already returned by a different queue recovery attempt");
+  // Re-run the fenced classification before granting source authority. If
+  // main moved again, route-base-drift atomically supersedes the old attempt
+  // and returns a receipt for the new exact base; substantive overlap stops
+  // here without ever granting the builder permission to rebase it away.
+  if (liveCandidate.baseSha !== receipt?.targetBase?.sha) {
+    try {
+      const routed = runAuthoritativeQueue([
+        "route-base-drift",
+        "--lease-id",
+        String(receipt?.sourceLease?.leaseId ?? ""),
+        "--fence",
+        String(receipt?.sourceLease?.fence ?? ""),
+        "--expected-head-sha",
+        String(receipt?.candidate?.headSha ?? ""),
+        "--expected-diff-fingerprint",
+        String(receipt?.candidate?.diffFingerprint ?? ""),
+        "--transaction-id",
+        `accept-source-return-${receipt?.attemptId ?? "missing"}-${liveCandidate.baseSha}`,
+      ]);
+      if (!routed?.sourceReturnReceipt && routed?.action !== "transaction-already-recorded") {
+        fail(
+          "continued base drift now requires semantic resolution; source authority was not granted",
+        );
       }
-      return {
-        state,
-        output: {
-          action: "queue-source-already-returned",
-          contractId: release.contractId,
-          attemptId: receipt.attemptId,
-          builder,
-          standingAuthority: receipt.standingAuthority,
-        },
-      };
+      if (routed?.sourceReturnReceipt) {
+        receipt = routed.sourceReturnReceipt;
+      }
+    } catch (error) {
+      if (error instanceof LifecycleError) {
+        throw error;
+      }
+      fail(`cannot refresh authoritative queue source return: ${error.message}`, 75);
     }
-    if (release.phase !== "handoff-pending") {
-      fail(`repo-backed release handoff is ${release.phase}, not handoff-pending`);
-    }
-
-    release.queueSourceReturn = receipt;
-    release.phase = "awaiting-source";
-    release.returnedAt = new Date().toISOString();
-    state.updatedAt = new Date().toISOString();
-    return {
-      state,
-      output: {
-        action: "queue-source-return-accepted",
-        contractId: release.contractId,
-        attemptId: receipt.attemptId,
-        builder,
-        standingAuthority: receipt.standingAuthority,
-        optionalCallback: {
-          route: builder,
-          establishesOwnership: false,
-        },
-      },
-    };
-  });
+    receipt = verifyAuthoritativeQueueSourceReturn(pr, receipt);
+  }
+  return withStateLock(pr, (state) =>
+    applyQueueSourceReturnToState(state, pr, receipt, liveCandidate),
+  );
 }
 
 function returnSource(pr, options) {
@@ -1502,48 +1663,64 @@ function cancelPending(pr, options) {
   });
 }
 
-try {
-  const { command, pr, options } = parseArgs(process.argv.slice(2));
-  let output;
-  switch (command) {
-    case "handoff-test":
-      output = handoffTest(pr, options);
-      break;
-    case "accept-test-owner":
-      output = acceptOwner(pr, options, "tester");
-      break;
-    case "record-test-receipt":
-      output = recordTestReceipt(pr, options);
-      break;
-    case "close-test":
-      output = closeTest(pr, options);
-      break;
-    case "handoff-release":
-      output = handoffRelease(pr, options);
-      break;
-    case "accept-release-owner":
-      output = acceptOwner(pr, options, "release");
-      break;
-    case "accept-release-handoff":
-      output = acceptReleaseHandoff(pr, options);
-      break;
-    case "accept-queue-source-return":
-      output = acceptQueueSourceReturn(pr, options);
-      break;
-    case "return-source":
-      output = returnSource(pr, options);
-      break;
-    case "cancel-pending":
-      output = cancelPending(pr, options);
-      break;
-    default:
-      usage();
-      throw new LifecycleError(`unknown command: ${command}`, 2);
-  }
+function main() {
+  try {
+    const { command, pr, options } = parseArgs(process.argv.slice(2));
+    let output;
+    switch (command) {
+      case "handoff-test":
+        output = handoffTest(pr, options);
+        break;
+      case "accept-test-owner":
+        output = acceptOwner(pr, options, "tester");
+        break;
+      case "record-test-receipt":
+        output = recordTestReceipt(pr, options);
+        break;
+      case "close-test":
+        output = closeTest(pr, options);
+        break;
+      case "handoff-release":
+        output = handoffRelease(pr, options);
+        break;
+      case "accept-release-owner":
+        output = acceptOwner(pr, options, "release");
+        break;
+      case "accept-release-handoff":
+        output = acceptReleaseHandoff(pr, options);
+        break;
+      case "accept-queue-source-return":
+        output = acceptQueueSourceReturn(pr, options);
+        break;
+      case "return-source":
+        output = returnSource(pr, options);
+        break;
+      case "cancel-pending":
+        output = cancelPending(pr, options);
+        break;
+      default:
+        usage();
+        throw new LifecycleError(`unknown command: ${command}`, 2);
+    }
 
-  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`[pr-lifecycle] ${message}\n`);
-  process.exitCode = error instanceof LifecycleError ? error.exitCode : 1;
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`[pr-lifecycle] ${message}\n`);
+    process.exitCode = error instanceof LifecycleError ? error.exitCode : 1;
+  }
+}
+
+// Unit tests exercise receipt resolution and state transitions as pure
+// functions over caller-owned objects. Those exports never locate, lock, read,
+// or write a lifecycle ledger; production acceptance keeps all authoritative
+// queue I/O behind the non-exported pinned path above.
+export {
+  applyQueueSourceReturnToState,
+  authoritativeQueueEnvironment,
+  resolveQueueSourceReturnFromStatus,
+};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main();
 }

@@ -173,6 +173,15 @@ rebase, re-review, retest, regenerate, and refresh under its bounded standing
 authority. The callback route is optional wake UX; durable state is sufficient
 after callback loss or context compaction.
 
+Acceptance always reads `ops/release-state` through the repository's canonical
+local origin and branch. It resolves that origin with fixed `/usr/bin/git`, pins
+`gh` to a fixed system installation path, and starts the queue reader with a
+minimal environment. Caller PATH, Git config, proxy/TLS/preload settings,
+local-state, alternate-repository, branch, clock, and queue-binary overrides
+cannot substitute a local ledger for lifecycle ownership. Those diagnostic/test
+overrides remain available to direct queue commands, but never at this lifecycle
+authority boundary.
+
 Any overlapping path or Git conflict is substantive and stops automatic churn.
 Renames, binaries, truncated comparisons, non-ancestor history, changing
 head/base/diff, or malformed GitHub evidence are ambiguous and fail before the
@@ -188,13 +197,17 @@ scripts/pr-release-queue refresh \
   --recovery-attempt-id "$ATTEMPT_ID"
 ```
 
-The queue requires the packet's tested base to equal the attempt's observed
-base, preserves the old candidate and stale receipts, moves the completed
-attempt into ordered history, and returns the new immutable candidate to
-`queued`. The next claim receives a higher fence. Continued benign drift may
-repeat one durable attempt per distinct fence and base advance; substantive
-overlap or conflict is the terminal condition for automatic recovery, not a
-routine founder prompt.
+The queue normally requires the packet's tested base to equal the attempt's
+observed base. If main advanced again before acceptance, the retired fence
+reclassifies the cumulative delta and supersedes the old receipt. If it advanced
+while the builder was re-proving, `refresh` classifies only the additional base
+delta against the fresh packet before accepting it. Stable disjoint evidence
+preserves the old candidate and stale receipts, moves every superseded and
+completed attempt into ordered history, and returns the new immutable candidate
+to `queued`. Ambiguous evidence remains retryable; overlap or conflict becomes a
+durable semantic stop. The next claim receives a higher fence. Continued benign
+drift has no arbitrary attempt cap and does not require a new fence until the
+repaired candidate is actually requeued.
 
 `checks-pending` is the one blocker that may recover without a new candidate.
 Run the explicit recovery transition with the same immutable identity:

@@ -280,7 +280,10 @@ Generic free-text `base-drift` blockers are forbidden.
 The builder feeds the emitted receipt to
 `pr-lifecycle accept-queue-source-return`. That transition validates the same
 builder, lifecycle contract, state directory, stale candidate, target base, and
-released fence before opening `awaiting-source`. The receipt grants only the
+released fence against canonical repo-backed queue state before opening
+`awaiting-source`; fixed Git/`gh` paths and a minimal child environment prevent
+caller PATH, Git config, proxy/preload, or local queue/repository/branch/binary
+overrides from redirecting this authority boundary. The receipt grants only the
 bounded source sequence: rebase the exact isolated builder worktree onto that
 base, push with expected-old-head protection, obtain fresh review and tester
 proof, regenerate the packet, and refresh the queue. A callback may wake the
@@ -313,6 +316,15 @@ observed-base tuple; completed attempts remain in order. Benign drift has no
 arbitrary retry cap, while any substantive overlap or conflict immediately
 terminates automatic churn. Every retired candidate stays in lifecycle and
 queue history; tester and release identities are never reused or duplicated.
+
+If main moves again before the builder accepts the receipt, the same retired
+fence performs a new exact cumulative classification and replaces the active
+receipt. If it moves after acceptance but before the fresh packet reaches the
+queue, `refresh` classifies only the added base range against that fresh
+candidate. Each superseded attempt remains auditable. Disjoint drift continues;
+ambiguous evidence remains safely retryable; overlap or conflict records the
+principled semantic terminal state without returning routine coordination to
+the user.
 
 If main advances again after a tester reservation was definitely cancelled
 before owner creation, the same accepted release contract may return source from
