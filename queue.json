@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 65,
+  "sequence": 66,
   "nextFence": 20,
-  "mergeLease": {
-    "leaseId": "70afc59f-1065-4dc8-8926-dafa95a03d60",
-    "fence": 19,
-    "owner": {
-      "threadId": "/root/pr1365_fenced_release",
-      "hostId": "subagent-local"
-    },
-    "claimedPr": 1365,
-    "claimedAt": "2026-08-09T06:17:17.809Z",
-    "heartbeatAt": "2026-08-09T06:17:17.809Z",
-    "expiresAt": "2026-08-09T06:37:17.809Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -1415,7 +1404,7 @@
       }
     },
     "1365": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1365,
         "url": "https://github.com/artemgetmann/openclaw/pull/1365",
@@ -1678,7 +1667,20 @@
           "replacedAt": "2026-08-09T06:15:53.698Z"
         }
       ],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1365,
+          "reviewedHeadSha": "c69952329cc571d718d635e4a18208f26a6fb59e",
+          "diffFingerprint": "sha256:002f527dac901d64cc36a80926dd02ac7d94cc46e128d2239b868d375317abb3",
+          "mergeSha": "b6243a67867df61e1d7bb4274013ed8c9333d228",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -1951,10 +1953,10 @@
     }
   },
   "lastTransaction": {
-    "id": "57db1bb1-7e57-48e2-9469-0e771dd1ca97",
-    "recordedAt": "2026-08-09T06:17:17.809Z"
+    "id": "3e5572b5-df77-4e15-813b-bc29629f026b",
+    "recordedAt": "2026-08-09T06:18:25.927Z"
   },
-  "updatedAt": "2026-08-09T06:17:17.809Z",
+  "updatedAt": "2026-08-09T06:18:25.927Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -1967,6 +1969,7 @@
       1362,
       1363,
       1364,
+      1365,
       1366,
       1369
     ],
