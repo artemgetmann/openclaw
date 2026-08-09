@@ -696,6 +696,13 @@ ready`.
     must stop new heavy builds
   - runtime instances, Codex sessions/history/browser state, and ambiguous
     authenticated state are excluded from scheduled deletion
+- Already-authorized build or shipping work may remove an exact cache or failed
+  build/package output without a separate cleanup approval when the active task
+  owns that target, it is reproducible, the current attempt no longer needs it,
+  and native process, open-file, and heavy/release lock checks prove it inactive.
+  This authority never covers a worktree, source, user data, credentials,
+  sessions, browser profiles, shared/live runtime state, or ambiguously owned or
+  referenced artifacts. Uncertain ownership or liveness remains a hard stop.
 - Prove the background job is real with
   `bash scripts/install-worktree-gc.sh status`. A plist on disk is not enough;
   status fails unless launchd reports the job loaded and enabled.
