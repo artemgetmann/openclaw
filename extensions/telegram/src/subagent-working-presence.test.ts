@@ -14,6 +14,7 @@ describe("Telegram subagent working presence", () => {
 
     await handlers.get("subagent_spawned")?.({
       runId: "run-1",
+      childSessionKey: "agent:main:subagent:child-1",
       mode: "run",
       requester: { channel: "telegram", to: "-1001", accountId: "jarvis", threadId: "42" },
     });
@@ -24,10 +25,28 @@ describe("Telegram subagent working presence", () => {
       messageThreadId: 42,
     });
 
-    for (const outcome of ["ok", "error", "timeout", "killed", "reset", "deleted"]) {
-      await handlers.get("subagent_ended")?.({ runId: `run-${outcome}`, outcome });
+    await handlers.get("subagent_ended")?.({
+      runId: "run-1",
+      targetSessionKey: "agent:main:subagent:child-1",
+      outcome: "ok",
+    });
+
+    for (const outcome of ["reset", "deleted"] as const) {
+      const runId = `run-${outcome}`;
+      const childSessionKey = `agent:main:subagent:child-${outcome}`;
+      await handlers.get("subagent_spawned")?.({
+        runId,
+        childSessionKey,
+        mode: "run",
+        requester: { channel: "telegram", to: "-1001" },
+      });
+      // Match the production reset/delete event shape: target session only,
+      // without the runId that ordinary completion events carry.
+      await handlers.get("subagent_ended")?.({ targetSessionKey: childSessionKey, outcome });
     }
-    expect(presence.stop).toHaveBeenCalledTimes(6);
+    expect(presence.stop).toHaveBeenNthCalledWith(1, "subagent:run-1");
+    expect(presence.stop).toHaveBeenNthCalledWith(2, "subagent:run-reset");
+    expect(presence.stop).toHaveBeenNthCalledWith(3, "subagent:run-deleted");
   });
 
   it("ignores non-Telegram routes and clears leases on gateway stop", async () => {
