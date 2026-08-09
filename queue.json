@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 59,
+  "sequence": 60,
   "nextFence": 18,
-  "mergeLease": {
-    "leaseId": "cf7f95b3-f7c9-474a-8f59-d9e9257b2bf5",
-    "fence": 17,
-    "owner": {
-      "threadId": "019fe508-e3a5-71f2-b409-7f1a90d99c32",
-      "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
-    },
-    "claimedPr": 1361,
-    "claimedAt": "2026-08-09T05:43:39.416Z",
-    "heartbeatAt": "2026-08-09T05:43:39.416Z",
-    "expiresAt": "2026-08-09T06:03:39.416Z"
-  },
+  "mergeLease": null,
   "items": {
     "1354": {
       "state": "closed",
@@ -690,7 +679,7 @@
       }
     },
     "1361": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1361,
         "url": "https://github.com/artemgetmann/openclaw/pull/1361",
@@ -783,7 +772,20 @@
       ],
       "mutationIntent": null,
       "candidateHistory": [],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1361,
+          "reviewedHeadSha": "517fb8c471250b570b0f358cf780d65fd166cd94",
+          "diffFingerprint": "sha256:619674d6355fcc2b867f030de1c2f050496a97bd58148cfb1a7cdaf4249bdf4a",
+          "mergeSha": "19b43fa53124228a62946fa3413faeb317cbf9e4",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -1657,10 +1659,10 @@
     }
   },
   "lastTransaction": {
-    "id": "7e86d41b-6f1c-4ca0-a469-c97827a136df",
-    "recordedAt": "2026-08-09T05:43:39.416Z"
+    "id": "b4e2e83b-758a-4e30-b1a3-a36bf3991336",
+    "recordedAt": "2026-08-09T05:46:48.913Z"
   },
-  "updatedAt": "2026-08-09T05:43:39.416Z",
+  "updatedAt": "2026-08-09T05:46:48.913Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -1669,6 +1671,7 @@
       1355,
       1358,
       1359,
+      1361,
       1362,
       1363,
       1364,
