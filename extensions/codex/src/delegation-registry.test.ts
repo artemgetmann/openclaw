@@ -51,11 +51,15 @@ describe("CodexDelegationRegistry", () => {
     await expect(
       registry.claimOverdueProgress("delegation-cleanup-failure"),
     ).resolves.toBeUndefined();
-    await expect(registry.get("delegation-cleanup-failure")).resolves.toMatchObject({
+    const suppressed = await registry.get("delegation-cleanup-failure");
+    expect(suppressed).toMatchObject({
       lifecycle: "accepted",
       overdueProgressSuppressedAtMs: expect.any(Number),
-      deliveryKind: undefined,
     });
+    // Optional persisted fields are omitted, not serialized as explicit
+    // undefined values. Assert the semantic state directly instead of making
+    // toMatchObject require a deliveryKind property to exist.
+    expect(suppressed?.deliveryKind).toBeUndefined();
 
     // Simulate restart reconciliation after callback-route cleanup failed:
     // decision delivery remains unclaimed and therefore available exactly once.

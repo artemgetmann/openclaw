@@ -672,9 +672,11 @@ describe("Codex natural-language delegation", () => {
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
-    expect(waitForRun).toHaveBeenCalledWith({
-      runId: "jarvis-relay-run",
-      timeoutMs: 5 * 60 * 1000,
+    await vi.waitFor(() => {
+      expect(waitForRun).toHaveBeenCalledWith({
+        runId: "jarvis-relay-run",
+        timeoutMs: 5 * 60 * 1000,
+      });
     });
   });
 
@@ -725,6 +727,7 @@ describe("Codex natural-language delegation", () => {
         action: "delegate_async",
         text: "Inspect bookmarks and stay in the existing native thread.",
         task_mode: "analysis",
+        project_dir: process.cwd(),
       });
       const delegationId = (accepted as { details?: { delegationId?: string } }).details
         ?.delegationId;
@@ -814,6 +817,7 @@ describe("Codex natural-language delegation", () => {
         action: "delegate_async",
         text: "Finish exactly when the overdue progress deadline arrives.",
         task_mode: "analysis",
+        project_dir: process.cwd(),
       });
 
       await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
