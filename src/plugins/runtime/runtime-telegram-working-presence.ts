@@ -90,6 +90,13 @@ export function createTelegramWorkingPresenceManager(params: {
       if (!created) {
         await route.lease.refresh();
       }
+      // A shared-lease refresh is still an async provider boundary. The worker
+      // may finish while that pulse is in flight, so repeat the ownership check
+      // before publishing it into the route's ref-counted owner set.
+      if (generation !== startGeneration || owners.get(ownerId) !== key) {
+        releaseRouteIfEmpty(key, promise, route);
+        return;
+      }
       route.owners.add(ownerId);
     },
     refresh: async (ownerId: string) => {

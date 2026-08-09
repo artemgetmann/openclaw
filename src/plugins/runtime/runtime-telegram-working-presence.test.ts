@@ -60,4 +60,26 @@ describe("telegram working presence", () => {
     expect(startTyping).toHaveBeenCalledTimes(1);
     expect(lease.stop).toHaveBeenCalledTimes(1);
   });
+
+  it("does not resurrect an owner stopped while a shared refresh is pending", async () => {
+    let resolveRefresh!: () => void;
+    const lease = {
+      refresh: vi.fn(async () => await new Promise<void>((resolve) => (resolveRefresh = resolve))),
+      stop: vi.fn(),
+    };
+    const manager = createTelegramWorkingPresenceManager({
+      startTyping: vi.fn(async () => lease),
+    });
+    const route = { to: "-1001", messageThreadId: 42 };
+
+    await manager.start({ ownerId: "worker-a", ...route });
+    const startB = manager.start({ ownerId: "worker-b", ...route });
+    await vi.waitFor(() => expect(lease.refresh).toHaveBeenCalledTimes(1));
+    manager.stop("worker-b");
+    resolveRefresh();
+    await startB;
+
+    manager.stop("worker-a");
+    await vi.waitFor(() => expect(lease.stop).toHaveBeenCalledTimes(1));
+  });
 });
