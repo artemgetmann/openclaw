@@ -247,6 +247,11 @@ if [[ -n "$next_info" ]]; then
   # either the old marker or a fully settled synthetic Sparkle transaction.
   mv "$next_info" "$app/Contents/Info.plist"
 fi
+
+# Give the harness an explicit test-only startup handshake. Without this, the
+# one-second production quit grace can interrupt a background fixture process
+# before its atomic synthetic update is published on a contended host.
+: >"$root/control/app-hook-settled-$count"
 EOF
 
   cat >"$fixture/bin/launchctl" <<'EOF'
@@ -477,7 +482,7 @@ harness_env() {
       --scratch-root "$fixture/runs" \
       --min-free-gb "${JARVIS_TEST_MIN_FREE_GB:-0}" \
       --download-grace 1 \
-      --timeout "${JARVIS_TEST_TIMEOUT_SECONDS:-60}" \
+      --timeout "${JARVIS_TEST_TIMEOUT_SECONDS:-30}" \
       "$@"
 }
 

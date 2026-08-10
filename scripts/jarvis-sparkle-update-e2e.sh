@@ -1035,6 +1035,7 @@ launch_disposable_app() {
   local launch_home="$HOME"
   local log_suffix="$1"
   local pid
+  local test_launch_number=""
   executable="$(app_plist_value "$DISPOSABLE_APP" CFBundleExecutable)"
   [[ -n "$executable" && -x "$DISPOSABLE_APP/Contents/MacOS/$executable" ]] || die "disposable app executable is missing"
 
@@ -1043,6 +1044,7 @@ launch_disposable_app() {
   if [[ -n "$TEST_ROOT" ]]; then
     launch_home="$TEST_ROOT/home"
     mkdir -p "$launch_home"
+    test_launch_number="$(( $(cat "$TEST_ROOT/control/launch-count" 2>/dev/null || printf '0') + 1 ))"
   fi
   HOME="$launch_home" CFFIXED_USER_HOME="$launch_home" TMPDIR="$RUN_DIR/tmp" \
     "$DISPOSABLE_APP/Contents/MacOS/$executable" \
@@ -1050,6 +1052,20 @@ launch_disposable_app() {
   pid="$!"
   record_app_pid "$pid"
   log "disposable_app_pid=$pid phase=$log_suffix"
+
+  if [[ -n "$TEST_ROOT" ]]; then
+    local test_deadline=$((SECONDS + TIMEOUT_SECONDS))
+    local settled="$TEST_ROOT/control/app-hook-settled-$test_launch_number"
+
+    # The fixture performs its synthetic Sparkle transaction synchronously at
+    # process start. Wait for that explicit event before the production-style
+    # quit timer can terminate a low-priority test process mid-transaction.
+    while [[ ! -e "$settled" ]] && (( SECONDS < test_deadline )); do
+      kill -0 "$pid" >/dev/null 2>&1 || die "synthetic app hook exited before settling launch $test_launch_number"
+      sleep 1
+    done
+    [[ -e "$settled" ]] || die "synthetic app hook did not settle launch $test_launch_number"
+  fi
 }
 
 wait_for_disposable_update() {
