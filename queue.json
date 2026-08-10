@@ -1,8 +1,19 @@
 {
   "schemaVersion": 1,
-  "sequence": 121,
-  "nextFence": 35,
-  "mergeLease": null,
+  "sequence": 122,
+  "nextFence": 36,
+  "mergeLease": {
+    "leaseId": "d4a18f11-0264-4c05-baa0-130dd3d7608d",
+    "fence": 35,
+    "owner": {
+      "threadId": "/root/pr1389_release",
+      "hostId": "local-subagent"
+    },
+    "claimedPr": 1389,
+    "claimedAt": "2026-08-10T18:49:29.595Z",
+    "heartbeatAt": "2026-08-10T18:49:29.595Z",
+    "expiresAt": "2026-08-10T19:09:29.595Z"
+  },
   "items": {
     "1330": {
       "state": "closed",
@@ -4263,7 +4274,7 @@
       }
     },
     "1389": {
-      "state": "queued",
+      "state": "claimed",
       "candidate": {
         "pr": 1389,
         "url": "https://github.com/artemgetmann/openclaw/pull/1389",
@@ -4374,19 +4385,47 @@
       "declaredDependencies": [],
       "discoveredBlockers": [],
       "readyAt": "2026-08-10T18:48:39.260Z",
-      "ownerHistory": [],
+      "ownerHistory": [
+        {
+          "leaseId": "d4a18f11-0264-4c05-baa0-130dd3d7608d",
+          "fence": 35,
+          "owner": {
+            "threadId": "/root/pr1389_release",
+            "hostId": "local-subagent"
+          },
+          "claimedPr": 1389,
+          "claimedAt": "2026-08-10T18:49:29.595Z",
+          "heartbeatAt": "2026-08-10T18:49:29.595Z",
+          "expiresAt": "2026-08-10T19:09:29.595Z"
+        }
+      ],
       "mutationIntent": null,
       "candidateHistory": [],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": []
+      "terminalReceipts": [],
+      "ownershipReceipt": {
+        "mode": "queue-lease",
+        "owner": {
+          "threadId": "/root/pr1389_release",
+          "hostId": "local-subagent"
+        },
+        "builder": {
+          "threadId": "019fc197-0fc8-7273-849a-ed756d07606e",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "builderSuspended": true,
+        "leaseId": "d4a18f11-0264-4c05-baa0-130dd3d7608d",
+        "fence": 35,
+        "recordedAt": "2026-08-10T18:49:29.595Z"
+      }
     }
   },
   "lastTransaction": {
-    "id": "5f28c32f-e463-4b00-aae7-b28d4fb23746",
-    "recordedAt": "2026-08-10T18:48:39.260Z"
+    "id": "087d5e50-1294-46e2-9911-7e69be63d77a-claim",
+    "recordedAt": "2026-08-10T18:49:29.595Z"
   },
-  "updatedAt": "2026-08-10T18:48:39.260Z",
+  "updatedAt": "2026-08-10T18:49:29.595Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
