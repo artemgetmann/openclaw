@@ -174,6 +174,7 @@ function writeJarvisProofFixture(
     manifestCommit?: string;
     runtimeSource?: "jarvis-managed-bundle" | "jarvis-break-glass-hotfix";
     statusRuntimeSource?: "jarvis-managed-bundle" | "jarvis-break-glass-hotfix";
+    buildInfoCommit?: string;
     serviceLabel?: string;
     protection?: {
       protectedRuntimeGitCommit: string;
@@ -200,12 +201,21 @@ function writeJarvisProofFixture(
   const binDir = path.join(root, "bin");
   const commit = options.commit ?? "389c0513cf";
   const runtimeSource = options.runtimeSource ?? "jarvis-managed-bundle";
+  const buildInfoCommit =
+    options.buildInfoCommit ??
+    (runtimeSource === "jarvis-break-glass-hotfix" ? commit.padEnd(40, "0") : undefined);
   const serviceLabel = options.serviceLabel ?? "ai.jarvis.gateway";
   fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
   fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
   fs.mkdirSync(path.dirname(appManifest), { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
   fs.writeFileSync(entrypoint, "fixture\n");
+  if (buildInfoCommit) {
+    fs.writeFileSync(
+      path.join(path.dirname(entrypoint), "build-info.json"),
+      JSON.stringify({ commit: buildInfoCommit }),
+    );
+  }
   writeExecutable(
     nodeBin,
     `#!/usr/bin/env bash
@@ -1447,8 +1457,39 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
   });
 
   it("accepts only a fully protected source hotfix when explicitly selected", () => {
+    const exactCommit = "dd8a89b1234567890abcdef1234567890abcdef1";
     const fixture = writeJarvisProofFixture({
       commit: "dd8a89b",
+      buildInfoCommit: exactCommit,
+      manifestCommit: "ce3ed18",
+      runtimeSource: "jarvis-break-glass-hotfix",
+      protection: {
+        protectedRuntimeGitCommit: "dd8a89b",
+        compatibilityManifestGitCommit: "ce3ed18",
+        compatibilityManifestBundleVersion: "300",
+      },
+    });
+
+    const result = runScript(
+      "scripts/prove-jarvis-runtime.sh",
+      ["--runtime-source", "jarvis-break-glass-hotfix", "--expected-commit", exactCommit],
+      {
+        HOME: fixture.home,
+        PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_INSTALLED_JARVIS_APP_PATH: fixture.appPath,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("runtime_source=jarvis-break-glass-hotfix");
+    expect(result.stdout).toContain(`runtime_commit=${exactCommit}`);
+    expect(result.stdout).toContain("rpc=ok");
+  });
+
+  it("rejects an abbreviated protected commit that disagrees with live build-info", () => {
+    const fixture = writeJarvisProofFixture({
+      commit: "dd8a89b",
+      buildInfoCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       manifestCommit: "ce3ed18",
       runtimeSource: "jarvis-break-glass-hotfix",
       protection: {
@@ -1468,10 +1509,10 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
       },
     );
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("runtime_source=jarvis-break-glass-hotfix");
-    expect(result.stdout).toContain("runtime_commit=dd8a89b");
-    expect(result.stdout).toContain("rpc=ok");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "runtimeCommit=dd8a89b does not match exact build commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
   });
 
   it("honors an explicitly configured Jarvis launchd label", () => {

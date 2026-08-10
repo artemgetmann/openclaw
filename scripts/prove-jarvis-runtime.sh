@@ -11,6 +11,7 @@ JARVIS_LOG_DIR="${OPENCLAW_JARVIS_LOG_DIR:-${JARVIS_STATE_DIR}/logs}"
 JARVIS_NODE="${OPENCLAW_JARVIS_NODE_BIN:-${JARVIS_STATE_DIR}/tools/node/bin/node}"
 JARVIS_ENTRYPOINT="${OPENCLAW_JARVIS_ENTRYPOINT:-${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js}"
 JARVIS_RUNTIME_ROOT="$(dirname -- "$(dirname -- "${JARVIS_ENTRYPOINT}")")"
+JARVIS_BUILD_INFO="${JARVIS_RUNTIME_ROOT}/dist/build-info.json"
 JARVIS_APP_PATH="${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}"
 JARVIS_APP_MANIFEST="${OPENCLAW_JARVIS_APP_MANIFEST:-${JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/manifest.json}"
 JARVIS_INSTALLED_MANIFEST="${OPENCLAW_JARVIS_INSTALLED_MANIFEST:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json}"
@@ -209,6 +210,39 @@ is_git_commit() {
   [[ "$1" =~ ^[0-9a-fA-F]{7,40}$ ]]
 }
 
+is_full_git_commit() {
+  [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]
+}
+
+commit_is_prefix_of_exact() {
+  local abbreviated="$1"
+  local exact="$2"
+  is_git_commit "${abbreviated}" && is_full_git_commit "${exact}" && [[ "${exact}" == "${abbreviated}"* ]]
+}
+
+canonicalize_live_protected_runtime_commit() {
+  local build_commit=""
+
+  [[ "${EXPECTED_RUNTIME_SOURCE}" == "jarvis-break-glass-hotfix" ]] || return 0
+  is_git_commit "${LIVE_RUNTIME_COMMIT}" || \
+    die "protected-hotfix runtimeCommit=${LIVE_RUNTIME_COMMIT:-missing} is not a git commit"
+  is_full_git_commit "${LIVE_RUNTIME_COMMIT}" && return 0
+
+  # Runtime identity intentionally reports a short commit for display. Expand
+  # it only from build metadata inside the exact launchd-owned runtime tree.
+  # A repository lookup or marker value would not bind the full hash to the
+  # daemon whose entrypoint and working directory were already proven above.
+  [[ -r "${JARVIS_BUILD_INFO}" ]] || \
+    die "protected-hotfix build metadata is not readable: ${JARVIS_BUILD_INFO}"
+  build_commit="$("${JQ_BIN}" -r '.commit // empty' "${JARVIS_BUILD_INFO}")"
+  is_full_git_commit "${build_commit}" || \
+    die "protected-hotfix build metadata has missing or non-exact commit"
+  commit_is_prefix_of_exact "${LIVE_RUNTIME_COMMIT}" "${build_commit}" || \
+    die "protected-hotfix runtimeCommit=${LIVE_RUNTIME_COMMIT} does not match exact build commit ${build_commit}"
+
+  LIVE_RUNTIME_COMMIT="${build_commit}"
+}
+
 assert_packaged_runtime_provenance() {
   local installed_commit=""
   local installed_version=""
@@ -282,7 +316,7 @@ assert_protected_hotfix_runtime_provenance() {
   is_git_commit "${protected_commit}" || die "protected-hotfix marker has missing or invalid protectedRuntimeGitCommit"
   is_git_commit "${compatibility_commit}" || die "protected-hotfix marker has missing or invalid compatibilityManifestGitCommit"
   is_git_commit "${app_commit}" || die "installed Jarvis app manifest has missing or invalid gitCommit"
-  commit_matches "${LIVE_RUNTIME_COMMIT}" "${protected_commit}" || \
+  commit_is_prefix_of_exact "${protected_commit}" "${LIVE_RUNTIME_COMMIT}" || \
     die "protected-hotfix marker commit=${protected_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
   commit_matches "${installed_commit}" "${compatibility_commit}" || \
     die "protected-hotfix compatibility commit=${compatibility_commit:-missing}, expected ${installed_commit}"
@@ -298,7 +332,7 @@ assert_protected_hotfix_runtime_provenance() {
     die "protected-hotfix backup receipt is missing or unreadable"
   backup_commit="$("${JQ_BIN}" -r '.gitCommit // empty' "${backup_path}")"
   is_git_commit "${backup_commit}" || die "protected-hotfix backup receipt has missing or invalid gitCommit"
-  commit_matches "${LIVE_RUNTIME_COMMIT}" "${backup_commit}" || \
+  commit_is_prefix_of_exact "${backup_commit}" "${LIVE_RUNTIME_COMMIT}" || \
     die "protected-hotfix backup commit=${backup_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
 }
 
@@ -345,6 +379,7 @@ assert_live_runtime_identity() {
     die "runtimeSource=jarvis-break-glass-hotfix; packaged Jarvis proof refused"
   fi
   assert_identity_field "runtimeSource" "${LIVE_RUNTIME_SOURCE}" "${EXPECTED_RUNTIME_SOURCE}"
+  canonicalize_live_protected_runtime_commit
   assert_identity_field "stateDir" "${LIVE_STATE_DIR}" "${JARVIS_STATE_DIR}"
   assert_identity_field "configPath" "${LIVE_CONFIG_PATH}" "${JARVIS_CONFIG_PATH}"
   [[ -n "${LIVE_RUNTIME_COMMIT}" ]] || die "runtimeCommit=missing, expected ${EXPECTED_COMMIT:-a live daemon revision}"
@@ -440,8 +475,13 @@ assert_status_probe() {
   [[ "${healthy}" == "true" ]] || die "gateway health is not healthy"
   assert_identity_field "status serviceLabel" "${status_service_label}" "${JARVIS_LABEL}"
   assert_identity_field "status runtimeSource" "${status_runtime_source}" "${EXPECTED_RUNTIME_SOURCE}"
-  commit_matches "${LIVE_RUNTIME_COMMIT}" "${status_runtime_commit}" || \
-    die "live runtime status runtimeCommit=${status_runtime_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
+  if [[ "${EXPECTED_RUNTIME_SOURCE}" == "jarvis-break-glass-hotfix" ]]; then
+    commit_is_prefix_of_exact "${status_runtime_commit}" "${LIVE_RUNTIME_COMMIT}" || \
+      die "live runtime status runtimeCommit=${status_runtime_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
+  else
+    commit_matches "${LIVE_RUNTIME_COMMIT}" "${status_runtime_commit}" || \
+      die "live runtime status runtimeCommit=${status_runtime_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
+  fi
   assert_identity_field "status stateDir" "${status_state_dir}" "${JARVIS_STATE_DIR}"
   assert_identity_field "status configPath" "${status_config_path}" "${JARVIS_CONFIG_PATH}"
   if [[ -n "${EXPECTED_PACKAGE_VERSION}" ]]; then

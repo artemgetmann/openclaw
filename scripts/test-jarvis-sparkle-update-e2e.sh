@@ -14,7 +14,8 @@ trap 'rm -rf "$TEST_TMP"' EXIT HUP INT TERM
 
 OLD_COMMIT="1111111111111111111111111111111111111111"
 NEW_COMMIT="2222222222222222222222222222222222222222"
-PROTECTED_COMMIT="4444444444444444444444444444444444444444"
+PROTECTED_COMMIT="381c3f8edbe7fcca5bbdfc964439faf621d1a7f5"
+PROTECTED_COMMIT_ABBREVIATED="381c3f8edb"
 OLD_VERSION="2026.7.14.1"
 NEW_VERSION="2026.7.15.1"
 OLD_BUILD="2026071401"
@@ -288,6 +289,11 @@ root="${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}"
 if [[ "$*" == *'--runtime-source jarvis-break-glass-hotfix'* ]]; then
   commit="$(jq -r '.protectedRuntimeGitCommit' "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.protection.json")"
   source='jarvis-break-glass-hotfix'
+  if [[ "${#commit}" -lt 40 ]]; then
+    exact_commit="$(jq -r '.commit // empty' "$root/live/Jarvis/.jarvis/lib/openclaw-bundled/dist/build-info.json")"
+    [[ "$exact_commit" =~ ^[0-9a-fA-F]{40}$ && "$exact_commit" == "$commit"* ]] || exit 32
+    commit="$exact_commit"
+  fi
   [[ ! -e "$root/control/protected-proof-drift" ]] || commit='7777777777777777777777777777777777777777'
 else
   commit="$(jq -r '.gitCommit' "$root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json")"
@@ -367,7 +373,7 @@ write_protected_receipt() {
   issued_at="$(node -e 'process.stdout.write(new Date(Date.now() - 60000).toISOString())')"
   expires_at="$(node -e 'process.stdout.write(new Date(Date.now() + 3600000).toISOString())')"
   protected_build="$(jq -r '.bundleVersion' "$backup")"
-  protected_commit="$(jq -r '.gitCommit' "$backup")"
+  protected_commit="$(jq -r '.commit' "$state/lib/openclaw-bundled/dist/build-info.json")"
 
   jq -n \
     --arg issuedAt "$issued_at" \
@@ -438,10 +444,30 @@ protect_fixture() {
   local backup="$state/.consumer-bundled-runtime.json.backup.fixture"
   printf 'gatekeeper-rejected\n' >"$fixture/apps/old/Jarvis.app/.fixture-gatekeeper"
   printf 'gatekeeper-rejected\n' >"$fixture/apps/installed/Jarvis.app/.fixture-gatekeeper"
+  mkdir -p "$state/lib/openclaw-bundled/dist"
+  printf '{"commit":"%s"}\n' "$PROTECTED_COMMIT" >"$state/lib/openclaw-bundled/dist/build-info.json"
   printf '{"format":1,"bundleVersion":"%s","gitCommit":"%s"}\n' "$PROTECTED_BUILD" "$PROTECTED_COMMIT" >"$backup"
   cat >"$state/.consumer-bundled-runtime.protection.json" <<EOF
 {"format":1,"protectedRuntimeGitCommit":"$PROTECTED_COMMIT","compatibilityManifestGitCommit":"$OLD_COMMIT","compatibilityManifestBundleVersion":"$OLD_BUILD","compatibilityManifestSource":"$fixture/apps/installed/Jarvis.app","backupPath":"$backup","createdAt":"2026-08-02T00:00:00Z"}
 EOF
+  write_protected_receipt "$fixture"
+}
+
+protect_abbreviated_fixture() {
+  local fixture="$1"
+  local state="$fixture/live/Jarvis/.jarvis"
+  local marker="$state/.consumer-bundled-runtime.protection.json"
+  local backup="$state/.consumer-bundled-runtime.json.backup.fixture"
+
+  protect_fixture "$fixture"
+  # Recreate the legacy on-disk state: marker and backup retain the daemon's
+  # display-length hash while build-info and the new receipt keep the exact SHA.
+  jq --arg commit "$PROTECTED_COMMIT_ABBREVIATED" '.protectedRuntimeGitCommit = $commit' \
+    "$marker" >"$marker.tmp"
+  mv "$marker.tmp" "$marker"
+  jq --arg commit "$PROTECTED_COMMIT_ABBREVIATED" '.gitCommit = $commit' \
+    "$backup" >"$backup.tmp"
+  mv "$backup.tmp" "$backup"
   write_protected_receipt "$fixture"
 }
 
@@ -564,6 +590,21 @@ after="$(fixture_hashes "$case_root")"
 [[ "$protected_output" == *"proof.protected_runtime=receipt_and_live_bound commit=$PROTECTED_COMMIT"* ]] || \
   fail "accepted receipt omitted protected runtime identity"
 pass "exact protected-hotfix compatibility receipt is accepted read-only"
+
+case_root="$(copy_case protected-abbreviated-provenance)"
+protect_abbreviated_fixture "$case_root"
+abbreviated_output="$(harness_env "$case_root" --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json")"
+[[ "$abbreviated_output" == *"proof.protected_runtime=receipt_and_live_bound commit=$PROTECTED_COMMIT"* ]] || \
+  fail "abbreviated protected provenance did not bind to the exact live build commit"
+pass "abbreviated protected provenance binds to exact live build-info"
+
+case_root="$(copy_case protected-abbreviated-provenance-mismatch)"
+protect_abbreviated_fixture "$case_root"
+printf '{"commit":"%s"}\n' "7777777777777777777777777777777777777777" \
+  >"$case_root/live/Jarvis/.jarvis/lib/openclaw-bundled/dist/build-info.json"
+run_expect_fail "abbreviated protected provenance mismatch blocks" "$case_root" \
+  "protection marker commit $PROTECTED_COMMIT_ABBREVIATED does not match exact live protected runtime build-info commit" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
 
 case_root="$(copy_case signed-app-protected-runtime)"
 protect_signed_app_fixture "$case_root"

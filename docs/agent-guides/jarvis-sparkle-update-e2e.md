@@ -100,7 +100,10 @@ requirement, package-commit, and public-appcast checks. A Gatekeeper-valid
 installed app grants no runtime-transition authority by itself: the receipt must
 still bind the exact protected marker, compatibility manifest, backup, live
 break-glass proof, target, expiry, and one-time intent. Missing, stale, unknown,
-or extra receipt fields fail closed. The target build must be newer than both
+or extra receipt fields fail closed. Legacy abbreviated marker or backup commits
+are accepted only when each is a prefix of the exact full commit embedded in the
+live protected runtime's `dist/build-info.json`; the receipt and runtime proof
+still expose and require the full commit. The target build must be newer than both
 the private app and the protected runtime backup. The canonical read-only
 runtime proof must also match the receipt's exact protected commit and
 break-glass source. Installed/live, protection/backup, signing, or target drift

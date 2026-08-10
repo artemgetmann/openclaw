@@ -34,6 +34,7 @@ JARVIS_HOME="${HOME}/Library/Application Support/Jarvis"
 JARVIS_STATE_DIR="${JARVIS_HOME}/.jarvis"
 MANAGED_MANIFEST="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json"
 PROTECTION_MARKER="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json"
+LIVE_RUNTIME_BUILD_INFO="${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/build-info.json"
 GATEWAY_PLIST="${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist"
 PREFERENCES_PLIST="${HOME}/Library/Preferences/${PREFERENCES_DOMAIN}.plist"
 SPARKLE_CACHE_ROOT="${HOME}/Library/Caches/${PREFERENCES_DOMAIN}/org.sparkle-project.Sparkle"
@@ -221,6 +222,39 @@ manifest_build() {
 
 manifest_commit() {
   manifest_value "$1" '.gitCommit // empty'
+}
+
+is_git_commit() {
+  [[ "$1" =~ ^[0-9a-fA-F]{7,40}$ ]]
+}
+
+is_full_git_commit() {
+  [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]
+}
+
+canonicalize_protected_provenance_commit() {
+  local abbreviated="$1"
+  local label="$2"
+  local build_commit=""
+
+  is_git_commit "$abbreviated" || \
+    die "preflight blocked: $label has missing or invalid git commit"
+  if is_full_git_commit "$abbreviated"; then
+    printf '%s\n' "$abbreviated"
+    return 0
+  fi
+
+  # Legacy protection records used the daemon's display-length commit. The
+  # only safe expansion source is build-info inside the exact live runtime tree
+  # whose launchd ownership is proved separately; never guess from Git or the
+  # compatibility receipt that is asking for this identity.
+  require_readable_file "$LIVE_RUNTIME_BUILD_INFO" "live protected runtime build-info"
+  build_commit="$(manifest_value "$LIVE_RUNTIME_BUILD_INFO" '.commit // empty')"
+  is_full_git_commit "$build_commit" || \
+    die "preflight blocked: live protected runtime build-info has missing or non-exact commit"
+  [[ "$build_commit" == "$abbreviated"* ]] || \
+    die "preflight blocked: $label commit $abbreviated does not match exact live protected runtime build-info commit $build_commit"
+  printf '%s\n' "$build_commit"
 }
 
 app_manifest_path() {
@@ -440,6 +474,8 @@ verify_protected_hotfix_compatibility_receipt() {
   local backup_path
   local backup_commit
   local backup_build
+  local raw_protected_commit
+  local raw_backup_commit
   local live_proof
   local receipt_proof
 
@@ -493,14 +529,16 @@ verify_protected_hotfix_compatibility_receipt() {
   require_readable_file "$PROTECTION_MARKER" "protected-hotfix protection marker"
   compatibility_commit="$(manifest_commit "$MANAGED_MANIFEST")"
   compatibility_build="$(manifest_build "$MANAGED_MANIFEST")"
-  protected_commit="$(manifest_value "$PROTECTION_MARKER" '.protectedRuntimeGitCommit // empty')"
+  raw_protected_commit="$(manifest_value "$PROTECTION_MARKER" '.protectedRuntimeGitCommit // empty')"
+  protected_commit="$(canonicalize_protected_provenance_commit "$raw_protected_commit" "protection marker")"
   marker_compatibility_commit="$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestGitCommit // empty')"
   marker_compatibility_build="$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestBundleVersion // empty')"
   marker_source="$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestSource // empty')"
   backup_path="$(manifest_value "$PROTECTION_MARKER" '.backupPath // empty')"
   [[ "$backup_path" == /* ]] || die "preflight blocked: protected-hotfix backup provenance is missing or ambiguous"
   require_readable_file "$backup_path" "protected-hotfix backup receipt"
-  backup_commit="$(manifest_commit "$backup_path")"
+  raw_backup_commit="$(manifest_commit "$backup_path")"
+  backup_commit="$(canonicalize_protected_provenance_commit "$raw_backup_commit" "backup manifest")"
   backup_build="$(manifest_build "$backup_path")"
 
   # Node validates exact keys as well as values. Rejecting unknown fields keeps
@@ -832,6 +870,7 @@ configure_test_root() {
   INSTALLED_APP="$TEST_ROOT/apps/installed/Jarvis.app"
   MANAGED_MANIFEST="$JARVIS_STATE_DIR/.consumer-bundled-runtime.json"
   PROTECTION_MARKER="$JARVIS_STATE_DIR/.consumer-bundled-runtime.protection.json"
+  LIVE_RUNTIME_BUILD_INFO="$JARVIS_STATE_DIR/lib/openclaw-bundled/dist/build-info.json"
   GATEWAY_PLIST="$TEST_ROOT/live/LaunchAgents/$GATEWAY_LABEL.plist"
   PREFERENCES_PLIST="$TEST_ROOT/live/Preferences/$PREFERENCES_DOMAIN.plist"
   SPARKLE_CACHE_ROOT="$TEST_ROOT/live/Caches/$PREFERENCES_DOMAIN/org.sparkle-project.Sparkle"
