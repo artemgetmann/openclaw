@@ -177,6 +177,24 @@ export class CodexCallbackRouteRegistry {
     };
   }
 
+  /** Prove this exact relay turn is still active and has produced no callback. */
+  async isSilentActiveTurn(input: {
+    routeId: string;
+    relayId: string;
+    turnId: string;
+  }): Promise<boolean> {
+    await this.mutationTail;
+    const document = await this.readDocument();
+    const route = findRoute(document, input.routeId);
+    return (
+      route.activeRelayId === input.relayId &&
+      route.activeTurnId === input.turnId &&
+      !route.callbacks.some(
+        (entry) => entry.delivery === "delivered" && entry.envelope.turnId === input.turnId,
+      )
+    );
+  }
+
   /** Bind a Jarvis-owned live turn when one exists; cross-host later resumes remain valid without it. */
   async bindTurn(routeId: string, turn: { relayId: string; turnId: string }): Promise<void> {
     await this.mutate((document) => {

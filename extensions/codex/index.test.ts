@@ -672,10 +672,168 @@ describe("Codex natural-language delegation", () => {
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
-    expect(waitForRun).toHaveBeenCalledWith({
-      runId: "jarvis-relay-run",
-      timeoutMs: 5 * 60 * 1000,
+    await vi.waitFor(() => {
+      expect(waitForRun).toHaveBeenCalledWith({
+        runId: "jarvis-relay-run",
+        timeoutMs: 5 * 60 * 1000,
+      });
     });
+  });
+
+  it("proactively reports one overdue silent turn without replacing its native owner", async () => {
+    vi.useFakeTimers();
+    try {
+      appServer.requests.splice(0);
+      appServer.handlers = new Set();
+      appServer.serverRequestHandlers = new Set();
+      appServer.autoComplete = false;
+      const run = vi.fn(async ({ idempotencyKey }: { idempotencyKey: string }) => ({
+        runId: idempotencyKey,
+      }));
+      const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+      const state = await createRelayState();
+      let factory: OpenClawPluginToolFactory | undefined;
+
+      registerCodex(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: { command: "fake-codex", defaultWorkspaceDir: "/repo/openclaw" },
+          runtime: {
+            state,
+            subagent: { run, waitForRun },
+            system: {
+              enqueueSystemEvent: vi.fn(() => true),
+              requestHeartbeatNow: vi.fn(),
+            },
+          } as never,
+          registerTool(next) {
+            if (typeof next === "function") {
+              factory = next;
+            }
+          },
+        }),
+      );
+
+      const tool = factory?.({
+        senderIsOwner: true,
+        sandboxed: false,
+        sessionKey: "agent:main:telegram:direct:owner",
+        agentId: "main",
+      }) as AnyAgentTool;
+      const accepted = await tool.execute("delegate-overdue", {
+        action: "delegate_async",
+        text: "Inspect bookmarks and stay in the existing native thread.",
+        task_mode: "analysis",
+        project_dir: process.cwd(),
+      });
+      const delegationId = (accepted as { details?: { delegationId?: string } }).details
+        ?.delegationId;
+      expect(delegationId).toBeTruthy();
+
+      await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
+      await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+      expect(run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:telegram:direct:owner",
+          idempotencyKey: expect.stringMatching(/:overdue-progress:thread-natural:turn-natural$/),
+          message: expect.stringContaining(
+            "The exact accepted turn is still owned by the existing native thread",
+          ),
+          inputProvenance: expect.objectContaining({
+            sourceSessionKey: "codex:thread:thread-natural:turn:turn-natural",
+            sourceTool: "codex_threads",
+          }),
+        }),
+      );
+      expect(appServer.requests.filter((request) => request.method === "turn/start")).toHaveLength(
+        1,
+      );
+
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(run).toHaveBeenCalledTimes(1);
+      const registry = new CodexDelegationRegistry(
+        path.join(state.resolveStateDir(), "codex", "async-relays.json"),
+      );
+      await expect(registry.get(delegationId!)).resolves.toMatchObject({
+        lifecycle: "accepted",
+        overdueProgressStartedAtMs: expect.any(Number),
+        overdueProgressDeliveredAtMs: expect.any(Number),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suppresses overdue progress when the exact turn completes at the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      appServer.requests.splice(0);
+      appServer.handlers = new Set();
+      appServer.serverRequestHandlers = new Set();
+      appServer.autoComplete = false;
+      const run = vi.fn(async ({ idempotencyKey }: { idempotencyKey: string }) => ({
+        runId: idempotencyKey,
+      }));
+      const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+      const state = await createRelayState();
+      let factory: OpenClawPluginToolFactory | undefined;
+
+      registerCodex(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: { command: "fake-codex", defaultWorkspaceDir: "/repo/openclaw" },
+          runtime: {
+            state,
+            subagent: { run, waitForRun },
+            system: {
+              enqueueSystemEvent: vi.fn(() => true),
+              requestHeartbeatNow: vi.fn(),
+            },
+          } as never,
+          registerTool(next) {
+            if (typeof next === "function") {
+              factory = next;
+            }
+          },
+        }),
+      );
+
+      // Register terminal completion first so both timers become due in the
+      // same tick and the regression exercises terminal-before-overdue order.
+      setTimeout(() => finishNaturalTurn(), 3 * 60 * 1000);
+      const tool = factory?.({
+        senderIsOwner: true,
+        sandboxed: false,
+        sessionKey: "agent:main:telegram:direct:owner",
+        agentId: "main",
+      }) as AnyAgentTool;
+      await tool.execute("delegate-terminal-deadline", {
+        action: "delegate_async",
+        text: "Finish exactly when the overdue progress deadline arrives.",
+        task_mode: "analysis",
+        project_dir: process.cwd(),
+      });
+
+      await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
+      await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+      expect(run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          idempotencyKey: expect.stringMatching(/:completed:thread-natural:turn-natural$/),
+          message: expect.stringContaining("Codex relay"),
+        }),
+      );
+      expect(run.mock.calls[0]?.[0]).not.toMatchObject({
+        idempotencyKey: expect.stringContaining(":overdue-progress:"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps spawn-accepted handback non-final until the exact Jarvis run completes", async () => {

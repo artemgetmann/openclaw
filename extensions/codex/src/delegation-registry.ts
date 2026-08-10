@@ -42,6 +42,9 @@ export type CodexRelayRecord = {
   lastJarvisRunPurpose?: CodexRelayJarvisRunPurpose;
   jarvisRunAcceptedAtMs?: number;
   heartbeatQueuedAtMs?: number;
+  overdueProgressStartedAtMs?: number;
+  overdueProgressDeliveredAtMs?: number;
+  overdueProgressSuppressedAtMs?: number;
   deliveredAtMs?: number;
   decisionNeededAtMs?: number;
 };
@@ -301,6 +304,73 @@ export class CodexDelegationRegistry {
     });
   }
 
+  /**
+   * Claim the one launcher-owned overdue progress handback.
+   *
+   * This does not change relay lifecycle or terminal authority. Persisting the
+   * claim only makes the informational update at-most-once across timer races
+   * and process restarts; completion remains independently deliverable.
+   */
+  async claimOverdueProgress(delegationId: string): Promise<CodexRelayRecord | undefined> {
+    return await this.mutate((records) => {
+      const index = findRecordIndex(records, delegationId);
+      const record = records[index];
+      if (
+        record.lifecycle !== "accepted" ||
+        record.overdueProgressStartedAtMs !== undefined ||
+        record.overdueProgressSuppressedAtMs !== undefined
+      ) {
+        return undefined;
+      }
+      const timestamp = this.now();
+      const claimed = {
+        ...record,
+        overdueProgressStartedAtMs: timestamp,
+        // An informational claim must not refresh reconciliation age. The
+        // acceptance clock remains the authority for stale-relay decisions.
+        updatedAtMs: record.updatedAtMs,
+      };
+      records[index] = claimed;
+      return claimed;
+    });
+  }
+
+  /**
+   * Suppress the informational timer without consuming terminal authority.
+   *
+   * Failure cleanup uses this before clearing callback-route activity. If that
+   * later local write fails, startup reconciliation still sees an accepted
+   * relay and retains its normal exact-turn decision path.
+   */
+  async suppressOverdueProgress(delegationId: string): Promise<CodexRelayRecord> {
+    return await this.update(delegationId, (record, timestamp) => {
+      if (record.lifecycle !== "accepted") {
+        return record;
+      }
+      return {
+        ...record,
+        overdueProgressSuppressedAtMs: record.overdueProgressSuppressedAtMs ?? timestamp,
+        updatedAtMs: record.updatedAtMs,
+      };
+    });
+  }
+
+  async markOverdueProgressDelivered(delegationId: string): Promise<CodexRelayRecord> {
+    return await this.update(delegationId, (record, timestamp) => {
+      if (record.overdueProgressStartedAtMs === undefined) {
+        throw new Error(`Codex relay ${record.delegationId} has no overdue progress claim`);
+      }
+      if (record.overdueProgressDeliveredAtMs !== undefined) {
+        return record;
+      }
+      return {
+        ...record,
+        overdueProgressDeliveredAtMs: timestamp,
+        updatedAtMs: record.updatedAtMs,
+      };
+    });
+  }
+
   async markDecisionNeeded(delegationId: string): Promise<CodexRelayRecord> {
     return await this.update(delegationId, (record, timestamp) => {
       if (record.lifecycle !== "delivery-started" || record.deliveryKind !== "decision") {
@@ -474,6 +544,9 @@ function validateRecord(value: unknown): CodexRelayRecord | string {
     "deliveryStartedAtMs",
     "jarvisRunAcceptedAtMs",
     "heartbeatQueuedAtMs",
+    "overdueProgressStartedAtMs",
+    "overdueProgressDeliveredAtMs",
+    "overdueProgressSuppressedAtMs",
     "deliveredAtMs",
     "decisionNeededAtMs",
   ] as const;
@@ -496,6 +569,12 @@ function validateRecord(value: unknown): CodexRelayRecord | string {
   }
   if ((value.lastJarvisRunId === undefined) !== (value.lastJarvisRunPurpose === undefined)) {
     return "Jarvis run identity is incomplete";
+  }
+  if (
+    value.overdueProgressDeliveredAtMs !== undefined &&
+    value.overdueProgressStartedAtMs === undefined
+  ) {
+    return "overdue progress delivery is missing its claim";
   }
   if (
     (["accepted", "terminal", "delivered"].includes(value.lifecycle) ||

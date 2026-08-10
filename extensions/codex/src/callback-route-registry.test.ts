@@ -77,6 +77,21 @@ describe("CodexCallbackRouteRegistry", () => {
       },
     });
     await registry.markDelivered(route.routeId, progress.callbackId);
+    await expect(
+      registry.isSilentActiveTurn({
+        routeId: route.routeId,
+        relayId: "relay-1",
+        turnId: "turn-1",
+      }),
+    ).resolves.toBe(false);
+    await registry.finishTurn(route.routeId, "turn-1");
+    await expect(
+      registry.isSilentActiveTurn({
+        routeId: route.routeId,
+        relayId: "relay-1",
+        turnId: "turn-1",
+      }),
+    ).resolves.toBe(false);
 
     const restored = new CodexCallbackRouteRegistry(filePath);
     await expect(

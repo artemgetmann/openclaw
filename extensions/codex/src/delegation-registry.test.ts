@@ -14,6 +14,63 @@ async function createRegistry(now: () => number = () => 1_000) {
 }
 
 describe("CodexDelegationRegistry", () => {
+  it("claims one overdue progress update without consuming terminal authority", async () => {
+    const { registry } = await createRegistry();
+    await registry.createStarting({
+      delegationId: "delegation-overdue",
+      sessionKey: "agent:main:telegram:direct:owner",
+      threadId: "thread-overdue",
+      deliveryKey: "codex-relay:delegation-overdue",
+    });
+    await registry.markAccepted("delegation-overdue", "turn-overdue");
+
+    await expect(registry.claimOverdueProgress("delegation-overdue")).resolves.toMatchObject({
+      lifecycle: "accepted",
+      overdueProgressStartedAtMs: expect.any(Number),
+    });
+    await expect(registry.claimOverdueProgress("delegation-overdue")).resolves.toBeUndefined();
+    await registry.markOverdueProgressDelivered("delegation-overdue");
+    await expect(registry.markTerminal("delegation-overdue", "completed")).resolves.toMatchObject({
+      lifecycle: "terminal",
+      terminalStatus: "completed",
+      overdueProgressDeliveredAtMs: expect.any(Number),
+    });
+  });
+
+  it("suppresses overdue progress without consuming restart decision authority", async () => {
+    const { registry } = await createRegistry();
+    await registry.createStarting({
+      delegationId: "delegation-cleanup-failure",
+      sessionKey: "agent:main:telegram:direct:owner",
+      threadId: "thread-cleanup-failure",
+      deliveryKey: "codex-relay:delegation-cleanup-failure",
+    });
+    await registry.markAccepted("delegation-cleanup-failure", "turn-cleanup-failure");
+
+    await registry.suppressOverdueProgress("delegation-cleanup-failure");
+    await expect(
+      registry.claimOverdueProgress("delegation-cleanup-failure"),
+    ).resolves.toBeUndefined();
+    const suppressed = await registry.get("delegation-cleanup-failure");
+    expect(suppressed).toMatchObject({
+      lifecycle: "accepted",
+      overdueProgressSuppressedAtMs: expect.any(Number),
+    });
+    // Optional persisted fields are omitted, not serialized as explicit
+    // undefined values. Assert the semantic state directly instead of making
+    // toMatchObject require a deliveryKind property to exist.
+    expect(suppressed?.deliveryKind).toBeUndefined();
+
+    // Simulate restart reconciliation after callback-route cleanup failed:
+    // decision delivery remains unclaimed and therefore available exactly once.
+    await expect(
+      registry.claimDecisionDelivery("delegation-cleanup-failure"),
+    ).resolves.toMatchObject({
+      lifecycle: "delivery-started",
+      deliveryKind: "decision",
+    });
+  });
+
   it("atomically persists exact accepted identity with owner-only permissions", async () => {
     let now = 1_000;
     const { filePath, registry } = await createRegistry(() => now++);
