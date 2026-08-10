@@ -1,22 +1,11 @@
 {
   "schemaVersion": 1,
-  "sequence": 99,
+  "sequence": 100,
   "nextFence": 30,
-  "mergeLease": {
-    "leaseId": "40e78fec-162a-4dde-be11-c1eca30337dc",
-    "fence": 29,
-    "owner": {
-      "threadId": "/root/pr1330_release",
-      "hostId": "multi-agent-local"
-    },
-    "claimedPr": 1330,
-    "claimedAt": "2026-08-10T05:17:17.463Z",
-    "heartbeatAt": "2026-08-10T05:17:17.463Z",
-    "expiresAt": "2026-08-10T05:37:17.463Z"
-  },
+  "mergeLease": null,
   "items": {
     "1330": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1330,
         "url": "https://github.com/artemgetmann/openclaw/pull/1330",
@@ -116,7 +105,20 @@
       "candidateHistory": [],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1330,
+          "reviewedHeadSha": "9e58440a3c3e2ea79dbfc0f7fc308b6f75f0f148",
+          "diffFingerprint": "sha256:13db9446531f4298c47a6533161cc9203a17df83ed7d728642ba9f313f18f600",
+          "mergeSha": "08cc91b50d0e4f425a540e554e1b5408b3f0382f",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -3419,14 +3421,15 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1330-claim-root-pr1330-release-20260810-v1",
-    "recordedAt": "2026-08-10T05:17:17.463Z"
+    "id": "pr1330-record-merge-root-pr1330-release-20260810-v1",
+    "recordedAt": "2026-08-10T05:19:05.460Z"
   },
-  "updatedAt": "2026-08-10T05:17:17.463Z",
+  "updatedAt": "2026-08-10T05:19:05.460Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
     "successfulPrs": [
+      1330,
       1354,
       1355,
       1358,
