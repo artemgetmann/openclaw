@@ -24,7 +24,7 @@ export function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
   agentId: string;
   sessionsDir: string;
-}): { sessionId: string; sessionFile: string } | null {
+}): { sessionId: string; sessionFile: string; sourceLeafId?: string } | null {
   const parentSessionFile = resolveSessionFilePath(
     params.parentEntry.sessionId,
     params.parentEntry,
@@ -40,7 +40,10 @@ export function forkSessionFromParent(params: {
       const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
       const sessionId = manager.getSessionId();
       if (sessionFile && sessionId) {
-        return { sessionId, sessionFile };
+        // Return the exact source boundary copied by createBranchedSession.
+        // Callers that continue syncing the parent must not reread a newer leaf
+        // after a concurrent parent turn lands.
+        return { sessionId, sessionFile, sourceLeafId: leafId };
       }
     }
     const sessionId = crypto.randomUUID();

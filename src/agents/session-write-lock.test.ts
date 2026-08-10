@@ -134,6 +134,66 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("can block later in-process acquisitions during an atomic commit window", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      const first = await acquireSessionWriteLock({ sessionFile, blockReentrant: true });
+      let secondAcquired = false;
+      const secondPromise = acquireSessionWriteLock({ sessionFile, timeoutMs: 500 }).then(
+        (lock) => {
+          secondAcquired = true;
+          return lock;
+        },
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(secondAcquired).toBe(false);
+      await first.release();
+      const second = await secondPromise;
+      expect(secondAcquired).toBe(true);
+      await second.release();
+    });
+  });
+
+  it("waits to start an atomic commit window behind an ordinary holder", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      const first = await acquireSessionWriteLock({ sessionFile });
+      let commitWindowAcquired = false;
+      const commitWindowPromise = acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+        blockReentrant: true,
+      }).then((lock) => {
+        commitWindowAcquired = true;
+        return lock;
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(commitWindowAcquired).toBe(false);
+      await first.release();
+      const commitWindow = await commitWindowPromise;
+      expect(commitWindowAcquired).toBe(true);
+      await commitWindow.release();
+    });
+  });
+
+  it("cancels a queued acquisition without reclaiming the active lock", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const first = await acquireSessionWriteLock({ sessionFile });
+      const controller = new AbortController();
+      const queued = acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: Number.POSITIVE_INFINITY,
+        blockReentrant: true,
+        abortSignal: controller.signal,
+      });
+      controller.abort(new Error("monitor wake timed out"));
+
+      await expect(queued).rejects.toThrow("monitor wake timed out");
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      await first.release();
+    });
+  });
+
   it("reclaims stale lock files", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     try {

@@ -1,8 +1,15 @@
+import path from "node:path";
+import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  loadSessionStore,
+  resolveSessionFilePath,
+} from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
@@ -10,6 +17,7 @@ import {
   type OutboundDeliveryResult,
 } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
+import type { DeliveryMirror } from "../../infra/outbound/mirror.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
@@ -87,6 +95,15 @@ type DispatchCronDeliveryParams = {
   deliveryRequested: boolean;
   skipHeartbeatDelivery: boolean;
   skipMessagingToolDelivery?: boolean;
+  /**
+   * Optional live-session mirror for a direct monitor notification. The
+   * transcript file lets delivery serialize provider acceptance and the local
+   * mirror with inbound turns, so a fast follow-up cannot overtake the result.
+   */
+  deliveryMirror?: Pick<DeliveryMirror, "agentId" | "sessionKey"> & {
+    storePath: string;
+    idempotencyPrefix: string;
+  };
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
@@ -111,6 +128,21 @@ export type DispatchCronDeliveryState = {
   synthesizedText?: string;
   deliveryPayloads: ReplyPayload[];
 };
+
+function resolveCurrentMirrorSessionFile(params: {
+  agentId?: string;
+  sessionKey: string;
+  storePath: string;
+}): string | null {
+  const entry = loadSessionStore(params.storePath, { skipCache: true })[params.sessionKey];
+  if (!entry?.sessionId) {
+    return null;
+  }
+  return resolveSessionFilePath(entry.sessionId, entry, {
+    agentId: params.agentId,
+    sessionsDir: path.dirname(params.storePath),
+  });
+}
 
 const TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /\berrorcode=unavailable\b/i,
@@ -374,26 +406,168 @@ export async function dispatchCronDelivery(
         agentId: params.agentId,
         sessionKey: params.agentSessionKey,
       });
-      const runDelivery = async () =>
-        await deliverOutboundPayloads({
-          cfg: params.cfgWithAgentDefaults,
-          channel: delivery.channel,
-          to: delivery.to,
-          accountId: delivery.accountId,
-          threadId: delivery.threadId,
-          payloads: payloadsForDelivery,
-          session: deliverySession,
-          identity,
-          bestEffort: params.deliveryBestEffort,
-          deps: createOutboundSendDeps(params.deps),
-          abortSignal: params.abortSignal,
-          // Isolated cron direct delivery uses its own transient retry loop.
-          // Keep all attempts out of the write-ahead delivery queue so a
-          // late-successful first send cannot leave behind a failed queue
-          // entry that replays on the next restart.
-          // See: https://github.com/openclaw/openclaw/issues/40545
-          skipQueue: true,
-        });
+      const runDelivery = async () => {
+        const mirrorText = payloadsForDelivery
+          .map((payload) => payload.text?.trim())
+          .filter((text): text is string => Boolean(text))
+          .join("\n\n");
+        const mirrorMediaUrls = payloadsForDelivery.flatMap((payload) => [
+          ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+          ...(payload.mediaUrls ?? []),
+        ]);
+        const mirrorIdempotencyKey = `${params.deliveryMirror?.idempotencyPrefix ?? ""}${deliveryIdempotencyKey}`;
+        let mirrorResult:
+          | Awaited<ReturnType<typeof appendAssistantMessageToSessionTranscript>>
+          | undefined;
+        const deliver = async (expectedMirrorSessionFile?: string) =>
+          await deliverOutboundPayloads({
+            cfg: params.cfgWithAgentDefaults,
+            channel: delivery.channel,
+            to: delivery.to,
+            accountId: delivery.accountId,
+            threadId: delivery.threadId,
+            payloads: payloadsForDelivery,
+            session: deliverySession,
+            identity,
+            bestEffort: params.deliveryBestEffort,
+            deps: createOutboundSendDeps(params.deps),
+            abortSignal: params.abortSignal,
+            // Isolated cron direct delivery uses its own transient retry loop.
+            // Keep all attempts out of the write-ahead delivery queue so a
+            // late-successful first send cannot leave behind a failed queue
+            // entry that replays on the next restart.
+            // See: https://github.com/openclaw/openclaw/issues/40545
+            skipQueue: true,
+            ...(params.deliveryMirror
+              ? {
+                  mirror: {
+                    agentId: params.deliveryMirror.agentId,
+                    sessionKey: params.deliveryMirror.sessionKey,
+                    storePath: params.deliveryMirror.storePath,
+                    expectedSessionFile: expectedMirrorSessionFile,
+                    text: mirrorText,
+                    mediaUrls: mirrorMediaUrls,
+                    idempotencyKey: mirrorIdempotencyKey,
+                  },
+                  onMirrorResult: (result) => {
+                    mirrorResult = result;
+                  },
+                }
+              : {}),
+          });
+        if (!params.deliveryMirror) {
+          return await deliver();
+        }
+        // Telegram can acknowledge the send before the user replies. Hold the
+        // same transcript lock used by interactive turns across provider send
+        // and mirror append, making the visible notification the durable parent
+        // of any immediate "send that" follow-up.
+        for (;;) {
+          const sessionFile = resolveCurrentMirrorSessionFile(params.deliveryMirror);
+          if (!sessionFile) {
+            throw new Error(`unknown mirror session: ${params.deliveryMirror.sessionKey}`);
+          }
+          const lock = await acquireSessionWriteLock({
+            sessionFile,
+            // Interactive turns can legitimately exceed ten seconds. Queue the
+            // notification rather than dropping it because the user is chatting.
+            timeoutMs: Number.POSITIVE_INFINITY,
+            staleMs: Number.POSITIVE_INFINITY,
+            blockReentrant: true,
+            abortSignal: params.abortSignal,
+          });
+          // A reset can rotate the store while this monitor is running. Lock and
+          // mirror the same current transcript; retry before any provider send
+          // when the mapping changed while we waited.
+          if (resolveCurrentMirrorSessionFile(params.deliveryMirror) !== sessionFile) {
+            await lock.release();
+            continue;
+          }
+          try {
+            const deliveryResults = await deliver(sessionFile);
+            if (!mirrorResult || mirrorResult.ok) {
+              return deliveryResults;
+            }
+            // Provider success is irreversible. If a concurrent reset moved the
+            // session, keep the old transcript locked while acquiring the new
+            // one and repair only the mirror; never resend the notification.
+            for (;;) {
+              const currentSessionFile = resolveCurrentMirrorSessionFile(params.deliveryMirror);
+              if (!currentSessionFile) {
+                throw new Error(`unknown mirror session: ${params.deliveryMirror.sessionKey}`);
+              }
+              if (currentSessionFile === sessionFile) {
+                let retried:
+                  | Awaited<ReturnType<typeof appendAssistantMessageToSessionTranscript>>
+                  | undefined;
+                try {
+                  retried = await appendAssistantMessageToSessionTranscript({
+                    agentId: params.deliveryMirror.agentId,
+                    sessionKey: params.deliveryMirror.sessionKey,
+                    storePath: params.deliveryMirror.storePath,
+                    expectedSessionFile: sessionFile,
+                    text: mirrorText,
+                    mediaUrls: mirrorMediaUrls,
+                    idempotencyKey: mirrorIdempotencyKey,
+                  });
+                } catch (err) {
+                  logWarn(
+                    `[cron:${params.job.id}] delivered notification but transcript mirror repair threw: ${String(err)}`,
+                  );
+                  return deliveryResults;
+                }
+                if (!retried.ok) {
+                  // Provider acceptance cannot be rolled back. Preserve and
+                  // cache it so a mirror I/O failure never replays the send.
+                  logWarn(
+                    `[cron:${params.job.id}] delivered notification but transcript mirror failed: ${retried.reason}`,
+                  );
+                }
+                return deliveryResults;
+              }
+              const currentLock = await acquireSessionWriteLock({
+                sessionFile: currentSessionFile,
+                timeoutMs: Number.POSITIVE_INFINITY,
+                staleMs: Number.POSITIVE_INFINITY,
+                blockReentrant: true,
+                abortSignal: params.abortSignal,
+              });
+              try {
+                if (resolveCurrentMirrorSessionFile(params.deliveryMirror) !== currentSessionFile) {
+                  continue;
+                }
+                let repaired:
+                  | Awaited<ReturnType<typeof appendAssistantMessageToSessionTranscript>>
+                  | undefined;
+                try {
+                  repaired = await appendAssistantMessageToSessionTranscript({
+                    agentId: params.deliveryMirror.agentId,
+                    sessionKey: params.deliveryMirror.sessionKey,
+                    storePath: params.deliveryMirror.storePath,
+                    expectedSessionFile: currentSessionFile,
+                    text: mirrorText,
+                    mediaUrls: mirrorMediaUrls,
+                    idempotencyKey: mirrorIdempotencyKey,
+                  });
+                } catch (err) {
+                  logWarn(
+                    `[cron:${params.job.id}] delivered notification but rotated transcript mirror repair threw: ${String(err)}`,
+                  );
+                  return deliveryResults;
+                }
+                if (repaired.ok) {
+                  return deliveryResults;
+                }
+                mirrorResult = repaired;
+              } finally {
+                await currentLock.release();
+              }
+            }
+          } finally {
+            await lock.release();
+          }
+        }
+      };
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
             jobId: params.job.id,

@@ -13,6 +13,8 @@ type FakeCronRunResult = {
   status: "ok" | "error";
   error?: string;
   summary?: string;
+  outputText?: string;
+  delivered?: boolean;
 };
 
 const {
@@ -21,6 +23,8 @@ const {
   loadConfigMock,
   fetchWithSsrFGuardMock,
   runCronIsolatedAgentTurnMock,
+  syncOriginContextIntoMonitorMock,
+  resolveMonitorTranscriptPathMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatNowMock: vi.fn(),
@@ -32,6 +36,8 @@ const {
       summary: "ok",
     }),
   ),
+  syncOriginContextIntoMonitorMock: vi.fn(async () => ({ ok: true as const, imported: 0 })),
+  resolveMonitorTranscriptPathMock: vi.fn(() => "/tmp/origin.jsonl"),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -66,6 +72,13 @@ vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
+vi.mock("../monitor/context-sync.js", () => ({
+  MONITOR_RESULT_IDEMPOTENCY_PREFIX: "monitor-result:",
+  recordMonitorOriginSyncCursor: vi.fn(),
+  resolveMonitorTranscriptPath: resolveMonitorTranscriptPathMock,
+  syncOriginContextIntoMonitor: syncOriginContextIntoMonitorMock,
+}));
+
 import { buildGatewayCronService, formatCronFailureMessage } from "./server-cron.js";
 import { monitorHandlers } from "./server-methods/monitor.js";
 
@@ -88,6 +101,8 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
+    syncOriginContextIntoMonitorMock.mockClear();
+    resolveMonitorTranscriptPathMock.mockClear();
   });
 
   it("uses monitor terminology for monitorWake failure destinations", () => {
@@ -498,7 +513,12 @@ describe("buildGatewayCronService", () => {
           },
           isWebchatConnect: () => false,
         });
-        return { status: "ok" as const, summary: "draft routed for approval" };
+        return {
+          status: "ok" as const,
+          summary: "draft routed for approval",
+          outputText: "Empower replied. Here is the draft for approval.",
+          delivered: true,
+        };
       });
 
       const matchRespond = vi.fn();
@@ -557,12 +577,28 @@ describe("buildGatewayCronService", () => {
         },
       });
       expect(wake).not.toHaveProperty("messageToolTarget");
+      expect(wake).toHaveProperty("deliveryContract", "cron-owned");
       expect(wake?.message).toContain("Authoritative original user task contract:");
       expect(wake?.message).toContain(instructions);
       expect(wake?.message).toContain(`goalId: ${goal.id}`);
       expect(wake?.message).toContain(`goalObjective: ${goal.objective}`);
       expect(wake?.message).toContain("must include the actual draft text");
       expect(wake?.message).toContain(`expiryAt: ${expiryAt}`);
+      expect(syncOriginContextIntoMonitorMock).toHaveBeenCalledWith({
+        cfg,
+        monitor: expect.objectContaining({ monitorId: created?.monitorId, originSessionKey }),
+        abortSignal: expect.any(AbortSignal),
+      });
+      expect(syncOriginContextIntoMonitorMock.mock.invocationCallOrder[0]).toBeLessThan(
+        runCronIsolatedAgentTurnMock.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+      );
+      expect(wake).toMatchObject({
+        deliveryMirror: {
+          agentId: "main",
+          sessionKey: originSessionKey,
+          idempotencyPrefix: `monitor-result:${created?.monitorId}:`,
+        },
+      });
 
       await vi.waitFor(async () => {
         const completed = await loadMonitorStore(

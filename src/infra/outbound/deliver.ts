@@ -269,6 +269,10 @@ type DeliverOutboundPayloadsCoreParams = {
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
+  /** @internal Reports mirror persistence without discarding provider success. */
+  onMirrorResult?: (
+    result: Awaited<ReturnType<typeof appendAssistantMessageToSessionTranscript>>,
+  ) => void;
   silent?: boolean;
   /** @internal Called after one original payload is fully handled. */
   onPayloadComplete?: () => Promise<void>;
@@ -664,6 +668,7 @@ async function deliverOutboundPayloadsCore(
       },
     );
   }
+  let anyPayloadFailed = false;
   for (const originalPayload of payloads) {
     let payloadFailed = false;
     const payload = normalizePayloadsForChannelDelivery([originalPayload], channel, handler)[0];
@@ -783,6 +788,7 @@ async function deliverOutboundPayloadsCore(
         error: err instanceof Error ? err.message : String(err),
       });
       payloadFailed = true;
+      anyPayloadFailed = true;
       if (!params.bestEffort) {
         throw err;
       }
@@ -799,18 +805,32 @@ async function deliverOutboundPayloadsCore(
       continue;
     }
   }
-  if (params.mirror && results.length > 0) {
+  // A partial best-effort batch has no faithful single transcript mirror.
+  // Omitting it is safer than letting a follow-up refer to undelivered content.
+  if (params.mirror && results.length > 0 && !anyPayloadFailed) {
     const mirrorText = resolveMirroredTranscriptText({
       text: params.mirror.text,
       mediaUrls: params.mirror.mediaUrls,
     });
     if (mirrorText) {
-      await appendAssistantMessageToSessionTranscript({
-        agentId: params.mirror.agentId,
-        sessionKey: params.mirror.sessionKey,
-        text: mirrorText,
-        idempotencyKey: params.mirror.idempotencyKey,
-      });
+      try {
+        const mirrored = await appendAssistantMessageToSessionTranscript({
+          agentId: params.mirror.agentId,
+          sessionKey: params.mirror.sessionKey,
+          text: mirrorText,
+          idempotencyKey: params.mirror.idempotencyKey,
+          storePath: params.mirror.storePath,
+          expectedSessionFile: params.mirror.expectedSessionFile,
+        });
+        params.onMirrorResult?.(mirrored);
+      } catch (err) {
+        // Provider acceptance is already irreversible. Report mirror failure
+        // separately so monitor delivery can repair context without resending.
+        params.onMirrorResult?.({
+          ok: false,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 

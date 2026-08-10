@@ -175,6 +175,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   idempotencyKey?: string;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
+  /** Bind the append to a transcript lock already held by the caller. */
+  expectedSessionFile?: string;
 }): Promise<{ ok: true; sessionFile: string } | { ok: false; reason: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -213,6 +215,13 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       ok: false,
       reason: err instanceof Error ? err.message : String(err),
     };
+  }
+
+  if (
+    params.expectedSessionFile &&
+    path.resolve(sessionFile) !== path.resolve(params.expectedSessionFile)
+  ) {
+    return { ok: false, reason: "session mapping changed before transcript append" };
   }
 
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });

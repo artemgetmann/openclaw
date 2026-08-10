@@ -971,6 +971,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       await seedMonitorSession({
         cfg,
         agentId: p.agentId,
+        monitorId: monitor.monitorId,
         sessionKey: monitor.monitorSessionKey,
         sessionId: crypto.randomUUID(),
         label: `Monitor: ${monitor.name ?? monitor.sourceType}`,

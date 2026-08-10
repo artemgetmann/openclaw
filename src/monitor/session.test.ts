@@ -77,6 +77,7 @@ describe("monitor bootstrap contract", () => {
     await seedMonitorSession({
       cfg: { session: { store: storePath } } as OpenClawConfig,
       agentId: "main",
+      monitorId: "monitor-1",
       sessionKey: monitorSessionKey,
       sessionId: "unused-fresh-session",
       label: "Monitor: AirAsia",
@@ -149,6 +150,7 @@ describe("monitor bootstrap contract", () => {
     await seedMonitorSession({
       cfg: { session: { store: storePath, parentForkMaxTokens: 100 } } as OpenClawConfig,
       agentId: "main",
+      monitorId: "monitor-large",
       sessionKey: "agent:main:monitor:monitor-large",
       sessionId: "fresh-monitor-session",
       label: "Monitor: bounded",
@@ -166,6 +168,12 @@ describe("monitor bootstrap contract", () => {
     ];
     expect(monitorEntry?.sessionId).toBe("fresh-monitor-session");
     expect(monitorEntry?.forkedFromParent).not.toBe(true);
+    const monitorEntries = SessionManager.open(monitorEntry?.sessionFile ?? "").getEntries();
+    expect(
+      monitorEntries.some(
+        (entry) => entry.type === "custom" && entry.customType === "monitor-origin-sync-cursor",
+      ),
+    ).toBe(false);
   });
 
   it("includes the exact approved continuation prompt in the seeded session", () => {

@@ -10,6 +10,10 @@
  * returning so the timer correctly skips the system-event fallback.
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Module mocks (must be hoisted before imports) ---
@@ -45,8 +49,13 @@ vi.mock("./subagent-followup.js", () => ({
   waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import {
@@ -257,6 +266,106 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         isCronSystemEvent: () => true,
       }),
     ).toBe(false);
+  });
+
+  it("makes a delivered monitor result the durable parent of an immediate follow-up", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-monitor-delivery-race-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionFile = path.join(tempDir, "origin.jsonl");
+    const sessionKey = "agent:main:telegram:group:-1001:topic:42";
+    fs.writeFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "origin-session",
+        timestamp: new Date(0).toISOString(),
+        cwd: process.cwd(),
+      })}\n`,
+    );
+    SessionManager.open(sessionFile).appendMessage({
+      role: "user",
+      content: "Tell me when Empower replies.",
+      timestamp: 1,
+    });
+    await updateSessionStore(storePath, (store) => {
+      store[sessionKey] = {
+        sessionId: "origin-session",
+        sessionFile,
+        updatedAt: 1,
+      };
+    });
+
+    let providerAccepted!: () => void;
+    const providerAcceptedPromise = new Promise<void>((resolve) => {
+      providerAccepted = resolve;
+    });
+    let finishProvider!: () => void;
+    const finishProviderPromise = new Promise<void>((resolve) => {
+      finishProvider = resolve;
+    });
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (params) => {
+      // Model Telegram accepting the visible result before the outbound helper
+      // appends its mirror. The dispatch layer must still hold the origin lock.
+      providerAccepted();
+      await finishProviderPromise;
+      const mirror = params.mirror;
+      expect(mirror).toBeDefined();
+      await appendAssistantMessageToSessionTranscript({
+        agentId: mirror?.agentId,
+        sessionKey: mirror?.sessionKey ?? "",
+        text: mirror?.text,
+        mediaUrls: mirror?.mediaUrls,
+        idempotencyKey: mirror?.idempotencyKey,
+        storePath: mirror?.storePath,
+      });
+      return [{ channel: "telegram", messageId: "monitor-result-1" }];
+    });
+
+    try {
+      const delivery = dispatchCronDelivery({
+        ...makeBaseParams({ synthesizedText: "Empower replied. The draft is ready." }),
+        deliveryMirror: {
+          agentId: "main",
+          sessionKey,
+          storePath,
+          idempotencyPrefix: "monitor-result:monitor-1:",
+        },
+      });
+      await providerAcceptedPromise;
+      const immediateFollowUp = (async () => {
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 10_000 });
+        try {
+          SessionManager.open(sessionFile).appendMessage({
+            role: "user",
+            content: "send that",
+            timestamp: 2,
+          });
+        } finally {
+          await lock.release();
+        }
+      })();
+      finishProvider();
+      await expect(delivery).resolves.toMatchObject({ delivered: true });
+      await immediateFollowUp;
+
+      // Reopen from disk to model a gateway restart. The live agent sees the
+      // monitor result immediately before the unquoted reference.
+      const restartedContext = SessionManager.open(sessionFile).buildSessionContext();
+      const messages = restartedContext.messages.map((message) => ({
+        role: message.role,
+        content: JSON.stringify("content" in message ? message.content : undefined),
+      }));
+      expect(messages.slice(-2)).toEqual([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.stringContaining("Empower replied. The draft is ready."),
+        }),
+        expect.objectContaining({ role: "user", content: expect.stringContaining("send that") }),
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("uses synthesized text when selected direct delivery payload has no visible content", async () => {
