@@ -198,8 +198,13 @@ run_canonical_wrapper_and_finalize() {
   # The public launcher stays outside the heavy process group so it can persist
   # the wrapper's terminal health/cleanup outcome only after wrapper EXIT traps
   # have finished. The wrapper remains the sole canonical heavy owner.
+  # This measured pair intentionally retains the standard-policy invariant
+  # checked by guarded_pair_root_is_valid. Give the lower wrapper the same safe
+  # 24-hour bounded wait as ordinary dedicated work so retryable admission
+  # pressure cannot strand the owning Codex task behind a manual wake.
   "$ROOT_DIR/scripts/with-heavy-local-slot.sh" \
     --label "focused-vitest-pair:${LABEL}" \
+    --wait-seconds 86400 \
     -- \
     "$ROOT_DIR/scripts/run-focused-vitest-pair.sh" "${ORIGINAL_ARGS[@]}" &
   wrapper_pid="$!"

@@ -55,14 +55,33 @@ unsafe:
 
 ## Required wrapper
 
-Run every heavy command through the shared slot. Agent-owned transactions use
-the dedicated-agent CPU policy by default, so CPU saturation remains visible
-telemetry but does not block or terminate work:
+Run every heavy command through the shared slot. For ordinary agent-owned work,
+the canonical entrypoint is the dedicated wrapper below. It owns the
+dedicated-agent CPU policy and, unless the caller supplies a tighter deadline,
+waits for up to 86400 seconds without holding the lease. Retryable occupancy or
+measured host pressure therefore stays in the same shell transaction and the
+real command executes exactly once after admission:
 
 ```bash
-scripts/with-heavy-local-slot.sh --label "<thread-id>:<purpose>" -- \
+scripts/with-dedicated-agent-slot.sh --label "<thread-id>:<purpose>" -- \
   pnpm vitest run path/to/focused.test.ts --maxWorkers 1
 ```
+
+Do not replace that transaction with a separate `--check`, a one-shot lower
+wrapper call, or a second waiter after `occupied` or admission-time
+`host_unhealthy`. Those patterns race or duplicate the one transaction that is
+allowed to launch the workload. Use the lower wrapper directly only for an
+intentional diagnostic, explicit shared CPU policy, or a lower-level
+integration that owns its wait semantics.
+
+The waiter itself sleeps without CPU work or a heavy lease. That does not prove
+that every Codex client can keep a tool call attached without model re-entry.
+Never add a model-driven `write_stdin`, status, or guard polling loop around the
+waiter. If the client returns control while the shell is still queued, preserve
+the one existing transaction and use only a continuation route proved for that
+exact task. Do not start another command or claim that the shell alone will
+wake a finished Codex turn. Without a proved continuation route, a yielded
+waiter is an honest orchestration blocker rather than autonomous completion.
 
 For a diagnostic snapshot only, use the read-only preflight:
 
@@ -95,9 +114,11 @@ identity requires native `/bin/ps` access. A restricted
 `guard_internal owner_publish_failed stage=process_start_unavailable` permits
 exactly one identical native rerun; do not poll or delete lease metadata. Run
 the real workload in that same native acquire-and-run transaction—a successful
-`--check` never authorizes a later unguarded command. A native `occupied` or
-`host_unhealthy` result remains a queue/stop outcome; a native `guard_internal`
-result requires diagnosis before any workload starts.
+`--check` never authorizes a later unguarded command. Through the named
+dedicated entrypoint, native admission-time `occupied` or `host_unhealthy`
+remains queued inside the same bounded transaction; only wait expiry is a
+terminal capacity outcome. A native `guard_internal` result fails immediately
+and requires diagnosis before any workload starts.
 
 The wrapper stores an atomic lease at a stable per-user machine path, so
 independent clones and worktrees contend for the same slot. Canonical

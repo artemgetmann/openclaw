@@ -1239,6 +1239,9 @@ export async function startGatewayServer(
     stopChannel,
     pluginServices,
     cron,
+    // Resolve through the mutable hot-reload state at shutdown so close never
+    // disposes only the scheduler that existed when the handler was created.
+    releaseActiveCronJobDisabler: () => cronState.releaseActiveCronJobDisabler(),
     heartbeatRunner,
     updateCheckStop: stopGatewayUpdateCheck,
     nodePresenceTimers,

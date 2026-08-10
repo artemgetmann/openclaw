@@ -133,8 +133,12 @@ describe("buildGatewayCronService", () => {
 
       expect(state.cron.getJob(job.id)).toMatchObject({ enabled: false });
     } finally {
+      state.releaseActiveCronJobDisabler();
       state.cron.stop();
     }
+    await expect(disableActiveCronJob("stopped-monitor")).rejects.toThrow(
+      "active Gateway cron service is unavailable",
+    );
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {

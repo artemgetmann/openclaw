@@ -60,19 +60,22 @@ two owners, lose the measured one-supervisor contract, and race machine-wide
 serialization. New workload combinations require their own measurement and
 repository review; they are not arguments to this profile.
 
-## Coordinate the one heavy owner directly
+## Let the guarded transaction wait
 
-Before requesting the pair, identify the current canonical heavy-local owner
-from the guard refusal. The waiting owner asks that exact owner to send one
-direct material-release callback after its process group is gone, owner
-metadata is removed, and fresh admission is possible. The waiting owner does
-not poll the guard, route routine acknowledgments through a coordinator, delete
-lease state, retry a refusal, or bypass admission. If another legitimate owner
-wins before the callback is used, stop and request the next direct release from
-that owner.
+Invoke the actual pair command once. The entrypoint uses a 24-hour bounded wait,
+releases the lease between admission attempts, and starts the pair exactly once
+when capacity is healthy. Do not preflight separately, ask the current owner for
+a callback, poll from the model, or stop merely because a different legitimate
+job owns the slot. A changing owner is normal scheduling, not a reason to
+rebuild the wake chain.
+
+Stop only when the wrapper reports a terminal condition: `guard_internal`, an
+authorization failure, runtime health termination, or bounded-wait expiry.
+Preserve that exact receipt; none of those conditions authorize bypassing the
+guard or silently restarting an ambiguous workload.
 
 Pairing is allowed only through this entrypoint and only for its two explicitly
 compatible focused-test jobs. Generic and unknown workloads remain serialized
-at capacity one. This human callback contract is deliberately repository-local
-documentation, not a daemon, broker, queue, dispatcher, bot, scheduler, or
-service.
+at capacity one. The bounded waiter is local to this one shell transaction. It
+is not a daemon, broker, dispatcher, cross-thread callback, or second capacity
+owner.

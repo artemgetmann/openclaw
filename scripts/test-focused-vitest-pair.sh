@@ -95,6 +95,19 @@ set -euo pipefail
 
 printf '%s\n' "$*" >>"$PAIR_TEST_GUARD_CALLS"
 [[ "${PAIR_TEST_GUARD_MODE:-admitted}" != "delegate" ]] || exit 42
+if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "guard_internal" ]]; then
+  printf 'HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=fixture\n'
+  exit 75
+fi
+if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "wait_timeout" ]]; then
+  printf 'Heavy-local slot queued for "fixture"\n'
+  printf 'HEAVY_LOCAL_SLOT_REFUSAL class=occupied code=wait_timeout\n'
+  exit 75
+fi
+if [[ "${PAIR_TEST_GUARD_MODE:-admitted}" == "wait_then_admit" ]]; then
+  printf 'Heavy-local slot queued for "fixture"\n'
+  printf 'Heavy-local slot granted to "fixture"\n'
+fi
 while [[ "$1" != "--" ]]; do shift; done
 shift
 
@@ -297,7 +310,40 @@ test_exactly_one_canonical_supervisor_request() {
   [[ "$(wc -l <"$TMP_DIR/guard.calls" | tr -d ' ')" == "1" ]] ||
     fail "entrypoint requested more than one canonical supervisor"
   assert_contains "$TMP_DIR/guard.calls" "focused-vitest-pair:delegation"
+  assert_contains "$TMP_DIR/guard.calls" "--wait-seconds 86400 --"
   pass "one canonical supervisor is requested"
+}
+
+test_wait_transitions_preserve_exactly_once_launch_and_terminal_stops() {
+  local receipt_dir="$TMP_DIR/wait-transition-receipt"
+  local output="$TMP_DIR/wait-transition.out"
+  local mode=""
+  local status=0
+
+  rm -rf "$TMP_DIR/state" "$receipt_dir"
+  mkdir -p "$TMP_DIR/state"
+  : >"$TMP_DIR/pnpm.calls"
+  run_pair "$receipt_dir" wait_then_admit >"$output" 2>&1 ||
+    fail "queued admission did not complete"
+  [[ "$(wc -l <"$TMP_DIR/pnpm.calls" | tr -d ' ')" == "2" ]] ||
+    fail "queued admission did not launch the pair exactly once"
+  [[ "$(rg -F -c 'Heavy-local slot queued' "$output")" == "1" ]] ||
+    fail "queued admission emitted more than one queue notice"
+  [[ "$(rg -F -c 'Heavy-local slot granted' "$output")" == "1" ]] ||
+    fail "queued admission omitted its single grant notice"
+
+  for mode in guard_internal wait_timeout; do
+    rm -rf "$TMP_DIR/state" "$receipt_dir"
+    mkdir -p "$TMP_DIR/state"
+    : >"$TMP_DIR/pnpm.calls"
+    set +e
+    run_pair "$receipt_dir" "$mode" >"$output" 2>&1
+    status=$?
+    set -e
+    [[ "$status" -eq 75 ]] || fail "$mode returned $status instead of 75"
+    [[ ! -s "$TMP_DIR/pnpm.calls" ]] || fail "$mode launched a workload"
+  done
+  pass "queued admission launches once while guard-internal and timeout stop before workload"
 }
 
 test_unrelated_inherited_lease_is_refused() {
@@ -473,6 +519,7 @@ test_signal_stops_both_children_and_records_interrupt() {
 
 test_argument_validation_precedes_guard
 test_exactly_one_canonical_supervisor_request
+test_wait_transitions_preserve_exactly_once_launch_and_terminal_stops
 test_unrelated_inherited_lease_is_refused
 test_expected_head_drift_is_refused
 test_receipt_creation_race_is_refused

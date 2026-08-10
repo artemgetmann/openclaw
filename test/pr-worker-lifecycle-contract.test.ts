@@ -27,6 +27,17 @@ describe("canonical PR worker lifecycle policy", () => {
     expect(forkGuide).not.toMatch(/tester.{0,80}skip/is);
   });
 
+  it("keeps retryable heavy-slot pressure inside one non-duplicated transaction", () => {
+    // The shell owns atomic admission and exactly-once launch. Continuation is
+    // a separate client contract and must not be faked with model polling.
+    expect(agents).toContain("scripts/with-dedicated-agent-slot.sh");
+    expect(agents).toContain("executes the workload exactly once when admitted");
+    expect(agents).toContain("Do not run a separate `--check`");
+    expect(agents).toContain("model-poll its session");
+    expect(agents).toContain("never claim the shell alone will wake a finished Codex turn");
+    expect(agents).toContain("Stop on `guard_internal`");
+  });
+
   it("separates builder, tester, and release ownership without self-merge", () => {
     // The release role exists to keep default-branch writes and approvals out
     // of builder or tester transcripts and to prevent duplicate merge owners.
