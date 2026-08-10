@@ -2040,6 +2040,79 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("preserves the provider-error marker when promoting block-streamed Telegram text", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const terminalFallback =
+      "Something went wrong while processing your request. Please try again.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      // Provider failures can end with only a block callback. The promoted
+      // final must retain isError so Telegram can distinguish it from a normal
+      // synthetic progress replay with identical text.
+      await opts?.onBlockReply?.({ text: terminalFallback, isError: true });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: terminalFallback,
+      isError: true,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+  });
+
+  it("retracts an error marker with duplicated provisional commentary", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const provisional = "The provider may be unavailable; checking once more.";
+    const finalText = "The follow-up check completed normally.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      // Some providers emit a phase-less provisional copy before the signed
+      // commentary block. Retracting that duplicate must also retract its
+      // error marker so a later normal final cannot inherit error semantics.
+      await opts?.onBlockReply?.({ text: provisional, isError: true });
+      await opts?.onBlockReply?.({
+        text: provisional,
+        isError: true,
+        channelData: { openclaw: { assistantPhase: "commentary" } },
+      });
+      await opts?.onBlockReply?.({ text: finalText });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+  });
+
   it("orders a mixed Telegram block final as text, captionless media, then voice", async () => {
     setNoAbort();
     ttsMocks.state.autoMode = "always";

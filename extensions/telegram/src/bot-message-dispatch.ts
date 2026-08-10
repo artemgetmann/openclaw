@@ -2393,11 +2393,23 @@ export const dispatchTelegramMessage = async ({
         );
       }
     }
-    const preparedText = await prepareFinalAnswerText(text, {
+    let preparedText = await prepareFinalAnswerText(text, {
       hasMedia,
       isError: payload.isError,
     });
-    const normalizedPreparedText = normalizeAdjacentProgressBoundaries(preparedText).trim();
+    let normalizedPreparedText = normalizeAdjacentProgressBoundaries(preparedText).trim();
+    if (
+      !normalizedPreparedText &&
+      payload.isError === true &&
+      resolveOpenClawAssistantPhase(payload) === "final_answer"
+    ) {
+      // Progress cleanup normally removes replayed commentary from a final. A
+      // provider-error fallback can legitimately promote that exact text with
+      // an explicit final marker, leaving nothing after the cleanup. Preserve
+      // the trusted terminal payload instead of completing with no text.
+      preparedText = normalizeAdjacentProgressBoundaries(text).trim();
+      normalizedPreparedText = preparedText;
+    }
     if (!normalizedPreparedText) {
       return "skipped";
     }
@@ -2412,15 +2424,17 @@ export const dispatchTelegramMessage = async ({
       activeProgressController?.lastText() ?? "",
     ).trim();
     if (
+      (resolveOpenClawAssistantPhase(payload) !== "final_answer" || payload.isError !== true) &&
       activeProgressController &&
       (transientProgressPreviewTexts.includes(normalizedPreparedText) ||
         normalizedPreparedText === activeProgressText) &&
       !isLikelyFinalAnswerPreviewAfterProgress(normalizedPreparedText)
     ) {
       // The high-route dispatcher can replay the latest progress/commentary
-      // block as a synthetic final when an agent turn pauses for continuation.
-      // Treat that as a progress echo, not a final boundary, so the same
-      // progress bubble can continue across dispatches until a real final lands.
+      // block as an unmarked synthetic final when an agent turn pauses for
+      // continuation. Treat only that legacy shape as a progress echo. An
+      // explicit final_answer marker is authoritative even when an error
+      // fallback repeats the last visible block verbatim.
       logVerbose("telegram: skipped final echo that matched transient progress");
       return "skipped";
     }

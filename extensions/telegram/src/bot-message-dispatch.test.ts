@@ -1212,6 +1212,51 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("delivers an explicitly marked final even when it repeats active progress", async () => {
+    const progressStream = createDraftStream(9012);
+    createTelegramDraftStream.mockReturnValueOnce(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const terminalFallback =
+        "Something went wrong while processing your request. Please try again.";
+      // Provider failures can expose their fallback first through the mutable
+      // commentary/progress lane. The generic dispatcher then promotes that
+      // same text with a trusted final marker. Matching active progress must
+      // not suppress that authoritative boundary.
+      await dispatcherOptions.deliver(
+        {
+          text: terminalFallback,
+          channelData: { openclaw: { assistantPhase: "commentary" } },
+        },
+        { kind: "block" },
+      );
+      await dispatcherOptions.deliver(
+        {
+          text: terminalFallback,
+          isError: true,
+          channelData: { openclaw: { assistantPhase: "final_answer" } },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "Something went wrong while processing your request. Please try again.",
+    );
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "Something went wrong while processing your request. Please try again.",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("starts final-looking partials in a separate answer bubble after transient progress", async () => {
     const progressStream = createDraftStream(9010);
     const answerStream = createDraftStream(9011);

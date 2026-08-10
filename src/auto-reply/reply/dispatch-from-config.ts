@@ -971,7 +971,9 @@ export async function dispatchReplyFromConfig(params: {
     // and return no final payload. Track those visible blocks so final-mode TTS
     // still gets one additive supplement; sourcePreview blocks stay progress-only.
     let durableBlockFinalText = "";
+    let durableBlockErrorCount = 0;
     let lastPhaseLessDurableBlockText: string | undefined;
+    let lastPhaseLessDurableBlockWasError = false;
     const deferredTelegramBlockMedia: Array<{
       payload: ReplyPayload;
       abortSignal?: AbortSignal;
@@ -1026,8 +1028,12 @@ export async function dispatchReplyFromConfig(params: {
                 durableBlockFinalText = durableBlockFinalText.endsWith(provisionalText)
                   ? durableBlockFinalText.slice(0, -provisionalText.length)
                   : durableBlockFinalText;
+                if (lastPhaseLessDurableBlockWasError) {
+                  durableBlockErrorCount = Math.max(0, durableBlockErrorCount - 1);
+                }
               }
               lastPhaseLessDurableBlockText = undefined;
+              lastPhaseLessDurableBlockWasError = false;
             }
             const shouldTrackBlockAsDurableFinal =
               !isSourcePreviewToolPayload(payload) &&
@@ -1038,10 +1044,15 @@ export async function dispatchReplyFromConfig(params: {
               !sourceReplyPolicy.suppressAutomaticSourceDelivery;
             if (shouldTrackBlockAsDurableFinal && payload.text?.trim()) {
               durableBlockFinalText += payload.text;
+              if (payload.isError === true) {
+                durableBlockErrorCount += 1;
+              }
               // Only the immediately preceding legacy block can be the
               // provider's provisional copy of a later signed commentary block.
               lastPhaseLessDurableBlockText =
                 assistantPhase === undefined ? payload.text : undefined;
+              lastPhaseLessDurableBlockWasError =
+                assistantPhase === undefined && payload.isError === true;
             }
             const shouldDeferTelegramBlockMedia =
               isTelegramProvider &&
@@ -1144,6 +1155,7 @@ export async function dispatchReplyFromConfig(params: {
         ).cleanedText.trim();
         const durableFinalPayload = sanitizeTelegramVisiblePayload({
           text: visibleDurableText || blockFinalTextForDelivery,
+          ...(durableBlockErrorCount > 0 ? { isError: true } : {}),
           channelData: {
             openclaw: {
               assistantPhase: "final_answer",
