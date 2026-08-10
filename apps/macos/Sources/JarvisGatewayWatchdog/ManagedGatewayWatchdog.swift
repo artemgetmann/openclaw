@@ -211,6 +211,12 @@ struct ManagedGatewayWatchdogState: Codable, Equatable, Sendable {
 struct ManagedGatewayWatchdogEnvironment: Equatable, Sendable {
     static let gatewayLabel = "ai.jarvis.gateway"
     static let watchdogLabel = "ai.jarvis.gateway-watchdog"
+    /// Supervise useful service readiness, not only the Node listener. The
+    /// gateway deliberately keeps `/healthz` green while a managed channel is
+    /// stale so process orchestrators do not kill it during bounded recovery.
+    /// Jarvis owns a slower, rate-limited outer recovery loop and therefore
+    /// must use the channel-aware probe to catch an HTTP-alive Telegram stall.
+    static let gatewayProbePath = "/readyz"
     static let notificationCategoryIdentifier = "ai.jarvis.gateway-recovery"
     static let notificationActionIdentifier = "ai.jarvis.gateway-recovery.restart"
     /// Match GatewayProcessManager's existing stable identifier so helper and

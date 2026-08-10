@@ -13,6 +13,10 @@ struct ManagedGatewayWatchdogPolicyTests {
         #expect(ManagedGatewayWatchdogPolicy.Configuration.production.failureThreshold == 8)
     }
 
+    @Test func `packaged watchdog probes channel aware gateway readiness`() {
+        #expect(ManagedGatewayWatchdogEnvironment.gatewayProbePath == "/readyz")
+    }
+
     @Test func `normal two second restart never triggers recovery`() {
         var policy = ManagedGatewayWatchdogPolicy(configuration: self.configuration)
         var state = ManagedGatewayWatchdogState()
@@ -147,7 +151,7 @@ struct ManagedGatewayWatchdogPolicyTests {
             observation: .unavailable(reason: "gateway-not-running"),
             now: now.addingTimeInterval(60),
             state: &state) == .notify(
-                reason: "automatic recovery replacement is unavailable"))
+            reason: "automatic recovery replacement is unavailable"))
         #expect(state.incidentActive)
         #expect(state.lastRecoveryAttemptAt == now)
     }
