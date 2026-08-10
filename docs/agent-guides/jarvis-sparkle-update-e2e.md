@@ -41,11 +41,13 @@ Preflight verifies, without creating a run directory:
 Do not continue when preflight blocks. Fix the named owner, disk, baseline,
 signature, feed, or runtime mismatch and rerun the same read-only command.
 
-### Protected private-hotfix baseline
+### Protected runtime compatibility baseline
 
-A protected break-glass installation is not a normal signed public baseline.
-Never disable Gatekeeper or substitute an older public app to make it look like
-one. Instead, the release owner may supply one short-lived compatibility receipt:
+A protected break-glass runtime is not a normal signed managed-runtime baseline,
+even when `/Applications/Jarvis.app` remains a Gatekeeper-valid public app.
+Never disable Gatekeeper or substitute another app to make the app and runtime
+look aligned. Instead, the release owner may supply one short-lived compatibility
+receipt:
 
 ```bash
 bash scripts/jarvis-sparkle-update-e2e.sh \
@@ -84,14 +86,20 @@ not a symlink. Its validity window may not exceed seven days. It binds:
   designated-requirement hash, CodeDirectory hash, Sparkle public-key hash,
   canonical feed, and the exact enclosure URL, length, and EdDSA-signature hash.
 
-This path still requires strict code-signature integrity for the private old and
-installed apps, and their Team ID plus designated requirement must match the
-signed public target. The old and installed apps must also carry the exact
+This path still requires strict code-signature integrity for the old and
+installed apps, whether Gatekeeper accepts them or not, and their Team ID plus
+designated requirement must match the signed public target. The old and
+installed apps must also carry the exact
 nonblank Sparkle public key from that receipt-bound signed target so the running
 host can authenticate and replace itself. It excuses only
-their Gatekeeper rejection. The target still
+the mismatch between the installed app's bundled manifest and the newer,
+receipt-bound protected runtime (and, for a private app, its Gatekeeper
+rejection). The target still
 must pass strict codesign, Gatekeeper, pinned Jarvis Team ID, designated
-requirement, package-commit, and public-appcast checks. Missing, stale, unknown,
+requirement, package-commit, and public-appcast checks. A Gatekeeper-valid
+installed app grants no runtime-transition authority by itself: the receipt must
+still bind the exact protected marker, compatibility manifest, backup, live
+break-glass proof, target, expiry, and one-time intent. Missing, stale, unknown,
 or extra receipt fields fail closed. The target build must be newer than both
 the private app and the protected runtime backup. The canonical read-only
 runtime proof must also match the receipt's exact protected commit and
@@ -100,7 +108,8 @@ therefore fails before any run directory is created. After a
 successful transition changes the managed manifest, replaying the old receipt
 fails the same exact-state binding.
 
-Output distinguishes `baseline_mode=normal_signed` from
+Output distinguishes `baseline_mode=normal_signed`,
+`baseline_mode=accepted_signed_app_protected_runtime_compatibility_receipt`, and
 `baseline_mode=accepted_protected_hotfix_compatibility_receipt`. A Gatekeeper
 failure without the receipt names that missing authorization directly.
 
