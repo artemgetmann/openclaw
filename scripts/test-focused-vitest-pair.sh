@@ -162,10 +162,16 @@ set -euo pipefail
 job="b"
 [[ "$PWD" == "$PAIR_TEST_JOB_A_ROOT" ]] && job="a"
 printf '%s\t%s\t%s\t%s\n' "$$" "$PPID" "$PWD" "$*" >>"$PAIR_TEST_CALLS"
+
+if [[ "${PAIR_TEST_BLOCK:-0}" == "1" ]]; then
+  # Publish readiness only after the fixture can observe TERM. Otherwise the
+  # supervisor test can see both start markers and signal during the tiny gap
+  # before these traps exist, falsely blaming production signal forwarding.
+  trap ': >"$PAIR_TEST_STATE/'"$job"'.terminated"; exit 143' TERM INT HUP
+fi
 : >"$PAIR_TEST_STATE/$job.started"
 
 if [[ "${PAIR_TEST_BLOCK:-0}" == "1" ]]; then
-  trap ': >"$PAIR_TEST_STATE/'"$job"'.terminated"; exit 143' TERM INT HUP
   while :; do sleep 0.05; done
 fi
 
