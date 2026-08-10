@@ -8,7 +8,6 @@ Docs: https://docs.openclaw.ai
 
 - Fleet/heavy work: add an explicit per-transaction `dedicated-agent` CPU policy that permits CPU saturation while retaining the canonical lease, non-CPU health gates, structured telemetry, signal handling, and exact cleanup; the conservative 35%/20% CPU-idle floors remain the default. (#1340) Thanks @artemgetmann.
 - Models/Jarvis: make GPT-5.6 Sol the single normal consumer model, default Adaptive reasoning to Medium, migrate managed GPT-5.4/5.5 defaults within their provider family, and cap the consumer context at 272K tokens. (#1246) Thanks @artemgetmann.
-- Models/Jarvis: expose GPT-5.5 beside GPT-5.6 Sol in consumer model selectors so users have a supported alternative when Sol is temporarily unavailable.
 
 ### Fixes
 

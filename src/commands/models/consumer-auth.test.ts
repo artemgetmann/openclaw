@@ -293,8 +293,7 @@ describe("consumer auth ChatGPT OAuth setup", () => {
     expect(validateConfigObject(mocks.configState.written)).toMatchObject({ ok: true });
   });
 
-  it("preserves an existing fallback while adding the managed GPT-5.5 fallback", async () => {
-    const configuredFallback = "anthropic/claude-sonnet-4-6";
+  it("preserves an explicit empty fallback opt-out during re-authentication", async () => {
     const config: OpenClawConfig = {
       jarvis: {
         managedServices: { mode: "managed" },
@@ -303,11 +302,8 @@ describe("consumer auth ChatGPT OAuth setup", () => {
       agents: {
         defaults: {
           model: {
-            primary: "openai-codex/gpt-5.4",
-            fallbacks: [configuredFallback],
-          },
-          models: {
-            [configuredFallback]: {},
+            primary: "openai-codex/gpt-5.6-sol",
+            fallbacks: [],
           },
         },
       },
@@ -365,7 +361,7 @@ describe("consumer auth ChatGPT OAuth setup", () => {
 
     expect(mocks.configState.written?.agents?.defaults?.model).toEqual({
       primary: "openai-codex/gpt-5.6-sol",
-      fallbacks: [configuredFallback, "openai-codex/gpt-5.5"],
+      fallbacks: [],
     });
     expect(validateConfigObject(mocks.configState.written)).toMatchObject({ ok: true });
   });

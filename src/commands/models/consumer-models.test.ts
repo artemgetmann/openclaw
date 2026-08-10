@@ -10,7 +10,7 @@ vi.mock("../../agents/model-catalog.js", () => ({
 const { listConsumerModelOptions } = await import("./consumer-models.js");
 
 describe("consumer model shortlist", () => {
-  it("exposes Sol and GPT-5.5 for ChatGPT OAuth", async () => {
+  it("exposes only GPT-5.6 Sol for ChatGPT OAuth", async () => {
     loadModelCatalog.mockResolvedValue([
       { provider: "openai-codex", id: "gpt-5.6-sol" },
       { provider: "openai-codex", id: "gpt-5.5" },
@@ -31,14 +31,11 @@ describe("consumer model shortlist", () => {
 
     await expect(listConsumerModelOptions({ config })).resolves.toMatchObject({
       currentModel: "openai-codex/gpt-5.6-sol",
-      options: [
-        { id: "openai-codex/gpt-5.6-sol", title: "GPT-5.6 Sol" },
-        { id: "openai-codex/gpt-5.5", title: "GPT-5.5" },
-      ],
+      options: [{ id: "openai-codex/gpt-5.6-sol", title: "GPT-5.6 Sol" }],
     });
   });
 
-  it("exposes Sol and GPT-5.5 for direct OpenAI API keys", async () => {
+  it("exposes only GPT-5.6 Sol for direct OpenAI API keys", async () => {
     loadModelCatalog.mockResolvedValue([
       { provider: "openai", id: "gpt-5.6-sol" },
       { provider: "openai", id: "gpt-5.5" },
@@ -59,10 +56,7 @@ describe("consumer model shortlist", () => {
 
     await expect(listConsumerModelOptions({ config })).resolves.toMatchObject({
       currentModel: "openai/gpt-5.6-sol",
-      options: [
-        { id: "openai/gpt-5.6-sol", title: "GPT-5.6 Sol" },
-        { id: "openai/gpt-5.5", title: "GPT-5.5" },
-      ],
+      options: [{ id: "openai/gpt-5.6-sol", title: "GPT-5.6 Sol" }],
     });
   });
 });

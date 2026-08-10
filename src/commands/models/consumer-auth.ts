@@ -636,15 +636,12 @@ function applyProviderAuthResult(
         existingModel && typeof existingModel === "object" && Array.isArray(existingModel.fallbacks)
           ? existingModel.fallbacks
           : undefined;
-      const consumerFallbacks = existingFallbacks?.includes(JARVIS_CONSUMER_CODEX_FALLBACK_MODEL)
-        ? existingFallbacks
-        : [...(existingFallbacks ?? []), JARVIS_CONSUMER_CODEX_FALLBACK_MODEL];
 
       // Consumer ChatGPT auth must persist one validator-clean config update.
       // A fresh install has no model block yet, so relying on the later legacy
       // migration makes the OAuth token succeed while this config write fails.
-      // Preserve explicit operator fallbacks, then append the GPT-5.5 fallback
-      // required by the managed Jarvis validator and shared model picker.
+      // Preserve an explicit operator fallback list, including an empty opt-out.
+      // Fresh installs have no fallback field, so seed the managed GPT-5.5 default.
       next = {
         ...next,
         agents: {
@@ -653,7 +650,7 @@ function applyProviderAuthResult(
             ...next.agents?.defaults,
             model: {
               primary: JARVIS_CONSUMER_CURRENT_CODEX_MODEL,
-              fallbacks: consumerFallbacks,
+              fallbacks: existingFallbacks ?? [JARVIS_CONSUMER_CODEX_FALLBACK_MODEL],
             },
             models: {
               ...next.agents?.defaults?.models,
