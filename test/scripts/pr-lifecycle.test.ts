@@ -46,6 +46,8 @@ type LifecycleOutput = {
       leaseHeldWhileWaiting: boolean;
     };
     branchName: string;
+    worktreePath?: string | null;
+    prepareCommand?: string | null;
     command: string;
     readinessCommand: string;
   } | null;
@@ -955,8 +957,182 @@ describe("scripts/pr-lifecycle", () => {
     ]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("live/external testing requires transport=user-visible-task");
+    expect(result.stderr).toContain(
+      "live/external testing requires transport=delegated-worker or user-visible-task",
+    );
     expect(fs.existsSync(path.join(fixture.root, "state", "pr-42.json"))).toBe(false);
+  });
+
+  it("permits a distinct receipt-bound delegated worker for live testing", () => {
+    const fixture = makeFixture();
+    const authority = {
+      schemaVersion: 1,
+      source: "direct-user-task",
+      pr: 42,
+      scope: "one bounded isolated live acceptance",
+      allowedActions: ["live-test", "protected-resource", "cleanup"],
+      constraints: ["no credentials", "no public release", "no retry after ambiguity"],
+    };
+    const authorityPath = path.join(fixture.root, "tester-authority.json");
+    fs.writeFileSync(authorityPath, JSON.stringify(authority));
+    const tester = run(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "live-external",
+      "--transport",
+      "delegated-worker",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--task-authority",
+      authorityPath,
+    ]);
+
+    expect(tester.action).toBe("spawn_delegated_worker");
+    expect(tester.nativeTool).toBeNull();
+    expect(tester.routing?.decision).toBe("delegated-worker-required");
+    expect(tester.environmentContract?.command).toContain("OPENCLAW_TESTER_WORKER_ID");
+    expect(tester.environmentContract?.prepareCommand).toContain(
+      "/scripts/new-worktree.sh' 'pr-42-tester-",
+    );
+    expect(tester.environmentContract?.prepareCommand).toContain("--no-bootstrap");
+    expect(tester.environmentContract?.prepareCommand).toContain(
+      `--base-sha '${fixture.metadata.headRefOid}'`,
+    );
+    expect(tester.environmentContract?.prepareCommand).toContain("--credential-mode none");
+    expect(tester.environmentContract?.worktreePath).toContain("/.worktrees/pr-42-tester-");
+    expect(tester.prompt).toContain("must start in that exact worktree");
+    expect(tester.taskAuthority).toEqual(authority);
+
+    const selfOwned = runFailure(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "builder-thread",
+      "--host-id",
+      "forged-other-host",
+    ]);
+    expect(selfOwned.stderr).toContain("tester owner must differ from the exact builder identity");
+
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "delegated-tester",
+      "--host-id",
+      "local-subagent",
+    ]);
+    const receiptPath = path.join(fixture.root, "delegated-tester-receipt.json");
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: tester.routing,
+        contractId: tester.contractId,
+        status: "PASS",
+        headSha: tester.candidate?.headSha,
+        diffFingerprint: tester.candidate?.diffFingerprint,
+        owner: { threadId: "delegated-tester", hostId: "local-subagent" },
+        taskAuthority: authority,
+        environment: readyEnvironment(tester),
+        evidence: ["bounded live acceptance passed"],
+        cleanup: { status: "complete", evidence: ["protected resources released"] },
+        limitations: [],
+      }),
+    );
+    const recorded = run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+    expect(recorded.action).toBe("resolve-exact-delegated-worker");
+    expect(
+      run(fixture, [
+        "close-test",
+        "42",
+        "--contract-id",
+        tester.contractId,
+        "--thread-id",
+        "delegated-tester",
+        "--host-id",
+        "local-subagent",
+        "--closure",
+        "terminal-receipt",
+      ]).action,
+    ).toBe("tester-closed");
+  });
+
+  it("rejects delegated live testing without exact bounded authority", () => {
+    const fixture = makeFixture();
+    const missing = runFailure(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "live-external",
+      "--transport",
+      "delegated-worker",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(missing.stderr).toContain("requires --task-authority");
+
+    const forgedPath = path.join(fixture.root, "forged-tester-authority.json");
+    fs.writeFileSync(
+      forgedPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        source: "direct-user-task",
+        pr: 42,
+        scope: "too broad",
+        allowedActions: ["live-test", "public-release"],
+        constraints: ["none"],
+      }),
+    );
+    const forged = runFailure(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "live-external",
+      "--transport",
+      "delegated-worker",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+      "--task-authority",
+      forgedPath,
+    ]);
+    expect(forged.stderr).toContain("grant only explicit live-test actions");
+  });
+
+  it("single-quotes repository branch names in delegated preparation commands", () => {
+    const fixture = makeFixture();
+    fixture.metadata.headRefName = "codex/policy$(touch injected)";
+    fixture.env.TEST_PR_METADATA = JSON.stringify(fixture.metadata);
+    const tester = run(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "read-only",
+      "--transport",
+      "delegated-worker",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+
+    expect(tester.environmentContract?.prepareCommand).toContain(
+      "--base 'codex/policy$(touch injected)'",
+    );
+    expect(tester.environmentContract?.prepareCommand).not.toContain(
+      '--base "codex/policy$(touch injected)"',
+    );
   });
 
   it("refreshes the PR receipt before recreating a cancelled tester handoff", () => {
@@ -990,7 +1166,7 @@ describe("scripts/pr-lifecycle", () => {
       "accept-test-owner",
     ]);
     expect(first.prompt).toContain(
-      "Never route live/external testing or release through a nested sub-agent",
+      "Live/external testing requires either a receipt-bound delegated worker or a user-visible task",
     );
     expect(first.prompt).toContain("gh pr diff 42 --patch");
     expect(first.environmentContract).toMatchObject({

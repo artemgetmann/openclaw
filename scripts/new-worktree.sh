@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ORIGINAL_ARGS=("$@")
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 
 # Trim leading/trailing whitespace for robust .env parsing.
 trim() {
@@ -77,7 +78,7 @@ mask_token() {
 
 usage() {
   cat <<'EOF'
-Usage: scripts/new-worktree.sh <feature-name> [--base <branch>] [--mode <clean|warm>] [--no-bootstrap]
+Usage: scripts/new-worktree.sh <feature-name> [--base <branch>] [--base-sha <40-hex>] [--mode <clean|warm>] [--credential-mode <default|none>] [--no-bootstrap]
 EOF
 }
 
@@ -151,6 +152,10 @@ EOF
   # when the caller launches the helper from another checkout. Otherwise the
   # task accidentally inherits the wrong clone's branch truth and metadata.
   rerun_args=("$FEATURE_NAME" "--base" "$base_branch" "--mode" "$LANE_MODE")
+  if [[ -n "$BASE_SHA" ]]; then
+    rerun_args+=("--base-sha" "$BASE_SHA")
+  fi
+  rerun_args+=("--credential-mode" "$CREDENTIAL_MODE")
   if [[ "$NO_BOOTSTRAP" == "1" ]]; then
     rerun_args+=("--no-bootstrap")
   fi
@@ -266,7 +271,9 @@ fi
 FEATURE_NAME=""
 BASE_BRANCH=""
 BASE_SOURCE="auto"
+BASE_SHA=""
 LANE_MODE="clean"
+CREDENTIAL_MODE="default"
 NO_BOOTSTRAP=0
 
 while [[ $# -gt 0 ]]; do
@@ -286,6 +293,22 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       LANE_MODE="$2"
+      shift 2
+      ;;
+    --base-sha)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --base-sha requires a value." >&2
+        exit 1
+      fi
+      BASE_SHA="$2"
+      shift 2
+      ;;
+    --credential-mode)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --credential-mode requires a value." >&2
+        exit 1
+      fi
+      CREDENTIAL_MODE="$2"
       shift 2
       ;;
     --no-bootstrap)
@@ -320,6 +343,16 @@ if [[ "$LANE_MODE" != "clean" && "$LANE_MODE" != "warm" ]]; then
   exit 1
 fi
 
+if [[ "$CREDENTIAL_MODE" != "default" && "$CREDENTIAL_MODE" != "none" ]]; then
+  echo "Error: --credential-mode must be one of: default, none." >&2
+  exit 1
+fi
+
+if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Error: --base-sha must be an exact lowercase 40-character commit SHA." >&2
+  exit 1
+fi
+
 if [[ ! "$FEATURE_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   echo "Error: feature name must match [a-zA-Z0-9_-]+." >&2
   exit 1
@@ -342,7 +375,7 @@ fi
 openclaw_heavy_local_slot_require_or_reexec \
   "new-worktree:${FEATURE_NAME}:${LANE_MODE}" \
   "$REPO_ROOT" \
-  "$REPO_ROOT/scripts/new-worktree.sh" \
+  "$SCRIPT_PATH" \
   "${ORIGINAL_ARGS[@]}"
 
 if ! git fetch origin; then
@@ -413,14 +446,32 @@ fi
 # be exactly aligned with its origin tracking branch before creating the worktree.
 assert_base_branch_synced_with_remote "$BASE_BRANCH"
 
+if [[ -n "$BASE_SHA" ]]; then
+  remote_base_sha="$(git rev-parse "refs/remotes/origin/${BASE_BRANCH}^{commit}")"
+  if [[ "$remote_base_sha" != "$BASE_SHA" ]]; then
+    cat >&2 <<EOF
+Error: exact base SHA drifted before worktree creation.
+
+Base branch: origin/${BASE_BRANCH}
+Expected:    ${BASE_SHA}
+Observed:    ${remote_base_sha}
+
+Refresh the immutable lifecycle candidate; do not create from a moving branch.
+EOF
+    exit 1
+  fi
+fi
+
 # Mirror the Telegram live runtime port derivation pattern: normalize the
 # absolute worktree path, hash it, then take a stable modulo into a reserved
 # dev-only port window that does not overlap the default gateway port.
-TARGET_REF="origin/${BASE_BRANCH}"
+TARGET_REF="${BASE_SHA:-origin/${BASE_BRANCH}}"
 git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "$TARGET_REF"
 
 TELEGRAM_BOOTSTRAP_STATUS="skipped"
-if [[ "$LANE_MODE" == "clean" ]]; then
+if [[ "$CREDENTIAL_MODE" == "none" ]]; then
+  TELEGRAM_BOOTSTRAP_STATUS="credential-free"
+elif [[ "$LANE_MODE" == "clean" ]]; then
   (cd "$WORKTREE_PATH" && bash "$BOOTSTRAP_SCRIPT" --optional)
   TELEGRAM_BOOTSTRAP_STATUS="optional"
 elif [[ "$LANE_MODE" == "warm" ]]; then
@@ -448,7 +499,9 @@ BASELINE_CONFIG_PATH=""
 BASELINE_META_PATH=""
 BASELINE_STRIPPED_NAMED_TELEGRAM_ACCOUNTS="none"
 BASELINE_BOOTSTRAP_STATUS="disabled"
-if [[ -f "$BASELINE_BOOTSTRAP_SCRIPT" ]]; then
+if [[ "$CREDENTIAL_MODE" == "none" ]]; then
+  BASELINE_BOOTSTRAP_STATUS="credential-free"
+elif [[ -f "$BASELINE_BOOTSTRAP_SCRIPT" ]]; then
   if ! BASELINE_BOOTSTRAP_OUTPUT="$(bash "$BASELINE_BOOTSTRAP_SCRIPT" --root "$WORKTREE_PATH")"; then
     echo "Error: tester baseline bootstrap failed for ${WORKTREE_PATH}." >&2
     exit 1
@@ -534,7 +587,9 @@ EOF
   fi
 fi
 
-if [[ "$LANE_MODE" == "clean" ]] && [[ -f "$WORKTREE_PATH/.env.local" ]]; then
+if [[ "$CREDENTIAL_MODE" == "none" ]]; then
+  echo "info: credential-free mode skips Telegram and canonical baseline copying" >&2
+elif [[ "$LANE_MODE" == "clean" ]] && [[ -f "$WORKTREE_PATH/.env.local" ]]; then
   run_ensure_with_timeout "$WORKTREE_PATH"
 elif [[ "$LANE_MODE" == "warm" ]]; then
   echo "info: warm mode copies canonical Telegram userbot files but skips Telegram lane claim/ensure and the build step; dependencies are installed in-place" >&2
@@ -553,8 +608,10 @@ fi
 echo "worktree=${WORKTREE_PATH}"
 echo "branch=${BRANCH_NAME}"
 echo "base_branch=${BASE_BRANCH}"
+echo "base_sha=${BASE_SHA:-none}"
 echo "base_source=${BASE_SOURCE}"
 echo "lane_mode=${LANE_MODE}"
+echo "credential_mode=${CREDENTIAL_MODE}"
 echo "bot_fingerprint=${BOT_FINGERPRINT}"
 echo "dev_port=${DEV_PORT}"
 echo "baseline_bootstrap=${BASELINE_BOOTSTRAP_STATUS}"
