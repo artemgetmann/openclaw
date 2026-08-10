@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 112,
+  "sequence": 113,
   "nextFence": 33,
   "mergeLease": null,
   "items": {
@@ -3940,13 +3940,135 @@
         "fence": 32,
         "recordedAt": "2026-08-10T11:31:43.660Z"
       }
+    },
+    "1388": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1388,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1388",
+        "headSha": "e51ddd28028abb2a529ead92cf5a8f29429f43ab",
+        "baseBranch": "main",
+        "testedBaseSha": "076242d1269b7d440ce96032fc71d68db9b93b50",
+        "diffFingerprint": "sha256:1dbef31cd1798f1fd2f0d462e4d7945e4a10a034badafe3a91c1896127b1085a",
+        "changedPaths": [
+          ".github/pull_request_template.md",
+          "AGENTS.md",
+          "docs/agent-guides/workflow.md",
+          "scripts/adopt-codex-worktree.sh",
+          "scripts/new-worktree.sh",
+          "scripts/pr-lifecycle.mjs",
+          "test/adopt-codex-worktree-owner.test.ts",
+          "test/scripts/pr-lifecycle.test.ts"
+        ],
+        "title": "fix(workflow): support receipt-bound delegated testers",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: A single source owner can coordinate an independent receipt-bound delegated tester without creating a native Codex chat; delegated live testing remains PR-bound, explicitly authorized, isolated, immutable-head, separately owned, receipt-verified, and cleanup-gated.\n- Exact head + builder proof: `e51ddd28028abb2a529ead92cf5a8f29429f43ab`; guarded lifecycle suite PASS before formatting (37/37), final delegated transport cases PASS (4/4), internal-worker adoption identity PASS (1/1), formatting/lint/syntax PASS.\n- Independent tester: Internal read-only reviewer `/root/lifecycle_policy_review` on `local-subagent` PASS; exact final lifecycle tester receipt will be added before merge.\n- Jarvis delivery boundary: Product-wide source-only infrastructure; validated receipt below.\n- Release worker: Repo-backed queue lease; no native release chat.\n- Dependencies / merge order / overlap: None — standalone policy/tooling prerequisite for PR #1387.\n- Remaining proof / cleanup / rollback: Exact-head delegated tester receipt, CI, normal merge. Rollback is one revert.\n- Still hurts: Disk pressure prevents another 100-second full-suite rerun; the earlier full suite passed and final new branches have focused guarded proof.\n\n## Why This Matters\n\n- Native tester/release chat proliferation is unnecessary UX overhead when the queue and lifecycle ledger already own durable identity.\n- The prior policy blocked authorized work even when a distinct internal worker could preserve every safety invariant.\n\n## Scope Boundary\n\n- Adds `delegated-worker` tester transport and exact lifecycle receipts.\n- Requires a PR-bound direct-user authority packet for delegated live/external actions.\n- Does not permit builders to test themselves, weaken protected-resource authority, merge, deploy, publish, or bypass the fenced release queue.\n\n## Verification\n\n- `pnpm exec vitest run test/scripts/pr-lifecycle.test.ts` — 37/37 PASS on the pre-format implementation.\n- `pnpm exec vitest run test/scripts/pr-lifecycle.test.ts -t \"delegated worker|delegated live|nested transport\"` — 3/3 PASS on final implementation.\n- `pnpm exec oxfmt --check ...`\n- `pnpm exec oxlint scripts/pr-lifecycle.mjs test/scripts/pr-lifecycle.test.ts`\n- `node --check scripts/pr-lifecycle.mjs`\n- Independent review PASS after authority fixes.\n\n## Security Impact\n\n- New permissions/capabilities? Yes — delegated live testers may receive narrowly enumerated actions.\n- Secrets/tokens handling changed? No.\n- New/changed network calls? No.\n- Command/tool execution surface changed? Yes — lifecycle emits `spawn_delegated_worker`.\n- Data access scope changed? No.\n- Mitigation: Exact distinct identity, immutable PR binding, allowlisted actions, mandatory `live-test`, explicit constraints, receipt echo, environment isolation, and fail-closed cleanup/closure.\n\n## Compatibility / Migration\n\n- Backward compatible: Yes; existing `nested-read-only` and `user-visible-task` remain supported.\n- Config/env changes: Delegated workers export `OPENCLAW_TESTER_WORKER_ID` during canonical adoption.\n- Migration needed: No.\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"source\",\n  \"completionClaim\": \"declared-boundary-complete\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home mutation is part of this product task.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Exact head passed focused guarded lifecycle tests, formatting, lint, syntax, and independent review.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"This PR changes source workflow policy only.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No installed app or runtime is changed by this PR.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No user data or configuration changes.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"Public Jarvis release work remains a separate preserved transaction.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"This PR changes internal lifecycle transport only.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted plus prior full lifecycle suite\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "source",
+          "completionClaim": "declared-boundary-complete",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation is part of this product task."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Exact head passed focused guarded lifecycle tests, formatting, lint, syntax, and independent review."
+            },
+            "packagedArtifact": {
+              "status": "not-applicable",
+              "evidence": "This PR changes source workflow policy only."
+            },
+            "installedRuntime": {
+              "status": "not-applicable",
+              "evidence": "No installed app or runtime is changed by this PR."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "No user data or configuration changes."
+            },
+            "publicRelease": {
+              "status": "not-applicable",
+              "evidence": "Public Jarvis release work remains a separate preserved transaction."
+            },
+            "endUserBehavior": {
+              "status": "not-applicable",
+              "evidence": "This PR changes internal lifecycle transport only."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fc197-0fc8-7273-849a-ed756d07606e",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fc197-0fc8-7273-849a-ed756d07606e",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "e51ddd28028abb2a529ead92cf5a8f29429f43ab",
+        "diffFingerprint": "sha256:1dbef31cd1798f1fd2f0d462e4d7945e4a10a034badafe3a91c1896127b1085a",
+        "closure": "terminal-receipt",
+        "contractId": "5576493e-5063-48d1-bc4f-302fead85ac0",
+        "owner": {
+          "threadId": "/root/pr1388_tester_final",
+          "hostId": "local-subagent"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/lifecycle_policy_review",
+          "hostId": "local-subagent"
+        },
+        "headSha": "e51ddd28028abb2a529ead92cf5a8f29429f43ab",
+        "diffFingerprint": "sha256:1dbef31cd1798f1fd2f0d462e4d7945e4a10a034badafe3a91c1896127b1085a",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1388 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "c2c8df47-a3c9-48a6-8fff-aa27f0acde03",
+        "stateDirectory": "/Users/user/Programming_Projects/openclaw/.worktrees/lifecycle-subagent-transport/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-10T17:33:54.720Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "8b1c78c6-44e6-4c60-b8bf-e0bbd5222e4f",
-    "recordedAt": "2026-08-10T11:34:16.831Z"
+    "id": "cec055bd-1915-403c-b88d-71acb063da18",
+    "recordedAt": "2026-08-10T17:33:54.720Z"
   },
-  "updatedAt": "2026-08-10T11:34:16.831Z",
+  "updatedAt": "2026-08-10T17:33:54.720Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
