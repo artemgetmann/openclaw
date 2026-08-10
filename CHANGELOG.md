@@ -8,9 +8,11 @@ Docs: https://docs.openclaw.ai
 
 - Fleet/heavy work: add an explicit per-transaction `dedicated-agent` CPU policy that permits CPU saturation while retaining the canonical lease, non-CPU health gates, structured telemetry, signal handling, and exact cleanup; the conservative 35%/20% CPU-idle floors remain the default. (#1340) Thanks @artemgetmann.
 - Models/Jarvis: make GPT-5.6 Sol the single normal consumer model, default Adaptive reasoning to Medium, migrate managed GPT-5.4/5.5 defaults within their provider family, and cap the consumer context at 272K tokens. (#1246) Thanks @artemgetmann.
+- Models/Jarvis: expose GPT-5.5 beside GPT-5.6 Sol in consumer model selectors so users have a supported alternative when Sol is temporarily unavailable.
 
 ### Fixes
 
+- Jarvis/ChatGPT sign-in: persist GPT-5.6 Sol with the managed GPT-5.5 fallback and both allowlist entries during fresh OAuth setup, preventing successful ChatGPT authentication from ending with a rejected config write and a misleading sign-in failure.
 - Telegram/pairing: render pairing codes and approve commands as Telegram HTML code blocks so challenge messages are easier to copy correctly from chats. (#52784) Thanks @sumukhj1219.
 - Gateway/restart sentinel: wake the interrupted agent session via heartbeat after restart instead of only sending a best-effort restart note, retry outbound delivery once on transient failure, and preserve explicit thread/topic routing through the wake path so replies land in the correct Telegram topic or Slack thread. (#53940) Thanks @VACInc.
 - Memory/builtin sqlite: cut redundant sync and status query churn by snapshotting file state once per source, reusing sync statements, and consolidating status aggregation reads, which reduces builtin memory overhead on sync/status/doctor-style paths. Thanks @vincentkoc.

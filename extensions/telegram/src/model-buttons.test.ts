@@ -499,7 +499,7 @@ describe("buildModelFamilyKeyboard", () => {
     ]);
   });
 
-  it("shows only GPT-5.6 Sol in the normal ChatGPT family picker", () => {
+  it("shows GPT-5.6 Sol and GPT-5.5 in the normal ChatGPT family picker", () => {
     const byProvider = new Map([
       ["openai-codex", new Set(["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.5", "gpt-5.6-sol"])],
       ["openai", new Set(["gpt-5.4", "gpt-5.4-mini", "gpt-5.6-sol", "gpt-image-2"])],
@@ -510,7 +510,7 @@ describe("buildModelFamilyKeyboard", () => {
       text: "GPT-5.6 Sol",
       callback_data: "mdl_sel_openai-codex/gpt-5.6-sol",
     });
-    expect(recommended.map((row) => row[0]?.text)).toEqual(["GPT-5.6 Sol", "<< Back"]);
+    expect(recommended.map((row) => row[0]?.text)).toEqual(["GPT-5.6 Sol", "GPT-5.5", "<< Back"]);
 
     const more = buildModelFamilyKeyboard({ family: "chatgpt", byProvider, more: true });
     expect(more.map((row) => row[0]?.text)).toEqual(["<< Back"]);

@@ -30,6 +30,21 @@ export const CONSUMER_CHATGPT_MODEL_REGISTRY: readonly ConsumerChatGptModelChoic
       },
     ],
   },
+  {
+    label: "GPT-5.5",
+    refs: [
+      {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        detail: "Reliable ChatGPT / Codex alternative when Sol is temporarily unavailable.",
+      },
+      {
+        provider: "openai",
+        model: "gpt-5.5",
+        detail: "Direct OpenAI API alternative when Sol is temporarily unavailable.",
+      },
+    ],
+  },
 ] as const;
 
 export function formatConsumerChatGptModelId(

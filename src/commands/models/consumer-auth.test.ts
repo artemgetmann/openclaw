@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { validateConfigObject } from "../../config/config.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -17,9 +18,16 @@ const mocks = vi.hoisted(() => ({
   })),
   resolveAuthProfileOrder: vi.fn(() => []),
   upsertAuthProfile: vi.fn(),
-  updateConfig: vi.fn(async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) =>
-    mutator(baseConfig),
-  ),
+  configState: {
+    current: {} as OpenClawConfig,
+    written: undefined as OpenClawConfig | undefined,
+  },
+  updateConfig: vi.fn(async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
+    const written = mutator(mocks.configState.current);
+    mocks.configState.current = written;
+    mocks.configState.written = written;
+    return written;
+  }),
 }));
 
 vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
@@ -80,6 +88,8 @@ const anthropicProvider: ProviderPlugin = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.configState.current = baseConfig;
+  mocks.configState.written = undefined;
 });
 
 describe("consumer auth Claude CLI setup detection", () => {
@@ -207,6 +217,159 @@ describe("consumer auth Claude CLI setup detection", () => {
 });
 
 describe("consumer auth ChatGPT OAuth setup", () => {
+  it("persists validator-clean Sol defaults on a fresh consumer sign-in", async () => {
+    const freshConfig: OpenClawConfig = {
+      jarvis: {
+        managedServices: { mode: "managed" },
+        backend: { baseUrl: "https://jarvis.example.invalid" },
+      },
+    };
+    mocks.configState.current = freshConfig;
+    const runOpenAiCodexOAuth = vi.fn(async () => ({
+      profiles: [
+        {
+          profileId: "openai-codex:default",
+          credential: {
+            type: "oauth" as const,
+            provider: "openai-codex" as const,
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+    }));
+    const openAiCodexProvider: ProviderPlugin = {
+      id: "openai-codex",
+      label: "ChatGPT / Codex",
+      auth: [
+        {
+          id: "oauth",
+          label: "OAuth",
+          kind: "oauth",
+          run: runOpenAiCodexOAuth,
+        },
+      ],
+    };
+
+    await expect(
+      applyConsumerAuth({
+        optionId: "openai-codex-oauth",
+        config: freshConfig,
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+        providers: [openAiCodexProvider],
+        resolveReadiness: async () => ({
+          status: "ready",
+          mode: "oauth",
+          defaultModel: "openai-codex/gpt-5.6-sol",
+          configPath: "/tmp/openclaw/config.json",
+          stateDir: "/tmp/openclaw",
+          agentDir: "/tmp/openclaw-agent",
+          authMode: "oauth",
+          reasonCodes: [],
+          summary: "ready",
+          actions: [],
+          byokAvailable: false,
+          voiceStatus: "ready",
+          voiceSummary: "ready",
+          voiceActions: [],
+        }),
+      }),
+    ).resolves.toMatchObject({
+      defaultModel: "openai-codex/gpt-5.6-sol",
+      profileIds: ["openai-codex:default"],
+    });
+
+    expect(runOpenAiCodexOAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.configState.written?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.6-sol",
+      fallbacks: ["openai-codex/gpt-5.5"],
+    });
+    expect(mocks.configState.written?.agents?.defaults?.models).toMatchObject({
+      "openai-codex/gpt-5.6-sol": {},
+      "openai-codex/gpt-5.5": {},
+    });
+    expect(validateConfigObject(mocks.configState.written)).toMatchObject({ ok: true });
+  });
+
+  it("preserves an existing fallback while adding the managed GPT-5.5 fallback", async () => {
+    const configuredFallback = "anthropic/claude-sonnet-4-6";
+    const config: OpenClawConfig = {
+      jarvis: {
+        managedServices: { mode: "managed" },
+        backend: { baseUrl: "https://jarvis.example.invalid" },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+            fallbacks: [configuredFallback],
+          },
+          models: {
+            [configuredFallback]: {},
+          },
+        },
+      },
+    };
+    mocks.configState.current = config;
+    const openAiCodexProvider: ProviderPlugin = {
+      id: "openai-codex",
+      label: "ChatGPT / Codex",
+      auth: [
+        {
+          id: "oauth",
+          label: "OAuth",
+          kind: "oauth",
+          run: async () => ({
+            profiles: [
+              {
+                profileId: "openai-codex:default",
+                credential: {
+                  type: "oauth" as const,
+                  provider: "openai-codex" as const,
+                  access: "access-token",
+                  refresh: "refresh-token",
+                  expires: Date.now() + 60_000,
+                },
+              },
+            ],
+          }),
+        },
+      ],
+    };
+
+    await applyConsumerAuth({
+      optionId: "openai-codex-oauth",
+      config,
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      providers: [openAiCodexProvider],
+      resolveReadiness: async () => ({
+        status: "ready",
+        mode: "oauth",
+        defaultModel: "openai-codex/gpt-5.6-sol",
+        configPath: "/tmp/openclaw/config.json",
+        stateDir: "/tmp/openclaw",
+        agentDir: "/tmp/openclaw-agent",
+        authMode: "oauth",
+        reasonCodes: [],
+        summary: "ready",
+        actions: [],
+        byokAvailable: false,
+        voiceStatus: "ready",
+        voiceSummary: "ready",
+        voiceActions: [],
+      }),
+    });
+
+    expect(mocks.configState.written?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.6-sol",
+      fallbacks: [configuredFallback, "openai-codex/gpt-5.5"],
+    });
+    expect(validateConfigObject(mocks.configState.written)).toMatchObject({ ok: true });
+  });
+
   it("surfaces a zero-profile openai-codex OAuth result without retrying provider auth", async () => {
     const runOpenAiCodexOAuth = vi.fn(async () => ({
       profiles: [],
