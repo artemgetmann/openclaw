@@ -999,17 +999,27 @@ case_root="$(copy_case signal-cleanup)"
 : >"$case_root/control/no-transition"
 prefs_before="$(shasum -a 256 "$case_root/live/Preferences/ai.jarvis.mac.plist")"
 harness_env "$case_root" --apply --timeout 30 >/dev/null 2>&1 &
-signal_pid="$!"
-for _ in 1 2 3 4 5; do
-  [[ -s "$case_root/control/launch-count" ]] && break
+signal_wrapper_pid="$!"
+signal_sentinel=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  signal_sentinel="$(find "$case_root/runs" -name .owned-by-jarvis-sparkle-update-e2e -type f -print -quit 2>/dev/null || true)"
+  [[ -s "$case_root/control/launch-count" && -n "$signal_sentinel" ]] && break
   sleep 1
 done
-kill -TERM "$signal_pid"
+[[ -n "$signal_sentinel" ]] || fail "signal cleanup harness did not publish its ownership sentinel"
+signal_harness_pid="$(sed -n 's/^pid=//p' "$signal_sentinel")"
+[[ "$signal_harness_pid" =~ ^[1-9][0-9]*$ ]] || fail "signal cleanup sentinel has an invalid harness pid"
+
+# `$!` belongs to the backgrounded harness_env function and may be a wrapper
+# subshell rather than the harness itself. Signal the exact PID that owns the
+# run sentinel, then wait for the wrapper to reap it before inspecting cleanup.
+kill -TERM "$signal_harness_pid"
 set +e
-wait "$signal_pid"
+wait "$signal_wrapper_pid"
 signal_status="$?"
 set -e
 [[ "$signal_status" -ne 0 ]] || fail "signal interruption exited successfully"
+! kill -0 "$signal_harness_pid" >/dev/null 2>&1 || fail "signal cleanup left the harness process alive"
 prefs_after="$(shasum -a 256 "$case_root/live/Preferences/ai.jarvis.mac.plist")"
 [[ "$prefs_before" == "$prefs_after" ]] || fail "signal cleanup did not restore exact preferences"
 find "$case_root/runs" -mindepth 1 -print -quit | grep -q . && fail "signal cleanup left sentinel-owned run files"
