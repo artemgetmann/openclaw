@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 120,
+  "sequence": 121,
   "nextFence": 35,
   "mergeLease": null,
   "items": {
@@ -4261,13 +4261,132 @@
         "fence": 33,
         "recordedAt": "2026-08-10T17:34:36.814Z"
       }
+    },
+    "1389": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1389,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1389",
+        "headSha": "7e987689819946883c04b9b79ccaccb7b127ee8e",
+        "baseBranch": "main",
+        "testedBaseSha": "0dde2f43159a6e8a7b9f925e78ee510a2bcba33f",
+        "diffFingerprint": "sha256:3659cca8147b59066f926ed555d25b8a6ff4e1e6012da72010986d0c9f3975e5",
+        "changedPaths": [
+          "docs/agent-guides/jarvis-sparkle-update-e2e.md",
+          "scripts/jarvis-sparkle-update-e2e.sh",
+          "scripts/prove-jarvis-runtime.sh",
+          "scripts/test-jarvis-sparkle-update-e2e.sh",
+          "src/scripts/operator-scripts.test.ts"
+        ],
+        "title": "fix(jarvis): bind abbreviated protected commits",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: A legacy 7-40 character protected-runtime commit is accepted only when it is a prefix of the exact 40-character commit in the launchd-owned runtime's `dist/build-info.json`; protected Sparkle preflight and break-glass runtime proof then use the full commit, while a mismatch fails closed and managed proof is unchanged.\n- Exact head + builder proof: `7e987689819946883c04b9b79ccaccb7b127ee8e`; shell syntax and the full synthetic Sparkle fixture passed once under the machine guard, including deterministic signal cleanup plus exact, abbreviated-to-full, and mismatch cases.\n- Independent tester: Pending exact-head tester receipt and lifecycle closure.\n- Jarvis delivery boundary: Product-wide, source target; validated receipt below.\n- Release worker: Pending after independent tester and required CI.\n- Dependencies / merge order / overlap: None — standalone. Built directly on `main` at `0dde2f43159a6e8a7b9f925e78ee510a2bcba33f` (includes #1387).\n- Remaining proof / cleanup / rollback: Fresh required CI and independent exact-head tester remain. Package, installed-runtime, public-release, and end-user Sparkle proof are explicitly out of scope and still pending. Roll back by reverting both PR commits.\n- Still hurts: The legacy marker and backup stay abbreviated on disk; this PR safely reads them but does not rewrite protected runtime state.\n\n## Why This Matters\n\n- Problem: Current protected state can legitimately carry `381c3f8edb` in its marker and backup while the live bundle contains exact `381c3f8edbe7fcca5bbdfc964439faf621d1a7f5` build metadata.\n- Root cause: The new compatibility receipt correctly requires full commits, but preflight passed raw abbreviated provenance into that verifier and the canonical runtime proof printed only the daemon's short commit.\n- Fix: Canonicalize only abbreviated break-glass provenance against the exact live bundled build commit using one-way prefix equality. Exact values retain existing behavior; missing, malformed, or mismatched build metadata fails closed.\n- Tester-failure repair: The signal fixture previously terminated a background function wrapper instead of the sentinel-recorded harness process, so it could inspect preferences before child cleanup. It now signals the exact harness PID and waits for the wrapper to reap it.\n\n## Scope Boundary\n\n- Product-wide source behavior only.\n- No receipt schema relaxation and no managed-bundle proof change.\n- No package, app, runtime, LaunchAgent, release asset, credential, or Telegram mutation.\n\n## Verification\n\n- `bash scripts/test-jarvis-sparkle-update-e2e.sh` — PASS once under the machine guard on exact head `7e987689819946883c04b9b79ccaccb7b127ee8e`; all prior cases plus deterministic signal cleanup, exact, abbreviated-to-full, and mismatch regressions.\n- `bash -n scripts/prove-jarvis-runtime.sh scripts/jarvis-sparkle-update-e2e.sh scripts/test-jarvis-sparkle-update-e2e.sh` — PASS.\n- Parent-head context, not exact-head proof: format/type-aware lint passed and `src/scripts/operator-scripts.test.ts` passed 41/44, including both new runtime-proof cases. Three unrelated `ship-jarvis-hotfix` cases exited 126 because their self-guarded release mechanics were nested under the required outer heavy-local guard; no retry or guard bypass was attempted. The head repair changes only the synthetic signal fixture.\n\n## PR Contract\n\n- Observable claim + acceptance criteria: Legacy abbreviated protected provenance binds only to the exact live build commit; mismatch rejects; managed proof remains unchanged.\n- Exact head SHA: `7e987689819946883c04b9b79ccaccb7b127ee8e`\n- Base branch + exact SHA: `main` at `0dde2f43159a6e8a7b9f925e78ee510a2bcba33f`\n- Diff fingerprint + changed paths: SHA-256 `3659cca8147b59066f926ed555d25b8a6ff4e1e6012da72010986d0c9f3975e5` over exact raw `gh pr diff 1389 --patch`; five paths listed below.\n- Builder proof completed on that head: Full synthetic Sparkle matrix and shell syntax.\n- Builder owner: Codex project task `/root/sparkle_full_commit_fix`.\n- Tester transport / dispatcher / environment / receipt / cleanup / closure: Pending canonical exact-head tester handoff.\n- Release worker / acceptance: Pending after tester closure and required CI.\n- Source return / re-acceptance: None.\n- Base-drift recovery: None.\n- GitHub mutation transport: `host-gh`; branch push and PR creation bound to the exact head above.\n- Dependencies / merge order / overlapping PRs: None — standalone.\n- Proof still required after merge: Package, installed runtime, public Sparkle release, and end-user update behavior remain separate and pending.\n- Changed paths: `docs/agent-guides/jarvis-sparkle-update-e2e.md`, `scripts/jarvis-sparkle-update-e2e.sh`, `scripts/prove-jarvis-runtime.sh`, `scripts/test-jarvis-sparkle-update-e2e.sh`, `src/scripts/operator-scripts.test.ts`.\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"source\",\n  \"completionClaim\": \"declared-boundary-complete\",\n  \"upgradeImpact\": \"required\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home mutation is part of this product task.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"The full synthetic Sparkle regression suite passes on the exact current head.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"pending\",\n      \"evidence\": \"Packaging is outside this source-only task.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"pending\",\n      \"evidence\": \"No installed runtime mutation or proof was authorized.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Synthetic protected-runtime to managed-update acceptance passed without changing the receipt schema.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"pending\",\n      \"evidence\": \"No Sparkle asset publication was authorized.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"pending\",\n      \"evidence\": \"End-user update proof remains pending package and public release.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## Security Impact\n\n- New permissions/capabilities: No.\n- Secrets/tokens handling changed: No.\n- New/changed network calls: No.\n- Command/tool execution surface changed: No.\n- Data access scope changed: Read-only access adds the live runtime's existing `dist/build-info.json` on the protected proof path.\n\n## Compatibility / Recovery\n\n- Backward compatible: Yes. Exact commits keep the prior path; legacy abbreviated commits gain a fail-closed exact binding.\n- Config/env changes: No.\n- Migration needed: No state rewrite. Existing abbreviated records remain valid only when live build metadata proves the exact prefix.\n- Rollback: Revert `7e987689819946883c04b9b79ccaccb7b127ee8e` and `bc6f2dfe6d32f5d8172ab64acd7d2d956eedb797`.\n\n## AI Assistance\n\n- AI-assisted.\n- Testing degree: targeted synthetic; no live/runtime testing.\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "source",
+          "completionClaim": "declared-boundary-complete",
+          "upgradeImpact": "required",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation is part of this product task."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "The full synthetic Sparkle regression suite passes on the exact current head."
+            },
+            "packagedArtifact": {
+              "status": "pending",
+              "evidence": "Packaging is outside this source-only task."
+            },
+            "installedRuntime": {
+              "status": "pending",
+              "evidence": "No installed runtime mutation or proof was authorized."
+            },
+            "upgradeMigration": {
+              "status": "proven",
+              "evidence": "Synthetic protected-runtime to managed-update acceptance passed without changing the receipt schema."
+            },
+            "publicRelease": {
+              "status": "pending",
+              "evidence": "No Sparkle asset publication was authorized."
+            },
+            "endUserBehavior": {
+              "status": "pending",
+              "evidence": "End-user update proof remains pending package and public release."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fc197-0fc8-7273-849a-ed756d07606e",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fc197-0fc8-7273-849a-ed756d07606e",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "7e987689819946883c04b9b79ccaccb7b127ee8e",
+        "diffFingerprint": "sha256:3659cca8147b59066f926ed555d25b8a6ff4e1e6012da72010986d0c9f3975e5",
+        "closure": "terminal-receipt",
+        "contractId": "d552c00f-f19c-4c23-b0c4-6f6185c9679d",
+        "owner": {
+          "threadId": "/root/pr1389_tester_final",
+          "hostId": "local-subagent"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/lifecycle_policy_review",
+          "hostId": "local-subagent"
+        },
+        "headSha": "7e987689819946883c04b9b79ccaccb7b127ee8e",
+        "diffFingerprint": "sha256:3659cca8147b59066f926ed555d25b8a6ff4e1e6012da72010986d0c9f3975e5",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1389 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "087d5e50-1294-46e2-9911-7e69be63d77a",
+        "stateDirectory": "/Users/user/Programming_Projects/openclaw/.worktrees/sparkle-full-protected-commit/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-10T18:48:39.260Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "0fc540cb-266a-4532-9850-65828a36f91b-record-merge",
-    "recordedAt": "2026-08-10T17:56:48.158Z"
+    "id": "5f28c32f-e463-4b00-aae7-b28d4fb23746",
+    "recordedAt": "2026-08-10T18:48:39.260Z"
   },
-  "updatedAt": "2026-08-10T17:56:48.158Z",
+  "updatedAt": "2026-08-10T18:48:39.260Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
