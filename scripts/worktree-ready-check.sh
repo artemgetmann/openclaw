@@ -92,6 +92,51 @@ if [[ "$MODE" == "clean" && ! -f "$ROOT/dist/index.js" ]]; then
   fail "clean lanes require build output at $ROOT/dist/index.js"
 fi
 
+if [[ "$MODE" == "clean" ]]; then
+  BUILD_INFO_PATH="$ROOT/dist/build-info.json"
+  BUILD_STATE_PATH="$ROOT/dist/.openclaw-worktree-build-state.json"
+  [[ -f "$BUILD_INFO_PATH" ]] || fail "clean lanes require build metadata at $BUILD_INFO_PATH"
+  [[ -f "$BUILD_STATE_PATH" ]] || fail "clean lanes require tracked-source build state at $BUILD_STATE_PATH"
+
+  # Artifact presence alone is not readiness. A prior branch or commit can
+  # leave a perfectly executable dist/ tree behind. HEAD alone is insufficient:
+  # staged or unstaged tracked source can also advance without a commit. Bind
+  # clean readiness to both identities and let bootstrap own recovery.
+  BUILD_STATE_STATUS="$(
+    ROOT_PATH="$ROOT" BUILD_INFO_PATH="$BUILD_INFO_PATH" BUILD_STATE_PATH="$BUILD_STATE_PATH" \
+      "$OPENCLAW_NODE_BIN" --input-type=module - <<'NODE'
+import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+
+try {
+  const root = process.env.ROOT_PATH;
+  const buildInfo = JSON.parse(fs.readFileSync(process.env.BUILD_INFO_PATH, "utf8"));
+  const buildState = JSON.parse(fs.readFileSync(process.env.BUILD_STATE_PATH, "utf8"));
+  const commit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  const trackedDiff = execFileSync("git", ["-C", root, "diff", "--binary", "HEAD", "--"], {
+    encoding: null,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const trackedDiffHash = crypto.createHash("sha256").update(trackedDiff).digest("hex");
+  if (buildInfo?.commit !== commit || buildState?.commit !== commit) {
+    process.stdout.write("commit_mismatch");
+  } else if (buildState?.version !== 1 || buildState?.trackedDiffHash !== trackedDiffHash) {
+    process.stdout.write("tracked_source_mismatch");
+  } else {
+    process.stdout.write("current");
+  }
+} catch {
+  process.stdout.write("invalid_metadata");
+}
+NODE
+  )"
+  [[ "$BUILD_STATE_STATUS" == "current" ]] ||
+    fail "clean lane build is stale (${BUILD_STATE_STATUS}): rebuild tracked source state in $ROOT"
+fi
+
 # The specific failure we are closing is "pnpm exec vitest" resolving to
 # nothing in a supposedly ready lane. Prove the local tool is executable from
 # this worktree before handing it to an agent.

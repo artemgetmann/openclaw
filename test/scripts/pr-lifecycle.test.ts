@@ -35,6 +35,20 @@ type LifecycleOutput = {
   owner?: { threadId: string; hostId: string } | null;
   prompt?: string;
   retryOfContractId?: string | null;
+  environmentContract?: {
+    contractId: string;
+    method: string;
+    credentialMode: string;
+    readyMode: string;
+    admission: {
+      mode: string;
+      waitSeconds: number;
+      leaseHeldWhileWaiting: boolean;
+    };
+    branchName: string;
+    command: string;
+    readinessCommand: string;
+  } | null;
   routing?: {
     dispatcher: { role: string; threadId: string; hostId: string };
     decision: string;
@@ -265,6 +279,36 @@ function beginLiveTester(fixture: ReturnType<typeof makeFixture>) {
   ]);
 }
 
+function readyEnvironment(tester: LifecycleOutput) {
+  return {
+    status: "ready",
+    contractId: tester.contractId,
+    method: tester.environmentContract?.method,
+    credentialMode: "none",
+    readyMode: "warm",
+    laneReady: true,
+  };
+}
+
+function capacityBlockedEnvironment(tester: LifecycleOutput) {
+  return {
+    status: "blocked",
+    contractId: tester.contractId,
+    class: "bootstrap_guard",
+    code: "guard_refused",
+    preCollection: true,
+    workloadStarted: false,
+    bootstrapAttempted: true,
+  };
+}
+
+function markActiveTesterAsLegacyCapacityContract(fixture: ReturnType<typeof makeFixture>) {
+  const statePath = path.join(fixture.root, "state", "pr-42.json");
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  delete state.tester.environmentContract.admission;
+  fs.writeFileSync(statePath, JSON.stringify(state));
+}
+
 function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
   const tester = run(fixture, [
     "handoff-test",
@@ -288,6 +332,9 @@ function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
     "--host-id",
     "tester-host",
   ]);
+  // Capacity replacement remains readable for contracts emitted before the
+  // same-owner waiter existed. New contracts reject this terminal receipt.
+  markActiveTesterAsLegacyCapacityContract(fixture);
   const receiptPath = path.join(fixture.root, "capacity-fail.json");
   fs.writeFileSync(
     receiptPath,
@@ -300,7 +347,7 @@ function completeCapacityOnlyFailure(fixture: ReturnType<typeof makeFixture>) {
       headSha: tester.candidate?.headSha,
       diffFingerprint: tester.candidate?.diffFingerprint,
       owner: { threadId: "capacity-blocked-tester", hostId: "tester-host" },
-      workloadStarted: false,
+      environment: capacityBlockedEnvironment(tester),
       evidence: ["heavy guard refused disk pressure before workload start"],
       cleanup: { status: "not-required", evidence: "workload never started" },
       limitations: [],
@@ -334,6 +381,7 @@ function completeJarvisHealthFailure(fixture: ReturnType<typeof makeFixture>) {
     "--host-id",
     "tester-host",
   ]);
+  markActiveTesterAsLegacyCapacityContract(fixture);
   const receiptPath = path.join(fixture.root, "jarvis-health-fail.json");
   fs.writeFileSync(
     receiptPath,
@@ -346,6 +394,7 @@ function completeJarvisHealthFailure(fixture: ReturnType<typeof makeFixture>) {
       headSha: tester.candidate?.headSha,
       diffFingerprint: tester.candidate?.diffFingerprint,
       owner: { threadId: "health-blocked-tester", hostId: "tester-host" },
+      environment: capacityBlockedEnvironment(tester),
       workloadStarted: false,
       evidence: ["heavy guard refused unhealthy Jarvis before workload start"],
       cleanup: { status: "complete", evidence: "partial dependency bootstrap removed" },
@@ -360,6 +409,109 @@ function completeJarvisHealthFailure(fixture: ReturnType<typeof makeFixture>) {
     tester.contractId,
     "--thread-id",
     "health-blocked-tester",
+    "--host-id",
+    "tester-host",
+    "--closure",
+    "archived",
+  ]);
+  return tester;
+}
+
+function completeCurrentContractFailure(
+  fixture: ReturnType<typeof makeFixture>,
+  environment: (tester: LifecycleOutput) => Record<string, unknown>,
+) {
+  const tester = beginLiveTester(fixture);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "failed-tester",
+    "--host-id",
+    "tester-host",
+  ]);
+  const receiptPath = path.join(fixture.root, "current-contract-fail.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "FAIL",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "failed-tester", hostId: "tester-host" },
+      environment: environment(tester),
+      evidence: ["terminal failure that must not enter capacity recovery"],
+      cleanup: { status: "not-required", evidence: "no protected state created" },
+      limitations: [],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "failed-tester",
+    "--host-id",
+    "tester-host",
+    "--closure",
+    "archived",
+  ]);
+  return tester;
+}
+
+function completeEnvironmentOnlyBlock(fixture: ReturnType<typeof makeFixture>) {
+  const tester = beginLiveTester(fixture);
+  run(fixture, [
+    "accept-test-owner",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "environment-blocked-tester",
+    "--host-id",
+    "tester-host",
+  ]);
+  const receiptPath = path.join(fixture.root, "environment-blocked.json");
+  fs.writeFileSync(
+    receiptPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      role: "tester",
+      routing: tester.routing,
+      contractId: tester.contractId,
+      status: "BLOCKED",
+      headSha: tester.candidate?.headSha,
+      diffFingerprint: tester.candidate?.diffFingerprint,
+      owner: { threadId: "environment-blocked-tester", hostId: "tester-host" },
+      environment: {
+        status: "blocked",
+        contractId: tester.contractId,
+        class: "test_environment",
+        code: "dependencies_unavailable",
+        preCollection: true,
+        workloadStarted: false,
+        bootstrapAttempted: true,
+      },
+      evidence: ["canonical warm adoption failed before test collection"],
+      cleanup: { status: "not-required", evidence: "behavioral workload never started" },
+      limitations: ["behavioral acceptance was not attempted"],
+    }),
+  );
+  run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+  run(fixture, [
+    "close-test",
+    "42",
+    "--contract-id",
+    tester.contractId,
+    "--thread-id",
+    "environment-blocked-tester",
     "--host-id",
     "tester-host",
     "--closure",
@@ -501,6 +653,23 @@ function capacityRetryArgs(
   ];
 }
 
+function environmentRetryArgs(priorTesterContractId: string) {
+  return [
+    "handoff-test",
+    "42",
+    "--test-kind",
+    "live-external",
+    "--transport",
+    "user-visible-task",
+    "--owner-thread",
+    "builder-thread",
+    "--owner-host",
+    "builder-host",
+    "--environment-retry-contract",
+    priorTesterContractId,
+  ];
+}
+
 function acceptReleaseHandoff(fixture: ReturnType<typeof makeFixture>, contractId: string) {
   return run(fixture, [
     "accept-release-handoff",
@@ -569,6 +738,7 @@ function completeTesterPass(fixture: ReturnType<typeof makeFixture>) {
       headSha: tester.candidate?.headSha,
       diffFingerprint: tester.candidate?.diffFingerprint,
       owner: { threadId: "tester-thread", hostId: "tester-host" },
+      environment: readyEnvironment(tester),
       evidence: ["exact-head lifecycle proof passed"],
       cleanup: { status: "complete" },
       limitations: [],
@@ -823,6 +993,25 @@ describe("scripts/pr-lifecycle", () => {
       "Never route live/external testing or release through a nested sub-agent",
     );
     expect(first.prompt).toContain("gh pr diff 42 --patch");
+    expect(first.environmentContract).toMatchObject({
+      contractId: first.contractId,
+      method: "canonical-warm-adoption",
+      credentialMode: "none",
+      readyMode: "warm",
+      admission: {
+        mode: "same-owner-bounded-wait",
+        waitSeconds: 86400,
+        leaseHeldWhileWaiting: false,
+      },
+    });
+    expect(first.environmentContract?.branchName).toBe(
+      `pr-42-tester-${first.contractId.slice(0, 8)}`,
+    );
+    expect(first.prompt).toContain("before test collection or any dependency-requiring command");
+    expect(first.prompt).toContain("--credential-mode none");
+    expect(first.environmentContract?.command).toContain("--capacity-wait-seconds 86400");
+    expect(first.prompt).toContain("must not emit a terminal receipt");
+    expect(first.prompt).toContain("test_environment/dependencies_unavailable");
 
     // The crash window between contract emission and native task acceptance is
     // deliberately one-shot. A compacted builder sees the pending claim and
@@ -896,6 +1085,179 @@ describe("scripts/pr-lifecycle", () => {
     expect(state.testerHistory).toHaveLength(1);
     expect(state.testerHistory[0].tester.contractId).toBe(priorTester.contractId);
     expect(state.tester.retryOfContractId).toBe(priorTester.contractId);
+  });
+
+  it("keeps repeated pre-workload owner races on one tester identity", () => {
+    const fixture = makeFixture();
+    const tester = beginLiveTester(fixture);
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "tester-thread",
+      "--host-id",
+      "tester-host",
+    ]);
+
+    // A waiter may observe any number of short-lived owners internally. Until
+    // admission or a real fail-closed condition, lifecycle ownership remains
+    // the same active contract and no retry history exists.
+    for (let race = 0; race < 3; race += 1) {
+      expect(beginLiveTester(fixture)).toMatchObject({
+        action: "do-not-create",
+        contractId: tester.contractId,
+        owner: { threadId: "tester-thread", hostId: "tester-host" },
+      });
+    }
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.tester.phase).toBe("active");
+    expect(state.testerHistory ?? []).toHaveLength(0);
+  });
+
+  it("rejects terminal occupied receipts but preserves real post-workload failures", () => {
+    const fixture = makeFixture();
+    const tester = beginLiveTester(fixture);
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "tester-thread",
+      "--host-id",
+      "tester-host",
+    ]);
+    const receiptPath = path.join(fixture.root, "owner-race.json");
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: tester.routing,
+        contractId: tester.contractId,
+        status: "FAIL",
+        headSha: tester.candidate?.headSha,
+        diffFingerprint: tester.candidate?.diffFingerprint,
+        owner: { threadId: "tester-thread", hostId: "tester-host" },
+        environment: capacityBlockedEnvironment(tester),
+        evidence: ["short owner race before workload"],
+        cleanup: { status: "not-required" },
+        limitations: [],
+      }),
+    );
+    const rejected = runFailure(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("tester receipt is incomplete or does not match");
+
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: tester.routing,
+        contractId: tester.contractId,
+        status: "FAIL",
+        headSha: tester.candidate?.headSha,
+        diffFingerprint: tester.candidate?.diffFingerprint,
+        owner: { threadId: "tester-thread", hostId: "tester-host" },
+        environment: readyEnvironment(tester),
+        evidence: ["behavioral assertion failed after workload start"],
+        cleanup: { status: "not-required" },
+        limitations: [],
+      }),
+    );
+    expect(run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath])).toMatchObject({
+      status: "FAIL",
+    });
+  });
+
+  it("does not consume the behavioral attempt for one exact pre-collection environment block", () => {
+    const fixture = makeFixture();
+    const blocked = completeEnvironmentOnlyBlock(fixture);
+    const retryArgs = environmentRetryArgs(blocked.contractId);
+
+    const retry = run(fixture, retryArgs);
+    expect(retry).toMatchObject({
+      action: "create_thread",
+      retryOfContractId: blocked.contractId,
+    });
+    expect(retry.contractId).not.toBe(blocked.contractId);
+
+    const repeated = run(fixture, retryArgs);
+    expect(repeated).toMatchObject({ action: "do-not-create", contractId: retry.contractId });
+
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.testerHistory).toHaveLength(1);
+    expect(state.testerHistory[0]).toMatchObject({
+      environmentRetry: true,
+      behavioralAttemptConsumed: false,
+      tester: { contractId: blocked.contractId, receipt: { status: "BLOCKED" } },
+    });
+  });
+
+  it("rejects malformed or recursive environment retry claims", () => {
+    const fixture = makeFixture();
+    const blocked = completeEnvironmentOnlyBlock(fixture);
+    const replacement = run(fixture, environmentRetryArgs(blocked.contractId));
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      replacement.contractId,
+      "--thread-id",
+      "replacement-environment-tester",
+      "--host-id",
+      "tester-host",
+    ]);
+    const receiptPath = path.join(fixture.root, "replacement-environment-blocked.json");
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: replacement.routing,
+        contractId: replacement.contractId,
+        status: "BLOCKED",
+        headSha: replacement.candidate?.headSha,
+        diffFingerprint: replacement.candidate?.diffFingerprint,
+        owner: { threadId: "replacement-environment-tester", hostId: "tester-host" },
+        environment: {
+          status: "blocked",
+          contractId: replacement.contractId,
+          class: "test_environment",
+          code: "dependencies_unavailable",
+          preCollection: true,
+          workloadStarted: false,
+          bootstrapAttempted: true,
+        },
+        evidence: ["replacement canonical warm adoption also failed before collection"],
+        cleanup: { status: "not-required" },
+        limitations: [],
+      }),
+    );
+    run(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
+    run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      replacement.contractId,
+      "--thread-id",
+      "replacement-environment-tester",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+
+    const recursive = runFailure(fixture, environmentRetryArgs(replacement.contractId));
+    expect(recursive.status).toBe(1);
+    expect(recursive.stderr).toContain("environment retry was already consumed");
   });
 
   it("permits one replacement after a bounded occupied-slot refusal is proven cleared", () => {
@@ -992,7 +1354,7 @@ describe("scripts/pr-lifecycle", () => {
     expect(result.stderr).toContain("prove that exact host gate recovered");
   });
 
-  it("refuses a recursive capacity retry after the one replacement also fails", () => {
+  it("keeps a legacy replacement active when its bounded capacity wait cannot admit", () => {
     const fixture = makeFixture();
     const originalTester = completeCapacityOnlyFailure(fixture);
     const originalRecovery = writeCapacityRecovery(fixture, originalTester.contractId);
@@ -1001,8 +1363,9 @@ describe("scripts/pr-lifecycle", () => {
       capacityRetryArgs(originalTester.contractId, originalRecovery),
     );
 
-    // Close the authorized replacement with the same pre-work capacity-only
-    // failure. This must not mint a fresh retry budget from its new identity.
+    // A legacy contract may create its one authorized replacement. That new
+    // contract has bounded-wait semantics, so another owner race cannot close
+    // it or mint a fresh retry budget from its identity.
     run(fixture, [
       "accept-test-owner",
       "42",
@@ -1025,42 +1388,60 @@ describe("scripts/pr-lifecycle", () => {
         headSha: replacement.candidate?.headSha,
         diffFingerprint: replacement.candidate?.diffFingerprint,
         owner: { threadId: "replacement-tester", hostId: "tester-host" },
-        workloadStarted: false,
+        environment: capacityBlockedEnvironment(replacement),
         evidence: ["heavy guard again refused disk pressure before workload start"],
         cleanup: { status: "not-required", evidence: "workload never started" },
         limitations: [],
       }),
     );
-    run(fixture, ["record-test-receipt", "42", "--receipt", replacementReceiptPath]);
-    run(fixture, [
-      "close-test",
+    const terminalCapacityReceipt = runFailure(fixture, [
+      "record-test-receipt",
       "42",
-      "--contract-id",
-      replacement.contractId,
-      "--thread-id",
-      "replacement-tester",
-      "--host-id",
-      "tester-host",
-      "--closure",
-      "archived",
+      "--receipt",
+      replacementReceiptPath,
     ]);
-
-    const secondRecovery = writeCapacityRecovery(fixture, replacement.contractId);
-    const recursiveRetry = runFailure(
-      fixture,
-      capacityRetryArgs(replacement.contractId, secondRecovery),
-    );
-    expect(recursiveRetry.status).toBe(1);
-    expect(recursiveRetry.stderr).toContain(
-      "capacity retry was already consumed for this immutable candidate",
+    expect(terminalCapacityReceipt.status).toBe(1);
+    expect(terminalCapacityReceipt.stderr).toContain(
+      "tester receipt is incomplete or does not match",
     );
 
     const state = JSON.parse(
       fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
     );
     expect(state.tester.contractId).toBe(replacement.contractId);
-    expect(state.tester.phase).toBe("closed");
+    expect(state.tester.phase).toBe("active");
     expect(state.testerHistory).toHaveLength(1);
+  });
+
+  it.each([
+    ["post-workload behavioral failure", readyEnvironment],
+    [
+      "internal guard failure",
+      (tester: LifecycleOutput) => ({
+        status: "blocked",
+        contractId: tester.contractId,
+        class: "bootstrap_guard",
+        code: "guard_internal",
+        preCollection: true,
+        workloadStarted: false,
+        bootstrapAttempted: true,
+      }),
+    ],
+  ])("rejects legacy capacity recovery after %s", (_label, environment) => {
+    const fixture = makeFixture();
+    const tester = completeCurrentContractFailure(fixture, environment);
+    const recoveryPath = writeCapacityRecovery(fixture, tester.contractId);
+
+    const result = runFailure(fixture, capacityRetryArgs(tester.contractId, recoveryPath));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("historical contract without bounded admission");
+
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.tester.contractId).toBe(tester.contractId);
+    expect(state.tester.phase).toBe("closed");
+    expect(state.testerHistory ?? []).toHaveLength(0);
   });
 
   it("rejects capacity retry without exact no-work and recovered-capacity proof", () => {
@@ -1101,6 +1482,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: tester.candidate?.headSha,
         diffFingerprint: tester.candidate?.diffFingerprint,
         owner: { threadId: "tester-thread", hostId: "tester-host" },
+        environment: readyEnvironment(tester),
         evidence: ["focused lifecycle tests passed"],
         cleanup: { status: "complete", evidence: "no runtime state created" },
         limitations: ["source-only proof"],
@@ -1764,6 +2146,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: tester.candidate?.headSha,
         diffFingerprint: tester.candidate?.diffFingerprint,
         owner: { threadId: "tester-thread", hostId: "tester-host" },
+        environment: readyEnvironment(tester),
         evidence: ["old proof"],
         cleanup: { status: "complete" },
         limitations: [],
@@ -1991,6 +2374,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: firstTester.candidate?.headSha,
         diffFingerprint: firstTester.candidate?.diffFingerprint,
         owner: { threadId: "first-tester", hostId: "tester-host" },
+        environment: readyEnvironment(firstTester),
         evidence: ["first candidate passed"],
         cleanup: { status: "complete" },
         limitations: [],
@@ -2248,6 +2632,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: replacementTester.candidate?.headSha,
         diffFingerprint: replacementTester.candidate?.diffFingerprint,
         owner: { threadId: "replacement-tester", hostId: "tester-host" },
+        environment: readyEnvironment(replacementTester),
         evidence: ["tester found a second source repair"],
         cleanup: { status: "complete" },
         limitations: [],
@@ -2324,6 +2709,7 @@ describe("scripts/pr-lifecycle", () => {
         headSha: secondRepairedTester.candidate?.headSha,
         diffFingerprint: secondRepairedTester.candidate?.diffFingerprint,
         owner: { threadId: "second-repaired-tester", hostId: "tester-host" },
+        environment: readyEnvironment(secondRepairedTester),
         evidence: ["second repaired candidate passed"],
         cleanup: { status: "complete" },
         limitations: [],

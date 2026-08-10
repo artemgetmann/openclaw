@@ -67,12 +67,31 @@ const fixture = () => {
       body += 'touch "$PWD/bootstrap-effect"\n';
     } else if (script === "bootstrap-worktree-tester-baseline.sh") {
       body +=
+        'if [[ -n "${TEST_BASELINE_ENV_LOG:-}" ]]; then printf \'%s\\n%s\\n\' "${OPENCLAW_WORKTREE_BASELINE_SOURCE_CONFIG_PATH:-}" "${OPENCLAW_WORKTREE_BASELINE_SOURCE_STATE_DIR:-}" > "$TEST_BASELINE_ENV_LOG"; fi\n' +
         "printf 'baseline_state_dir=/tmp/fixture-state\\nbaseline_config_path=/tmp/fixture-config\\n'\n";
     } else if (script === "worktree-ready-check.sh") {
       body += "printf 'lane_ready=yes\\n'\n";
     }
     writeFileSync(path.join(home, "scripts", script), body, { mode: 0o755 });
   }
+  writeFileSync(
+    path.join(home, "scripts", "with-heavy-local-slot.sh"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+wait_seconds=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --label) shift 2 ;;
+    --wait-seconds) wait_seconds="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) exit 2 ;;
+  esac
+done
+printf '%s\\n' "$wait_seconds" > "$PWD/capacity-wait-seconds"
+exec "$@"
+`,
+    { mode: 0o755 },
+  );
   run(home, "git", ["add", "."]);
   run(home, "git", ["commit", "-m", "fixture scripts"]);
   run(home, "git", ["push", "origin", "main"]);
@@ -87,6 +106,7 @@ const adopt = (
   name: string,
   thread = "thread-fixture",
   env?: NodeJS.ProcessEnv,
+  extraArgs: string[] = [],
 ) =>
   result(
     detached,
@@ -99,6 +119,7 @@ const adopt = (
       "--no-home-refresh",
       "--thread-id",
       thread,
+      ...extraArgs,
     ],
     { OPENCLAW_MAIN_HOME_CLONE: home, ...env },
   );
@@ -115,6 +136,42 @@ describe("Codex worktree adoption ownership", () => {
     );
     expect(run(detached, "git", ["branch", "--show-current"])).toBe("codex/single-owner");
     expect(existsSync(path.join(detached, "bootstrap-effect"))).toBe(true);
+  });
+
+  it("adopts a source-only tester without reading credential baselines", () => {
+    const { home, detached } = fixture();
+    const baselineLog = path.join(detached, "baseline-env.log");
+    const adopted = adopt(
+      home,
+      detached,
+      "credential-free",
+      "tester-thread",
+      { TEST_BASELINE_ENV_LOG: baselineLog },
+      ["--credential-mode", "none"],
+    );
+
+    expect(adopted.status).toBe(0);
+    expect(adopted.stdout).toContain("credential_mode=none");
+    expect(adopted.stdout).toContain("telegram_bootstrap=skipped-no-credentials");
+    expect(existsSync(path.join(detached, "bootstrap-effect"))).toBe(false);
+    const [configSource, stateSource] = run(detached, "sed", ["-n", "1,2p", baselineLog]).split(
+      "\n",
+    );
+    expect(configSource).toContain(".local/no-credential-baseline-source/openclaw.json");
+    expect(stateSource).toContain(".local/no-credential-baseline-source");
+  });
+
+  it("uses one bounded lease-free wait for source-only tester bootstrap", () => {
+    const { home, detached } = fixture();
+    const adopted = adopt(home, detached, "bounded-wait", "tester-thread", undefined, [
+      "--credential-mode",
+      "none",
+      "--capacity-wait-seconds",
+      "86400",
+    ]);
+
+    expect(adopted.status).toBe(0);
+    expect(run(detached, "sed", ["-n", "1p", "capacity-wait-seconds"])).toBe("86400");
   });
 
   it("fails before bootstrap when the intended branch is attached elsewhere", () => {

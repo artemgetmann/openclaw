@@ -172,6 +172,31 @@ must not be used to recompute candidate identity. The emitted tester prompt
 records this algorithm so independent validation fails closed for real drift,
 not a formatting mismatch.
 
+A fresh user-visible tester must complete the emitted credential-free warm
+adoption command before test collection or any dependency-requiring workload.
+That command attaches a contract-unique branch at the immutable PR head,
+installs repository-pinned dependencies, creates an empty isolated baseline,
+and proves `worktree-ready-check.sh --mode warm` without copying Telegram,
+model, or runtime credentials. The tester receipt binds that environment proof
+to the same owner, head, diff fingerprint, and tester contract. Canonical
+adoption waits up to 24 hours for guarded bootstrap admission without holding a
+machine lease. Ordinary occupied or recoverable host-unhealthy observations
+keep that exact tester owner and contract active; they do not create a terminal
+receipt, consume an attempt, archive the tester, or reserve a replacement.
+Fresh exact-head reviewers use the same credential-free warm adoption before
+any dependency-requiring review command; a purely static GitHub patch review
+does not need local dependencies.
+
+If canonical adoption fails, or collection reports
+`test_environment/dependencies_unavailable` before behavioral work starts, the
+tester returns `BLOCKED` with `preCollection=true` and
+`workloadStarted=false`. That exact archived environment block does not consume
+the behavioral tester attempt. `handoff-test --environment-retry-contract`
+may atomically reserve one replacement on the unchanged candidate; the attempt
+ledger prevents a second environment retry. Any other failure, source drift,
+active or ambiguous owner, incomplete cleanup, or post-collection failure
+remains fail-closed and cannot use this recovery path.
+
 A user-visible live tester additionally proves exact immutable source and
 runtime provenance, uses stable isolated identities, and runs exactly one bounded
 scenario when the acceptance contract says one. Its handoff must grant the exact
@@ -197,29 +222,25 @@ identity. `handoff-release` refuses a stale, failed, incomplete, or unclosed
 tester receipt.
 
 A capacity or managed-Jarvis health guard refusal before workload start is not
-source proof and is not a generic retry license. After a failed user-visible
-tester is archived, the same builder may pass its exact contract plus a typed
-capacity-owner recovery receipt to `handoff-test --capacity-retry-contract ...
---capacity-recovery-receipt ...`. One additional shape is legal: a
-`nested-read-only` tester terminally closed by `terminal-receipt` may retry on
-the same nested transport only when its sole recovered gate is
-`heavy_slot_occupied`. Its terminal tester receipt must carry the same typed
-`terminalCause` as the recovery receipt; free-text evidence or an independently
-asserted recovery cause cannot turn a source/test failure into a capacity
-retry. Nested disk, Jarvis-health, transport-changing, or post-workload retries
-remain forbidden.
+source proof and is not a generic retry license. New tester contracts handle
+ordinary recoverable capacity inside the same-owner bounded wait above. If that
+wait expires, the tester reports a material blocker while remaining active; it
+does not record a tester receipt. `guard_internal`, identity/head/fingerprint
+drift, cleanup ambiguity, or any post-workload failure still fails closed.
 
-The receipt must bind that closed `FAIL`, record `workloadStarted=false`, prove
-the exact failed gate recovered, prove empty heavy/release lock directories,
-and preserve the same immutable candidate and test contract. The terminal
-tester receipt must independently record `workloadStarted=false`; cleanup may
-be `not-required`, or `complete` only when the workload never started. The
-command moves the failed tester unchanged into the attempt ledger and
-atomically reserves exactly one fresh tester. Repeating the command returns the
-existing reservation; a source/test failure, completed workload, wrong closure
-or transport, missing recovery proof, unrecovered host gate, occupied lock,
-release owner, repeated retry, identity drift, or different candidate fails
-closed.
+Historical tester contracts emitted before the bounded-wait policy may use one
+typed capacity-owner recovery receipt with `handoff-test
+--capacity-retry-contract ... --capacity-recovery-receipt ...`. This legacy
+transition requires the exact archived pre-workload `FAIL`, recovered host gate,
+empty heavy/release locks, unchanged candidate, and complete or unnecessary
+cleanup. Its replacement uses the current same-owner bounded-wait policy and
+cannot consume another capacity retry.
+
+The legacy transition also permits a `nested-read-only` tester closed by
+`terminal-receipt` to retry on the same nested transport only when its sole
+recovered gate is `heavy_slot_occupied`. The tester receipt and recovery receipt
+must carry the same typed cause with `workloadStarted=false`; free-text evidence,
+other host gates, transport changes, and post-workload failures remain forbidden.
 
 ### 4. One release operator owns merge
 

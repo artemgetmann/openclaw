@@ -32,7 +32,7 @@ function fail(message, exitCode = 1) {
 
 function usage() {
   process.stderr.write(`Usage:
-  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> --review-receipt <FILE> [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>]
+  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> --review-receipt <FILE> [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>] [--environment-retry-contract <ID>]
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
@@ -346,6 +346,31 @@ function testerRouting(testKind, transport, builder) {
   };
 }
 
+function testerEnvironmentContract(candidate, contractId, transport) {
+  if (transport !== "user-visible-task") {
+    return null;
+  }
+  // A tester worktree starts detached at the immutable PR head. Give adoption
+  // a contract-unique branch so it cannot collide with or steal the builder's
+  // source branch, while keeping the exact candidate commit unchanged.
+  const branchName = `pr-${candidate.number}-tester-${contractId.slice(0, 8)}`;
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    contractId,
+    method: "canonical-warm-adoption",
+    credentialMode: "none",
+    readyMode: "warm",
+    admission: {
+      mode: "same-owner-bounded-wait",
+      waitSeconds: 86400,
+      leaseHeldWhileWaiting: false,
+    },
+    branchName,
+    command: `bash scripts/adopt-codex-worktree.sh ${branchName} --mode warm --credential-mode none --capacity-wait-seconds 86400 --allow-stale-head --no-home-refresh --thread-id "\${CODEX_THREAD_ID:?CODEX_THREAD_ID is required}"`,
+    readinessCommand: 'bash scripts/worktree-ready-check.sh --root "$PWD" --mode warm',
+  };
+}
+
 function readCapacityRecovery(receiptPath, priorTester) {
   let receipt;
   try {
@@ -403,6 +428,7 @@ function ownerPrompt(role, state, stateDirectory) {
   const { candidate, builder } = state;
   const testerReceipt = role === "release" ? state.tester?.receipt : null;
   const releaseAuthority = role === "release" ? state.release?.taskAuthority : null;
+  const environmentContract = role === "tester" ? state.tester?.environmentContract : null;
   return [
     `Task: ${role === "tester" ? "Independently test" : "Release"} OpenClaw PR #${candidate.number} on the immutable candidate below.`,
     `Owner/cwd: fresh user-visible project-scoped Codex task in the OpenClaw project.`,
@@ -420,6 +446,15 @@ function ownerPrompt(role, state, stateDirectory) {
     role === "tester"
       ? `Scope: falsify the fixed acceptance criteria on this exact head; do not edit source, merge, deploy, or expand scope.`
       : `Tester: ${testerReceipt.status}; thread=${testerReceipt.owner.threadId} host=${testerReceipt.owner.hostId}; evidence=${testerReceipt.evidence.join(" | ")}`,
+    environmentContract
+      ? `Environment gate: before test collection or any dependency-requiring command, run ${environmentContract.command}; then run ${environmentContract.readinessCommand}. The command fails closed unless this task exposes its exact CODEX_THREAD_ID. Do not access or copy Telegram, model, or runtime credentials. A ready receipt must bind contractId=${environmentContract.contractId}, method=${environmentContract.method}, credentialMode=none, readyMode=warm, and laneReady=true.`
+      : null,
+    environmentContract
+      ? `Environment failure: if canonical adoption/readiness fails, or collection reports test_environment/dependencies_unavailable before behavioral workload starts, run no behavioral retry. Return status=BLOCKED with environment={status:"blocked",contractId:"${environmentContract.contractId}",class:"test_environment",code:"dependencies_unavailable",preCollection:true,workloadStarted:false,bootstrapAttempted:true}. This environment block does not consume the behavioral tester attempt.`
+      : null,
+    environmentContract
+      ? `Capacity wait: canonical adoption owns one same-thread, same-contract bounded wait for up to ${environmentContract.admission.waitSeconds} seconds. Ordinary occupied or recoverable host-unhealthy admission waits lease-free and must not emit a terminal receipt, archive this tester, consume a behavioral attempt, or create a replacement tester. If the bounded wait expires, preserve this exact active owner and report the material blocker without recording a tester receipt. guard_internal, identity/head/fingerprint drift, cleanup ambiguity, or any failure after workload start still fails closed.`
+      : null,
     role === "tester"
       ? `Diff identity: if independently recomputing the fingerprint, hash the exact raw stdout bytes from gh pr diff ${candidate.number} --patch with SHA-256. A plain gh pr diff uses a different format and is not the lifecycle fingerprint.`
       : null,
@@ -427,7 +462,7 @@ function ownerPrompt(role, state, stateDirectory) {
       ? `Constraints: return one terminal receipt; preserve source/runtime/live proof boundaries; perform external or live actions only when explicitly granted in this task.`
       : `Authority packet: ${JSON.stringify(releaseAuthority)}. Treat only allowedActions as durable authority. Never infer credentials, OTP, admin/bypass, irreversible/public-release, or new-scope authority.`,
     role === "tester"
-      ? `Handback: send the builder a JSON receipt matching scripts/pr-lifecycle record-test-receipt, including the emitted routing object, exact task identity, head, diff, PASS|FAIL, evidence, cleanup, and limitations.`
+      ? `Handback: send the builder a JSON receipt matching scripts/pr-lifecycle record-test-receipt, including the emitted routing object, exact task identity, head, diff, PASS|FAIL|BLOCKED, environment receipt, evidence, cleanup, and limitations.`
       : `Acceptance gate: before review, merge, or deploy work, archive the exact builder thread above, verify archived=true, then run scripts/pr-lifecycle accept-release-handoff with both exact identities and --builder-archived true. Stop if that receipt is not release-handoff-accepted.`,
     role === "release"
       ? `Source return: if review finds concrete source work, unarchive only that exact builder, verify archived=false, run scripts/pr-lifecycle return-source with the exact finding, send the finding to that same builder, and pause. Never create a replacement builder. After repaired proof resumes this task, repeat the acceptance gate and re-archive the builder before continuing.`
@@ -451,6 +486,7 @@ function handoffTest(pr, options) {
   const returningReleaseContract = options.returningReleaseContract?.trim() || null;
   const capacityRetryContract = options.capacityRetryContract?.trim() || null;
   const capacityRecoveryReceipt = options.capacityRecoveryReceipt?.trim() || null;
+  const environmentRetryContract = options.environmentRetryContract?.trim() || null;
   if (Boolean(capacityRetryContract) !== Boolean(capacityRecoveryReceipt)) {
     fail(
       "capacity retry requires both --capacity-retry-contract and --capacity-recovery-receipt",
@@ -459,6 +495,12 @@ function handoffTest(pr, options) {
   }
   if (capacityRetryContract && returningReleaseContract) {
     fail("capacity retry and release source-return retry are separate transitions", 2);
+  }
+  if (environmentRetryContract && (capacityRetryContract || returningReleaseContract)) {
+    fail(
+      "environment retry, capacity retry, and release source-return retry are separate transitions",
+      2,
+    );
   }
   if (!new Set(["read-only", "live-external"]).has(testKind)) {
     fail("--test-kind must be read-only or live-external", 2);
@@ -536,6 +578,9 @@ function handoffTest(pr, options) {
     const consumedCapacityRetry = state.testerHistory?.some(
       (attempt) => attempt?.capacityRecoveryReceipt !== null,
     );
+    const consumedEnvironmentRetry = state.testerHistory?.some(
+      (attempt) => attempt?.environmentRetry === true,
+    );
     if (
       capacityRetryContract &&
       consumedCapacityRetry &&
@@ -557,6 +602,25 @@ function handoffTest(pr, options) {
     if (capacityRetryContract && consumedCapacityRetry) {
       fail("capacity retry was already consumed for this immutable candidate");
     }
+    if (
+      environmentRetryContract &&
+      consumedEnvironmentRetry &&
+      state.tester?.retryOfContractId === environmentRetryContract
+    ) {
+      return {
+        state,
+        output: {
+          schemaVersion: SCHEMA_VERSION,
+          action: "do-not-create",
+          reason: `environment retry already created tester lifecycle ${state.tester.phase}`,
+          contractId: state.tester.contractId,
+          owner: state.tester.owner ?? null,
+        },
+      };
+    }
+    if (environmentRetryContract && consumedEnvironmentRetry) {
+      fail("environment retry was already consumed for this immutable candidate");
+    }
 
     if (state.tester && !["closed", "cancelled"].includes(state.tester.phase)) {
       return {
@@ -573,7 +637,7 @@ function handoffTest(pr, options) {
     let retryOfContractId = null;
     let recoveryReceipt = null;
     if (state.tester?.phase === "closed") {
-      if (!capacityRetryContract) {
+      if (!capacityRetryContract && !environmentRetryContract) {
         return {
           state,
           output: {
@@ -586,67 +650,120 @@ function handoffTest(pr, options) {
       }
 
       const priorTester = state.tester;
-      if (priorTester.contractId !== capacityRetryContract) {
-        fail("capacity retry contract does not match the exact closed tester");
-      }
-      recoveryReceipt = readCapacityRecovery(capacityRecoveryReceipt, priorTester);
-      const userVisibleRecovery =
-        priorTester.transport === "user-visible-task" &&
-        transport === "user-visible-task" &&
-        priorTester.closure?.type === "archived";
-      const nestedOccupiedSlotRecovery =
-        priorTester.transport === "nested-read-only" &&
-        transport === "nested-read-only" &&
-        priorTester.testKind === "read-only" &&
-        testKind === "read-only" &&
-        priorTester.closure?.type === "terminal-receipt" &&
-        priorTester.receipt?.terminalCause?.class === "host_capacity" &&
-        priorTester.receipt?.terminalCause?.code === "heavy_slot_occupied" &&
-        priorTester.receipt?.terminalCause?.workloadStarted === false &&
-        priorTester.receipt.terminalCause.class === recoveryReceipt.cause.class &&
-        priorTester.receipt.terminalCause.code === recoveryReceipt.cause.code &&
-        recoveryReceipt.cause.code === "heavy_slot_occupied";
-      if (
-        (!userVisibleRecovery && !nestedOccupiedSlotRecovery) ||
-        priorTester.testKind !== testKind ||
-        priorTester.receipt?.status !== "FAIL" ||
-        priorTester.receipt?.workloadStarted !== false ||
-        !(
-          priorTester.receipt?.cleanup?.status === "not-required" ||
-          (priorTester.receipt?.cleanup?.status === "complete" &&
-            priorTester.receipt?.workloadStarted === false)
-        ) ||
-        state.release !== null
-      ) {
-        fail(
-          "capacity retry requires the same test contract and transport, one terminal pre-workload capacity FAIL with complete or unnecessary cleanup, legal archived user-visible or occupied-slot nested closure, and no release owner",
-        );
-      }
+      if (environmentRetryContract) {
+        if (priorTester.contractId !== environmentRetryContract) {
+          fail("environment retry contract does not match the exact closed tester");
+        }
+        const environment = priorTester.receipt?.environment;
+        if (
+          priorTester.transport !== "user-visible-task" ||
+          priorTester.transport !== transport ||
+          priorTester.testKind !== testKind ||
+          priorTester.receipt?.status !== "BLOCKED" ||
+          environment?.status !== "blocked" ||
+          environment?.contractId !== priorTester.contractId ||
+          environment?.class !== "test_environment" ||
+          environment?.code !== "dependencies_unavailable" ||
+          environment?.preCollection !== true ||
+          environment?.workloadStarted !== false ||
+          environment?.bootstrapAttempted !== true ||
+          !["complete", "not-required"].includes(priorTester.receipt?.cleanup?.status) ||
+          priorTester.closure?.type !== "archived" ||
+          state.release !== null
+        ) {
+          fail(
+            "environment retry requires the same test contract, one archived pre-collection dependencies_unavailable BLOCKED receipt with no workload, and no release owner",
+          );
+        }
+        retryOfContractId = priorTester.contractId;
+        state.testerHistory = [
+          ...(Array.isArray(state.testerHistory) ? state.testerHistory : []),
+          {
+            tester: priorTester,
+            capacityRecoveryReceipt: null,
+            environmentRetry: true,
+            behavioralAttemptConsumed: false,
+            retiredAt: new Date().toISOString(),
+          },
+        ];
+        state.tester = null;
+      } else {
+        if (priorTester.contractId !== capacityRetryContract) {
+          fail("capacity retry contract does not match the exact closed tester");
+        }
+        recoveryReceipt = readCapacityRecovery(capacityRecoveryReceipt, priorTester);
+        const capacityEnvironment = priorTester.receipt?.environment;
+        const userVisibleRecovery =
+          priorTester.transport === "user-visible-task" &&
+          transport === "user-visible-task" &&
+          priorTester.closure?.type === "archived" &&
+          capacityEnvironment?.status === "blocked" &&
+          capacityEnvironment?.contractId === priorTester.contractId &&
+          capacityEnvironment?.class === "bootstrap_guard" &&
+          capacityEnvironment?.code === "guard_refused" &&
+          capacityEnvironment?.preCollection === true &&
+          capacityEnvironment?.workloadStarted === false &&
+          capacityEnvironment?.bootstrapAttempted === true;
+        const nestedOccupiedSlotRecovery =
+          priorTester.transport === "nested-read-only" &&
+          transport === "nested-read-only" &&
+          priorTester.testKind === "read-only" &&
+          testKind === "read-only" &&
+          priorTester.closure?.type === "terminal-receipt" &&
+          priorTester.receipt?.terminalCause?.class === "host_capacity" &&
+          priorTester.receipt?.terminalCause?.code === "heavy_slot_occupied" &&
+          priorTester.receipt?.terminalCause?.workloadStarted === false &&
+          priorTester.receipt.terminalCause.class === recoveryReceipt.cause.class &&
+          priorTester.receipt.terminalCause.code === recoveryReceipt.cause.code &&
+          recoveryReceipt.cause.code === "heavy_slot_occupied";
+        if (
+          (!userVisibleRecovery && !nestedOccupiedSlotRecovery) ||
+          priorTester.testKind !== testKind ||
+          priorTester.environmentContract?.admission != null ||
+          priorTester.receipt?.status !== "FAIL" ||
+          (priorTester.receipt?.workloadStarted ?? capacityEnvironment?.workloadStarted) !==
+            false ||
+          !(
+            priorTester.receipt?.cleanup?.status === "not-required" ||
+            (priorTester.receipt?.cleanup?.status === "complete" &&
+              (priorTester.receipt?.workloadStarted ?? capacityEnvironment?.workloadStarted) ===
+                false)
+          ) ||
+          state.release !== null
+        ) {
+          fail(
+            "capacity retry requires one historical contract without bounded admission and one terminal pre-workload capacity FAIL: an exact archived bootstrap_guard/guard_refused receipt or typed nested heavy_slot_occupied terminal receipt, complete or unnecessary cleanup, and no release owner",
+          );
+        }
 
-      retryOfContractId = priorTester.contractId;
-      // Preserve the terminal failed tester verbatim. Moving it into an attempt
-      // ledger makes the new reservation atomic without rewriting past truth.
-      state.testerHistory = [
-        ...(Array.isArray(state.testerHistory) ? state.testerHistory : []),
-        {
-          tester: priorTester,
-          capacityRecoveryReceipt: recoveryReceipt,
-          retiredAt: new Date().toISOString(),
-        },
-      ];
-      state.tester = null;
-    } else if (capacityRetryContract) {
-      fail("capacity retry requires the exact closed tester on this immutable candidate");
+        retryOfContractId = priorTester.contractId;
+        // Preserve the terminal failed tester verbatim. Moving it into an attempt
+        // ledger makes the new reservation atomic without rewriting past truth.
+        state.testerHistory = [
+          ...(Array.isArray(state.testerHistory) ? state.testerHistory : []),
+          {
+            tester: priorTester,
+            capacityRecoveryReceipt: recoveryReceipt,
+            environmentRetry: false,
+            retiredAt: new Date().toISOString(),
+          },
+        ];
+        state.tester = null;
+      }
+    } else if (capacityRetryContract || environmentRetryContract) {
+      fail("retry requires the exact closed tester on this immutable candidate");
     }
 
     const contractId = randomUUID();
     const routing = testerRouting(testKind, transport, builder);
+    const environmentContract = testerEnvironmentContract(candidate, contractId, transport);
     state.tester = {
       phase: "handoff-pending",
       contractId,
       testKind,
       transport,
       routing,
+      environmentContract,
       owner: null,
       receipt: null,
       closure: null,
@@ -663,6 +780,7 @@ function handoffTest(pr, options) {
         contractId,
         transport,
         routing,
+        environmentContract,
         candidate,
         retryOfContractId,
         nativeTool:
@@ -1355,12 +1473,60 @@ function recordTestReceipt(pr, options) {
       fail("PR head/diff changed before the tester receipt was recorded");
     }
     const expected = state.tester;
-    const validStatus = receipt.status === "PASS" || receipt.status === "FAIL";
+    const validStatus = ["PASS", "FAIL", "BLOCKED"].includes(receipt.status);
     const validOwner =
       receipt.owner?.threadId === expected.owner.threadId &&
       receipt.owner?.hostId === expected.owner.hostId;
     const validCleanup = ["complete", "not-required"].includes(receipt.cleanup?.status);
     const validRouting = JSON.stringify(receipt.routing) === JSON.stringify(expected.routing);
+    const environment = receipt.environment;
+    const readyEnvironment =
+      environment?.status === "ready" &&
+      environment?.contractId === expected.contractId &&
+      environment?.method === expected.environmentContract?.method &&
+      environment?.credentialMode === "none" &&
+      environment?.readyMode === "warm" &&
+      environment?.laneReady === true;
+    const blockedEnvironment =
+      receipt.status === "BLOCKED" &&
+      environment?.status === "blocked" &&
+      environment?.contractId === expected.contractId &&
+      environment?.class === "test_environment" &&
+      environment?.code === "dependencies_unavailable" &&
+      environment?.preCollection === true &&
+      environment?.workloadStarted === false &&
+      environment?.bootstrapAttempted === true;
+    const internalGuardEnvironment =
+      receipt.status === "FAIL" &&
+      environment?.status === "blocked" &&
+      environment?.contractId === expected.contractId &&
+      environment?.class === "bootstrap_guard" &&
+      environment?.code === "guard_internal" &&
+      environment?.preCollection === true &&
+      environment?.workloadStarted === false &&
+      environment?.bootstrapAttempted === true;
+    const legacyCapacityEnvironment =
+      expected.environmentContract?.admission == null &&
+      receipt.status === "FAIL" &&
+      environment?.status === "blocked" &&
+      environment?.contractId === expected.contractId &&
+      environment?.class === "bootstrap_guard" &&
+      environment?.code === "guard_refused" &&
+      environment?.preCollection === true &&
+      environment?.workloadStarted === false &&
+      environment?.bootstrapAttempted === true;
+    const validEnvironment =
+      expected.transport !== "user-visible-task" ||
+      readyEnvironment ||
+      blockedEnvironment ||
+      internalGuardEnvironment ||
+      legacyCapacityEnvironment;
+    const validStatusEnvironmentPair =
+      receipt.status === "BLOCKED"
+        ? blockedEnvironment
+        : receipt.status === "FAIL"
+          ? readyEnvironment || internalGuardEnvironment || legacyCapacityEnvironment
+          : readyEnvironment;
     if (
       receipt.schemaVersion !== SCHEMA_VERSION ||
       receipt.role !== "tester" ||
@@ -1370,13 +1536,16 @@ function recordTestReceipt(pr, options) {
       receipt.diffFingerprint !== candidate.diffFingerprint ||
       !validOwner ||
       !validRouting ||
+      !validEnvironment ||
+      (receipt.status === "BLOCKED" && !blockedEnvironment) ||
+      (expected.transport === "user-visible-task" && !validStatusEnvironmentPair) ||
       !Array.isArray(receipt.evidence) ||
       receipt.evidence.length === 0 ||
       !validCleanup ||
       !Array.isArray(receipt.limitations)
     ) {
       fail(
-        "tester receipt is incomplete or does not match the immutable candidate, dispatcher routing, and exact owner",
+        "tester receipt is incomplete or does not match the immutable candidate, dispatcher routing, exact owner, and required warm environment gate",
       );
     }
     expected.receipt = receipt;
