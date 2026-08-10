@@ -37,8 +37,9 @@ Describe the problem and fix in 2–5 bullets:
 - Diff fingerprint + changed paths:
 - Builder proof completed on that head:
 - Builder owner: (exact thread ID + host ID when required)
-- Tester transport: (`nested-read-only` for short deterministic proof, otherwise `user-visible-task`)
+- Tester transport: (`nested-read-only` for short deterministic proof; otherwise receipt-bound `delegated-worker` or `user-visible-task`)
 - Tester dispatcher + eligibility rationale: (`builder` + why nested was eligible, or why a user-visible task was required)
+- Tester authority: (exact direct-user packet for delegated `live-external`, otherwise `Not required`)
 - Tester environment: (credential-free warm adoption/readiness receipt, or exact pre-collection `BLOCKED` classification)
 - Independent tester: (`PASS`/`FAIL`/environment-only `BLOCKED` + exact worker identity/head/diff + receipt)
 - Tester/runtime cleanup:

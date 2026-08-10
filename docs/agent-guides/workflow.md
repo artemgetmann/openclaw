@@ -40,14 +40,24 @@ Worker transport is part of the ownership contract:
   receipt, then resolve it before creating another owner. Nested agents do not
   expose a separate user-visible thread to archive; their terminal exact-identity
   receipt is the lifecycle closure and must not be described as thread archival.
-- Use one fresh user-visible project-scoped tester task whenever testing performs
+- Use either one fresh receipt-bound delegated worker or one fresh user-visible
+  project-scoped tester task whenever testing performs
   or may perform end-to-end or live acceptance, Telegram sends or creation of a
   topic, message, or session, runtime/provider/backend ownership or mutation,
   GUI or Computer Use, credential access, external-service access, protected
   machine-resource use, cleanup, a long-running wait, a direct user decision or
   approval, or any result needing a durable independently addressable transcript.
-  Record its exact task and host identity, then archive that exact task only
-  after its terminal receipt is recorded.
+  Select the transport from the user's explicit orchestration preference and
+  the lifecycle handoff. Record the exact worker and host identity. Resolve a
+  delegated worker with its terminal receipt, or archive a user-visible task,
+  only after that receipt is recorded. Neither transport permits the builder to
+  test its own candidate or weakens protected-resource authority and cleanup.
+  A delegated `live-external` handoff additionally requires a direct-user task
+  authority JSON packet bound to the PR. Its `allowedActions` may contain only
+  `live-test`, `external-service`, `protected-resource`, `credential-access`,
+  and `cleanup`; `live-test` is mandatory. The receipt must echo the exact
+  packet. Merge, deploy, signing, publication, admin/bypass, and unlisted actions
+  cannot be implied by the tester handoff.
 - Repo-backed release ownership is one distinct fenced queue lease. The exact
   builder identity cannot claim it. Native Codex tasks are optional coordination
   UX and never establish, extend, or prove queue ownership.
@@ -71,10 +81,23 @@ the transition a mandatory two-step gate:
 
 1. The command validates the current GitHub PR/head/diff and existing owner
    state, reserves one pending handoff, and emits a machine-readable contract.
-2. Only when that contract says `action=create_thread`, the native agent calls
+2. When the contract says `action=create_thread`, the native agent calls
    `list_projects` then `create_thread`, and immediately records the exact
    returned thread and host with `accept-test-owner` or
-   `accept-release-owner`.
+   `accept-release-owner`. When it says `action=spawn_delegated_worker`, the
+   builder spawns exactly one distinct worker, records that exact worker/host
+   through `accept-test-owner`, and exports its identity as
+   `OPENCLAW_TESTER_WORKER_ID` for canonical worktree adoption.
+   Before spawning, the builder consumes the emitted `prepareCommand` exactly
+   once. It creates a contract-unique worktree from the immutable PR branch with
+   `new-worktree.sh --base-sha <exact-head> --credential-mode none
+--no-bootstrap`; the helper fails if the remote PR branch moved, performs no
+   Telegram or canonical-baseline copy, and creates only the exact isolated Git
+   worktree. The worker then runs credential-free warm
+   adoption inside that exact path. A delegated worker must never test from the
+   builder's worktree or silently skip either preparation or adoption.
+   `accept-test-owner` rejects the builder thread ID even when a caller forges a
+   different host ID; the delegated worker must be a genuinely distinct owner.
 
 For direct rollback, recording a release owner is not permission to begin work:
 the fresh release task must still archive the exact builder and record
@@ -172,7 +195,7 @@ must not be used to recompute candidate identity. The emitted tester prompt
 records this algorithm so independent validation fails closed for real drift,
 not a formatting mismatch.
 
-A fresh user-visible tester must complete the emitted credential-free warm
+A fresh delegated or user-visible tester must complete the emitted credential-free warm
 adoption command before test collection or any dependency-requiring workload.
 That command attaches a contract-unique branch at the immutable PR head,
 installs repository-pinned dependencies, creates an empty isolated baseline,
@@ -197,7 +220,7 @@ ledger prevents a second environment retry. Any other failure, source drift,
 active or ambiguous owner, incomplete cleanup, or post-collection failure
 remains fail-closed and cannot use this recovery path.
 
-A user-visible live tester additionally proves exact immutable source and
+A live tester additionally proves exact immutable source and
 runtime provenance, uses stable isolated identities, and runs exactly one bounded
 scenario when the acceptance contract says one. Its handoff must grant the exact
 external actions before they occur. It returns exact cleanup receipts and direct
@@ -207,8 +230,8 @@ Keep source, merged, package, installed, runtime/provider, GUI, and live-behavio
 proof as separate claims.
 
 The builder records the terminal receipt before resolving the exact tester. For
-a user-visible tester it then archives that exact task; for a nested tester it
-records the exact terminal agent closure. It archives nothing if the tester
+a user-visible tester it then archives that exact task; for delegated and nested
+testers it records the exact terminal worker closure. It archives nothing if the tester
 identity is ambiguous or the receipt is incomplete. A `FAIL` returns source
 ownership to the builder. Any behavior-bearing repair, conflict resolution,
 rebase, or other head change makes prior tester proof stale; the builder repeats

@@ -217,7 +217,7 @@ done
 }
 
 [[ "$FEATURE_NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || fail "feature name must match [a-zA-Z0-9_-]+."
-[[ "$THREAD_ID" =~ ^[a-zA-Z0-9:_-]+$ ]] || fail "thread id must match [a-zA-Z0-9:_-]+."
+[[ "$THREAD_ID" =~ ^[a-zA-Z0-9:_/-]+$ ]] || fail "thread id must match [a-zA-Z0-9:_/-]+."
 [[ "$LANE_MODE" == "clean" || "$LANE_MODE" == "warm" ]] || fail "--mode must be one of: clean, warm."
 [[ "$CREDENTIAL_MODE" == "copy" || "$CREDENTIAL_MODE" == "none" ]] ||
   fail "--credential-mode must be one of: copy, none."

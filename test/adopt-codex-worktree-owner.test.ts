@@ -138,6 +138,14 @@ describe("Codex worktree adoption ownership", () => {
     expect(existsSync(path.join(detached, "bootstrap-effect"))).toBe(true);
   });
 
+  it("accepts canonical internal delegated-worker identities", () => {
+    const { home, detached } = fixture();
+    const adopted = adopt(home, detached, "delegated-owner", "/root/pr1388_tester");
+
+    expect(adopted.status).toBe(0);
+    expect(adopted.stdout).toContain("adoption_owner_receipt=thread:/root/pr1388_tester");
+  });
+
   it("adopts a source-only tester without reading credential baselines", () => {
     const { home, detached } = fixture();
     const baselineLog = path.join(detached, "baseline-env.log");

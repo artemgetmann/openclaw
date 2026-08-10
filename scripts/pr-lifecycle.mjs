@@ -11,6 +11,13 @@ import { validateJarvisPullRequest } from "./lib/jarvis-delivery-boundary.mjs";
 const SCHEMA_VERSION = 1;
 const GH_BIN = process.env.OPENCLAW_PR_LIFECYCLE_GH ?? "gh";
 const RELEASE_ACTIONS = new Set(["normal-merge", "deploy"]);
+const TESTER_ACTIONS = new Set([
+  "live-test",
+  "external-service",
+  "protected-resource",
+  "credential-access",
+  "cleanup",
+]);
 
 const RELEASE_CAPABILITY_POLICY = Object.freeze({
   routine: "routine-release",
@@ -30,9 +37,16 @@ function fail(message, exitCode = 1) {
   throw new LifecycleError(message, exitCode);
 }
 
+function shellQuote(value) {
+  // Emitted recovery/preparation commands are copied into a POSIX shell.
+  // JSON double quotes still evaluate `$()` and backticks, so quote every
+  // repository-derived argument with the standard single-quote escape.
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
 function usage() {
   process.stderr.write(`Usage:
-  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|user-visible-task> --owner-thread <ID> --owner-host <ID> --review-receipt <FILE> [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>] [--environment-retry-contract <ID>]
+  scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|delegated-worker|user-visible-task> --owner-thread <ID> --owner-host <ID> --review-receipt <FILE> [--task-authority <FILE>] [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>] [--environment-retry-contract <ID>]
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
@@ -43,7 +57,8 @@ function usage() {
   scripts/pr-lifecycle return-source <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --builder-thread <ID> --builder-host <ID> --builder-unarchived true --finding <TEXT>
   scripts/pr-lifecycle cancel-pending <PR> --role <tester|release> --contract-id <ID> --confirm-no-thread-created
 
-Direct handoffs emit action=create_thread and require native task acceptance.
+User-visible handoffs emit action=create_thread and require native task acceptance.
+Delegated handoffs emit action=spawn_delegated_worker and require exact worker acceptance.
 Repo-backed handoffs emit an immutable packet; a distinct fenced queue lease is
 the release owner, while native callbacks remain optional coordination.
 `);
@@ -330,30 +345,56 @@ function testerRouting(testKind, transport, builder) {
   // must never infer either from a worker name or from conversational context.
   return {
     dispatcher: { role: "builder", threadId: builder.threadId, hostId: builder.hostId },
-    decision: transport === "nested-read-only" ? "nested-eligible" : "user-visible-required",
+    decision:
+      transport === "nested-read-only"
+        ? "nested-eligible"
+        : transport === "delegated-worker"
+          ? "delegated-worker-required"
+          : "user-visible-required",
     rationale:
       transport === "nested-read-only"
         ? [
             "short-lived deterministic immutable-head read-only validation",
             "no protected resource, external effect, cleanup duty, long wait, user decision, or durable-transcript need",
           ]
-        : [
-            testKind === "live-external"
-              ? "live or external validation requires an independently addressable task"
-              : "validation requires an independently addressable durable task",
-            "archive the exact tester task only after its terminal receipt is recorded",
-          ],
+        : transport === "delegated-worker"
+          ? [
+              testKind === "live-external"
+                ? "live or external validation requires a distinct receipt-bound worker"
+                : "validation requires a distinct receipt-bound worker",
+              "resolve the exact delegated worker only after its terminal receipt is recorded",
+            ]
+          : [
+              testKind === "live-external"
+                ? "live or external validation requires an independently addressable task"
+                : "validation requires an independently addressable durable task",
+              "archive the exact tester task only after its terminal receipt is recorded",
+            ],
   };
 }
 
 function testerEnvironmentContract(candidate, contractId, transport) {
-  if (transport !== "user-visible-task") {
+  if (!new Set(["delegated-worker", "user-visible-task"]).has(transport)) {
     return null;
   }
   // A tester worktree starts detached at the immutable PR head. Give adoption
   // a contract-unique branch so it cannot collide with or steal the builder's
   // source branch, while keeping the exact candidate commit unchanged.
   const branchName = `pr-${candidate.number}-tester-${contractId.slice(0, 8)}`;
+  const sacredRoot =
+    transport === "delegated-worker"
+      ? path.dirname(
+          execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+            cwd: process.cwd(),
+            encoding: "utf8",
+          }).trim(),
+        )
+      : null;
+  const candidateWorktreeScript = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "new-worktree.sh",
+  );
+  const worktreePath = sacredRoot ? path.join(sacredRoot, ".worktrees", branchName) : null;
   return {
     schemaVersion: SCHEMA_VERSION,
     contractId,
@@ -366,7 +407,15 @@ function testerEnvironmentContract(candidate, contractId, transport) {
       leaseHeldWhileWaiting: false,
     },
     branchName,
-    command: `bash scripts/adopt-codex-worktree.sh ${branchName} --mode warm --credential-mode none --capacity-wait-seconds 86400 --allow-stale-head --no-home-refresh --thread-id "\${CODEX_THREAD_ID:?CODEX_THREAD_ID is required}"`,
+    worktreePath,
+    prepareCommand:
+      transport === "delegated-worker"
+        ? `cd ${shellQuote(sacredRoot)} && bash ${shellQuote(candidateWorktreeScript)} ${shellQuote(branchName)} --base ${shellQuote(candidate.headRefName)} --base-sha ${shellQuote(candidate.headSha)} --mode warm --credential-mode none --no-bootstrap`
+        : null,
+    command:
+      transport === "delegated-worker"
+        ? `bash scripts/adopt-codex-worktree.sh ${branchName} --mode warm --credential-mode none --capacity-wait-seconds 86400 --allow-stale-head --no-home-refresh --thread-id "\${OPENCLAW_TESTER_WORKER_ID:?OPENCLAW_TESTER_WORKER_ID is required}"`
+        : `bash scripts/adopt-codex-worktree.sh ${branchName} --mode warm --credential-mode none --capacity-wait-seconds 86400 --allow-stale-head --no-home-refresh --thread-id "\${CODEX_THREAD_ID:?CODEX_THREAD_ID is required}"`,
     readinessCommand: 'bash scripts/worktree-ready-check.sh --root "$PWD" --mode warm',
   };
 }
@@ -429,9 +478,15 @@ function ownerPrompt(role, state, stateDirectory) {
   const testerReceipt = role === "release" ? state.tester?.receipt : null;
   const releaseAuthority = role === "release" ? state.release?.taskAuthority : null;
   const environmentContract = role === "tester" ? state.tester?.environmentContract : null;
+  const testerAuthority = role === "tester" ? state.tester?.taskAuthority : null;
+  const testerTransport = role === "tester" ? state.tester?.transport : null;
   return [
     `Task: ${role === "tester" ? "Independently test" : "Release"} OpenClaw PR #${candidate.number} on the immutable candidate below.`,
-    `Owner/cwd: fresh user-visible project-scoped Codex task in the OpenClaw project.`,
+    `Owner/cwd: ${
+      testerTransport === "delegated-worker"
+        ? "fresh receipt-bound delegated worker in an isolated OpenClaw worktree"
+        : "fresh user-visible project-scoped Codex task in the OpenClaw project"
+    }.`,
     `PR: ${candidate.number} ${candidate.url}`,
     `Head: ${candidate.headSha}`,
     `Base: ${candidate.baseRefName} ${candidate.baseSha}`,
@@ -447,7 +502,12 @@ function ownerPrompt(role, state, stateDirectory) {
       ? `Scope: falsify the fixed acceptance criteria on this exact head; do not edit source, merge, deploy, or expand scope.`
       : `Tester: ${testerReceipt.status}; thread=${testerReceipt.owner.threadId} host=${testerReceipt.owner.hostId}; evidence=${testerReceipt.evidence.join(" | ")}`,
     environmentContract
-      ? `Environment gate: before test collection or any dependency-requiring command, run ${environmentContract.command}; then run ${environmentContract.readinessCommand}. The command fails closed unless this task exposes its exact CODEX_THREAD_ID. Do not access or copy Telegram, model, or runtime credentials. A ready receipt must bind contractId=${environmentContract.contractId}, method=${environmentContract.method}, credentialMode=none, readyMode=warm, and laneReady=true.`
+      ? testerTransport === "delegated-worker"
+        ? `Isolation preparation: before spawning the worker, the builder must run ${environmentContract.prepareCommand} and verify worktree=${environmentContract.worktreePath}. The delegated worker must start in that exact worktree; it must not test in the builder worktree.`
+        : null
+      : null,
+    environmentContract
+      ? `Environment gate: before test collection or any dependency-requiring command, run ${environmentContract.command}; then run ${environmentContract.readinessCommand}. The command fails closed unless this worker exposes its exact ${testerTransport === "delegated-worker" ? "OPENCLAW_TESTER_WORKER_ID" : "CODEX_THREAD_ID"}. Do not access or copy Telegram, model, or runtime credentials unless the authority packet explicitly grants credential-access. A ready receipt must bind contractId=${environmentContract.contractId}, method=${environmentContract.method}, credentialMode=none, readyMode=warm, and laneReady=true.`
       : null,
     environmentContract
       ? `Environment failure: if canonical adoption/readiness fails, or collection reports test_environment/dependencies_unavailable before behavioral workload starts, run no behavioral retry. Return status=BLOCKED with environment={status:"blocked",contractId:"${environmentContract.contractId}",class:"test_environment",code:"dependencies_unavailable",preCollection:true,workloadStarted:false,bootstrapAttempted:true}. This environment block does not consume the behavioral tester attempt.`
@@ -459,7 +519,7 @@ function ownerPrompt(role, state, stateDirectory) {
       ? `Diff identity: if independently recomputing the fingerprint, hash the exact raw stdout bytes from gh pr diff ${candidate.number} --patch with SHA-256. A plain gh pr diff uses a different format and is not the lifecycle fingerprint.`
       : null,
     role === "tester"
-      ? `Constraints: return one terminal receipt; preserve source/runtime/live proof boundaries; perform external or live actions only when explicitly granted in this task.`
+      ? `Authority packet: ${JSON.stringify(testerAuthority)}. Return one terminal receipt; preserve source/runtime/live proof boundaries; perform only allowedActions and stop before any unlisted external, protected, credential, cleanup, or live action.`
       : `Authority packet: ${JSON.stringify(releaseAuthority)}. Treat only allowedActions as durable authority. Never infer credentials, OTP, admin/bypass, irreversible/public-release, or new-scope authority.`,
     role === "tester"
       ? `Handback: send the builder a JSON receipt matching scripts/pr-lifecycle record-test-receipt, including the emitted routing object, exact task identity, head, diff, PASS|FAIL|BLOCKED, environment receipt, evidence, cleanup, and limitations.`
@@ -470,7 +530,7 @@ function ownerPrompt(role, state, stateDirectory) {
     role === "release"
       ? `Handback: independently verify current head/diff/checks/reviews; merge only if every gate passes; send the merge receipt. Builder archival belongs to acceptance, not post-merge cleanup.`
       : null,
-    `Read AGENTS.md, CONSUMER.md, docs/agent-guides/workflow.md, and docs/agent-guides/fleet-resource-control.md before acting. Never route live/external testing or release through a nested sub-agent.`,
+    `Read AGENTS.md, CONSUMER.md, docs/agent-guides/workflow.md, and docs/agent-guides/fleet-resource-control.md before acting. Live/external testing requires either a receipt-bound delegated worker or a user-visible task; it must never use nested-read-only transport.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -505,17 +565,18 @@ function handoffTest(pr, options) {
   if (!new Set(["read-only", "live-external"]).has(testKind)) {
     fail("--test-kind must be read-only or live-external", 2);
   }
-  if (!new Set(["nested-read-only", "user-visible-task"]).has(transport)) {
-    fail("--transport must be nested-read-only or user-visible-task", 2);
+  if (!new Set(["nested-read-only", "delegated-worker", "user-visible-task"]).has(transport)) {
+    fail("--transport must be nested-read-only, delegated-worker, or user-visible-task", 2);
   }
-  if (testKind === "live-external" && transport !== "user-visible-task") {
+  if (testKind === "live-external" && transport === "nested-read-only") {
     fail(
-      "live/external testing requires transport=user-visible-task; nested sub-agents are forbidden",
+      "live/external testing requires transport=delegated-worker or user-visible-task; nested-read-only is forbidden",
     );
   }
   if (transport === "nested-read-only" && testKind !== "read-only") {
     fail("nested-read-only transport is legal only for short deterministic read-only testing");
   }
+  const taskAuthority = readTesterAuthority(options.taskAuthority, pr, testKind, transport);
 
   const candidate = fetchCandidate(pr);
   const reviewReceipt = readReviewReceipt(
@@ -656,7 +717,7 @@ function handoffTest(pr, options) {
         }
         const environment = priorTester.receipt?.environment;
         if (
-          priorTester.transport !== "user-visible-task" ||
+          !new Set(["delegated-worker", "user-visible-task"]).has(priorTester.transport) ||
           priorTester.transport !== transport ||
           priorTester.testKind !== testKind ||
           priorTester.receipt?.status !== "BLOCKED" ||
@@ -668,7 +729,8 @@ function handoffTest(pr, options) {
           environment?.workloadStarted !== false ||
           environment?.bootstrapAttempted !== true ||
           !["complete", "not-required"].includes(priorTester.receipt?.cleanup?.status) ||
-          priorTester.closure?.type !== "archived" ||
+          priorTester.closure?.type !==
+            (priorTester.transport === "user-visible-task" ? "archived" : "terminal-receipt") ||
           state.release !== null
         ) {
           fail(
@@ -693,10 +755,11 @@ function handoffTest(pr, options) {
         }
         recoveryReceipt = readCapacityRecovery(capacityRecoveryReceipt, priorTester);
         const capacityEnvironment = priorTester.receipt?.environment;
-        const userVisibleRecovery =
-          priorTester.transport === "user-visible-task" &&
-          transport === "user-visible-task" &&
-          priorTester.closure?.type === "archived" &&
+        const durableWorkerRecovery =
+          new Set(["delegated-worker", "user-visible-task"]).has(priorTester.transport) &&
+          priorTester.transport === transport &&
+          priorTester.closure?.type ===
+            (priorTester.transport === "user-visible-task" ? "archived" : "terminal-receipt") &&
           capacityEnvironment?.status === "blocked" &&
           capacityEnvironment?.contractId === priorTester.contractId &&
           capacityEnvironment?.class === "bootstrap_guard" &&
@@ -717,7 +780,7 @@ function handoffTest(pr, options) {
           priorTester.receipt.terminalCause.code === recoveryReceipt.cause.code &&
           recoveryReceipt.cause.code === "heavy_slot_occupied";
         if (
-          (!userVisibleRecovery && !nestedOccupiedSlotRecovery) ||
+          (!durableWorkerRecovery && !nestedOccupiedSlotRecovery) ||
           priorTester.testKind !== testKind ||
           priorTester.environmentContract?.admission != null ||
           priorTester.receipt?.status !== "FAIL" ||
@@ -764,6 +827,7 @@ function handoffTest(pr, options) {
       transport,
       routing,
       environmentContract,
+      taskAuthority,
       owner: null,
       receipt: null,
       closure: null,
@@ -776,11 +840,17 @@ function handoffTest(pr, options) {
       state,
       output: {
         schemaVersion: SCHEMA_VERSION,
-        action: transport === "user-visible-task" ? "create_thread" : "spawn_nested_read_only",
+        action:
+          transport === "user-visible-task"
+            ? "create_thread"
+            : transport === "delegated-worker"
+              ? "spawn_delegated_worker"
+              : "spawn_nested_read_only",
         contractId,
         transport,
         routing,
         environmentContract,
+        taskAuthority,
         candidate,
         retryOfContractId,
         nativeTool:
@@ -814,11 +884,7 @@ function acceptOwner(pr, options, role) {
     if (!state?.[role] || state[role].contractId !== contractId) {
       fail(`no matching ${role} handoff contract`);
     }
-    if (
-      role === "tester" &&
-      state.builder.threadId === owner.threadId &&
-      state.builder.hostId === owner.hostId
-    ) {
+    if (role === "tester" && state.builder.threadId === owner.threadId) {
       fail("tester owner must differ from the exact builder identity");
     }
     const record = state[role];
@@ -1394,6 +1460,62 @@ function readTaskAuthority(authorityPath, pr) {
   return authority;
 }
 
+function readTesterAuthority(authorityPath, pr, testKind, transport) {
+  if (transport !== "delegated-worker") {
+    if (authorityPath) {
+      fail("tester task authority is supported only for transport=delegated-worker", 2);
+    }
+    return null;
+  }
+  if (testKind !== "live-external") {
+    if (authorityPath) {
+      fail("tester task authority is legal only for test-kind=live-external", 2);
+    }
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      source: "builder-handoff",
+      scope: `PR #${pr} isolated source validation only`,
+      allowedActions: [],
+      constraints: ["no external, protected, credential, cleanup, or live actions"],
+    };
+  }
+  if (!authorityPath) {
+    fail("live/external testing requires --task-authority with explicit allowed actions", 2);
+  }
+
+  let authority;
+  try {
+    authority = JSON.parse(fs.readFileSync(path.resolve(authorityPath), "utf8"));
+  } catch (error) {
+    fail(`cannot read tester task authority: ${error.message}`);
+  }
+  const allowedActions = authority?.allowedActions;
+  const validActions =
+    Array.isArray(allowedActions) &&
+    allowedActions.length > 0 &&
+    new Set(allowedActions).size === allowedActions.length &&
+    allowedActions.every((action) => TESTER_ACTIONS.has(action)) &&
+    allowedActions.includes("live-test");
+  if (
+    authority?.schemaVersion !== SCHEMA_VERSION ||
+    authority?.source !== "direct-user-task" ||
+    authority?.pr !== pr ||
+    typeof authority?.scope !== "string" ||
+    authority.scope.trim() === "" ||
+    !validActions ||
+    !Array.isArray(authority.constraints) ||
+    authority.constraints.length === 0 ||
+    authority.constraints.some(
+      (constraint) => typeof constraint !== "string" || constraint.trim() === "",
+    )
+  ) {
+    fail(
+      "tester task authority must bind this PR and grant only explicit live-test actions with non-empty scope and constraints",
+    );
+  }
+  return authority;
+}
+
 function readDeclaredDependencies(dependenciesPath, pr) {
   if (!dependenciesPath) {
     return [];
@@ -1479,6 +1601,9 @@ function recordTestReceipt(pr, options) {
       receipt.owner?.hostId === expected.owner.hostId;
     const validCleanup = ["complete", "not-required"].includes(receipt.cleanup?.status);
     const validRouting = JSON.stringify(receipt.routing) === JSON.stringify(expected.routing);
+    const validAuthority =
+      expected.transport !== "delegated-worker" ||
+      JSON.stringify(receipt.taskAuthority) === JSON.stringify(expected.taskAuthority);
     const environment = receipt.environment;
     const readyEnvironment =
       environment?.status === "ready" &&
@@ -1516,7 +1641,7 @@ function recordTestReceipt(pr, options) {
       environment?.workloadStarted === false &&
       environment?.bootstrapAttempted === true;
     const validEnvironment =
-      expected.transport !== "user-visible-task" ||
+      !new Set(["delegated-worker", "user-visible-task"]).has(expected.transport) ||
       readyEnvironment ||
       blockedEnvironment ||
       internalGuardEnvironment ||
@@ -1536,9 +1661,11 @@ function recordTestReceipt(pr, options) {
       receipt.diffFingerprint !== candidate.diffFingerprint ||
       !validOwner ||
       !validRouting ||
+      !validAuthority ||
       !validEnvironment ||
       (receipt.status === "BLOCKED" && !blockedEnvironment) ||
-      (expected.transport === "user-visible-task" && !validStatusEnvironmentPair) ||
+      (new Set(["delegated-worker", "user-visible-task"]).has(expected.transport) &&
+        !validStatusEnvironmentPair) ||
       !Array.isArray(receipt.evidence) ||
       receipt.evidence.length === 0 ||
       !validCleanup ||
@@ -1558,7 +1685,9 @@ function recordTestReceipt(pr, options) {
         action:
           expected.transport === "user-visible-task"
             ? "archive-exact-tester-thread"
-            : "resolve-exact-nested-agent",
+            : expected.transport === "delegated-worker"
+              ? "resolve-exact-delegated-worker"
+              : "resolve-exact-nested-agent",
         contractId: expected.contractId,
         owner: expected.owner,
         status: receipt.status,
