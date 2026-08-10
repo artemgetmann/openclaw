@@ -72,7 +72,7 @@ GATEWAY_RESTART_STARTED=0
 GATEWAY_RESTART_FINISHED=0
 APP_PIDS=""
 SPARKLE_CACHE_SNAPSHOT=""
-BASELINE_MODE="normal-signed"
+BASELINE_MODE="normal_signed"
 
 OLD_VERSION=""
 OLD_BUILD=""
@@ -446,13 +446,11 @@ verify_protected_hotfix_compatibility_receipt() {
   [[ -f "$PROTECTED_HOTFIX_RECEIPT" && -r "$PROTECTED_HOTFIX_RECEIPT" && ! -L "$PROTECTED_HOTFIX_RECEIPT" ]] || \
     die "preflight blocked: protected-hotfix compatibility receipt is missing, unreadable, or a symlink"
 
-  # A receipt is never an unsigned-app bypass. Both private-baseline copies must
-  # still have intact code signatures; only their Gatekeeper verdict may fail.
+  # A receipt is never an unsigned-app bypass. Both baseline copies must retain
+  # intact signatures. Gatekeeper may accept a public installed app even while
+  # the separately protected runtime is newer than that app's bundled manifest.
   verify_strict_codesign "$OLD_APP" old
   verify_strict_codesign "$INSTALLED_APP" installed
-  if gatekeeper_accepts "$INSTALLED_APP"; then
-    die "preflight blocked: normal signed baseline detected; protected-hotfix compatibility receipt is not applicable"
-  fi
 
   [[ "$OLD_VERSION" == "$INSTALLED_VERSION" && "$OLD_BUILD" == "$INSTALLED_BUILD" && "$OLD_COMMIT" == "$INSTALLED_COMMIT" ]] || \
     die "preflight blocked: installed/live mismatch: protected installed app is not the declared old baseline"
@@ -638,9 +636,14 @@ NODE
     "$live_proof" == *"runtime_commit=$protected_commit"* ]] || \
     die "preflight blocked: live protected runtime proof did not return the exact receipt identity"
 
-  BASELINE_MODE="protected-hotfix-compatibility-receipt"
-  log "baseline_mode=accepted_protected_hotfix_compatibility_receipt $receipt_proof receipt_sha256=$(sha256_file "$PROTECTED_HOTFIX_RECEIPT")"
-  log "proof.installed_app=accepted_protected_hotfix_compatibility_receipt version=$INSTALLED_VERSION build=$INSTALLED_BUILD commit=$INSTALLED_COMMIT"
+  BASELINE_MODE="protected_hotfix_compatibility_receipt"
+  if gatekeeper_accepts "$INSTALLED_APP"; then
+    log "baseline_mode=accepted_signed_app_protected_runtime_compatibility_receipt $receipt_proof receipt_sha256=$(sha256_file "$PROTECTED_HOTFIX_RECEIPT")"
+    log "proof.installed_app=signed_app_protected_runtime_compatibility_receipt version=$INSTALLED_VERSION build=$INSTALLED_BUILD commit=$INSTALLED_COMMIT"
+  else
+    log "baseline_mode=accepted_protected_hotfix_compatibility_receipt $receipt_proof receipt_sha256=$(sha256_file "$PROTECTED_HOTFIX_RECEIPT")"
+    log "proof.installed_app=accepted_protected_hotfix_compatibility_receipt version=$INSTALLED_VERSION build=$INSTALLED_BUILD commit=$INSTALLED_COMMIT"
+  fi
   log "proof.protected_runtime=receipt_and_live_bound commit=$protected_commit backup_build=$backup_build"
 }
 
@@ -730,7 +733,8 @@ current_app_package_or_sparkle_owners() {
     $1 == self { next }
     /\.app\/Contents\/MacOS\// && /(Jarvis|OpenClaw)/ { print; next }
     /(package-openclaw-mac-dist|jarvis-public-release|package-consumer-mac-app|package-jarvis-consumer-rc)\.sh/ { print; next }
-    /(org\.sparkle-project\.Sparkle|Autoupdate|InstallerLauncher|InstallerStatus|Sparkle.*Downloader)/ { print }
+    /(org\.sparkle-project\.Sparkle|Autoupdate|InstallerLauncher|InstallerStatus|Sparkle.*Downloader)/ && \
+      /(Jarvis|OpenClaw|ai\.jarvis\.mac|ai\.openclaw\.)/ { print }
   '
 }
 
@@ -872,7 +876,7 @@ run_preflight() {
     verify_official_signing_identity
     verify_latest_public_feed
   fi
-  if [[ "$BASELINE_MODE" == "normal-signed" ]]; then
+  if [[ "$BASELINE_MODE" == "normal_signed" ]]; then
     verify_live_managed_baseline
   fi
   verify_gateway_plist_identity
@@ -1185,7 +1189,7 @@ run_apply() {
   verify_one_official_signing_identity "$DISPOSABLE_APP" updated-disposable
   [[ "$(app_designated_requirement "$DISPOSABLE_APP")" == "$(app_designated_requirement "$NEW_APP")" ]] || \
     die "updated disposable designated requirement does not match the signed candidate"
-  if [[ "$BASELINE_MODE" == "protected-hotfix-compatibility-receipt" ]]; then
+  if [[ "$BASELINE_MODE" == "protected_hotfix_compatibility_receipt" ]]; then
     [[ "$(app_code_directory_hash "$DISPOSABLE_APP")" == "$(app_code_directory_hash "$NEW_APP")" ]] || \
       die "updated disposable CodeDirectory hash does not match the receipt-bound signed candidate"
   fi

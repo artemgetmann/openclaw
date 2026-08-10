@@ -440,6 +440,16 @@ EOF
   write_protected_receipt "$fixture"
 }
 
+protect_signed_app_fixture() {
+  local fixture="$1"
+
+  # Keep the exact public app Gatekeeper-valid while installing the same
+  # protected-runtime provenance used by the private-hotfix fixture.
+  protect_fixture "$fixture"
+  printf 'strict-valid\n' >"$fixture/apps/old/Jarvis.app/.fixture-gatekeeper"
+  printf 'strict-valid\n' >"$fixture/apps/installed/Jarvis.app/.fixture-gatekeeper"
+}
+
 harness_env() {
   local fixture="$1"
   shift
@@ -467,7 +477,7 @@ harness_env() {
       --scratch-root "$fixture/runs" \
       --min-free-gb "${JARVIS_TEST_MIN_FREE_GB:-0}" \
       --download-grace 1 \
-      --timeout "${JARVIS_TEST_TIMEOUT_SECONDS:-30}" \
+      --timeout "${JARVIS_TEST_TIMEOUT_SECONDS:-60}" \
       "$@"
 }
 
@@ -549,6 +559,28 @@ after="$(fixture_hashes "$case_root")"
 [[ "$protected_output" == *"proof.protected_runtime=receipt_and_live_bound commit=$PROTECTED_COMMIT"* ]] || \
   fail "accepted receipt omitted protected runtime identity"
 pass "exact protected-hotfix compatibility receipt is accepted read-only"
+
+case_root="$(copy_case signed-app-protected-runtime)"
+protect_signed_app_fixture "$case_root"
+signed_protected_output="$(harness_env "$case_root" --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json")"
+[[ "$signed_protected_output" == *"baseline_mode=accepted_signed_app_protected_runtime_compatibility_receipt"* ]] || \
+  fail "signed installed app plus protected runtime receipt was not accepted explicitly"
+[[ "$signed_protected_output" == *"proof.protected_runtime=receipt_and_live_bound commit=$PROTECTED_COMMIT"* ]] || \
+  fail "signed installed app receipt omitted protected runtime identity"
+pass "signed installed app plus protected runtime receipt is accepted read-only"
+
+case_root="$(copy_case signed-app-protected-runtime-drift)"
+protect_signed_app_fixture "$case_root"
+: >"$case_root/control/protected-proof-drift"
+run_expect_fail "signed app protected runtime drift blocks" "$case_root" "live protected runtime proof did not return the exact receipt identity" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case signed-app-protected-runtime-extra-field)"
+protect_signed_app_fixture "$case_root"
+jq '.protectedRuntime.allowSignedAppBypass = true' "$case_root/protected-hotfix-receipt.json" >"$case_root/receipt.tmp"
+mv "$case_root/receipt.tmp" "$case_root/protected-hotfix-receipt.json"
+run_expect_fail "signed app protected receipt extra field blocks" "$case_root" "protectedRuntime has missing or ambiguous fields" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
 
 case_root="$(copy_case protected-target-older-than-runtime)"
 protect_fixture "$case_root"
@@ -791,6 +823,15 @@ case_root="$(copy_case debug-owner)"
 printf '404 /tmp/Debug Jarvis.app/Contents/MacOS/OpenClaw\n' >"$case_root/control/processes"
 run_expect_fail "active debug Jarvis app blocks" "$case_root" "quit every Jarvis/OpenClaw app"
 
+case_root="$(copy_case unrelated-sparkle-owner)"
+printf '403 /Applications/Astropad Workbench.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate\n' >"$case_root/control/processes"
+harness_env "$case_root" >/dev/null
+pass "unrelated application Sparkle helper does not block"
+
+case_root="$(copy_case jarvis-sparkle-owner)"
+printf '404 /Users/fixture/Library/Caches/ai.jarvis.mac/org.sparkle-project.Sparkle/InstallerLauncher /Applications/Jarvis.app\n' >"$case_root/control/processes"
+run_expect_fail "active Jarvis Sparkle helper blocks" "$case_root" "quit every Jarvis/OpenClaw app"
+
 case_root="$(copy_case package-owner)"
 printf '405 bash scripts/package-openclaw-mac-dist.sh --phase full\n' >"$case_root/control/processes"
 run_expect_fail "active packaging owner blocks" "$case_root" "quit every Jarvis/OpenClaw app"
@@ -899,8 +940,10 @@ gateway_output="$(harness_env "$case_root" --apply --timeout 30 2>&1)"
 status="$?"
 set -e
 [[ "$status" -ne 0 ]] || fail "gateway proof failure unexpectedly passed"
-[[ "$gateway_output" == *"managed gateway runtime proof failed"* ]] || \
+[[ "$gateway_output" == *"managed gateway runtime proof failed"* ]] || {
+  printf '%s\n' "$gateway_output" >&2
   fail "gateway rollback fixture failed before the intended proof boundary"
+}
 plist_after="$(shasum -a 256 "$case_root/live/LaunchAgents/ai.jarvis.gateway.plist")"
 [[ "$plist_before" == "$plist_after" ]] || fail "gateway rollback did not restore exact plist"
 [[ "$(grep -c 'launchctl bootstrap' "$case_root/logs/actions")" -ge 2 ]] || fail "gateway rollback did not reload exact plist"
