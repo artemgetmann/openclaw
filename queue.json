@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 100,
+  "sequence": 101,
   "nextFence": 30,
   "mergeLease": null,
   "items": {
@@ -2082,6 +2082,107 @@
         "recordedAt": "2026-08-08T11:48:24.194Z"
       }
     },
+    "1370": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1370,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1370",
+        "headSha": "beb43ccc4baad6128c0d2850618cbc99a0a92b6e",
+        "baseBranch": "main",
+        "testedBaseSha": "08cc91b50d0e4f425a540e554e1b5408b3f0382f",
+        "diffFingerprint": "sha256:9bdef3772ab845853ff097a9bb63116c01f2480ed81df3580cf82afdb0c9fad1",
+        "changedPaths": [
+          "package.json",
+          "scripts/typecheck-projects.d.mts",
+          "scripts/typecheck-projects.mjs",
+          "src/agents/model-catalog.ts",
+          "src/agents/usage.ts",
+          "src/config/sessions/types.ts",
+          "src/gateway/events.ts",
+          "src/infra/session-cost-usage.types.ts",
+          "src/infra/update-startup.ts",
+          "src/scripts/typecheck-projects.test.ts",
+          "src/shared/contracts.test.ts",
+          "src/shared/model-catalog-contract.ts",
+          "src/shared/session-system-prompt-report.ts",
+          "src/shared/update-contract.ts",
+          "src/shared/usage-normalization-contract.ts",
+          "src/shared/usage-types.ts",
+          "tsconfig.typecheck.core.json",
+          "tsconfig.typecheck.ui.json",
+          "ui/src/ui/app-gateway.node.test.ts",
+          "ui/src/ui/app-gateway.ts",
+          "ui/src/ui/chat/slash-command-executor.ts",
+          "ui/src/ui/type-contract-boundary.node.test.ts",
+          "ui/src/ui/types.ts"
+        ],
+        "title": "refactor(types): isolate UI contract leaves",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: isolate the UI type graph and materially reduce the exact repository typecheck peak without losing source coverage or failure semantics.\n- Exact head + builder proof: `e7418926e6da61e09f021f439905fc1abf52b0ae`; UI core closure `2,382 -> 69` (`-97.1%`); deterministic project coverage/failure tests `8/8` PASS; format/lint/diff PASS.\n- Independent tester: Not created — terminal local memory proof is blocked.\n- Release worker: Not created.\n- Dependencies / merge order / overlap: PR #1361 landed. No guard-file overlap.\n- Remaining proof / cleanup / rollback: exact local aggregate cannot complete under current host paging pressure. Both permitted guarded attempts terminated exit `75` during core; task-owned lease/process cleanup was exact.\n- Still hurts: the dense core graph remains the limiting process even after UI isolation.\n\n## Why This Matters\n\n- Three UI type imports previously pulled 2,382 core files into UI typechecking.\n- Pure contract leaves reduce that exact closure to 69 core files.\n- The aggregate preserves `pnpm tsgo`, runs dense core/extensions once, then runs the small UI graph sequentially.\n\n## Verification\n\n- PASS: shared contract compatibility `2/2`.\n- PASS: UI import-boundary regression `2/2`.\n- PASS: project root ownership/order/failure semantics `4/4`.\n- PASS: UI closure `files_total=1156 core_src=69 ui=225 extensions=1 dependencies_or_lib=861`.\n- PASS: exact CI diagnostic repair adds the NodeNext declaration for the `.mjs` runner; focused runner test remains `4/4`.\n- BLOCKED: exact guarded `pnpm tsgo` attempt 1 terminated during core after repeated active paging; observed group RSS peak `908,112 KiB`, final interval `+415` pageouts and `+28,732` swapouts.\n- BLOCKED: one allowed recovery retry terminated during core; final interval `+804` pageouts and `+59,380` swapouts.\n- Neither local attempt reached UI or emitted compiler diagnostics.\n\n## Scope Boundary\n\n- No source roots, diagnostics, or packages are omitted.\n- No resource threshold or guard policy is changed.\n- No deployment, restart, runtime mutation, or capacity claim.\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted; full local memory proof blocked by repeatable active paging\n\n",
+        "jarvisDeliveryBoundary": null
+      },
+      "builder": {
+        "threadId": "019fc5d2-da1f-7f62-9386-7a6aa6a45807",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fc5d2-da1f-7f62-9386-7a6aa6a45807",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "beb43ccc4baad6128c0d2850618cbc99a0a92b6e",
+        "diffFingerprint": "sha256:9bdef3772ab845853ff097a9bb63116c01f2480ed81df3580cf82afdb0c9fad1",
+        "closure": "terminal-receipt",
+        "contractId": "74668de8-aba2-49aa-ac6b-aae00f8ee9c2",
+        "owner": {
+          "threadId": "/root/pr1370_exact_head_tester",
+          "hostId": "nested-agent-local"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/pr1370_exact_head_review",
+          "hostId": "nested-agent-local"
+        },
+        "headSha": "beb43ccc4baad6128c0d2850618cbc99a0a92b6e",
+        "diffFingerprint": "sha256:9bdef3772ab845853ff097a9bb63116c01f2480ed81df3580cf82afdb0c9fad1",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1370 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "cddaa409-b414-4468-8b44-4e71ecb14562",
+        "stateDirectory": "/Users/user/.codex/worktrees/6eb2ea59-6795-4fa0-a5d9-dd0dc47a6676/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-10T07:31:50.077Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
+    },
     "1372": {
       "state": "closed",
       "candidate": {
@@ -3421,10 +3522,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1330-record-merge-root-pr1330-release-20260810-v1",
-    "recordedAt": "2026-08-10T05:19:05.460Z"
+    "id": "ad90c6f4-9aa5-4346-ba7a-bf5e0cc3ca21",
+    "recordedAt": "2026-08-10T07:31:50.077Z"
   },
-  "updatedAt": "2026-08-10T05:19:05.460Z",
+  "updatedAt": "2026-08-10T07:31:50.077Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
