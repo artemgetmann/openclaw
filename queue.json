@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 104,
+  "sequence": 105,
   "nextFence": 31,
   "mergeLease": null,
   "items": {
@@ -2758,6 +2758,127 @@
         "recordedAt": "2026-08-09T08:14:08.883Z"
       }
     },
+    "1375": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1375,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1375",
+        "title": "fix(jarvis): report overdue delegated Codex work",
+        "prContract": "## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\"schemaVersion\":1,\"workScope\":\"product-wide\",\"deliveryTarget\":\"public-release\",\"completionClaim\":\"blocked-at-boundary\",\"upgradeImpact\":\"not-applicable\",\"layers\":{\"localConfiguration\":{\"status\":\"not-applicable\",\"evidence\":\"No personal-home mutation.\"},\"source\":{\"status\":\"proven\",\"evidence\":\"Exact-head guarded focused tests, independent review, and tester PASS.\"},\"packagedArtifact\":{\"status\":\"pending\",\"evidence\":\"No package build authorized or performed.\"},\"installedRuntime\":{\"status\":\"pending\",\"evidence\":\"Installed Jarvis was not changed.\"},\"upgradeMigration\":{\"status\":\"not-applicable\",\"evidence\":\"Backward compatible optional fields.\"},\"publicRelease\":{\"status\":\"pending\",\"evidence\":\"No publication authorized or performed.\"},\"endUserBehavior\":{\"status\":\"pending\",\"evidence\":\"No installed Telegram proof.\"}}}\n```\n<!-- jarvis-delivery-boundary:end -->",
+        "headSha": "0b4769b7db940ecadb7d7f3ca03a9de18788e92b",
+        "baseBranch": "main",
+        "testedBaseSha": "eab9779e654cb06297fd42963f72e7339cd717c5",
+        "diffFingerprint": "sha256:8351cf6ea5b07befe467d1579cc3685a40f03ff055befda3567f6a13d851a220",
+        "changedPaths": [
+          "extensions/codex/index.test.ts",
+          "extensions/codex/index.ts",
+          "extensions/codex/src/callback-route-registry.test.ts",
+          "extensions/codex/src/callback-route-registry.ts",
+          "extensions/codex/src/delegation-registry.test.ts",
+          "extensions/codex/src/delegation-registry.ts"
+        ],
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "public-release",
+          "completionClaim": "blocked-at-boundary",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Exact-head guarded focused tests, independent review, and tester PASS."
+            },
+            "packagedArtifact": {
+              "status": "pending",
+              "evidence": "No package build authorized or performed."
+            },
+            "installedRuntime": {
+              "status": "pending",
+              "evidence": "Installed Jarvis was not changed."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "Backward compatible optional fields."
+            },
+            "publicRelease": {
+              "status": "pending",
+              "evidence": "No publication authorized or performed."
+            },
+            "endUserBehavior": {
+              "status": "pending",
+              "evidence": "No installed Telegram proof."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fe54e-dfd7-7451-9066-3325e0cd55b7",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe54e-dfd7-7451-9066-3325e0cd55b7",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "0b4769b7db940ecadb7d7f3ca03a9de18788e92b",
+        "diffFingerprint": "sha256:8351cf6ea5b07befe467d1579cc3685a40f03ff055befda3567f6a13d851a220",
+        "closure": "archived",
+        "contractId": "2e616dfe-f5ff-4dc9-9bfa-697b4ea43189",
+        "owner": {
+          "threadId": "019fead5-48e5-7b30-acd1-048e27dfeb29",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "019fe5ab-ed4e-7d92-b61c-c14c8cea262e",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "headSha": "0b4769b7db940ecadb7d7f3ca03a9de18788e92b",
+        "baseSha": "eab9779e654cb06297fd42963f72e7339cd717c5",
+        "diffFingerprint": "sha256:8351cf6ea5b07befe467d1579cc3685a40f03ff055befda3567f6a13d851a220",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1375 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "10be42e8-4fc2-4c03-ac49-95ba148de12f",
+        "stateDirectory": "/Users/user/.codex/worktrees/69f40726-96a1-4f0e-a6bc-23ee9d3052bc/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-10T08:52:26.413Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
+    },
     "1376": {
       "state": "closed",
       "candidate": {
@@ -3563,10 +3684,10 @@
     }
   },
   "lastTransaction": {
-    "id": "b765f21c-a128-4daf-98f0-ebfd79a72941",
-    "recordedAt": "2026-08-10T07:36:19.512Z"
+    "id": "pr1375-enqueue-0b4769b7",
+    "recordedAt": "2026-08-10T08:52:26.413Z"
   },
-  "updatedAt": "2026-08-10T07:36:19.512Z",
+  "updatedAt": "2026-08-10T08:52:26.413Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
