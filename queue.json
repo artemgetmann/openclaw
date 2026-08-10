@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 103,
+  "sequence": 104,
   "nextFence": 31,
-  "mergeLease": {
-    "leaseId": "e9746f97-bfe0-4107-86dd-bd71e211cb8c",
-    "fence": 30,
-    "owner": {
-      "threadId": "/root/pr1370_release",
-      "hostId": "multi-agent-local"
-    },
-    "claimedPr": 1370,
-    "claimedAt": "2026-08-10T07:33:54.836Z",
-    "heartbeatAt": "2026-08-10T07:34:27.830Z",
-    "expiresAt": "2026-08-10T07:54:27.830Z"
-  },
+  "mergeLease": null,
   "items": {
     "1330": {
       "state": "closed",
@@ -2094,7 +2083,7 @@
       }
     },
     "1370": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1370,
         "url": "https://github.com/artemgetmann/openclaw/pull/1370",
@@ -2205,7 +2194,20 @@
       "candidateHistory": [],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1370,
+          "reviewedHeadSha": "beb43ccc4baad6128c0d2850618cbc99a0a92b6e",
+          "diffFingerprint": "sha256:9bdef3772ab845853ff097a9bb63116c01f2480ed81df3580cf82afdb0c9fad1",
+          "mergeSha": "eab9779e654cb06297fd42963f72e7339cd717c5",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -3561,10 +3563,10 @@
     }
   },
   "lastTransaction": {
-    "id": "70ae4297-4d56-48dd-b8ca-e6884900b7f9",
-    "recordedAt": "2026-08-10T07:34:27.830Z"
+    "id": "b765f21c-a128-4daf-98f0-ebfd79a72941",
+    "recordedAt": "2026-08-10T07:36:19.512Z"
   },
-  "updatedAt": "2026-08-10T07:34:27.830Z",
+  "updatedAt": "2026-08-10T07:36:19.512Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -3581,6 +3583,7 @@
       1365,
       1366,
       1369,
+      1370,
       1372,
       1373,
       1376,
