@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 106,
+  "sequence": 107,
   "nextFence": 32,
-  "mergeLease": {
-    "leaseId": "ce99601e-5c0b-47a4-b695-6b2315282d13",
-    "fence": 31,
-    "owner": {
-      "threadId": "/root/pr1375_release",
-      "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
-    },
-    "claimedPr": 1375,
-    "claimedAt": "2026-08-10T08:53:21.410Z",
-    "heartbeatAt": "2026-08-10T08:53:21.410Z",
-    "expiresAt": "2026-08-10T09:23:21.410Z"
-  },
+  "mergeLease": null,
   "items": {
     "1330": {
       "state": "closed",
@@ -2770,7 +2759,7 @@
       }
     },
     "1375": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1375,
         "url": "https://github.com/artemgetmann/openclaw/pull/1375",
@@ -2901,7 +2890,20 @@
       "candidateHistory": [],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1375,
+          "reviewedHeadSha": "0b4769b7db940ecadb7d7f3ca03a9de18788e92b",
+          "diffFingerprint": "sha256:8351cf6ea5b07befe467d1579cc3685a40f03ff055befda3567f6a13d851a220",
+          "mergeSha": "0318b6873027d086a63eb9f147047e8e88d48a26",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -3723,10 +3725,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1375-claim-0b4769b7",
-    "recordedAt": "2026-08-10T08:53:21.410Z"
+    "id": "pr1375-record-merge-0318b687",
+    "recordedAt": "2026-08-10T08:54:42.327Z"
   },
-  "updatedAt": "2026-08-10T08:53:21.410Z",
+  "updatedAt": "2026-08-10T08:54:42.327Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -3746,6 +3748,7 @@
       1370,
       1372,
       1373,
+      1375,
       1376,
       1377,
       1378,
