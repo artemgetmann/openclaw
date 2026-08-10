@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 108,
+  "sequence": 109,
   "nextFence": 32,
   "mergeLease": null,
   "items": {
@@ -3775,13 +3775,137 @@
         "fence": 28,
         "recordedAt": "2026-08-09T17:17:55.911Z"
       }
+    },
+    "1384": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1384,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1384",
+        "headSha": "adf0992340091b6390679c919bed66d682d6a1e7",
+        "baseBranch": "main",
+        "testedBaseSha": "0318b6873027d086a63eb9f147047e8e88d48a26",
+        "diffFingerprint": "sha256:b966a4f0fc3441eb2a71e758e437a1a726def2741b5092966811a458fd502ec1",
+        "changedPaths": [
+          "extensions/telegram/src/bot-message-dispatch.test.ts",
+          "extensions/telegram/src/bot-message-dispatch.ts",
+          "src/auto-reply/reply/dispatch-from-config.test.ts",
+          "src/auto-reply/reply/dispatch-from-config.ts"
+        ],
+        "title": "fix(telegram): deliver provider error finals",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: A direct Jarvis Telegram turn that ends in a provider error delivers one durable text fallback even when the same text already appeared as mutable progress.\n- Exact head + builder proof: `adf0992340091b6390679c919bed66d682d6a1e7`; three focused regressions pass. The earlier head passed `pnpm check`; the exact-head rerun passed formatting before the canonical guard stopped typecheck for active host paging, so CI remains the exact-head broad proof.\n- Independent tester: Pending canonical exact-head handoff.\n- Jarvis delivery boundary: Product-wide public-release receipt below; source proven, package/install/public/live layers pending.\n- Release worker: Pending canonical repo-backed release handoff after tester PASS.\n- Dependencies / merge order / overlap: Standalone. PR #1371 touches delegated working presence and the generic dispatcher but not these four paths; no source overlap.\n- Remaining proof / cleanup / rollback: Exact-head CI/review/test, expected-head merge, then a new immutable Sparkle release/package/install/runtime/live Telegram receipt. Revert this commit to roll back.\n- Still hurts: Two affected Telegram tests fail unchanged on base `0318b6873027d086a63eb9f147047e8e88d48a26`; recorded as base failures, not this patch's regressions.\n\n## Why This Matters\n\n- The 2026-08-10 incident was a direct Jarvis turn, not native Codex delegation.\n- Provider overload produced a marked error fallback, but Telegram stripped/suppressed it because its text matched active progress. The user saw no durable text final and had to ask for a repeat.\n\n## Scope Boundary\n\n- Preserve `isError` when block-stream text is promoted to a marked final.\n- Allow only marked provider-error finals to survive progress stripping and echo suppression.\n- Do not change ordinary final delivery, delegated Codex completion, typing/presence, or monitor wakes.\n\n## Verification\n\n- Red proof with old suppression: new Telegram regression fails because `deliverReplies` receives no final.\n- Green: three focused regressions pass across `bot-message-dispatch.test.ts` and `dispatch-from-config.test.ts`, including stale error-marker retraction.\n- Affected suites: 212 tests pass; two failures reproduced unchanged with production source reverted to base.\n- Prior head `pnpm check`: format, core/UI typecheck, plugin exports, type-aware lint, and policy lint all passed. Exact amended head: formatting passed, then the canonical guard terminated typecheck for active host paging; exact-head CI is pending.\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"public-release\",\n  \"completionClaim\": \"blocked-at-boundary\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home mutation is part of this product task.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Head adf0992340091b6390679c919bed66d682d6a1e7 passes three focused regressions and exact-patch independent review; broad exact-head CI remains pending.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"pending\",\n      \"evidence\": \"A new immutable signed and notarized Sparkle candidate must include the merged head.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"pending\",\n      \"evidence\": \"Artem's installed Jarvis must update to the new candidate and restart safely.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The dispatch-only repair changes no stored state or configuration.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"pending\",\n      \"evidence\": \"The appcast and immutable public assets must publish after merge.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"pending\",\n      \"evidence\": \"One bounded live Telegram provider-error fallback acceptance remains.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "public-release",
+          "completionClaim": "blocked-at-boundary",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation is part of this product task."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Head adf0992340091b6390679c919bed66d682d6a1e7 passes three focused regressions and exact-patch independent review; broad exact-head CI remains pending."
+            },
+            "packagedArtifact": {
+              "status": "pending",
+              "evidence": "A new immutable signed and notarized Sparkle candidate must include the merged head."
+            },
+            "installedRuntime": {
+              "status": "pending",
+              "evidence": "Artem's installed Jarvis must update to the new candidate and restart safely."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "The dispatch-only repair changes no stored state or configuration."
+            },
+            "publicRelease": {
+              "status": "pending",
+              "evidence": "The appcast and immutable public assets must publish after merge."
+            },
+            "endUserBehavior": {
+              "status": "pending",
+              "evidence": "One bounded live Telegram provider-error fallback acceptance remains."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fe5cf-1cf1-70d0-b58f-e2f8ef8dbbc1",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fe5cf-1cf1-70d0-b58f-e2f8ef8dbbc1",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "adf0992340091b6390679c919bed66d682d6a1e7",
+        "diffFingerprint": "sha256:b966a4f0fc3441eb2a71e758e437a1a726def2741b5092966811a458fd502ec1",
+        "closure": "terminal-receipt",
+        "contractId": "17bd3b5b-22ca-4a0a-9c6d-ee8668eccb32",
+        "owner": {
+          "threadId": "pr1384_tester",
+          "hostId": "nested-agent"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "headSha": "adf0992340091b6390679c919bed66d682d6a1e7",
+        "diffFingerprint": "sha256:b966a4f0fc3441eb2a71e758e437a1a726def2741b5092966811a458fd502ec1",
+        "owner": {
+          "threadId": "pr1384_reviewer",
+          "hostId": "nested-agent"
+        },
+        "unresolvedFindings": [],
+        "evidence": [
+          "SHA-256 of .local/pr1384-adf0992340.patch matches the canonical fingerprint.",
+          "Error-count bookkeeping retracts the marker alongside duplicated provisional commentary.",
+          "A dedicated regression confirms a later normal final does not inherit error semantics.",
+          "Full four-file patch review found no unresolved high, critical, or other correctness findings."
+        ]
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1384 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "76262197-ed54-46d6-ae92-8db4c1ba16be",
+        "stateDirectory": "/Users/user/.codex/worktrees/d722dd22-b8fd-4d83-836c-1c8e1f49cae3/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-10T11:30:47.117Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "08eec616-9471-4474-b470-11d99662528d",
-    "recordedAt": "2026-08-10T09:11:42.991Z"
+    "id": "3c8c692f-bb0c-40ad-8bad-04c1cce5f2e9",
+    "recordedAt": "2026-08-10T11:30:47.117Z"
   },
-  "updatedAt": "2026-08-10T09:11:42.991Z",
+  "updatedAt": "2026-08-10T11:30:47.117Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
