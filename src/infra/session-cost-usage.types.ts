@@ -1,8 +1,8 @@
-import type { NormalizedUsage } from "../agents/usage.js";
 import type {
   SessionUsageTimePoint as SharedSessionUsageTimePoint,
   SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
 } from "../shared/session-usage-timeseries-types.js";
+import type { NormalizedUsage } from "../shared/usage-normalization-contract.js";
 
 export type CostBreakdown = {
   total?: number;

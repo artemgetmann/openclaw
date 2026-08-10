@@ -3,7 +3,6 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
@@ -22,6 +21,7 @@ import type {
   AgentsListResult,
   ChatModelOverride,
   GatewaySessionRow,
+  ModelCatalogEntry,
   SessionsListResult,
   SessionsPatchResult,
 } from "../types.ts";

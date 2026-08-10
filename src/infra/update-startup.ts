@@ -5,6 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import type { UpdateAvailable } from "../shared/update-contract.js";
 import { VERSION } from "../version.js";
 import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -42,11 +43,7 @@ type AutoUpdateRunResult = {
   reason?: string;
 };
 
-export type UpdateAvailable = {
-  currentVersion: string;
-  latestVersion: string;
-  channel: string;
-};
+export type { UpdateAvailable } from "../shared/update-contract.js";
 
 let updateAvailableCache: UpdateAvailable | null = null;
 

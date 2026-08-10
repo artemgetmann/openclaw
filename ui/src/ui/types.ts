@@ -1,4 +1,4 @@
-export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+export type UpdateAvailable = import("../../../src/shared/update-contract.js").UpdateAvailable;
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {
@@ -630,15 +630,7 @@ export type HealthSummary = {
   };
 };
 
-/** A model entry returned by the gateway model-catalog endpoint. */
-export type ModelCatalogEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-  input?: Array<"text" | "image">;
-};
+export type { ModelCatalogEntry } from "../../../src/shared/model-catalog-contract.js";
 
 export type ToolCatalogProfile =
   import("../../../src/gateway/protocol/schema/types.js").ToolCatalogProfile;

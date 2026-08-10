@@ -1,4 +1,3 @@
-import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type {
   CostUsageSummary,
   SessionCostSummary,
@@ -8,7 +7,8 @@ import type {
   SessionMessageCounts,
   SessionModelUsage,
   SessionToolUsage,
-} from "../infra/session-cost-usage.js";
+} from "../infra/session-cost-usage.types.js";
+import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 
 export type SessionUsageEntry = {
   key: string;
