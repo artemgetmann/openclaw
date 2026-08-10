@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 116,
+  "sequence": 117,
   "nextFence": 34,
   "mergeLease": null,
   "items": {
@@ -3941,6 +3941,123 @@
         "recordedAt": "2026-08-10T11:31:43.660Z"
       }
     },
+    "1387": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1387,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1387",
+        "headSha": "02df3c0ba2333645793f744960fa76be994fa2e1",
+        "baseBranch": "main",
+        "testedBaseSha": "c045a2f0b65b81815e0cc9834c97bcc4e4ef39ba",
+        "diffFingerprint": "sha256:ccb6e323fd1b1a837bca3d7b7440f6e888aa4222a882b7a57d9095c649321c34",
+        "changedPaths": [
+          "docs/agent-guides/jarvis-sparkle-update-e2e.md",
+          "scripts/jarvis-sparkle-update-e2e.sh",
+          "scripts/test-jarvis-sparkle-update-e2e.sh"
+        ],
+        "title": "fix(jarvis): accept protected signed baselines",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: The Sparkle harness accepts only an exact receipt-bound signed installed app plus protected break-glass runtime, always proves a normal signed managed baseline, ignores unrelated apps' Sparkle helpers, and still blocks real Jarvis updater owners.\n- Exact head + builder proof: `02df3c0ba2333645793f744960fa76be994fa2e1`; source-only rebase onto merged lifecycle policy PR #1388; prior guarded `bash scripts/test-jarvis-sparkle-update-e2e.sh` PASS and focused formatting/syntax PASS. Fresh exact-head tester and CI own final proof.\n- Independent tester: Pending canonical exact-head handoff.\n- Jarvis delivery boundary: Product-wide, source target; validated receipt below.\n- Release worker: Pending tester PASS and fenced release handoff.\n- Dependencies / merge order / overlap: None — standalone; no open PR touches the three changed paths.\n- Remaining proof / cleanup / rollback: Independent exact-head review/test and normal merge remain. Public assets, installed app, protected runtime, and gateway were untouched. Release owner retains signed update/install/runtime acceptance.\n- Still hurts: The already-public release remains uninstalled on this Mac until the preserved release owner resumes the live acceptance lane.\n\n## Why This Matters\n\n- The installed signed public app can legitimately coexist with a newer protected break-glass runtime, but the acceptance harness had no explicit safe contract for that state.\n- A baseline-mode spelling mismatch skipped normal live managed-baseline proof, while unrelated applications' Sparkle helpers blocked Jarvis acceptance.\n\n## Scope Boundary\n\n- Product-wide source fix in the Sparkle acceptance harness, synthetic fixtures, and focused guide.\n- No release asset/appcast changes, package build, `/Applications/Jarvis.app` install, gateway restart, protected-marker mutation, Telegram send, or live `--apply` transition.\n\n## Verification\n\n- `scripts/with-dedicated-agent-slot.sh --label \"019fec3e:sparkle-handshake-proof\" --wait-seconds 86400 -- bash scripts/test-jarvis-sparkle-update-e2e.sh`\n- `scripts/with-dedicated-agent-slot.sh --label \"019fc197:sparkle-pnpm-check-rerun\" --wait-seconds 86400 -- pnpm check`\n- `git diff --check`\n- `bash -n scripts/jarvis-sparkle-update-e2e.sh scripts/test-jarvis-sparkle-update-e2e.sh`\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"source\",\n  \"completionClaim\": \"declared-boundary-complete\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home mutation is part of this product task.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Exact source behavior passed the guarded synthetic harness suite; fresh exact-head delegated testing and CI own final proof after the policy-only rebase.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The requested delivery target is source; packaging remains with the preserved release owner.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"This source lane is explicitly forbidden from changing the installed app or runtime.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The change validates an existing acceptance receipt and does not migrate user data or configuration.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The public release already exists and this PR does not publish or modify release assets.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"Live signed update acceptance remains a separate preserved release-owner responsibility.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## Security Impact\n\n- New permissions/capabilities? No.\n- Secrets/tokens handling changed? No.\n- New/changed network calls? No.\n- Command/tool execution surface changed? No; owner detection is narrowed to Jarvis/OpenClaw identity.\n- Data access scope changed? No.\n\n## Compatibility / Migration\n\n- Backward compatible: Yes.\n- Config/env changes: No.\n- Migration needed: No.\n\n## Failure Recovery\n\n- Revert this single commit. The harness then returns to rejecting the signed-app/protected-runtime baseline and globally blocking Sparkle helpers.\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted synthetic and full static/type/lint checks\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "source",
+          "completionClaim": "declared-boundary-complete",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation is part of this product task."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Exact source behavior passed the guarded synthetic harness suite; fresh exact-head delegated testing and CI own final proof after the policy-only rebase."
+            },
+            "packagedArtifact": {
+              "status": "not-applicable",
+              "evidence": "The requested delivery target is source; packaging remains with the preserved release owner."
+            },
+            "installedRuntime": {
+              "status": "not-applicable",
+              "evidence": "This source lane is explicitly forbidden from changing the installed app or runtime."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "The change validates an existing acceptance receipt and does not migrate user data or configuration."
+            },
+            "publicRelease": {
+              "status": "not-applicable",
+              "evidence": "The public release already exists and this PR does not publish or modify release assets."
+            },
+            "endUserBehavior": {
+              "status": "not-applicable",
+              "evidence": "Live signed update acceptance remains a separate preserved release-owner responsibility."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "019fc197-0fc8-7273-849a-ed756d07606e",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fc197-0fc8-7273-849a-ed756d07606e",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "02df3c0ba2333645793f744960fa76be994fa2e1",
+        "diffFingerprint": "sha256:ccb6e323fd1b1a837bca3d7b7440f6e888aa4222a882b7a57d9095c649321c34",
+        "closure": "terminal-receipt",
+        "contractId": "5a8a2858-8727-453b-9522-af2b58abfa1d",
+        "owner": {
+          "threadId": "/root/pr1387_tester",
+          "hostId": "local-subagent"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/lifecycle_policy_review",
+          "hostId": "local-subagent"
+        },
+        "headSha": "02df3c0ba2333645793f744960fa76be994fa2e1",
+        "diffFingerprint": "sha256:ccb6e323fd1b1a837bca3d7b7440f6e888aa4222a882b7a57d9095c649321c34",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1387 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "0fc540cb-266a-4532-9850-65828a36f91b",
+        "stateDirectory": "/Users/user/.codex/worktrees/0274ddba-b4a3-4f6e-a0c6-dd87bcdc6f41/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-10T17:53:46.393Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
+    },
     "1388": {
       "state": "closed",
       "candidate": {
@@ -4106,10 +4223,10 @@
     }
   },
   "lastTransaction": {
-    "id": "6cd1a398-c864-4934-bbf4-82fa0e15cf23",
-    "recordedAt": "2026-08-10T17:39:05.085Z"
+    "id": "a54ac25d-9a88-4f0c-bd8d-d47317068e72",
+    "recordedAt": "2026-08-10T17:53:46.393Z"
   },
-  "updatedAt": "2026-08-10T17:39:05.085Z",
+  "updatedAt": "2026-08-10T17:53:46.393Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
