@@ -1,9 +1,99 @@
 {
   "schemaVersion": 1,
-  "sequence": 97,
+  "sequence": 98,
   "nextFence": 29,
   "mergeLease": null,
   "items": {
+    "1330": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1330,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1330",
+        "headSha": "9e58440a3c3e2ea79dbfc0f7fc308b6f75f0f148",
+        "baseBranch": "main",
+        "testedBaseSha": "381c3f8edbe7fcca5bbdfc964439faf621d1a7f5",
+        "diffFingerprint": "sha256:13db9446531f4298c47a6533161cc9203a17df83ed7d728642ba9f313f18f600",
+        "changedPaths": [
+          ".github/pull_request_template.md",
+          "docs/agent-guides/workflow.md",
+          "scripts/adopt-codex-worktree.sh",
+          "scripts/bootstrap-worktree-runtime.sh",
+          "scripts/pr-lifecycle.mjs",
+          "scripts/telegram-e2e/README.md",
+          "scripts/telegram-live-runtime.sh",
+          "scripts/worktree-ready-check.sh",
+          "test/adopt-codex-worktree-owner.test.ts",
+          "test/scripts/pr-lifecycle.test.ts",
+          "test/scripts/telegram-live-runtime.test.ts",
+          "test/worktree-bootstrap.test.ts"
+        ],
+        "title": "fix(telegram): prepare tester lanes before reservation",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: canonical warm adoption/readiness runs before tester dependency work and before Telegram profile lock, identity, scenario reservation, model-auth probing, or runtime start. Fresh tester adoption waits lease-free under the same owner/contract for up to 24 hours; ordinary occupied or recoverable host-unhealthy admission cannot consume a behavioral attempt, archive the tester, or create a replacement.\n- Exact head + builder proof: `b8d8f123f745fd555b560bd6593bca050f88d310`; canonical guarded focused run passed 4 files / 60 tests. Commit hooks, shell syntax, focused formatting, and diff hygiene pass. Remote CI and refreshed independent receipts are pending.\n- Independent tester: Required. A fresh tester must run the emitted credential-free warm adoption command before collection. New contracts reject terminal `guard_refused` receipts and preserve exact owner/head/fingerprint while queued. `guard_internal`, drift, cleanup ambiguity, and post-workload failures remain fail-closed.\n- Dependencies / merge order / overlap: #1373 and #1374 overlap workflow/lifecycle files but remain open and unmerged. Reconcile and refresh exact-head proof if either lands first.\n- Remaining proof / cleanup / rollback: independent exact-head review/test, CI, and normal fenced release-worker merge. Both guarded process groups exited and their leases released; no Telegram/runtime state was created. Revert the four PR commits if readiness blocks valid clean lanes.\n\n## Why This Matters\n\n- Cold reviewer/tester worktrees could fail before collection because local dependencies were absent, incorrectly consuming a behavioral tester attempt.\n- Existing but stale `node_modules` could pass after `package.json` or `pnpm-lock.yaml` changed.\n- Dirty tracked source could be accepted with stale `dist`.\n- Short machine-owner races could exhaust tester retries and require a replacement owner even though no behavioral workload started.\n- Telegram tester setup could reach reservation/model-auth before canonical readiness, and bounded consumers could derive the wrong runtime config filename.\n\n## Scope Boundary\n\n- Product-wide source workflow; delivery target is this fork's `main`.\n- Adds credential-free warm adoption and one same-owner bounded capacity wait without weakening owner, head, base, diff-fingerprint, cleanup, or duplicate-owner gates.\n- Keeps the old one-time capacity recovery readable only for historical contracts; its replacement receives current bounded-wait semantics.\n- Repairs repository-pinned dependencies, records current commit plus tracked-diff build state, and verifies both before protected tester setup.\n- Emits and documents authoritative `runtime_config_path`.\n- Does not change Telegram transport, channels-status behavior, shared runtime, deployment, credentials, or release publication.\n\n## Verification\n\nCompleted on `b8d8f123f745fd555b560bd6593bca050f88d310`:\n\n- Canonical guarded focused Vitest: `test/adopt-codex-worktree-owner.test.ts`, `test/scripts/pr-lifecycle.test.ts`, `test/worktree-bootstrap.test.ts`, and `test/scripts/telegram-live-runtime.test.ts`; 4 files / 60 tests passed.\n- The proof queued lease-free behind another owner, admitted once, ran once, and released normally.\n- Conventional Commit hooks: oxlint and oxfmt passed.\n- `bash -n scripts/adopt-codex-worktree.sh`.\n- Focused oxfmt checks and `git diff --check`.\n\nPending and intentionally not claimed:\n\n- GitHub CI completion.\n- Independent exact-head review and tester receipt.\n- Rebase/re-proof if overlapping workflow PRs land first.\n\n## AI Assistance\n\n- AI-assisted.\n- Testing degree: deterministic focused guarded proof plus remote CI; refreshed independent exact-head proof pending.\n",
+        "jarvisDeliveryBoundary": null
+      },
+      "builder": {
+        "threadId": "019fb6d1-a095-7382-bf5f-1dee27f73456",
+        "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b",
+        "wakeRoute": {
+          "threadId": "019fb6d1-a095-7382-bf5f-1dee27f73456",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "9e58440a3c3e2ea79dbfc0f7fc308b6f75f0f148",
+        "diffFingerprint": "sha256:13db9446531f4298c47a6533161cc9203a17df83ed7d728642ba9f313f18f600",
+        "closure": "archived",
+        "contractId": "68252f82-6209-4d2e-915b-3fc9844894c0",
+        "owner": {
+          "threadId": "019fe7c8-3fc4-7a31-9fba-37b4366c85ff",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/pr1330_exact_review",
+          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+        },
+        "headSha": "9e58440a3c3e2ea79dbfc0f7fc308b6f75f0f148",
+        "diffFingerprint": "sha256:13db9446531f4298c47a6533161cc9203a17df83ed7d728642ba9f313f18f600",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1330 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "10eb1600-cf07-4f7f-921a-787d7e668bdf",
+        "stateDirectory": "/Users/user/.codex/worktrees/83d308a5-44be-4348-b2c7-9fccccad1c87/openclaw/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-10T05:16:09.281Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
+    },
     "1354": {
       "state": "closed",
       "candidate": {
@@ -3290,10 +3380,10 @@
     }
   },
   "lastTransaction": {
-    "id": "cecdc13e-fc60-4c45-ab31-6614324e9a18",
-    "recordedAt": "2026-08-09T17:19:42.961Z"
+    "id": "pr1330-enqueue-9e58440a3c",
+    "recordedAt": "2026-08-10T05:16:09.281Z"
   },
-  "updatedAt": "2026-08-09T17:19:42.961Z",
+  "updatedAt": "2026-08-10T05:16:09.281Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
