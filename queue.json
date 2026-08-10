@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 107,
+  "sequence": 108,
   "nextFence": 32,
   "mergeLease": null,
   "items": {
@@ -2640,14 +2640,14 @@
       }
     },
     "1374": {
-      "state": "blocked",
+      "state": "queued",
       "candidate": {
         "pr": 1374,
         "url": "https://github.com/artemgetmann/openclaw/pull/1374",
-        "headSha": "c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d",
+        "headSha": "ec085b9d70f4459363bfffd43593bef8d56e0f43",
         "baseBranch": "main",
-        "testedBaseSha": "b6243a67867df61e1d7bb4274013ed8c9333d228",
-        "diffFingerprint": "sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4",
+        "testedBaseSha": "0318b6873027d086a63eb9f147047e8e88d48a26",
+        "diffFingerprint": "sha256:a6e3a810cee941909f54f4616a652cb4f5827b2bc3822d443cfea6f84be2be82",
         "changedPaths": [
           "docs/agent-guides/workflow.md",
           "scripts/github-connector-transport.mjs",
@@ -2656,7 +2656,10 @@
           "scripts/pr-lifecycle",
           "scripts/pr-lifecycle.mjs",
           "test/scripts/github-connector-transport.test.ts"
-        ]
+        ],
+        "title": "fix(workflow): support GitHub connector fallback",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: GitHub lifecycle commands keep the existing host-gh path unchanged, but deterministically use authenticated connector evidence when local gh API auth is unavailable; mutable PR fields are independently bound to GitHub public HTTPS metadata, immutable head/base/diff/paths are bound to explicit GitHub HTTPS refs, and unsupported capabilities fail with a precise blocker.\n- Exact head + builder proof: `ec085b9d70f4459363bfffd43593bef8d56e0f43`; rebased onto current `main@0318b6873027d086a63eb9f147047e8e88d48a26`; 96 focused Vitest assertions and 7 shell preflight cases passed; targeted type-aware lint passed with 0 findings; syntax and diff checks passed.\n- Independent tester: Pending fresh exact-head review and tester receipt on `ec085b9d70f4459363bfffd43593bef8d56e0f43`.\n- Release worker: Prior conflict lease was safely blocked and released; pending fresh repo-backed fenced release after new proof.\n- Dependencies / merge order / overlap: None — standalone. PR #1361 and the Telegram presence lane were treated as read-only incident evidence and were not modified.\n- Remaining proof / cleanup / rollback: Fresh exact-head review, tester receipt, required CI, and fenced normal merge remain. Rollback is a normal revert of this source-only commit.\n- Still hurts: Connector evidence generation is explicit and capability-scoped; private repositories without an independently readable live-metadata witness fail closed.\n\n## Why This Matters\n\n- A failed local gh credential probe previously stopped lifecycle receipt recording even when the installed GitHub connector was authenticated and capable.\n- One sanctioned command path now negotiates transport capabilities without credential improvisation, fabricated receipts, duplicate ownership, or weakened merge gates.\n\n## Scope Boundary\n\n- Source/tooling and workflow guidance only.\n- No credentials, runtime, deployment, restart, package, Telegram, user data, admin merge, or bypass behavior changed.\n- Host-gh remains the default when healthy.\n\n## Verification\n\n- Base: `main@0318b6873027d086a63eb9f147047e8e88d48a26`\n- Diff: `sha256:a6e3a810cee941909f54f4616a652cb4f5827b2bc3822d443cfea6f84be2be82`\n- Changed paths: `docs/agent-guides/workflow.md`, `scripts/github-connector-transport.mjs`, `scripts/lib/github-auth-preflight.sh`, `scripts/lib/github-connector-evidence.mjs`, `scripts/pr-lifecycle`, `scripts/pr-lifecycle.mjs`, `test/scripts/github-connector-transport.test.ts`\n- Focused regression: 103/103 passed after final rebase (96 Vitest + 7 shell).\n- Connector transport unit suite: 14/14 passed.\n- Type-aware oxlint: 0 warnings, 0 errors.\n- Shell/Node syntax and `git diff --check`: passed.\n\n## Security Notes\n\n- Production lifecycle verification uses fixed `/usr/bin/curl` and `/usr/bin/git`, ignores caller witness-binary/PATH overrides, disables curl and Git user configuration, and queries explicit GitHub HTTPS refs outside repository configuration.\n- Lower-level injected runners exist only for isolated unit tests and are not reachable through lifecycle command arguments or environment.\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted\n",
+        "jarvisDeliveryBoundary": null
       },
       "builder": {
         "threadId": "019fe4fa-b5de-7070-b823-529e2aa815c9",
@@ -2668,12 +2671,12 @@
       },
       "testerReceipt": {
         "status": "PASS",
-        "headSha": "c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d",
-        "diffFingerprint": "sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4",
+        "headSha": "ec085b9d70f4459363bfffd43593bef8d56e0f43",
+        "diffFingerprint": "sha256:a6e3a810cee941909f54f4616a652cb4f5827b2bc3822d443cfea6f84be2be82",
         "closure": "terminal-receipt",
-        "contractId": "53370aa4-0a01-4f7d-b303-a61470adddd4",
+        "contractId": "b516088c-1003-4396-b871-10e61988b58e",
         "owner": {
-          "threadId": "/root/pr1374_exact_tester",
+          "threadId": "/root/pr1374_final_tester",
           "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
         }
       },
@@ -2683,15 +2686,14 @@
         "status": "PASS",
         "owner": {
           "threadId": "/root/exact_head_review",
-          "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+          "hostId": "local"
         },
-        "headSha": "c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d",
-        "diffFingerprint": "sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4",
+        "headSha": "ec085b9d70f4459363bfffd43593bef8d56e0f43",
+        "diffFingerprint": "sha256:a6e3a810cee941909f54f4616a652cb4f5827b2bc3822d443cfea6f84be2be82",
         "unresolvedFindings": [],
         "evidence": [
-          "Fixed production Git and curl witnesses with caller configuration disabled",
-          "Git replacement objects disabled for every trusted Git invocation",
-          "Host-gh default, capability gates, expected-head merge, and ambiguity no-retry preserved"
+          "Authenticated connector title, body, and Git-derived changed paths pass the same Jarvis delivery boundary as host-gh",
+          "Fixed trusted witnesses, immutable head and base, exact patch and paths, secret rejection, expected-head merge, and no-retry ambiguity remain fail-closed"
         ]
       },
       "capabilityPolicy": {
@@ -2713,18 +2715,12 @@
         ]
       },
       "lifecycle": {
-        "contractId": "808a43c0-2dde-432b-988d-5c5140ea63b6",
+        "contractId": "11618111-e73f-4664-818a-dd25b08869e0",
         "stateDirectory": "/Users/user/.codex/worktrees/4c83028d-43c0-4a0c-8622-0e445fdfb690/openclaw/.local/pr-lifecycle-1374"
       },
       "declaredDependencies": [],
-      "discoveredBlockers": [
-        {
-          "kind": "mergeability-conflict",
-          "details": "PR #1374 head c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d and trusted Git diff sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4 remain exact against main b6243a67867df61e1d7bb4274013ed8c9333d228, but GitHub reports mergeable=CONFLICTING and mergeStateStatus=DIRTY. The candidate merge base is 46145ab4632d9c34ac7ed051a368ac39db9136d7 and it is four commits behind strict main; intervening main changes overlap scripts/pr-lifecycle.mjs. Active ruleset 17215923 requires strict pr-required and actionlint, and both contexts are missing on the exact head; only non-required Labeler checks exist. Reviews require zero approvals, connector and gh show zero unresolved review threads, declared dependencies are empty, and draft PR #1373 overlaps workflow.md and pr-lifecycle.mjs as a warning only. Builder must resolve/rebase on current main, obtain fresh exact-head review/test/lifecycle packet, and rerun required CI; normal merge is forbidden on this lease.",
-          "observedAt": "2026-08-09T08:18:28.788Z"
-        }
-      ],
-      "readyAt": "2026-08-09T08:10:58.195Z",
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-10T09:11:42.991Z",
       "ownerHistory": [
         {
           "leaseId": "b3750037-bfb9-4745-bef6-8f1fd89b9f39",
@@ -2740,7 +2736,64 @@
         }
       ],
       "mutationIntent": null,
-      "candidateHistory": [],
+      "candidateHistory": [
+        {
+          "candidate": {
+            "pr": 1374,
+            "url": "https://github.com/artemgetmann/openclaw/pull/1374",
+            "headSha": "c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d",
+            "baseBranch": "main",
+            "testedBaseSha": "b6243a67867df61e1d7bb4274013ed8c9333d228",
+            "diffFingerprint": "sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4",
+            "changedPaths": [
+              "docs/agent-guides/workflow.md",
+              "scripts/github-connector-transport.mjs",
+              "scripts/lib/github-auth-preflight.sh",
+              "scripts/lib/github-connector-evidence.mjs",
+              "scripts/pr-lifecycle",
+              "scripts/pr-lifecycle.mjs",
+              "test/scripts/github-connector-transport.test.ts"
+            ]
+          },
+          "testerReceipt": {
+            "status": "PASS",
+            "headSha": "c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d",
+            "diffFingerprint": "sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4",
+            "closure": "terminal-receipt",
+            "contractId": "53370aa4-0a01-4f7d-b303-a61470adddd4",
+            "owner": {
+              "threadId": "/root/pr1374_exact_tester",
+              "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+            }
+          },
+          "reviewReceipt": {
+            "schemaVersion": 1,
+            "role": "code-reviewer",
+            "status": "PASS",
+            "owner": {
+              "threadId": "/root/exact_head_review",
+              "hostId": "slingshot:env_e_6a06b186fc40832bba82e2d21b06eb0b"
+            },
+            "headSha": "c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d",
+            "diffFingerprint": "sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4",
+            "unresolvedFindings": [],
+            "evidence": [
+              "Fixed production Git and curl witnesses with caller configuration disabled",
+              "Git replacement objects disabled for every trusted Git invocation",
+              "Host-gh default, capability gates, expected-head merge, and ambiguity no-retry preserved"
+            ]
+          },
+          "discoveredBlockers": [
+            {
+              "kind": "mergeability-conflict",
+              "details": "PR #1374 head c9ef2a052f5a45b3e57fdeb65a50c62d01877b4d and trusted Git diff sha256:292df249ef57b8cb2221331c93824962a501328dcdea3ce799022b3a74e629b4 remain exact against main b6243a67867df61e1d7bb4274013ed8c9333d228, but GitHub reports mergeable=CONFLICTING and mergeStateStatus=DIRTY. The candidate merge base is 46145ab4632d9c34ac7ed051a368ac39db9136d7 and it is four commits behind strict main; intervening main changes overlap scripts/pr-lifecycle.mjs. Active ruleset 17215923 requires strict pr-required and actionlint, and both contexts are missing on the exact head; only non-required Labeler checks exist. Reviews require zero approvals, connector and gh show zero unresolved review threads, declared dependencies are empty, and draft PR #1373 overlaps workflow.md and pr-lifecycle.mjs as a warning only. Builder must resolve/rebase on current main, obtain fresh exact-head review/test/lifecycle packet, and rerun required CI; normal merge is forbidden on this lease.",
+              "observedAt": "2026-08-09T08:18:28.788Z"
+            }
+          ],
+          "baseDriftRecovery": null,
+          "replacedAt": "2026-08-10T09:11:42.991Z"
+        }
+      ],
       "terminalReceipts": [],
       "ownershipReceipt": {
         "mode": "queue-lease",
@@ -3725,10 +3778,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1375-record-merge-0318b687",
-    "recordedAt": "2026-08-10T08:54:42.327Z"
+    "id": "08eec616-9471-4474-b470-11d99662528d",
+    "recordedAt": "2026-08-10T09:11:42.991Z"
   },
-  "updatedAt": "2026-08-10T08:54:42.327Z",
+  "updatedAt": "2026-08-10T09:11:42.991Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
