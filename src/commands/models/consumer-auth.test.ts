@@ -261,7 +261,7 @@ describe("consumer auth ChatGPT OAuth setup", () => {
         providers: [openAiCodexProvider],
         resolveReadiness: async () => ({
           status: "ready",
-          mode: "oauth",
+          mode: "managed",
           defaultModel: "openai-codex/gpt-5.6-sol",
           configPath: "/tmp/openclaw/config.json",
           stateDir: "/tmp/openclaw",
@@ -343,7 +343,7 @@ describe("consumer auth ChatGPT OAuth setup", () => {
       providers: [openAiCodexProvider],
       resolveReadiness: async () => ({
         status: "ready",
-        mode: "oauth",
+        mode: "managed",
         defaultModel: "openai-codex/gpt-5.6-sol",
         configPath: "/tmp/openclaw/config.json",
         stateDir: "/tmp/openclaw",
