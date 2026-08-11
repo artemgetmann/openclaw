@@ -128,6 +128,7 @@ assert_source_checkout_safe() {
     die "sacred main has local changes; refusing to load release helpers"
   /usr/bin/git -C "${CANONICAL_MAIN_REPO}" diff --quiet HEAD -- \
     scripts/ship-jarvis-hotfix.sh \
+    scripts/lib/ship-jarvis-hotfix-guarded-entry.sh \
     scripts/lib/heavy-local-slot.sh \
     scripts/lib/jarvis-release-lock.sh \
     scripts/lib/jarvis-release-disk-preflight.sh || \
@@ -1040,7 +1041,7 @@ main() {
       "jarvis-remediation" \
       "ship-jarvis-hotfix:pr-${PR_NUMBER}" \
       "$ROOT_DIR" \
-      "$ROOT_DIR/scripts/ship-jarvis-hotfix.sh" \
+      "$ROOT_DIR/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" \
       "$@"
   fi
   require_preflight_tools

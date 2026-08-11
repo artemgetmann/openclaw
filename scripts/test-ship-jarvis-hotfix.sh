@@ -38,10 +38,35 @@ fi
 [[ ! -e "${ENTRY_MARKER}" ]] || fail "ambient source function ran before clean-entry rejection"
 pass "clean-entry sentinel rejects explicit bash and imported functions"
 
+GUARDED_FIXTURE="${TMP_ROOT}/guarded-entry"
+GUARDED_TOKEN="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+mkdir -p "${GUARDED_FIXTURE}/scripts/lib"
+cp "${ROOT_DIR}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" \
+  "${GUARDED_FIXTURE}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh"
+cat >"${GUARDED_FIXTURE}/scripts/ship-jarvis-hotfix.sh" <<'EOF'
+#!/usr/bin/env bash
+root="$(cd "$(dirname "$0")/.." && pwd)"
+printf '%s|%s|%s\n' \
+  "${OPENCLAW_HOTFIX_CLEAN_ENTRY:-missing}" \
+  "${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-missing}" \
+  "${AMBIENT_POISON:-unset}" >"${root}/guarded-entry.out"
+EOF
+chmod +x \
+  "${GUARDED_FIXTURE}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" \
+  "${GUARDED_FIXTURE}/scripts/ship-jarvis-hotfix.sh"
+AMBIENT_POISON=must-not-survive \
+OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN="${GUARDED_TOKEN}" \
+  "${GUARDED_FIXTURE}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" --pr 1
+[[ "$(<"${GUARDED_FIXTURE}/guarded-entry.out")" == "1|${GUARDED_TOKEN}|unset" ]] || \
+  fail "guarded hotfix entry did not preserve only the fleet lease"
+pass "guarded hotfix entry preserves the lease across environment sanitization"
+
 DIRTY_FIXTURE="${TMP_ROOT}/dirty-checkout"
 DIRTY_MARKER="${TMP_ROOT}/dirty-helper-ran"
 mkdir -p "${DIRTY_FIXTURE}/scripts/lib"
 cp "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh" "${DIRTY_FIXTURE}/scripts/ship-jarvis-hotfix.sh"
+cp "${ROOT_DIR}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" \
+  "${DIRTY_FIXTURE}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh"
 cp "${ROOT_DIR}/scripts/lib/heavy-local-slot.sh" "${DIRTY_FIXTURE}/scripts/lib/heavy-local-slot.sh"
 cp "${ROOT_DIR}/scripts/lib/jarvis-release-lock.sh" "${DIRTY_FIXTURE}/scripts/lib/jarvis-release-lock.sh"
 cp "${ROOT_DIR}/scripts/lib/jarvis-release-disk-preflight.sh" "${DIRTY_FIXTURE}/scripts/lib/jarvis-release-disk-preflight.sh"
