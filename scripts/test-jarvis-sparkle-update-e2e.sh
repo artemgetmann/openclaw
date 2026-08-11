@@ -962,7 +962,13 @@ run_expect_fail "live Jarvis scratch root blocks" "$case_root" "scratch root may
 
 case_root="$(copy_case no-reseed)"
 : >"$case_root/control/no-reseed"
-run_expect_fail "candidate manifest cannot substitute for live managed polling" "$case_root" "live managed manifest did not reseed" --apply
+jq --arg commit "${OLD_COMMIT:0:10}" '.gitCommit = $commit' \
+  "$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json" \
+  >"$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json.tmp"
+mv "$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json.tmp" \
+  "$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json"
+run_expect_fail "stale abbreviated manifest keeps polling for managed reseed" "$case_root" \
+  "live managed manifest did not reseed" --apply
 
 case_root="$(copy_case post-update-foreign-signer)"
 : >"$case_root/control/post-update-foreign-team"

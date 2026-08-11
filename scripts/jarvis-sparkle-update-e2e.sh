@@ -1191,12 +1191,20 @@ wait_for_live_managed_manifest() {
   local deadline=$((SECONDS + TIMEOUT_SECONDS))
   local live_build
   local live_commit
+  local raw_live_commit
 
   while (( SECONDS < deadline )); do
     if [[ -r "$MANAGED_MANIFEST" ]]; then
       live_build="$(manifest_build "$MANAGED_MANIFEST")"
-      live_commit="$(canonicalize_commit_against_exact \
-        "$(manifest_commit "$MANAGED_MANIFEST")" "$NEW_COMMIT" "live managed manifest")"
+      raw_live_commit="$(manifest_commit "$MANAGED_MANIFEST")"
+      live_commit="$raw_live_commit"
+      # The app publishes its managed manifest asynchronously after relaunch.
+      # A stale old abbreviation is a not-ready observation, not a fatal
+      # provenance failure. Canonicalize only a prefix of the exact target;
+      # every other value keeps the bounded poll alive until reseed or timeout.
+      if is_git_commit "$raw_live_commit" && [[ "$NEW_COMMIT" == "$raw_live_commit"* ]]; then
+        live_commit="$NEW_COMMIT"
+      fi
       if [[ "$live_build" == "$NEW_BUILD" && "$live_commit" == "$NEW_COMMIT" ]]; then
         log "proof.managed_runtime=ok bundle_version=$live_build git_commit=$live_commit"
         return 0
