@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 127,
+  "sequence": 128,
   "nextFence": 37,
-  "mergeLease": {
-    "leaseId": "cd0153f5-57f4-4d90-ad32-83ffac9d80a5",
-    "fence": 36,
-    "owner": {
-      "threadId": "/root/sparkle_app_manifest_commit_fix/exact_head_review",
-      "hostId": "MacBook-Pro-JetBook-4.local"
-    },
-    "claimedPr": 1391,
-    "claimedAt": "2026-08-11T04:23:59.807Z",
-    "heartbeatAt": "2026-08-11T04:25:01.421Z",
-    "expiresAt": "2026-08-11T04:45:01.421Z"
-  },
+  "mergeLease": null,
   "items": {
     "1330": {
       "state": "closed",
@@ -4434,7 +4423,7 @@
       }
     },
     "1391": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1391,
         "url": "https://github.com/artemgetmann/openclaw/pull/1391",
@@ -4565,7 +4554,20 @@
       "candidateHistory": [],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1391,
+          "reviewedHeadSha": "eceed700bff02bbd788e50f4b249a37c041b79f9",
+          "diffFingerprint": "sha256:37ff481099f2f1374884f1c3eca28d15446ea357de0ba642d9133afa74dbab91",
+          "mergeSha": "ab75dad2cb66fb37ca0b5287761fb5f396ff52e0",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -4584,10 +4586,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1391-heartbeat-premerge-exact-head-review",
-    "recordedAt": "2026-08-11T04:25:01.421Z"
+    "id": "pr1391-record-merge-exact-head-review",
+    "recordedAt": "2026-08-11T04:26:02.763Z"
   },
-  "updatedAt": "2026-08-11T04:25:01.421Z",
+  "updatedAt": "2026-08-11T04:26:02.763Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -4616,7 +4618,8 @@
       1384,
       1387,
       1388,
-      1389
+      1389,
+      1391
     ],
     "pausedReason": null,
     "graduatedAt": "2026-08-07T05:46:10.866Z",
