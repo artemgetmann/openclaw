@@ -23,7 +23,7 @@ printf 'fixture-fs\t/fixture\t%s\t%s\n' "${TEST_FREE_KIB}" "$1"
 EOF
 cat >"${PACKAGE_SCRIPT_FIXTURE}" <<'EOF'
 #!/usr/bin/env bash
-: >"${PACKAGE_MARKER}"
+printf '%s\n' "${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-}" >"${PACKAGE_MARKER}"
 EOF
 chmod +x "${PROBE_SCRIPT}" "${PACKAGE_SCRIPT_FIXTURE}"
 
@@ -111,10 +111,13 @@ grep -q '^status=fail$' "${TMP_ROOT}/low.out" || fail "low disk omitted fail rec
 pass "low disk stops before package invocation"
 
 export TEST_FREE_KIB=100
+export OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 preflight_and_package_hotfix 1 2026.7.16 arm64 >"${TMP_ROOT}/enough.out" 2>&1
 [[ -e "${PACKAGE_MARKER}" ]] || fail "sufficient disk did not invoke package helper"
+[[ "$(<"${PACKAGE_MARKER}")" == "${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN}" ]] || \
+  fail "package helper did not inherit the hotfix owner's fleet lease"
 grep -q '^status=pass$' "${TMP_ROOT}/enough.out" || fail "sufficient disk omitted pass receipt"
-pass "sufficient disk proceeds to package invocation"
+pass "sufficient disk proceeds under the hotfix owner's fleet lease"
 
 rm -f "${PACKAGE_MARKER}"
 (
