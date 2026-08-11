@@ -6,6 +6,7 @@ source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/openclaw-runtime-payloads.sh"
+source "$ROOT_DIR/scripts/lib/consumer-mcporter-runtime.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
@@ -446,6 +447,9 @@ assert_capabilities_manifest_present \
   "bundled runtime skills"
 assert_app_managed_cli_payloads \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw"
+openclaw_verify_consumer_mcporter_runtime \
+  "$OPENCLAW_NODE_BIN" \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/tools/mcporter"
 
 sparkle_mode="disabled"
 if [[ -n "$sparkle_feed_url" ]]; then

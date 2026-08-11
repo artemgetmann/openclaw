@@ -1,16 +1,25 @@
 ---
 name: session-logs
-description: Search and analyze your own session logs (older/parent conversations) using jq.
-metadata: { "openclaw": { "emoji": "📜", "requires": { "bins": ["jq", "rg"] } } }
+description: Search relevant excerpts from the active agent's own session history when the user asks about earlier conversations.
+metadata: { "openclaw": { "emoji": "📜", "requires": { "bins": ["jq"] } } }
 ---
 
 # session-logs
 
-Search your complete conversation history stored in session JSONL files. Use this when a user references older/parent conversations or asks what was said before.
+Recover relevant context from the active agent's own live session history. Session transcripts are private and can contain credentials, personal data, tool output, and content the user later deleted. Search narrowly and disclose only what answers the request.
 
 ## Trigger
 
-Use this skill when the user asks about prior chats, parent conversations, or historical context that isn't in memory files.
+Use this skill only when the user asks about prior chats, parent conversations, or historical context that is not already available in the current conversation or memory files. Do not mine session history proactively.
+
+## Safety boundary
+
+- Scope every search to the active `agent=<id>` from the system prompt Runtime line. Never enumerate the state directory's `agents/` children, guess another agent ID, or search another agent's history by default.
+- Treat `sessions.json` as the live index. Search only transcripts referenced by its current entries. Exclude `*.deleted.*`, `*.reset.*`, rotated indexes, orphan transcripts, and other remnants unless the user explicitly asks to recover that material.
+- Read only `user` and `assistant` text blocks needed for the request. Exclude `toolResult`, tool calls, thinking, usage metadata, and unrelated messages by default.
+- Start with dates, session labels, and a narrow keyword. Expand the search only when the first pass cannot answer the request.
+- Never paste a full transcript. Return the smallest relevant excerpts with enough date/session context to understand them. Redact credentials, tokens, secrets, and unrelated personal data even if they appear in a matching message.
+- Session search is read-only. Do not edit, delete, restore, or rewrite session files.
 
 ## Location
 
@@ -29,87 +38,71 @@ Each `.jsonl` file contains messages with:
 - `message.content[]`: Text, thinking, or tool calls (filter `type=="text"` for human-readable content)
 - `message.usage.cost.total`: Cost per response
 
-## Common Queries
-
-### List all sessions by date and size
+Set the scope once and keep every command inside it:
 
 ```bash
-for f in "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"/agents/<agentId>/sessions/*.jsonl; do
-  date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
-  size=$(ls -lh "$f" | awk '{print $5}')
-  echo "$date $size $(basename $f)"
-done | sort -r
+SESSION_ROOT="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/<active-agent-id>/sessions"
+SESSION_INDEX="$SESSION_ROOT/sessions.json"
 ```
 
-### Find sessions from a specific day
+Do not replace `<active-agent-id>` with an ID discovered by listing other agents.
+
+## Safe search workflow
+
+### 1. List recent live indexed sessions
+
+Read metadata first. This avoids opening every transcript and keeps deleted or orphaned files out of the search.
 
 ```bash
-for f in "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"/agents/<agentId>/sessions/*.jsonl; do
-  head -1 "$f" | jq -r '.timestamp' | grep -q "2026-01-06" && echo "$f"
-done
+jq -r 'to_entries[] | [(.value.updatedAt // 0), (.value.displayName // .value.subject // .value.chatType // "session"), (.value.sessionId // ""), (.value.sessionFile // "")] | @tsv' "$SESSION_INDEX" |
+  sort -rn | head -50
 ```
 
-### Extract user messages from a session
+Use the timestamp, safe display label, and user-provided clues to select the smallest plausible set. Do not print raw session keys because they can contain routing identifiers. Resolve each selected entry to its current `sessionFile`, or to `$SESSION_ROOT/<sessionId>.jsonl` when `sessionFile` is absent. Reject any path that does not resolve inside `$SESSION_ROOT`, is not a regular `.jsonl` transcript, or has a `.deleted.` or `.reset.` suffix.
+
+### 2. Search human-readable messages only
+
+For each selected live transcript, extract user and assistant text before searching. This deliberately excludes tool results, tool calls, and thinking:
 
 ```bash
-jq -r 'select(.message.role == "user") | .message.content[]? | select(.type == "text") | .text' <session>.jsonl
+jq -r '
+  select(.type == "message")
+  | select(.message.role == "user" or .message.role == "assistant")
+  | .timestamp as $timestamp
+  | .message.role as $role
+  | .message.content[]?
+  | select(.type == "text")
+  | [$timestamp, $role, (.text | gsub("[\\r\\n]+"; " "))]
+  | @tsv
+' "$SESSION_FILE" | grep -i -n -C 1 -m 10 -- 'specific phrase'
 ```
 
-### Search for keyword in assistant responses
+Keep the phrase specific. If output lines are long, inspect locally and quote only the short clause that answers the user's question.
 
-```bash
-jq -r 'select(.message.role == "assistant") | .message.content[]? | select(.type == "text") | .text' <session>.jsonl | rg -i "keyword"
-```
+### 3. Answer with minimal disclosure
 
-### Get total cost for a session
+Summarize the finding and include only relevant short excerpts, attributed by date or session label. Do not expose file paths, raw JSONL, routing identifiers, tool payloads, or unrelated neighboring messages unless the user needs them and explicitly asks.
 
-```bash
-jq -s '[.[] | .message.usage.cost.total // 0] | add' <session>.jsonl
-```
+## Focused diagnostics
 
-### Daily cost summary
+These read-only queries remain useful when the user's request is about their own session rather than conversation content.
 
-```bash
-for f in "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"/agents/<agentId>/sessions/*.jsonl; do
-  date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
-  cost=$(jq -s '[.[] | .message.usage.cost.total // 0] | add' "$f")
-  echo "$date $cost"
-done | awk '{a[$1]+=$2} END {for(d in a) print d, "$"a[d]}' | sort -r
-```
-
-### Count messages and tokens in a session
+### Count messages in one selected live session
 
 ```bash
 jq -s '{
-  messages: length,
-  user: [.[] | select(.message.role == "user")] | length,
-  assistant: [.[] | select(.message.role == "assistant")] | length,
+  messages: [.[] | select(.type == "message")] | length,
+  user: [.[] | select(.type == "message" and .message.role == "user")] | length,
+  assistant: [.[] | select(.type == "message" and .message.role == "assistant")] | length,
   first: .[0].timestamp,
   last: .[-1].timestamp
-}' <session>.jsonl
+}' "$SESSION_FILE"
 ```
 
-### Tool usage breakdown
+### Total recorded model cost for one selected live session
 
 ```bash
-jq -r '.message.content[]? | select(.type == "toolCall") | .name' <session>.jsonl | sort | uniq -c | sort -rn
+jq -s '[.[] | .message.usage.cost.total // 0] | add' "$SESSION_FILE"
 ```
 
-### Search across ALL sessions for a phrase
-
-```bash
-rg -l "phrase" "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"/agents/<agentId>/sessions/*.jsonl
-```
-
-## Tips
-
-- Sessions are append-only JSONL (one JSON object per line)
-- Large sessions can be several MB - use `head`/`tail` for sampling
-- The `sessions.json` index maps chat providers (discord, whatsapp, etc.) to session IDs
-- Deleted sessions have `.deleted.<timestamp>` suffix
-
-## Fast text-only hint (low noise)
-
-```bash
-jq -r 'select(.type=="message") | .message.content[]? | select(.type=="text") | .text' "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"/agents/<agentId>/sessions/<id>.jsonl | rg 'keyword'
-```
+Do not run cost or usage aggregation across unrelated sessions unless the user asked for that analysis.

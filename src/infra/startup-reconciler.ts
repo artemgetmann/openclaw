@@ -11,7 +11,7 @@ import { applyPathPrepend } from "./path-prepend.js";
 const STATUS_FORMAT = 1;
 const STATUS_RELATIVE_PATH = path.join("startup-reconciler", "status.json");
 const TOOL_VERSION_TIMEOUT_MS = 2_000;
-const STARTUP_MANAGED_TOOL_SKILLS = new Set(["gog"]);
+const STARTUP_MANAGED_TOOL_SKILLS = new Set(["gog", "mcporter"]);
 
 const log = createSubsystemLogger("startup/reconciler");
 
@@ -299,6 +299,29 @@ async function copyManagedExecutable(sourcePath: string, targetPath: string) {
   await fsp.rename(tempPath, targetPath);
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+async function writeManagedNodeLauncher(params: {
+  targetPath: string;
+  entryPath: string;
+}): Promise<"current" | "updated"> {
+  // npm's generated .bin shim is relative to its original node_modules tree and
+  // breaks when copied into Jarvis state. Generate a tiny absolute launcher
+  // instead, pinned to the Node process that is running the packaged gateway.
+  const body = `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(params.entryPath)} "$@"\n`;
+  const current = await fsp.readFile(params.targetPath, "utf8").catch(() => undefined);
+  if (current === body && isExecutable(params.targetPath)) {
+    return "current";
+  }
+  await fsp.mkdir(path.dirname(params.targetPath), { recursive: true });
+  const tempPath = `${params.targetPath}.tmp-${process.pid}-${Date.now()}`;
+  await fsp.writeFile(tempPath, body, { encoding: "utf8", mode: 0o755 });
+  await fsp.rename(tempPath, params.targetPath);
+  return "updated";
+}
+
 function listImmediateManagedSkillNames(rootDir: string): string[] {
   try {
     return fs
@@ -429,8 +452,8 @@ async function reconcileManagedTools(params: {
     if (!skillName || bins.length === 0) {
       continue;
     }
-    // First runtime proof is Google Workspace. Keep the startup mutator narrow
-    // until packaged managed-tool payloads exist for the rest of the manifest.
+    // Keep startup mutation limited to tools with an explicit packaged-runtime
+    // contract. Each entry must prove its app payload before exposing a shim.
     if (!STARTUP_MANAGED_TOOL_SKILLS.has(skillName)) {
       continue;
     }
@@ -449,6 +472,68 @@ async function reconcileManagedTools(params: {
           recommendedVersion,
           status: "no-recommendation",
         });
+        continue;
+      }
+
+      if (skillName === "mcporter" && bin === "mcporter") {
+        const entryPath = path.join(
+          params.packageRoot,
+          "tools",
+          "mcporter",
+          "node_modules",
+          "mcporter",
+          "dist",
+          "cli.js",
+        );
+        if (!fs.statSync(entryPath, { throwIfNoEntry: false })?.isFile()) {
+          results.push({
+            skillName,
+            displayName,
+            bin,
+            recommendedVersion,
+            managedPath,
+            status: "missing-source",
+            message: `${displayName} needs CLI v${recommendedVersion}, but its packaged entrypoint is missing.`,
+          });
+          continue;
+        }
+        try {
+          const status = await writeManagedNodeLauncher({ targetPath: managedPath, entryPath });
+          const probe = probeVersion({
+            command: versionCommand,
+            candidatePath: managedPath,
+            versionRegex,
+            env: params.env,
+            runVersionCommand: params.runVersionCommand,
+          });
+          if (!probe.version || compareVersions(probe.version, recommendedVersion) < 0) {
+            throw new Error(`packaged launcher did not report v${recommendedVersion}`);
+          }
+          results.push({
+            skillName,
+            displayName,
+            bin,
+            recommendedVersion,
+            managedPath,
+            managedVersion: probe.version,
+            sourcePath: entryPath,
+            sourceVersion: probe.version,
+            status,
+            ...(status === "updated"
+              ? { message: `Updated Jarvis-managed ${displayName} CLI to v${probe.version}.` }
+              : {}),
+          });
+        } catch (err) {
+          results.push({
+            skillName,
+            displayName,
+            bin,
+            recommendedVersion,
+            managedPath,
+            status: "failed",
+            message: `Failed to expose packaged ${displayName}: ${String(err)}`,
+          });
+        }
         continue;
       }
 
