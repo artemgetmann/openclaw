@@ -136,7 +136,15 @@ runtime_previous_pageouts_file=''
 # intentionally actions, not shell commands: callers can wake on recovery
 # without exposing argv/environment data or guessing a universal threshold.
 refusal_next_action() {
-  case "$1" in
+  local refusal_code="$1"
+  local refusal_outcome="${2:-refused}"
+
+  if [ "$refusal_code" = "disk_pressure" ] && [ "$refusal_outcome" = "terminated" ]; then
+    printf '%s' 'invoke_reclaim_coding_disk_then_reconcile_terminated_command'
+    return
+  fi
+
+  case "$refusal_code" in
     memory_pressure | memory_pressure_state)
       printf '%s' 'wait_for_memory_pressure_normal'
       ;;
@@ -180,9 +188,22 @@ refusal_next_action() {
 }
 
 emit_disk_recovery_guidance() {
+  local refusal_outcome="${1:-refused}"
+
   # Do not print or serialize the guarded argv: build and release commands may
   # contain sensitive option data. The owning agent already has that command in
-  # its task context and must preserve it across the bounded cleanup workflow.
+  # its task context. Admission can replay once after cleanup; a killed command
+  # may have partial effects and must reconcile its own transaction first.
+  if [ "$refusal_outcome" = "terminated" ]; then
+    printf 'HEAVY_LOCAL_DISK_RECOVERY recovery_skill=%s target_available_kib=%s cleanup_scope=exact_generated_owner_attributed action=reconcile_terminated_guarded_command_before_any_resume\n' \
+      "$(openclaw_heavy_local_slot_safe_text "$RECLAIM_CODING_DISK_SKILL_PATH")" \
+      "$DISK_REPORT_BELOW_KIB" >&2
+    printf 'Disk recovery required: read %s, reclaim one exact reproducible batch only after ownership, process, open-file, heavy-lock, and release-lock checks pass, verify at least %s available KiB, then inspect command-specific side effects and receipts; resume only when that entrypoint proves replay safe.\n' \
+      "$RECLAIM_CODING_DISK_SKILL_PATH" \
+      "$DISK_REPORT_BELOW_KIB" >&2
+    return
+  fi
+
   printf 'HEAVY_LOCAL_DISK_RECOVERY recovery_skill=%s target_available_kib=%s cleanup_scope=exact_generated_owner_attributed action=resume_preserved_guarded_command_once\n' \
     "$(openclaw_heavy_local_slot_safe_text "$RECLAIM_CODING_DISK_SKILL_PATH")" \
     "$DISK_REPORT_BELOW_KIB" >&2
@@ -201,7 +222,7 @@ emit_refusal() {
   local next_action="${7:-}"
 
   if [ -z "$next_action" ]; then
-    next_action="$(refusal_next_action "$refusal_code")"
+    next_action="$(refusal_next_action "$refusal_code" "$refusal_outcome")"
   fi
 
   printf 'HEAVY_LOCAL_SLOT_REFUSAL class=%s code=%s' \
@@ -224,7 +245,7 @@ emit_refusal() {
       "$next_action" >&2
   fi
   if [ "$refusal_code" = "disk_pressure" ]; then
-    emit_disk_recovery_guidance
+    emit_disk_recovery_guidance "$refusal_outcome"
   fi
 }
 
@@ -1461,7 +1482,7 @@ monitor_guarded_child() {
         "$runtime_data" >"$health_stop_file"
       printf 'Stopping guarded work after repeated host-health failures: %s. Next safe action: %s.\n' \
         "$runtime_reason" \
-        "$(refusal_next_action "$runtime_code")" >&2
+        "$(refusal_next_action "$runtime_code" terminated)" >&2
       stop_guarded_child
       return 0
     fi

@@ -214,9 +214,14 @@ exact target is generated and reproducible, ownership is resolved, native
 process and open-file checks are clear, and heavy/release locks plus protected
 runtime state are clear. Never remove source, a worktree, user/session/browser
 data, credentials, runtime state, or an ambiguous target. Verify the before and
-after Data-volume KiB and the skill's 35 GiB durable target, then rerun the same
-preserved guarded command once. Stop only when the skill gate is ambiguous or
-protected, no qualifying target can safely restore the floor, or that one
+after Data-volume KiB and the skill's 35 GiB durable target. When refusal occurs
+at admission and the workload never started, rerun the same preserved guarded
+command once. When the guard terminated an in-flight command, first inspect that
+entrypoint's command-specific side effects and receipts; resume only when its
+idempotency or expected-head contract proves replay safe. Never blindly replay a
+partially executed release, deploy, send, restart, or other mutation. Stop when
+the skill gate is ambiguous or protected, no qualifying target can safely
+restore the floor, reconciliation cannot prove replay safe, or the one safe
 post-recovery attempt reaches the same disk boundary.
 
 Refusals retain exit code `75` for compatibility and also emit a stable line:

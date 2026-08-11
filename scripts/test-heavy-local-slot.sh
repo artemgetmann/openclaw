@@ -2650,6 +2650,51 @@ test_two_sample_health_stop_kills_tree() {
   pass "two unhealthy samples stop child and grandchild"
 }
 
+test_runtime_disk_pressure_requires_reconciliation_before_resume() {
+  local fixture="" lock_path="$TMP_DIR/runtime-disk-stop.lock"
+  local health_path="$TMP_DIR/runtime-disk-stop.health"
+  local child_pid_file="$TMP_DIR/runtime-disk-stop.child"
+  local grandchild_pid_file="$TMP_DIR/runtime-disk-stop.grandchild"
+  local output="$TMP_DIR/runtime-disk-stop.out"
+  local status=0 child_pid=0 grandchild_pid=0
+
+  fixture="$(create_process_tree_fixture)"
+  {
+    printf 'disk-low\n'
+    printf 'disk-low\n'
+  } >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_READY_FILE="$grandchild_pid_file" \
+    run_test_wrapper \
+      "$lock_path" \
+      "$health_path" \
+      "runtime-disk-stop" \
+      "$fixture" "$child_pid_file" "$grandchild_pid_file" \
+      >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "runtime disk stop returned $status instead of 75"
+  wait_for_file "$child_pid_file"
+  wait_for_file "$grandchild_pid_file"
+  child_pid="$(<"$child_pid_file")"
+  grandchild_pid="$(<"$grandchild_pid_file")"
+  wait_for_dead_pid "$child_pid"
+  wait_for_dead_pid "$grandchild_pid"
+  grep -Fq \
+    'code=disk_pressure metric=disk_available_kib observed=25000000 threshold=26214400 unit=KiB phase=runtime outcome=terminated next_action=invoke_reclaim_coding_disk_then_reconcile_terminated_command' \
+    "$output" ||
+    fail "runtime disk stop omitted its reconciliation-only terminal receipt"
+  grep -Fq \
+    'action=reconcile_terminated_guarded_command_before_any_resume' \
+    "$output" ||
+    fail "runtime disk stop recommended blind replay instead of reconciliation"
+  if grep -Fq 'then rerun the exact preserved guarded command once' "$output"; then
+    fail "runtime disk stop recommended replay after partial execution"
+  fi
+  [[ ! -e "$lock_path" ]] || fail "runtime disk stop left its lock behind"
+  pass "runtime disk termination requires state reconciliation before any resume"
+}
+
 signal_verified_slot_owner() {
   local signal_name="$1"
   local expected_label="$2"
@@ -3486,6 +3531,7 @@ if [[ "${1:-}" == "--cleanup-only" ]]; then
   create_sigint_reset_launcher
   run_suite_test test_root_exit_kills_term_ignoring_orphan_group
   run_suite_test test_two_sample_health_stop_kills_tree
+  run_suite_test test_runtime_disk_pressure_requires_reconciliation_before_resume
   run_suite_test test_signal_cleanup_kills_tree_and_releases
   SUITE_PHASE="complete"
   echo "Heavy-local slot cleanup tests passed."
@@ -3575,6 +3621,7 @@ run_suite_test test_wait_timeout_and_cancel_never_run_command
 run_suite_test test_root_exit_kills_term_ignoring_orphan_group
 run_suite_test test_wrapper_sigkill_retains_lease_until_orphan_group_dies
 run_suite_test test_two_sample_health_stop_kills_tree
+run_suite_test test_runtime_disk_pressure_requires_reconciliation_before_resume
 run_suite_test test_signal_cleanup_kills_tree_and_releases
 run_suite_test test_dedicated_cpu_policy_preserves_signal_cleanup
 run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient

@@ -765,11 +765,14 @@ ready`.
   queue-lease ownership. The same owner must preserve the exact guarded command,
   immediately apply `/Users/user/.agents/skills/reclaim-coding-disk/SKILL.md`,
   autonomously reclaim one exact safe generated batch when its gates pass, and
-  resume that command once after verified headroom. Ask only when ownership or
-  liveness is ambiguous, the required target is protected, or no qualifying
-  generated target can restore the floor. Never replace this with broad cleanup,
-  a duplicate worker, or deletion of source, worktrees, user/session/browser
-  data, credentials, release state, or shared/runtime state.
+  resume an admission-refused command once after verified headroom. If the guard
+  terminated work after launch, reconcile that entrypoint's side effects and
+  receipts first and resume only when its own replay contract proves safety.
+  Ask only when ownership or liveness is ambiguous, the required target is
+  protected, no qualifying generated target can restore the floor, or replay
+  safety cannot be proven. Never replace this with broad cleanup, blind mutation
+  replay, a duplicate worker, or deletion of source, worktrees,
+  user/session/browser data, credentials, release state, or shared/runtime state.
 - Prove the background job is real with
   `bash scripts/install-worktree-gc.sh status`. A plist on disk is not enough;
   status fails unless launchd reports the job loaded and enabled.
