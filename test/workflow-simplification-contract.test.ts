@@ -28,7 +28,10 @@ describe("single-owner workflow contract", () => {
     const agents = read("AGENTS.md");
     const contributing = read("FORK_CONTRIBUTING.md");
 
-    expect(agents).toMatch(/apply the Codex\s+Review rubric/);
+    expect(agents).toContain("Does the PR solve one clear, observable problem?");
+    expect(agents).toContain("Is every production change necessary for that problem?");
+    expect(agents).toContain("description-based triggering failed");
+    expect(agents).toContain("system prompt does not duplicate guidance");
     expect(contributing).toContain("Does the PR solve one clear, observable problem?");
     expect(contributing).toContain("Is every production change necessary for that problem?");
     expect(contributing).toContain("description-based triggering failed");

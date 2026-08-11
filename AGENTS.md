@@ -43,8 +43,16 @@
   - For explicit emergency backports targeting `codex/consumer-openclaw-project`, also read `FORK_CONTRIBUTING.md`
   - For upstream PRs or other targets, read `CONTRIBUTING.md`
 - Read `.github/pull_request_template.md` before opening or updating a PR.
-- Before running or interpreting Codex Review for a fork PR, apply the Codex
-  Review rubric in `FORK_CONTRIBUTING.md`.
+- Codex Review must answer from the diff and proof:
+  - Does the PR solve one clear, observable problem?
+  - Is every production change necessary for that problem?
+  - Does proof cover the intended behavior and likely regression?
+  - Are unrelated refactors, cleanup, abstractions, and future work excluded?
+- For prompt, skill, or agent-bootstrap changes, Codex Review must also verify:
+  - detailed procedures live in a focused skill or document, not the main system prompt;
+  - the system prompt does not duplicate guidance supplied by an injected skill name or description;
+  - any explicit skill pointer has measured evidence that description-based triggering failed and proof that the pointer fixes it.
+- `FORK_CONTRIBUTING.md` owns the full review procedure and severity policy.
 - Do not edit security-owned paths unless a listed owner asked for the change or is already reviewing it.
 - Do not edit generated `docs/zh-CN/**` unless the user explicitly asks.
 - Never edit `node_modules`.
