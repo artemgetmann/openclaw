@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 124,
+  "sequence": 125,
   "nextFence": 36,
   "mergeLease": null,
   "items": {
@@ -4421,13 +4421,134 @@
         "fence": 35,
         "recordedAt": "2026-08-10T18:49:29.595Z"
       }
+    },
+    "1391": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1391,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1391",
+        "headSha": "eceed700bff02bbd788e50f4b249a37c041b79f9",
+        "baseBranch": "main",
+        "testedBaseSha": "4a0c384890e28a9c910ab7d14f6b65a340e7f7fd",
+        "diffFingerprint": "sha256:37ff481099f2f1374884f1c3eca28d15446ea357de0ba642d9133afa74dbab91",
+        "changedPaths": [
+          "scripts/jarvis-sparkle-update-e2e.sh",
+          "scripts/test-jarvis-sparkle-update-e2e.sh"
+        ],
+        "title": "fix(jarvis): bind signed app manifests to exact commits",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: Protected Sparkle acceptance expands a 7-39 character signed-app manifest commit only from the same app's exact 40-character OpenClawRuntime/openclaw/dist/build-info.json commit; mismatches and non-full build-info block; compatibility receipts retain exact full commits.\n- Exact head + builder proof: eceed700bff02bbd788e50f4b249a37c041b79f9; bash syntax checks, git diff --check, and the full mocked Sparkle updater E2E matrix passed.\n- Independent tester: PASS — worker /root/sparkle_app_manifest_commit_fix/immutable_tester; head eceed700bff02bbd788e50f4b249a37c041b79f9; diff sha256:37ff481099f2f1374884f1c3eca28d15446ea357de0ba642d9133afa74dbab91; contract f43e4dfb-7c3e-4ba1-9180-256798d2dd5e; terminal-receipt closure recorded.\n- Jarvis delivery boundary: Product-wide, source-only receipt below.\n- Release worker: Pending fenced queue lease after tester closure.\n- Dependencies / merge order / overlap: None — standalone; preserves #1389 protected-runtime binding.\n- Remaining proof / cleanup / rollback: Required CI and normal fenced-queue merge. No package, installed-runtime, public-release, Telegram, or live-runtime work authorized.\n- Still hurts: This repairs source acceptance only; public assets and existing release artifacts remain unchanged.\n\n## Why This Matters\n\n- Public signed Jarvis apps use abbreviated manifest SHAs, while the protected compatibility receipt requires exact commits.\n- The verifier previously rejected a legitimate 2026.8.2 to 2026.8.10 protected transition before Sparkle could run.\n\n## Scope Boundary\n\n- Canonicalizes abbreviated old, installed, new, and updated-disposable app manifests from exact build-info inside the same app.\n- Canonicalizes abbreviated managed compatibility copies only toward the exact signed-app identity already established.\n- Rejects prefix mismatch and missing or non-full build-info.\n- Does not touch packages, release assets, installed apps, runtime, Telegram, or public publication.\n\n## Verification\n\n- bash -n scripts/jarvis-sparkle-update-e2e.sh\n- bash -n scripts/test-jarvis-sparkle-update-e2e.sh\n- git diff --check\n- scripts/with-dedicated-agent-slot.sh --label \"sparkle-app-manifest-commit-fix:focused-proof-rerun\" --wait-seconds 900 -- bash scripts/test-jarvis-sparkle-update-e2e.sh\n  - All mocked Jarvis Sparkle updater E2E tests passed.\n\n## Jarvis Delivery Boundary\n\n<!-- jarvis-delivery-boundary:start -->\n```json\n{\n  \"schemaVersion\": 1,\n  \"workScope\": \"product-wide\",\n  \"deliveryTarget\": \"source\",\n  \"completionClaim\": \"declared-boundary-complete\",\n  \"upgradeImpact\": \"not-applicable\",\n  \"layers\": {\n    \"localConfiguration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No personal-home mutation is part of this product task.\"\n    },\n    \"source\": {\n      \"status\": \"proven\",\n      \"evidence\": \"Exact head eceed700bff02bbd788e50f4b249a37c041b79f9 passed bash syntax, diff checks, and the full mocked Sparkle updater E2E matrix; merge ancestry is tracked separately.\"\n    },\n    \"packagedArtifact\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The requested delivery boundary is source only; no package build or mutation is authorized.\"\n    },\n    \"installedRuntime\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No installed app or runtime mutation is authorized.\"\n    },\n    \"upgradeMigration\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The verifier reads existing signed metadata without changing user state.\"\n    },\n    \"publicRelease\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"No asset publication or public release is authorized.\"\n    },\n    \"endUserBehavior\": {\n      \"status\": \"not-applicable\",\n      \"evidence\": \"The source-only task does not claim shipped end-user behavior.\"\n    }\n  }\n}\n```\n<!-- jarvis-delivery-boundary:end -->\n\n## Security Impact\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n\n## Compatibility / Migration\n\n- Backward compatible? Yes\n- Config/env changes? No\n- Migration needed? No\n\n## Failure Recovery\n\n- Revert the single source commit. No package, runtime, installed-app, public asset, or external state changed.\n\n## AI Assistance\n\n- AI-assisted\n- Testing degree: targeted\n\n\n\n",
+        "jarvisDeliveryBoundary": {
+          "schemaVersion": 1,
+          "workScope": "product-wide",
+          "deliveryTarget": "source",
+          "completionClaim": "declared-boundary-complete",
+          "upgradeImpact": "not-applicable",
+          "layers": {
+            "localConfiguration": {
+              "status": "not-applicable",
+              "evidence": "No personal-home mutation is part of this product task."
+            },
+            "source": {
+              "status": "proven",
+              "evidence": "Exact head eceed700bff02bbd788e50f4b249a37c041b79f9 passed bash syntax, diff checks, and the full mocked Sparkle updater E2E matrix; merge ancestry is tracked separately."
+            },
+            "packagedArtifact": {
+              "status": "not-applicable",
+              "evidence": "The requested delivery boundary is source only; no package build or mutation is authorized."
+            },
+            "installedRuntime": {
+              "status": "not-applicable",
+              "evidence": "No installed app or runtime mutation is authorized."
+            },
+            "upgradeMigration": {
+              "status": "not-applicable",
+              "evidence": "The verifier reads existing signed metadata without changing user state."
+            },
+            "publicRelease": {
+              "status": "not-applicable",
+              "evidence": "No asset publication or public release is authorized."
+            },
+            "endUserBehavior": {
+              "status": "not-applicable",
+              "evidence": "The source-only task does not claim shipped end-user behavior."
+            }
+          }
+        }
+      },
+      "builder": {
+        "threadId": "/root/sparkle_app_manifest_commit_fix",
+        "hostId": "MacBook-Pro-JetBook-4.local",
+        "wakeRoute": {
+          "threadId": "/root/sparkle_app_manifest_commit_fix",
+          "hostId": "MacBook-Pro-JetBook-4.local"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "eceed700bff02bbd788e50f4b249a37c041b79f9",
+        "diffFingerprint": "sha256:37ff481099f2f1374884f1c3eca28d15446ea357de0ba642d9133afa74dbab91",
+        "closure": "terminal-receipt",
+        "contractId": "f43e4dfb-7c3e-4ba1-9180-256798d2dd5e",
+        "owner": {
+          "threadId": "/root/sparkle_app_manifest_commit_fix/immutable_tester",
+          "hostId": "MacBook-Pro-JetBook-4.local"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "headSha": "eceed700bff02bbd788e50f4b249a37c041b79f9",
+        "diffFingerprint": "sha256:37ff481099f2f1374884f1c3eca28d15446ea357de0ba642d9133afa74dbab91",
+        "owner": {
+          "threadId": "/root/sparkle_app_manifest_commit_fix/exact_head_review",
+          "hostId": "MacBook-Pro-JetBook-4.local"
+        },
+        "unresolvedFindings": [],
+        "evidence": [
+          "Recomputed the exact GitHub head, base, and raw-patch SHA-256 immediately before handback.",
+          "Verified the P1 repair keeps stale abbreviated managed manifests inside the bounded poll while exact target build and commit remain mandatory.",
+          "Verified abbreviated signed-app manifests expand only from exact full build-info inside the same app and PR #1389 protected-runtime binding remains unchanged."
+        ]
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1391 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "95eeab79-5349-4196-bdd3-99b5924cf43d",
+        "stateDirectory": "/Users/user/Programming_Projects/openclaw/.worktrees/sparkle-app-manifest-commit-fix/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-11T04:22:00.042Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
     }
   },
   "lastTransaction": {
-    "id": "087d5e50-1294-46e2-9911-7e69be63d77a-record-merge",
-    "recordedAt": "2026-08-10T18:53:11.008Z"
+    "id": "pr1391-enqueue-95eeab79",
+    "recordedAt": "2026-08-11T04:22:00.042Z"
   },
-  "updatedAt": "2026-08-10T18:53:11.008Z",
+  "updatedAt": "2026-08-11T04:22:00.042Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
