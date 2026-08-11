@@ -1,0 +1,7 @@
+interface:
+  display_name: "TL;DR"
+  short_description: "Rewrite the last response in plain language"
+  default_prompt: "Use $tldr to rewrite the last response in plain language."
+
+policy:
+  allow_implicit_invocation: false

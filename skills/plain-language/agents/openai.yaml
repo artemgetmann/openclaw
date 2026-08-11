@@ -1,0 +1,7 @@
+interface:
+  display_name: "Plain Language"
+  short_description: "Repeat the last response in plain language"
+  default_prompt: "Use $plain-language to repeat the last response in plain language."
+
+policy:
+  allow_implicit_invocation: false

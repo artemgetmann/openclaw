@@ -64,7 +64,7 @@ skill-name/
 
 Every SKILL.md consists of:
 
-- **Frontmatter** (YAML): Contains required, non-empty `name` and `description` fields. Use `disable-model-invocation: true` for a command-only skill instead of weakening or emptying its description.
+- **Frontmatter** (YAML): Contains `name` and `description` fields. These are the only fields that Codex reads to determine when the skill gets used, thus it is very important to be clear and comprehensive in describing what the skill is, and when it should be used.
 - **Body** (Markdown): Instructions and guidance for using the skill. Only loaded AFTER the skill triggers (if at all).
 
 #### Bundled Resources (optional)
@@ -321,17 +321,14 @@ If you used `--examples`, delete any placeholder files that are not needed for t
 Write the YAML frontmatter with `name` and `description`:
 
 - `name`: The skill name
-- `description`: A non-empty summary of what the skill does. This is the primary automatic triggering mechanism unless model invocation is disabled.
+- `description`: This is the primary triggering mechanism for your skill, and helps Codex understand when to use the skill.
   - Include both what the Skill does and specific triggers/contexts for when to use it.
   - Include all "when to use" information here - Not in the body. The body is only loaded after triggering, so "When to Use This Skill" sections in the body are not helpful to Codex.
   - Example description for a `docx` skill: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. Use when Codex needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
 - Quote YAML string values, especially `description`, because colons, quotes, and punctuation can break unquoted YAML.
-- For a skill that users invoke only as a command, set `user-invocable: true` and `disable-model-invocation: true`. Keep its description short and meaningful; blank descriptions are not loaded.
 - Do not declare a skill valid until the frontmatter parses with a real YAML parser or the package validator; visual inspection is not enough.
 
-Use other supported frontmatter fields only when needed. In particular,
-`user-invocable` and `disable-model-invocation` control explicit command access
-and automatic model selection.
+Do not include any other fields in YAML frontmatter.
 
 ##### Body
 
