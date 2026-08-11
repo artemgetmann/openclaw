@@ -17,8 +17,7 @@ The reviewer should be able to answer:
 
 1. What observable claim and acceptance criteria does this PR own?
 2. What exact current-head proof shows it worked?
-3. Did the exact-head independent tester pass, and is its lifecycle closure
-   recorded?
+3. Did focused proof, required CI, and required Codex review pass on this head?
 4. What must merge before or after it, and what overlaps?
 5. What proof, cleanup, or rollback remains?
 6. What still hurts?
@@ -34,9 +33,9 @@ Every fork PR should start with this section:
 
 - Observable claim + acceptance criteria:
 - Exact head + builder proof:
-- Independent tester: (`PASS` + exact identity/head/diff/receipt + lifecycle closure)
+- Review + proof: (Codex verdict when required, focused commands, and required CI)
 - Jarvis delivery boundary: (validated receipt, or `Not required` for non-Jarvis work)
-- Release worker: (fresh user-visible project task + typed task-authority packet + accepted-handoff builder archive receipt)
+- Merge owner: (primary chat + normal non-admin merge authority)
 - Dependencies / merge order / overlap:
 - Remaining proof / cleanup / rollback:
 - Still hurts:
@@ -90,15 +89,13 @@ proof.
 
 Jarvis behavior PRs must also carry the JSON receipt from
 `docs/agent-guides/jarvis-delivery-boundary.md`. The receipt is classification
-and proof state, not another essay: CI validates it when the PR opens, and the
-worker lifecycle rejects handoff until the source receipt and completion claim
-are truthful.
+and proof state, not another essay; CI validates it when the PR opens.
 
-For lifecycle ownership, use `docs/agent-guides/workflow.md` as the source of
-truth. For CI and merge mechanics, use `docs/ci.md`. In short: the builder owns
-diagnosis, review-bot handling, failed-CI fixes, and exact-head readiness; the
-fresh user-visible release worker owns the normal non-admin merge. Runtime
-shipping remains separate and happens only when explicitly requested.
+For ownership, use `docs/agent-guides/workflow.md` as the source of truth. For
+CI and merge mechanics, use `docs/ci.md`. One primary chat owns diagnosis,
+implementation, review fixes, proof, and the normal non-admin merge when
+authorized. Runtime shipping remains separate and happens only when explicitly
+requested.
 
 Good proof:
 

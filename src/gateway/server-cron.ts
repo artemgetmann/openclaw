@@ -51,7 +51,6 @@ export type GatewayCronState = {
   cron: CronService;
   storePath: string;
   cronEnabled: boolean;
-  releaseActiveCronJobDisabler: () => void;
 };
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
@@ -737,9 +736,9 @@ export function buildGatewayCronService(params: {
   // Plugin tools do not receive Gateway method context. Publish only the
   // terminal operation needed by durable one-shot monitors, backed by the
   // scheduler's normal lock, persistence, and timer re-arming path.
-  const releaseActiveCronJobDisabler = setActiveCronJobDisabler(async (jobId) => {
+  setActiveCronJobDisabler(async (jobId) => {
     await cron.update(jobId, { enabled: false });
   });
 
-  return { cron, storePath, cronEnabled, releaseActiveCronJobDisabler };
+  return { cron, storePath, cronEnabled };
 }

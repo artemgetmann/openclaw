@@ -90,7 +90,7 @@ production_probe="$(
 
 PR_NUMBER=42
 if (assert_pr_can_ship '{"baseRefName":"main","state":"OPEN"}') >/dev/null 2>&1; then
-  fail "OPEN PR unexpectedly passed the fenced source-merge boundary"
+  fail "OPEN PR unexpectedly passed the source-merge boundary"
 fi
 pass "production target and prior-source-merge boundaries fail closed"
 
@@ -151,70 +151,26 @@ if moving_main_path_requires_new_approval "src/agents/pi-tools.ts"; then
 fi
 pass "moving-main path gate separates routine from security/release scope"
 
-QUEUE_ITEM_FIXTURE='{"state":"closed","candidate":{"pr":42,"url":"https://github.com/artemgetmann/openclaw/pull/42","title":"fixture","prContract":"fixture-contract","baseBranch":"main","testedBaseSha":"dddddddddddddddddddddddddddddddddddddddd","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","changedPaths":["src/agents/pi-tools.ts"]},"builder":{"threadId":"builder","hostId":"host","wakeRoute":{"threadId":"builder","hostId":"host"}},"reviewReceipt":{"schemaVersion":1,"role":"code-reviewer","status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","owner":{"threadId":"reviewer","hostId":"host"},"unresolvedFindings":[]},"testerReceipt":{"status":"PASS","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","closure":"terminal-receipt","contractId":"contract","owner":{"threadId":"tester","hostId":"host"}},"authority":{"schemaVersion":1,"source":"builder-handoff","scope":"PR #42 source merge only","allowedActions":["normal-merge"],"constraints":["no admin or bypass","no credentials or OTP","no irreversible or public release","no new scope"]},"lifecycle":{"contractId":"release-contract","stateDirectory":"/tmp/state"},"capabilityPolicy":{"routine":"routine-release","escalation":"reasoning-escalation"},"ownershipReceipt":{"mode":"queue-lease","owner":{"threadId":"release","hostId":"host"},"builder":{"threadId":"builder","hostId":"host","wakeRoute":{"threadId":"builder","hostId":"host"}},"builderSuspended":true,"leaseId":"lease","fence":1},"ownerHistory":[{"leaseId":"lease","fence":1,"claimedPr":42,"owner":{"threadId":"release","hostId":"host"}}],"terminalReceipts":[{"schemaVersion":1,"kind":"source-merge","pr":42,"reviewedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","diffFingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","mergeSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","normalNonAdmin":true,"expectedHeadProtected":true,"landedTreeMatchesReviewed":true,"targetAncestryProven":true}]}'
-release_queue_item_json() {
-  printf '%s\n' "${QUEUE_ITEM_FIXTURE}"
+gh_fixture() {
+  if [[ "$1 $2 $3" == "pr view 42" && "$4" == "--json" && "$5" == "number,state,baseRefName,mergeCommit" ]]; then
+    printf '%s\n' '{"number":42,"state":"MERGED","baseRefName":"main","mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}'
+    return
+  fi
+  if [[ "$1 $2 $3" == "pr view 42" && "$4" == "--json" && "$5" == "files" ]]; then
+    printf '%s\n' '{"files":[{"path":"src/agents/pi-tools.ts"}]}'
+    return
+  fi
+  return 1
 }
-release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb || \
-  fail "complete exact-head queue receipt was rejected"
-PR_NUMBER=42
-require_requested_pr_fenced_merge bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-VALID_QUEUE_ITEM_FIXTURE="${QUEUE_ITEM_FIXTURE}"
-QUEUE_ITEM_FIXTURE=''
-if (require_requested_pr_fenced_merge bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) >/dev/null 2>&1; then
-  fail "requested merged PR passed without its fenced queue receipt"
+
+GH_BIN=gh_fixture
+JQ_BIN=jq
+pr_proves_normal_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ||
+  fail "normal merged-main PR proof was rejected"
+if pr_proves_normal_merge 42 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; then
+  fail "mismatched merge commit passed normal merged-main proof"
 fi
-QUEUE_ITEM_FIXTURE="${VALID_QUEUE_ITEM_FIXTURE}"
-QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${QUEUE_ITEM_FIXTURE}" | jq '.reviewReceipt.unresolvedFindings = [{"severity":"high"}]')"
-if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
-  fail "high review finding unexpectedly passed"
-fi
-QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq 'del(.builder)')"
-if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
-  fail "missing builder unexpectedly passed"
-fi
-QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq '.candidate.changedPaths = ["   "]')"
-if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
-  fail "whitespace-only changed path unexpectedly passed"
-fi
-QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq '.testerReceipt.owner = {"threadId":"reviewer","hostId":"host","extra":"different-object"}')"
-if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
-  fail "same reviewer/tester identity unexpectedly passed"
-fi
-QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq 'del(.authority)')"
-if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
-  fail "missing release authority unexpectedly passed"
-fi
-QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq '.terminalReceipts = .terminalReceipts[0]')"
-if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
-  fail "object-shaped terminal receipts unexpectedly passed"
-fi
-for mutation in \
-  'del(.ownershipReceipt)' \
-  '.ownershipReceipt.builderSuspended = false' \
-  '.ownershipReceipt.owner = .builder' \
-  '.ownershipReceipt.leaseId = "wrong"' \
-  '.ownershipReceipt.fence = 99' \
-  '.terminalReceipts += [.terminalReceipts[0] | .mergeSha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"]' \
-  '.candidate.url = "https://github.com/artemgetmann/openclaw/pull/99"' \
-  '.candidate.changedPaths = [" scripts/ship-jarvis-hotfix.sh"]'; do
-  QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq "${mutation}")"
-  if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
-    fail "contradictory queue authority unexpectedly passed: ${mutation}"
-  fi
-done
-for mutation in \
-  '.capabilityPolicy.routine = "arbitrary"' \
-  '.lifecycle.stateDirectory = "relative/state"' \
-  '.authority.allowedActions += ["admin-bypass"]' \
-  '.authority.constraints = [null]' \
-  '.reviewReceipt.owner.threadId = "builder "' \
-  '.ownerHistory[0].owner = .builder'; do
-  QUEUE_ITEM_FIXTURE="$(printf '%s\n' "${VALID_QUEUE_ITEM_FIXTURE}" | jq "${mutation}")"
-  if release_queue_proves_reviewed_merge 42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; then
-    fail "malformed fenced authority unexpectedly passed: ${mutation}"
-  fi
-done
-pass "moving-main review gate requires exact-head fenced PASS receipts"
+pr_paths_are_routine 42 || fail "routine merged PR path was rejected"
+pass "hotfix source proof uses exact GitHub merge identity and changed paths"
 
 printf 'All ship-jarvis-hotfix disk preflight tests passed.\n'

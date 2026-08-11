@@ -1,467 +1,102 @@
-# Local fleet resource control
+# Fleet resource control
 
-This Mac is a dedicated agent host and the production Jarvis host. Local agent
-throughput may consume spare capacity aggressively, but it must not trade away
-machine survival, remote access, or Jarvis availability.
+The Mac is primarily an agent workstation. Ordinary isolated development work
+must run concurrently. Resource control exists to prevent machine damage and
+conflicting shared-state mutation, not to serialize every expensive command.
 
-## Hard limits
+## Default: no machine-wide slot
 
-- Eight to twelve open lanes are a valid scheduling target. Open or waiting
-  lanes do not need to hold an expensive local execution slot.
-- Run at most one heavy local command across all worktrees.
-- Give broad tests and builds one worker unless a focused command cannot do so.
-- Prefer remote CI for full suites.
-- Never overlap packaging, deployment, or shared-runtime work.
-- Load Xcode, browser, web-research, and other specialist MCP servers only for
-  lanes that need them. Do not preload every specialist server in every chat.
+Run these directly in their own worktree:
 
-A command is heavy when it can run longer than 30 seconds, starts worker
-processes, builds an app/package, runs a broad test or review suite, performs a
-browser/GUI E2E, or materially increases CPU or memory use.
+- focused or broad tests;
+- typechecks, lint, formatting, and Codex review;
+- source builds and generated-code checks;
+- dependency installation;
+- independent read-only analysis;
+- isolated gateway, browser, or app fixtures that use distinct ports, profiles,
+  state directories, and output paths.
 
-Multiple lanes may reason, inspect files, make source edits, or wait on remote
-CI in parallel while the host remains healthy. The expensive proof phase is the
-serialized resource, not the conversation count.
+Two or more of these jobs may run concurrently. Each command should keep its
+own worker count reasonable, and remote CI remains preferred for broad matrices.
+Do not acquire `with-heavy-local-slot.sh` for ordinary work, do not create a
+long-lived waiter, and do not wake another chat merely because a test is busy.
 
-## Failure taxonomy
+## Exclusive lane
 
-The machine-wide guard exists because these failures were observed across
-parallel feature lanes, not because parallel source ownership is inherently
-unsafe:
+Use one narrow machine-wide exclusive transaction only when concurrent owners
+could mutate the same protected resource or invalidate each other's proof:
 
-- CPU: overlapping builds, broad tests, Swift/Xcode work, browsers, and model
-  tooling starved the interactive host and Jarvis event loop.
-- RAM: multiple worker trees and specialist processes reduced headroom until
-  the workstation became unreliable even when no single command looked fatal.
-- Disk: hundreds of worktrees plus repeated dependencies, build products,
-  packages, archives, and simulator artifacts pushed the Data volume to 96%
-  used with only 44 GiB free in the 2026-07-28 incident snapshot. Disk retention
-  was still unmerged, so that snapshot was evidence—not an active cleanup
-  guarantee.
-- Worktree multiplication: creating a lane was cheap conversationally but often
-  cloned another dependency/build footprint; old lanes also retained stale
-  guard code.
-- Raw-command bypass: direct `pnpm`, `swift`, `xcodebuild`, manual
-  `launchctl`, or noncanonical scripts can avoid repository entrypoint guards.
-- Merge/rebase churn: multiple independent PRs advancing `main` created routine
-  `BEHIND` states, stacked dependencies, and repeated proof. A central merge
-  agent did not remove that Git truth; feature owners must refresh and continue.
-- Package/release overlap: app bundles, release receipts, notarization, appcast,
-  and install state are shared machine resources even when source worktrees are
-  isolated.
-- Runtime/live collisions: concurrent deploy, restart, tester-runtime, GUI, or
-  Telegram acceptance campaigns can invalidate provenance, message evidence,
-  session cleanup, and the result another lane is trying to prove.
+- package, sign, notarize, publish, or install;
+- the default/shared Jarvis or OpenClaw runtime and gateway;
+- launchd ownership, shared ports, or shared app-support state;
+- protected release artifacts and release metadata;
+- bounded live/external acceptance that claims a shared bot, account, GUI, or
+  provider resource;
+- explicit workstation cleanup or repair that mutates shared fleet state.
 
-## Required wrapper
-
-Run every heavy command through the shared slot. For ordinary agent-owned work,
-the canonical entrypoint is the dedicated wrapper below. It owns the
-dedicated-agent CPU policy and, unless the caller supplies a tighter deadline,
-waits for up to 86400 seconds without holding the lease. Retryable occupancy or
-measured host pressure therefore stays in the same shell transaction and the
-real command executes exactly once after admission:
-
-```bash
-scripts/with-dedicated-agent-slot.sh --label "<thread-id>:<purpose>" -- \
-  pnpm vitest run path/to/focused.test.ts --maxWorkers 1
-```
-
-Do not replace that transaction with a separate `--check`, a one-shot lower
-wrapper call, or a second waiter after `occupied` or admission-time
-`host_unhealthy`. Those patterns race or duplicate the one transaction that is
-allowed to launch the workload. Use the lower wrapper directly only for an
-intentional diagnostic, explicit shared CPU policy, or a lower-level
-integration that owns its wait semantics.
-
-The waiter itself sleeps without CPU work or a heavy lease. That does not prove
-that every Codex client can keep a tool call attached without model re-entry.
-Never add a model-driven `write_stdin`, status, or guard polling loop around the
-waiter. If the client returns control while the shell is still queued, preserve
-the one existing transaction and use only a continuation route proved for that
-exact task. Do not start another command or claim that the shell alone will
-wake a finished Codex turn. Without a proved continuation route, a yielded
-waiter is an honest orchestration blocker rather than autonomous completion.
-
-For a diagnostic snapshot only, use the read-only preflight:
-
-```bash
-scripts/with-heavy-local-slot.sh --label "<thread-id>:preflight" --check
-```
-
-`--check` does not reserve the slot. Never use a successful check followed by a
-separate unguarded command as admission; another lane can win that race. Use one
-bounded acquire-and-run transaction when the caller can wait:
+Use the canonical wrapper around the complete mutation and its cleanup:
 
 ```bash
 scripts/with-heavy-local-slot.sh \
-  --label "<thread-id>:focused-proof" \
-  --wait-seconds 900 \
-  -- pnpm vitest run path/to/focused.test.ts --maxWorkers 1
+  --label "<thread-id>:<exclusive-purpose>" \
+  -- <command> <args...>
 ```
 
-The bounded path waits without holding the lease, acquires and health-checks
-atomically before launch, and executes the command once. It prints at most one
-`Heavy-local slot queued` notice even if the refusal reason changes while
-waiting. `occupied` and recoverable `host_unhealthy` conditions are retryable;
-`disk_pressure` returns control immediately because passive waiting cannot prove
-or create disk headroom. `guard_internal` also fails immediately because
-retrying ambiguous guard state could hide a sandbox, measurement, metadata, or
-identity failure.
+Do not split preflight, mutation, proof, and cleanup across separate leases.
+Do not bypass an active legitimate owner. A queued shell does not wake a
+finished model turn, so prefer starting exclusive work only when the lane is
+available. If the client yields, use a continuation mechanism already proven
+for that exact task or report the dependency honestly; never burn tokens with
+model-driven polling.
 
-On macOS, run the guard itself outside a restricted sandbox because safe owner
-identity requires native `/bin/ps` access. A restricted
-`guard_internal owner_publish_failed stage=process_start_unavailable` permits
-exactly one identical native rerun; do not poll or delete lease metadata. Run
-the real workload in that same native acquire-and-run transaction—a successful
-`--check` never authorizes a later unguarded command. Through the named
-dedicated entrypoint, native admission-time `occupied` or `host_unhealthy`
-remains queued inside the same bounded transaction; only wait expiry is a
-terminal capacity outcome. A native `guard_internal` result fails immediately
-and requires diagnosis before any workload starts.
+The wrapper remains fail-closed for ambiguous owner identity, authorization
+failure, runtime-health termination, and internal guard errors. After an
+ambiguous external effect, inspect state before any retry.
 
-The wrapper stores an atomic lease at a stable per-user machine path, so
-independent clones and worktrees contend for the same slot. Canonical
-build/package/release/runtime entrypoints self-acquire this lease when called
-directly. Nested entrypoints reuse it only when the wrapper's capability token
-matches live owner metadata and the nested process is a verified descendant of
-that exact owner PID/start-time identity. A copied token, caller-provided
-boolean, sibling process, or stale environment cannot bypass admission.
+## Severe host safety stops
 
-The guarded command starts as the leader of a dedicated process group and
-session. The wrapper records the leader PID, PID start fingerprint, process
-group, and session, then requires an atomic commit marker before work begins.
-Pending or uncommitted metadata is never treated as signal authority or proof
-that stale recovery is safe. Live PGID and session validation uses POSIX
-`getpgid()`/`getsid()` results; macOS `ps -o sess=` is not a numeric SID source
-and must not be used for this contract. Root-command exit is not treated as
-tree exit: the wrapper sends `TERM`, escalates to `KILL`, and proves the entire
-recorded group is gone before releasing the lease. Stale recovery likewise
-requires positive proof that both the owner and guarded process group are gone.
-A dead wrapper with live orphan workers continues to block admission. Missing
-metadata, an incomplete spawn handshake, unreadable process identity, PID or
-group reuse, or mismatched start/session identity fails closed instead of
-guessing that the lease is stale or signaling an unverified group.
+Concurrent ordinary work should stop or reduce load only on measured severe
+host pressure. The evidence must identify the actual signal, not merely that
+another command is running.
 
-The general wrapper and all canonical self-guarded build, package, release, and
-deployment entrypoints now default to dedicated-agent CPU semantics on this
-agent-owned Mac. The named dedicated entrypoint remains useful when a caller
-wants its declaration to reject any conflicting CPU override and automatically
-queue retryable admission pressure in the same shell turn:
+Stop new local work when any of these are true:
 
-```bash
-scripts/with-dedicated-agent-slot.sh \
-  --label "<thread-id>:capacity-ramp" \
-  -- pnpm vitest run path/to/focused.test.ts --maxWorkers 1
-```
+- the data volume is at the repository's severe disk floor or writes are
+  failing from capacity;
+- memory pressure is critical, paging is growing materially across observations,
+  or the kernel is killing workloads;
+- thermal state is serious/critical or the thermal probe itself fails closed
+  for a protected operation;
+- Jarvis health degrades while local load is the plausible cause;
+- a required shared resource has an active exclusive owner.
 
-Ordinary named-entrypoint commands default to the guard's safe maximum bounded
-wait of 86400 seconds. The lower guard polls every five seconds, releases the
-lease while host health is unavailable, and launches the command exactly once
-after admission. Use an explicit shorter `--wait-seconds` when the task has a
-tighter deadline. `--check` remains an immediate read-only snapshot and never
-inherits the default wait.
+Prefer reducing per-command workers, letting an admitted command finish, or
+moving broad proof to CI. Do not treat ordinary CPU utilization, a warm cache,
+or one healthy concurrent build as a fleet incident.
 
-The named entrypoint owns CPU policy. Passing a second `--cpu-policy`, including
-one hidden behind flag-like option data, fails before admission with
-`code=wrong_cpu_policy` and directs the caller to remove the override. Malformed
-wait arguments still reach the lower parser and fail closed; authorization and
-`guard_internal` failures are never made retryable. Direct
-`scripts/with-heavy-local-slot.sh --cpu-policy dedicated-agent` remains
-supported for lower-level integrations and retains its explicit wait behavior.
-An unflagged call uses the same dedicated-agent CPU semantics, which prevents
-canonical checks, Swift builds, typechecks, tests, release builds, and protected
-deployments from treating 0% CPU idle as a host failure.
+## Disk recovery
 
-Dedicated mode allows 0% CPU idle while adding dedicated-host observations and
-platform safety signals. Preflight and runtime samples emit
-`HEAVY_LOCAL_CPU_TELEMETRY`; the grant receipt records
-`cpu_policy=dedicated-agent`; and resource receipts report macOS memory-pressure
-state, swap allocation, pageout/swapout counters, thermal/performance pressure,
-managed-Jarvis identity and HTTP latency, plus guarded-group process count and
-RSS. Arguments, environment values, and unrelated process details are never
-recorded.
+Preserve useful source first: commit and push recoverable work. Hourly
+`ai.openclaw.worktree-gc` owns routine deletion of eligible worktrees and
+artifacts. Do not launch competing cleanup loops from multiple chats.
 
-The machine-wide lease, 25% memory floor, disk policy, Tailscale check, process
-identity, signal propagation, two-strike runtime stop, and exact cleanup remain
-unchanged. Dedicated mode additionally refuses admission while macOS reports
-memory warning/critical or thermal/performance pressure. It pins the healthy
-managed Jarvis LaunchAgent PID before launch, requires that PID to be the only
-listener on port 18789, and treats listener takeover, restart, HTTP failure, or
-the existing three-second timeout as health failures. Missing required resource
-telemetry fails closed as `guard_internal`.
+If disk pressure is already severe and blocks safe work, inspect before
+deleting. Use the repository GC tooling for eligible artifacts, keep active or
+dirty worktrees, and re-measure the disk floor after cleanup. A cleanup receipt
+may justify resuming the same command; it does not grant new runtime, release,
+credential, or destructive authority.
 
-When Artem is actively using the Mac and needs interactive CPU headroom, opt
-into the shared/interactive policy explicitly:
+## Isolation rules
 
-```bash
-scripts/with-heavy-local-slot.sh \
-  --cpu-policy standard \
-  --label "<thread-id>:interactive-proof" \
-  --wait-seconds 900 \
-  -- pnpm check
-```
+Concurrency is safe only when jobs do not share mutable state:
 
-`standard` is the compatibility name for shared/interactive mode. It retains
-the conservative 35% admission and 20% runtime CPU-idle floors. It does not
-weaken or replace any memory, disk, remote-access, Jarvis, lock, signal, or
-cleanup protection.
+- use separate Git worktrees and output directories;
+- use explicit isolated gateway profiles, configs, state directories, and
+  ports for unmerged runtime proof;
+- never point a feature worktree at the default shared gateway or primary bot;
+- keep app packaging, installation, signing identities, notarization, and
+  shared live acceptance in the exclusive lane;
+- avoid duplicate owners for the same issue or external scenario.
 
-On macOS the dedicated-agent default currently refuses admission when:
-
-- another heavy command owns the slot;
-- system memory headroom is below 25%;
-- Data-volume free space is below 25 GiB;
-- configured Tailscale is disconnected; or
-- the managed Jarvis gateway is installed but unhealthy.
-
-Only explicit shared/interactive mode additionally refuses admission when CPU
-idle capacity is below 35% and stops after two runtime samples below 20%.
-
-Between 25 GiB and 35 GiB free, admission remains honest but prints one
-`HEAVY_LOCAL_DISK_REPORT` warning with the exact available KiB, report
-threshold, hard floor, and owner label. That is the trigger to run the
-repository retention report before the next build grows the incident. The
-runtime monitor also enforces the 25 GiB floor, so a guarded build that consumes
-the remaining margin is stopped through the same two-strike tree cleanup used
-for CPU and memory pressure.
-
-Disk pressure is an autonomous continuation state, not a reason to end the
-task or ask the user to repeat build or shipping authority. Preserve the exact
-guarded command without printing its arguments, read
-`/Users/user/.agents/skills/reclaim-coding-disk/SKILL.md`, and follow its
-report-first Autonomous Cleanup Gate. Reclaim one narrow batch only when every
-exact target is generated and reproducible, ownership is resolved, native
-process and open-file checks are clear, and heavy/release locks plus protected
-runtime state are clear. Never remove source, a worktree, user/session/browser
-data, credentials, runtime state, or an ambiguous target. Verify the before and
-after Data-volume KiB and the skill's 35 GiB durable target. When refusal occurs
-at admission and the workload never started, rerun the same preserved guarded
-command once. When the guard terminated an in-flight command, first inspect that
-entrypoint's command-specific side effects and receipts; resume only when its
-idempotency or expected-head contract proves replay safe. Never blindly replay a
-partially executed release, deploy, send, restart, or other mutation. Stop when
-the skill gate is ambiguous or protected, no qualifying target can safely
-restore the floor, reconciliation cannot prove replay safe, or the one safe
-post-recovery attempt reaches the same disk boundary.
-
-Refusals retain exit code `75` for compatibility and also emit a stable line:
-
-```text
-HEAVY_LOCAL_SLOT_REFUSAL class=<occupied|host_unhealthy|guard_internal> code=<reason> [measurement fields] phase=<admission|runtime> outcome=<refused|terminated> next_action=<safe-action>
-```
-
-The class separates normal serialization, measured host pressure, and failures
-inside the guard or its measurement backends. The following human line retains
-the useful owner, PID, measurement, or recovery detail and names the same next
-safe action. Retryable admission pressure additionally emits
-`HEAVY_LOCAL_SLOT_PAUSED` with `phase=admission`, `outcome=paused`, the decisive
-observation, and the recovery condition before the bounded waiter sleeps. A bounded wait that
-expires emits the last retryable class with `code=wait_timeout`.
-Measured CPU, memory, Tailscale, and Jarvis refusals also expose stable
-`metric`, `observed`, `threshold`, `expected`, and `unit` fields when relevant.
-These are refusal telemetry, not a complete capacity profile.
-
-Dedicated transactions also emit three bounded telemetry lines:
-
-- `HEAVY_LOCAL_RESOURCE_TELEMETRY` records elapsed time, macOS memory-pressure
-  state, swap used/free KiB, cumulative pageouts/swapouts, transaction-relative
-  and latest-interval swapout growth, thermal state, and the bounded
-  runtime-warn enforcement mode;
-- `HEAVY_LOCAL_JARVIS_TELEMETRY` records the matching LaunchAgent/listener PID,
-  sample phase/time, HTTP status, and latency; and
-- `HEAVY_LOCAL_GROUP_TELEMETRY` records only the guarded PGID's process count and
-  aggregate RSS, explicitly labeled as observations under the single-group
-  enforcement boundary.
-
-Absolute swap use and process count remain observations, not unevidenced kill
-thresholds. macOS can retain historical swap after pressure recovers, and the
-known workloads have different legitimate helper counts. Yellow pressure is
-provisional: admission confirms that pageout and swapout counters are stable,
-and runtime enforcement treats simultaneous growth in both counters as an
-unhealthy sample. Two consecutive unhealthy samples stop the guarded tree. A
-single counter or a burst followed by a healthy sample remains telemetry and
-does not poison later warnings.
-
-An owner-metadata publication failure also includes the exact atomic
-publication stage and owner path. Inspect that generated lease path and its
-live process references; do not delete it or retry-loop the guard merely
-because the old message was opaque.
-
-Admitted commands run with background scheduling and reduced process priority.
-While the command runs, the wrapper rechecks the host every 15 seconds. Two
-consecutive unhealthy samples stop only the guarded command and its worker tree
-before VNC, Tailscale, or Jarvis can remain starved for minutes. The slot is
-released when the command exits. Exit code `75` means "temporarily unavailable"
-or "stopped to protect host health"; wait for recovery instead of bypassing the
-guard.
-
-For ordinary dedicated-agent work, use the named entrypoint and let its bounded
-same-turn wait own retryable `occupied` or `host_unhealthy` admission pressure,
-except for actionable `disk_pressure`, which returns immediately for the
-reclaim-and-resume sequence above.
-Do not add a conversational cross-thread wake callback or a second polling loop.
-Lower-level direct-wrapper callers must choose an explicit `--wait-seconds` if
-they can safely remain in the same transaction. Never wait for an authorization
-rejection: authorization requires explicit approval and cannot become valid
-with time.
-If one fresh retry after verified host recovery fails at the same stage for the
-same health reason, stop treating it as a queue wait. Preserve the artifact,
-release the lane, and diagnose the command's own resource behavior. Repeatedly
-restarting a deterministic offender is not autonomous completion; it is just a
-slower denial of service.
-
-The 25% memory threshold, standard-policy 35% admission CPU-idle threshold,
-standard-policy 20% runtime CPU-idle threshold, 25 GiB disk floor, 35 GiB
-disk-report threshold, 15-second interval, two-strike stop rule, and three-second
-health timeout remain fixed product policy in this revision. Environment
-variables cannot lower, disable, corrupt, or stretch them. `critical` memory
-pressure remains an immediate refusal. `warn` is allowed only after a short
-stable-paging admission confirmation and remains subject to active pageout plus
-swapout growth through the existing two-strike runtime stop.
-Only the named
-dedicated entrypoint, the unflagged agent-host default, or the exact lower-level
-`--cpu-policy dedicated-agent` equivalent makes CPU idle telemetry-only.
-Explicit `--cpu-policy standard` restores the fixed CPU floors for an
-interactive session; unknown or conflicting values fail closed.
-
-## Task-owned disk receipts
-
-The wrapper measures only known generated directories inside the guarded
-command's starting Git worktree. It never scans source, shared caches, Codex
-history, browser state, credentials, or another lane. When one guarded task
-creates at least 1 GiB there, task exit prints
-`HEAVY_LOCAL_DISK_RECEIPT` with the exact worktree, before/after generated KiB,
-host free-space KiB, and threshold.
-
-That receipt is accountability, not deletion authority. The owner must preserve
-outputs still needed for its PR/release handoff. An already-authorized task may
-clean an exact reproducible cache or failed output only through the active-task
-ownership and inactivity gate in `workflow.md`; the receipt does not satisfy
-that gate by itself. Retire the whole temporary worktree through
-`gc-worktrees.sh` only after clean, recoverable, process-free proof. Active,
-dirty, unmerged, release, runtime, and ambiguous state remains protected.
-
-## Dedicated-host capacity policy
-
-The one-heavy lease is a failure-containment boundary, not interactive-headroom
-policy. It remains machine-wide for every profile.
-
-Current protection separates platform danger signals from capacity evidence:
-
-- CPU: the agent-host default records CPU idle without enforcing a floor.
-  Explicit shared/interactive mode retains admission and runtime CPU-idle
-  checks. Both modes retain background scheduling and reduced priority.
-  Dedicated mode also refuses/stops on macOS thermal or performance pressure.
-- Memory: the fixed 25% headroom floor remains. Dedicated mode also consumes the
-  macOS normal/warn/critical pressure state and reports swap allocation plus
-  cumulative pageout/swapout counters. It deliberately has no absolute swap or
-  paging-rate cutoff because no universal failure boundary has been measured.
-- Disk: admission reports below 35 GiB and refuses below 25 GiB; retention
-  tooling still owns candidate classification and deletion.
-- Availability: configured Tailscale connectivity remains required. Dedicated
-  mode additionally pins the managed Jarvis PID, matches it to the only listener,
-  and records HTTP latency under the existing three-second timeout. VNC or
-  another remote-desktop path is not probed directly.
-- Overlap: the machine-wide lease and process-group supervision prevent two
-  guarded heavy trees from running concurrently. Dedicated runtime samples also
-  expose the one guarded group's process count and aggregate RSS.
-
-Dedicated-agent mode still does not pretend that observed capacity receipts are
-universal thresholds. Paging-rate, Jarvis-latency trend, and per-process fanout
-limits remain deferred until a bounded experiment measures a failure boundary:
-
-1. Preserve the built-in redacted resource, Jarvis, and group telemetry for
-   representative Node, Swift/Xcode, browser, and package workloads run one at
-   a time under the existing lease. Record admission, every 15-second runtime
-   sample, workload exit, and any Jarvis or remote-access interruption.
-2. Establish stop limits from the first observed paging, latency, fanout, disk,
-   or availability degradation, then apply an explicit safety margin. A threshold
-   change is invalid if no failure boundary was observed.
-3. Repeat deterministic guard tests and a bounded host soak before adding any
-   numeric trend limit or broader dedicated-host capacity profile.
-
-Until that experiment is complete, describe swap/pageout, latency, and group
-size as trend telemetry—not numeric enforcement. Direct platform memory and
-thermal pressure, Jarvis identity/HTTP health, disk, Tailscale, serialization,
-signals, and cleanup are enforced safety boundaries.
-
-Live `scripts/ship-jarvis-hotfix.sh` is the one remediation exception. The
-helper requests an internal `jarvis-remediation` policy, and the wrapper accepts
-that policy only when the resolved guarded command is the canonical hotfix
-entrypoint under the same repo root. It skips only the managed Jarvis health
-probe because an unhealthy service or its planned restart is the object of the
-repair. Memory, CPU, Tailscale, machine-wide serialization, process-group
-supervision, and the narrower release lock remain enforced. No ambient
-environment variable can select remediation policy.
-
-Read-only `--help`, release `--dry-run`, and release `--authorize` paths remain
-outside the expensive slot where their entrypoint contract guarantees that
-they do not build, package, deploy, restart, or publish. Executed release lanes
-always acquire locks in this order:
-
-1. machine-wide heavy-local slot (the operational reservation);
-2. canonical Jarvis release lock.
-
-Canonical self-guarding includes the shared runtime build/deploy/restart lanes,
-main-gateway shipping, worktree creation/bootstrap/prewarm, and the existing
-package/release entrypoints. It also includes direct macOS build/run, consumer
-app launch and UI smoke, Open Computer Use bootstrap, tester Telegram runtime
-management, Sparkle apply, shared restart smoke, and Jarvis/shared-main live
-Telegram acceptance. A nested canonical call reuses the outer lease only
-through the verified ancestry contract above.
-
-`openclaw gateway restart` is a packaged CLI boundary, not only a repository
-shell entrypoint. On macOS its complete mutation transaction re-executes through
-the same wrapper, and the npm/runtime package therefore includes the canonical
-lifecycle command, wrapper, lease helper, and session runner. The detached
-launchd handoff acquires that lease independently and publishes an admission
-receipt before restart is reported as scheduled. Missing packaged helpers fail
-closed with exit `75`; they never downgrade to raw signal, bootstrap, or
-kickstart.
-The narrow `gateway-lifecycle` admission policy skips managed Jarvis health
-only when the validated target is exactly `ai.jarvis.gateway`, because that
-restart may block or close the listener while acquiring the lease. Restarts of
-default or isolated OpenClaw profiles still require healthy Jarvis. CPU,
-memory, remote-access, ownership, ancestry, stale recovery, and runtime
-monitoring remain enforced.
-
-This one lease is also the deterministic operational reservation for package,
-release, deploy, restart, and live-runtime campaigns. Public Jarvis release
-work then acquires the narrower canonical release lock second. Keeping one
-machine-wide first lock avoids deadlock and prevents a lightweight live
-acceptance script from racing a heavier package or restart.
-
-Mechanical coverage is intentionally bounded to canonical repository
-entrypoints. Shell builtins cannot intercept an arbitrary direct `pnpm test`,
-`pnpm build`, `swift test`, `xcodebuild`, `launchctl`, manually executed Node
-runtime, or third-party tool. Run those commands through
-`scripts/with-heavy-local-slot.sh`; do not claim the repository makes arbitrary
-shell execution impossible. Old clones remain unprotected until refreshed.
-
-## Proof boundaries and rollout limits
-
-- The generic `http://127.0.0.1:18789/healthz` probe proves that something
-  healthy answers on the managed port. It does not by itself bind that response
-  to the PID or commit intended for a deployment. Runtime-specific ship/proof
-  scripts must keep their deeper PID, source, commit, RPC, and end-user checks.
-- This contract takes effect only after a clone has refreshed these helper and
-  entrypoint changes. An old clone or long-running old wrapper retains its older,
-  weaker behavior until updated or restarted. During rollout, do not infer that
-  every local clone is protected merely because one clone contains this patch.
-- New helpers intentionally fail closed when they encounter incomplete or
-  legacy child-session metadata. That prevents unsafe overlap, but it may
-  require operator inspection and cleanup of a lease created during the
-  transition.
-
-## Resume sequence after an incident
-
-1. Stop every heavy local command.
-2. Verify Tailscale, remote desktop, and Jarvis health.
-3. Wait for two healthy host snapshots.
-4. Resume one light source-only lane.
-5. Admit one focused heavy command through the wrapper.
-6. Observe host and Jarvis health before admitting the next command.
-
-Do not restore twelve-way heavy concurrency. Parallelize reasoning and source
-edits; serialize expensive proof and send full validation to CI.
+The resource model is intentionally simple: parallel by default, exclusive only
+for shared mutation, and fail closed only on concrete severe safety evidence.
