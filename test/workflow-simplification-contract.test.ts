@@ -24,6 +24,17 @@ describe("single-owner workflow contract", () => {
     }
   });
 
+  it("keeps Codex Review focused on the smallest complete change", () => {
+    const agents = read("AGENTS.md");
+    const contributing = read("FORK_CONTRIBUTING.md");
+
+    expect(agents).toMatch(/apply the Codex\s+Review rubric/);
+    expect(contributing).toContain("Does the PR solve one clear, observable problem?");
+    expect(contributing).toContain("Is every production change necessary for that problem?");
+    expect(contributing).toContain("description-based triggering failed");
+    expect(contributing).toContain("system prompt does not duplicate guidance");
+  });
+
   it("allows isolated development work to run concurrently", () => {
     const agents = read("AGENTS.md");
     const fleet = read("docs/agent-guides/fleet-resource-control.md");

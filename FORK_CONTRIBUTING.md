@@ -163,6 +163,22 @@ Run it before or during merge flow when a PR touches:
 - bundled skills, tool execution, or agent bootstrap paths
 - operational tooling that can silently change how work gets shipped or verified
 
+For every Codex Review, answer these questions from the diff and proof:
+
+1. Does the PR solve one clear, observable problem?
+2. Is every production change necessary for that problem?
+3. Does the proof cover both the intended behavior and the likely regression?
+4. Are unrelated refactors, cleanup, abstractions, and future improvements excluded?
+
+When a PR changes prompts, skills, or agent bootstrap behavior, also verify:
+
+- Detailed procedures live in a focused skill or document instead of the main
+  system prompt.
+- The system prompt does not duplicate guidance already supplied by a skill's
+  injected name and description.
+- An explicit system-prompt pointer to a skill has measured evidence that normal
+  description-based triggering failed, plus proof that the pointer fixes it.
+
 If `codex review` finds a P1 or P2 before merge, fix it before merge. If it
 finishes after merge, open the follow-up PR immediately. Trivial docs, chore,
 and typo PRs may skip it by reviewer judgment so the founder loop stays fast.
