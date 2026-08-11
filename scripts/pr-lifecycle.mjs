@@ -49,6 +49,7 @@ function usage() {
   scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|delegated-worker|user-visible-task> --owner-thread <ID> --owner-host <ID> --review-receipt <FILE> [--task-authority <FILE>] [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>] [--environment-retry-contract <ID>]
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
+  scripts/pr-lifecycle retire-stale-test <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
   scripts/pr-lifecycle handoff-release <PR> --transport <queue-lease|user-visible-task> --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed|direct] [--declared-dependencies <FILE>]
   scripts/pr-lifecycle accept-release-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
@@ -1584,16 +1585,23 @@ function makeReleasePacket(state, contractId) {
   };
 }
 
-function recordTestReceipt(pr, options) {
+function recordTestReceipt(pr, options, { retireStale = false } = {}) {
   const receipt = readReceipt(requireOption(options, "receipt"));
-  const candidate = fetchCandidate(pr);
+  const liveCandidate = fetchCandidate(pr);
   return withStateLock(pr, (state) => {
     if (!state?.tester || state.tester.phase !== "active") {
       fail("tester receipt requires one exact active tester owner");
     }
-    if (!sameCandidate(state.candidate, candidate)) {
+    const candidateDrifted = !sameCandidate(state.candidate, liveCandidate);
+    if (!retireStale && candidateDrifted) {
       fail("PR head/diff changed before the tester receipt was recorded");
     }
+    if (retireStale && !candidateDrifted) {
+      fail("stale tester retirement requires verified candidate drift");
+    }
+    // Retirement validates the terminal receipt against the candidate the
+    // worker actually tested. It never treats that stale proof as live proof.
+    const candidate = retireStale ? state.candidate : liveCandidate;
     const expected = state.tester;
     const validStatus = ["PASS", "FAIL", "BLOCKED"].includes(receipt.status);
     const validOwner =
@@ -1672,8 +1680,42 @@ function recordTestReceipt(pr, options) {
       !Array.isArray(receipt.limitations)
     ) {
       fail(
-        "tester receipt is incomplete or does not match the immutable candidate, dispatcher routing, exact owner, and required warm environment gate",
+        retireStale
+          ? "stale tester retirement requires the exact terminal receipt for the retired candidate and owner"
+          : "tester receipt is incomplete or does not match the immutable candidate, dispatcher routing, exact owner, and required warm environment gate",
       );
+    }
+    if (retireStale) {
+      // Terminal work and addressable-owner closure are separate facts. Record
+      // the stale proof, but keep the owner active until the caller archives or
+      // resolves that exact transport through close-test.
+      const recordedAt = new Date().toISOString();
+      expected.receipt = receipt;
+      expected.receiptRecordedAt = recordedAt;
+      expected.candidateDrift = {
+        observedAt: recordedAt,
+        headSha: liveCandidate.headSha,
+        baseSha: liveCandidate.baseSha,
+        diffFingerprint: liveCandidate.diffFingerprint,
+      };
+      expected.phase = "stale-receipt-recorded";
+      state.updatedAt = recordedAt;
+      return {
+        state,
+        output: {
+          action:
+            expected.transport === "user-visible-task"
+              ? "archive-exact-tester-thread"
+              : expected.transport === "delegated-worker"
+                ? "resolve-exact-delegated-worker"
+                : "resolve-exact-nested-agent",
+          contractId: expected.contractId,
+          owner: expected.owner,
+          status: receipt.status,
+          proofReusable: false,
+          nextAction: "close-exact-stale-tester-owner",
+        },
+      };
     }
     expected.receipt = receipt;
     expected.phase = "receipt-recorded";
@@ -1703,7 +1745,12 @@ function closeTest(pr, options) {
   const closure = requireOption(options, "closure");
   return withStateLock(pr, (state) => {
     const tester = state?.tester;
-    if (!tester || tester.contractId !== contractId || tester.phase !== "receipt-recorded") {
+    const staleReceipt = tester?.phase === "stale-receipt-recorded";
+    if (
+      !tester ||
+      tester.contractId !== contractId ||
+      (!staleReceipt && tester.phase !== "receipt-recorded")
+    ) {
       fail("tester closure requires the matching recorded terminal receipt");
     }
     if (tester.owner.threadId !== threadId || tester.owner.hostId !== hostId) {
@@ -1714,12 +1761,28 @@ function closeTest(pr, options) {
     if (closure !== expectedClosure) {
       fail(`${tester.transport} requires closure=${expectedClosure}`);
     }
-    tester.closure = { type: closure, threadId, hostId, recordedAt: new Date().toISOString() };
+    tester.closure = staleReceipt
+      ? {
+          type: "candidate-drift",
+          transportClosure: closure,
+          threadId,
+          hostId,
+          recordedAt: new Date().toISOString(),
+          liveCandidate: tester.candidateDrift,
+        }
+      : { type: closure, threadId, hostId, recordedAt: new Date().toISOString() };
     tester.phase = "closed";
     state.updatedAt = new Date().toISOString();
     return {
       state,
-      output: { action: "tester-closed", contractId, status: tester.receipt.status },
+      output: {
+        action: staleReceipt ? "tester-retired-for-candidate-drift" : "tester-closed",
+        contractId,
+        status: tester.receipt.status,
+        ...(staleReceipt
+          ? { proofReusable: false, nextAction: "obtain-fresh-review-and-test" }
+          : {}),
+      },
     };
   });
 }
@@ -2007,6 +2070,9 @@ function main() {
         break;
       case "record-test-receipt":
         output = recordTestReceipt(pr, options);
+        break;
+      case "retire-stale-test":
+        output = recordTestReceipt(pr, options, { retireStale: true });
         break;
       case "close-test":
         output = closeTest(pr, options);

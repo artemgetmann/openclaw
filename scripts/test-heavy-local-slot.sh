@@ -349,7 +349,7 @@ host_health_reason() {
       'guard_internal|disk_measurement_failed|could not measure disk headroom|metric=disk_available_kib status=unavailable'
   elif [[ "$test_health_sample" == "disk-warning" ]]; then
     printf '%s\n' \
-      'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=34000000 report_below_kib=36700160 hard_floor_kib=26214400 owner=disk-warning phase=admission outcome=advisory next_action=reclaim_owner_attributed_space_before_hard_floor' >&2
+      "HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=34000000 report_below_kib=36700160 hard_floor_kib=26214400 owner=disk-warning phase=admission outcome=advisory next_action=invoke_reclaim_coding_disk_before_hard_floor recovery_skill=${HOME}/.agents/skills/reclaim-coding-disk/SKILL.md" >&2
   elif [[ -n "$test_health_sample" && "$test_health_sample" != "healthy" ]]; then
     printf 'host_unhealthy|fixture_host_pressure|%s|metric=fixture observed=unhealthy' \
       "$test_health_sample"
@@ -1403,6 +1403,7 @@ test_large_generated_state_emits_owner_receipt() {
 test_disk_pressure_refuses_and_warning_admits() {
   local lock_path="$TMP_DIR/disk-health.lock"
   local health_path="$TMP_DIR/disk-health.health"
+  local marker="$TMP_DIR/disk-health.marker"
   local output="$TMP_DIR/disk-health.out"
   local status=0
 
@@ -1418,7 +1419,39 @@ test_disk_pressure_refuses_and_warning_admits() {
     'HEAVY_LOCAL_SLOT_REFUSAL class=host_unhealthy code=disk_pressure metric=disk_available_kib observed=25000000 threshold=26214400 unit=KiB' \
     "$output" ||
     fail "disk floor refusal omitted stable measurements"
+  grep -Fq \
+    'next_action=invoke_reclaim_coding_disk_then_resume_preserved_command' \
+    "$output" ||
+    fail "disk floor refusal omitted the autonomous recovery action"
+  grep -Fq \
+    "recovery_skill=${HOME}/.agents/skills/reclaim-coding-disk/SKILL.md" \
+    "$output" ||
+    fail "disk floor refusal omitted the exact reclaim skill path"
   [[ ! -e "$lock_path" ]] || fail "disk floor refusal leaked its fixture lease"
+
+  # Disk cannot recover by conversational waiting. Even a caller that supplied
+  # a long wait must regain control immediately so it can reclaim one proven-safe
+  # batch and rerun this same guarded command without losing its argv.
+  printf 'disk-low\n' >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --label "disk-low-wait" \
+      --wait-seconds 2 \
+      -- touch "$marker" >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "wait-enabled disk floor returned $status instead of 75"
+  [[ ! -e "$marker" && ! -e "$lock_path" ]] ||
+    fail "wait-enabled disk floor ran work or leaked the fixture lease"
+  grep -Fq \
+    'code=disk_pressure metric=disk_available_kib observed=25000000 threshold=26214400 unit=KiB phase=admission outcome=refused' \
+    "$output" ||
+    fail "wait-enabled disk pressure did not return the actionable refusal"
+  if grep -Fq 'HEAVY_LOCAL_SLOT_PAUSED' "$output"; then
+    fail "wait-enabled disk pressure entered a passive wait instead of recovery"
+  fi
 
   printf 'disk-warning\n' >"$health_path"
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
@@ -1428,6 +1461,10 @@ test_disk_pressure_refuses_and_warning_admits() {
     'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=34000000 report_below_kib=36700160 hard_floor_kib=26214400 owner=disk-warning' \
     "$output" ||
     fail "disk warning omitted its exact report thresholds"
+  grep -Fq \
+    "next_action=invoke_reclaim_coding_disk_before_hard_floor recovery_skill=${HOME}/.agents/skills/reclaim-coding-disk/SKILL.md" \
+    "$output" ||
+    fail "disk warning omitted the proactive reclaim skill action"
   grep -Fq 'Heavy-local slot granted to "disk-warning".' "$output" ||
     fail "disk warning incorrectly blocked admission above the hard floor"
   [[ ! -e "$lock_path" ]] || fail "disk warning check leaked its fixture lease"
@@ -2613,6 +2650,51 @@ test_two_sample_health_stop_kills_tree() {
   pass "two unhealthy samples stop child and grandchild"
 }
 
+test_runtime_disk_pressure_requires_reconciliation_before_resume() {
+  local fixture="" lock_path="$TMP_DIR/runtime-disk-stop.lock"
+  local health_path="$TMP_DIR/runtime-disk-stop.health"
+  local child_pid_file="$TMP_DIR/runtime-disk-stop.child"
+  local grandchild_pid_file="$TMP_DIR/runtime-disk-stop.grandchild"
+  local output="$TMP_DIR/runtime-disk-stop.out"
+  local status=0 child_pid=0 grandchild_pid=0
+
+  fixture="$(create_process_tree_fixture)"
+  {
+    printf 'disk-low\n'
+    printf 'disk-low\n'
+  } >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_READY_FILE="$grandchild_pid_file" \
+    run_test_wrapper \
+      "$lock_path" \
+      "$health_path" \
+      "runtime-disk-stop" \
+      "$fixture" "$child_pid_file" "$grandchild_pid_file" \
+      >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "runtime disk stop returned $status instead of 75"
+  wait_for_file "$child_pid_file"
+  wait_for_file "$grandchild_pid_file"
+  child_pid="$(<"$child_pid_file")"
+  grandchild_pid="$(<"$grandchild_pid_file")"
+  wait_for_dead_pid "$child_pid"
+  wait_for_dead_pid "$grandchild_pid"
+  grep -Fq \
+    'code=disk_pressure metric=disk_available_kib observed=25000000 threshold=26214400 unit=KiB phase=runtime outcome=terminated next_action=invoke_reclaim_coding_disk_then_reconcile_terminated_command' \
+    "$output" ||
+    fail "runtime disk stop omitted its reconciliation-only terminal receipt"
+  grep -Fq \
+    'action=reconcile_terminated_guarded_command_before_any_resume' \
+    "$output" ||
+    fail "runtime disk stop recommended blind replay instead of reconciliation"
+  if grep -Fq 'then rerun the exact preserved guarded command once' "$output"; then
+    fail "runtime disk stop recommended replay after partial execution"
+  fi
+  [[ ! -e "$lock_path" ]] || fail "runtime disk stop left its lock behind"
+  pass "runtime disk termination requires state reconciliation before any resume"
+}
+
 signal_verified_slot_owner() {
   local signal_name="$1"
   local expected_label="$2"
@@ -3449,6 +3531,7 @@ if [[ "${1:-}" == "--cleanup-only" ]]; then
   create_sigint_reset_launcher
   run_suite_test test_root_exit_kills_term_ignoring_orphan_group
   run_suite_test test_two_sample_health_stop_kills_tree
+  run_suite_test test_runtime_disk_pressure_requires_reconciliation_before_resume
   run_suite_test test_signal_cleanup_kills_tree_and_releases
   SUITE_PHASE="complete"
   echo "Heavy-local slot cleanup tests passed."
@@ -3538,6 +3621,7 @@ run_suite_test test_wait_timeout_and_cancel_never_run_command
 run_suite_test test_root_exit_kills_term_ignoring_orphan_group
 run_suite_test test_wrapper_sigkill_retains_lease_until_orphan_group_dies
 run_suite_test test_two_sample_health_stop_kills_tree
+run_suite_test test_runtime_disk_pressure_requires_reconciliation_before_resume
 run_suite_test test_signal_cleanup_kills_tree_and_releases
 run_suite_test test_dedicated_cpu_policy_preserves_signal_cleanup
 run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient

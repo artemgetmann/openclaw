@@ -244,6 +244,16 @@ or nested-agent resolution it returns, then run `close-test` with the same
 identity. `handoff-release` refuses a stale, failed, incomplete, or unclosed
 tester receipt.
 
+If the candidate changes after the tester returns but before
+`record-test-receipt`, do not forge the live base, discard the owner ledger, or
+create a replacement tester. Run `scripts/pr-lifecycle retire-stale-test` with
+that exact terminal receipt. The transition validates the receipt against the
+retired candidate and exact owner, marks its proof non-reusable, and returns the
+normal transport-specific archival or resolution action. Only `close-test` with
+that exact identity closes the owner as `candidate-drift`; replacement remains
+forbidden until then. The same builder then obtains fresh review and test proof
+for the live candidate before release handoff.
+
 A capacity or managed-Jarvis health guard refusal before workload start is not
 source proof and is not a generic retry license. New tester contracts handle
 ordinary recoverable capacity inside the same-owner bounded wait above. If that
@@ -761,6 +771,18 @@ ready`.
   Use the owning repository cleanup command when it can classify that exact
   target; a disk receipt alone is accountability, not proof that these gates
   passed.
+- A `disk_pressure` guard receipt does not end or transfer builder, tester, or
+  queue-lease ownership. The same owner must preserve the exact guarded command,
+  immediately apply `/Users/user/.agents/skills/reclaim-coding-disk/SKILL.md`,
+  autonomously reclaim one exact safe generated batch when its gates pass, and
+  resume an admission-refused command once after verified headroom. If the guard
+  terminated work after launch, reconcile that entrypoint's side effects and
+  receipts first and resume only when its own replay contract proves safety.
+  Ask only when ownership or liveness is ambiguous, the required target is
+  protected, no qualifying generated target can restore the floor, or replay
+  safety cannot be proven. Never replace this with broad cleanup, blind mutation
+  replay, a duplicate worker, or deletion of source, worktrees,
+  user/session/browser data, credentials, release state, or shared/runtime state.
 - Prove the background job is real with
   `bash scripts/install-worktree-gc.sh status`. A plist on disk is not enough;
   status fails unless launchd reports the job loaded and enabled.

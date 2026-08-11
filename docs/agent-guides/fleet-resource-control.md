@@ -84,9 +84,11 @@ scripts/with-heavy-local-slot.sh \
 The bounded path waits without holding the lease, acquires and health-checks
 atomically before launch, and executes the command once. It prints at most one
 `Heavy-local slot queued` notice even if the refusal reason changes while
-waiting. `occupied` and `host_unhealthy` are retryable; `guard_internal` fails
-immediately because retrying ambiguous guard state could hide a sandbox,
-measurement, metadata, or identity failure.
+waiting. `occupied` and recoverable `host_unhealthy` conditions are retryable;
+`disk_pressure` returns control immediately because passive waiting cannot prove
+or create disk headroom. `guard_internal` also fails immediately because
+retrying ambiguous guard state could hide a sandbox, measurement, metadata, or
+identity failure.
 
 On macOS, run the guard itself outside a restricted sandbox because safe owner
 identity requires native `/bin/ps` access. A restricted
@@ -203,6 +205,25 @@ runtime monitor also enforces the 25 GiB floor, so a guarded build that consumes
 the remaining margin is stopped through the same two-strike tree cleanup used
 for CPU and memory pressure.
 
+Disk pressure is an autonomous continuation state, not a reason to end the
+task or ask the user to repeat build or shipping authority. Preserve the exact
+guarded command without printing its arguments, read
+`/Users/user/.agents/skills/reclaim-coding-disk/SKILL.md`, and follow its
+report-first Autonomous Cleanup Gate. Reclaim one narrow batch only when every
+exact target is generated and reproducible, ownership is resolved, native
+process and open-file checks are clear, and heavy/release locks plus protected
+runtime state are clear. Never remove source, a worktree, user/session/browser
+data, credentials, runtime state, or an ambiguous target. Verify the before and
+after Data-volume KiB and the skill's 35 GiB durable target. When refusal occurs
+at admission and the workload never started, rerun the same preserved guarded
+command once. When the guard terminated an in-flight command, first inspect that
+entrypoint's command-specific side effects and receipts; resume only when its
+idempotency or expected-head contract proves replay safe. Never blindly replay a
+partially executed release, deploy, send, restart, or other mutation. Stop when
+the skill gate is ambiguous or protected, no qualifying target can safely
+restore the floor, reconciliation cannot prove replay safe, or the one safe
+post-recovery attempt reaches the same disk boundary.
+
 Refusals retain exit code `75` for compatibility and also emit a stable line:
 
 ```text
@@ -255,7 +276,9 @@ or "stopped to protect host health"; wait for recovery instead of bypassing the
 guard.
 
 For ordinary dedicated-agent work, use the named entrypoint and let its bounded
-same-turn wait own retryable `occupied` or `host_unhealthy` admission pressure.
+same-turn wait own retryable `occupied` or `host_unhealthy` admission pressure,
+except for actionable `disk_pressure`, which returns immediately for the
+reclaim-and-resume sequence above.
 Do not add a conversational cross-thread wake callback or a second polling loop.
 Lower-level direct-wrapper callers must choose an explicit `--wait-seconds` if
 they can safely remain in the same transaction. Never wait for an authorization

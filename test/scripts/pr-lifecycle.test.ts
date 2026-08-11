@@ -2332,6 +2332,103 @@ describe("scripts/pr-lifecycle", () => {
     const stale = runFailure(fixture, ["record-test-receipt", "42", "--receipt", receiptPath]);
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("PR head/diff changed before the tester receipt was recorded");
+
+    const retired = run(fixture, ["retire-stale-test", "42", "--receipt", receiptPath]);
+    expect(retired).toMatchObject({
+      action: "archive-exact-tester-thread",
+      contractId: tester.contractId,
+      owner: { threadId: "tester-thread", hostId: "tester-host" },
+      status: "PASS",
+      proofReusable: false,
+      nextAction: "close-exact-stale-tester-owner",
+    });
+
+    const overlapping = runFailure(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "live-external",
+      "--transport",
+      "user-visible-task",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(overlapping.status).toBe(1);
+    expect(overlapping.stderr).toContain("owner may still be active");
+
+    const closed = run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "tester-thread",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+    expect(closed).toMatchObject({
+      action: "tester-retired-for-candidate-drift",
+      contractId: tester.contractId,
+      status: "PASS",
+      proofReusable: false,
+      nextAction: "obtain-fresh-review-and-test",
+    });
+
+    // Candidate replacement stays with the same builder and creates one fresh
+    // contract. The stale PASS is retained only in the retired audit history.
+    const replacement = beginLiveTester(fixture);
+    expect(replacement.contractId).not.toBe(tester.contractId);
+    const state = JSON.parse(
+      fs.readFileSync(path.join(fixture.root, "state", "pr-42.json"), "utf8"),
+    );
+    expect(state.history.at(-1)?.tester).toMatchObject({
+      contractId: tester.contractId,
+      phase: "closed",
+      closure: { type: "candidate-drift", transportClosure: "archived" },
+    });
+    expect(state.tester.contractId).toBe(replacement.contractId);
+    expect(state.tester.receipt).toBeNull();
+  });
+
+  it("refuses stale tester retirement while the candidate is unchanged", () => {
+    const fixture = makeFixture();
+    const tester = beginLiveTester(fixture);
+    run(fixture, [
+      "accept-test-owner",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "tester-thread",
+      "--host-id",
+      "tester-host",
+    ]);
+    const receiptPath = path.join(fixture.root, "current-receipt.json");
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "tester",
+        routing: tester.routing,
+        contractId: tester.contractId,
+        status: "PASS",
+        headSha: tester.candidate?.headSha,
+        diffFingerprint: tester.candidate?.diffFingerprint,
+        owner: { threadId: "tester-thread", hostId: "tester-host" },
+        environment: readyEnvironment(tester),
+        evidence: ["current proof"],
+        cleanup: { status: "complete" },
+        limitations: [],
+      }),
+    );
+
+    const result = runFailure(fixture, ["retire-stale-test", "42", "--receipt", receiptPath]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requires verified candidate drift");
   });
 
   it("accepts a terminal nested tester receipt before user-visible release", () => {
