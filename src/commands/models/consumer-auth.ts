@@ -22,6 +22,10 @@ import {
 } from "../../agents/cli-credentials.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  JARVIS_CONSUMER_CODEX_FALLBACK_MODEL,
+  JARVIS_CONSUMER_CURRENT_CODEX_MODEL,
+} from "../../config/jarvis-consumer-model-migration.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveProviderPluginChoice } from "../../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
@@ -626,6 +630,37 @@ function applyProviderAuthResult(
   const defaultModel = result.defaultModel?.trim() || fallbackDefaultModel?.trim();
   if (defaultModel) {
     next = applyDefaultModel(next, defaultModel);
+    if (defaultModel === JARVIS_CONSUMER_CURRENT_CODEX_MODEL) {
+      const existingModel = cfg.agents?.defaults?.model;
+      const existingFallbacks =
+        existingModel && typeof existingModel === "object" && Array.isArray(existingModel.fallbacks)
+          ? existingModel.fallbacks
+          : undefined;
+
+      // Consumer ChatGPT auth must persist one validator-clean config update.
+      // A fresh install has no model block yet, so relying on the later legacy
+      // migration makes the OAuth token succeed while this config write fails.
+      // Preserve an explicit operator fallback list, including an empty opt-out.
+      // Fresh installs have no fallback field, so seed the managed GPT-5.5 default.
+      next = {
+        ...next,
+        agents: {
+          ...next.agents,
+          defaults: {
+            ...next.agents?.defaults,
+            model: {
+              primary: JARVIS_CONSUMER_CURRENT_CODEX_MODEL,
+              fallbacks: existingFallbacks ?? [JARVIS_CONSUMER_CODEX_FALLBACK_MODEL],
+            },
+            models: {
+              ...next.agents?.defaults?.models,
+              [JARVIS_CONSUMER_CODEX_FALLBACK_MODEL]:
+                next.agents?.defaults?.models?.[JARVIS_CONSUMER_CODEX_FALLBACK_MODEL] ?? {},
+            },
+          },
+        },
+      };
+    }
   }
 
   return { config: next, selectedProfileIds };
