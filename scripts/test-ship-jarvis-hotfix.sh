@@ -137,6 +137,12 @@ if preflight_and_package_hotfix 1 2026.7.16 arm64 >"${TMP_ROOT}/low.out" 2>&1; t
 fi
 [[ ! -e "${PACKAGE_MARKER}" ]] || fail "low disk invoked package helper"
 grep -q '^status=fail$' "${TMP_ROOT}/low.out" || fail "low disk omitted fail receipt"
+grep -Fq \
+  'next_operator_action=invoke_reclaim_coding_disk_then_rerun_preflight_once' \
+  "${TMP_ROOT}/low.out" || fail "low disk omitted autonomous recovery action"
+grep -Fq \
+  "recovery_skill=${HOME}/.agents/skills/reclaim-coding-disk/SKILL.md" \
+  "${TMP_ROOT}/low.out" || fail "low disk omitted canonical recovery skill"
 pass "low disk stops before package invocation"
 
 export TEST_FREE_KIB=100

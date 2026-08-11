@@ -222,7 +222,12 @@ jarvis_release_disk_preflight_targets() {
   printf 'filesystems_checked=%s\n' "${#filesystem_ids[@]}"
   if [[ "$overall_status" -ne 0 ]]; then
     printf 'status=fail\n'
-    printf 'next_operator_action=free disk space on every failed filesystem, then rerun this preflight before packaging\n'
+    # A release preflight failure happens before packaging starts, so the same
+    # owner can safely reclaim one proven-generated batch and retry exactly
+    # once. Emit the canonical skill and a stable action instead of vague
+    # operator guidance that agents tend to hand back to the user.
+    printf 'recovery_skill=%s/.agents/skills/reclaim-coding-disk/SKILL.md\n' "${HOME}"
+    printf 'next_operator_action=invoke_reclaim_coding_disk_then_rerun_preflight_once\n'
     return 1
   fi
 
