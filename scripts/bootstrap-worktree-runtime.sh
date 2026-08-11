@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-ORIGINAL_ARGS=("$@")
 ROOT=""
 QUIET=0
 SKIP_INSTALL=0
@@ -69,14 +68,6 @@ if [[ ! -f "$ROOT/package.json" ]]; then
   echo "Error: not a repo root: $ROOT" >&2
   exit 1
 fi
-
-# shellcheck source=scripts/lib/heavy-local-slot.sh
-source "$SCRIPT_ROOT/scripts/lib/heavy-local-slot.sh"
-openclaw_heavy_local_slot_require_or_reexec \
-  "bootstrap-worktree-runtime:$(basename "$ROOT")" \
-  "$SCRIPT_ROOT" \
-  "$SCRIPT_ROOT/scripts/bootstrap-worktree-runtime.sh" \
-  "${ORIGINAL_ARGS[@]}"
 
 source "$ROOT/scripts/lib/validated-node.sh"
 

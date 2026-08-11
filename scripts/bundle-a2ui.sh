@@ -8,12 +8,6 @@ on_error() {
 trap on_error ERR
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=scripts/lib/heavy-local-slot.sh
-source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
-# Seed the re-exec argv with the script itself. macOS ships Bash 3.2, where
-# expanding an empty array under `set -u` raises "unbound variable"; the
-# release build invokes this entrypoint with zero arguments.
-REEXEC_COMMAND=("$ROOT_DIR/scripts/bundle-a2ui.sh" "$@")
 HASH_FILE="$ROOT_DIR/src/canvas-host/a2ui/.bundle.hash"
 OUTPUT_FILE="$ROOT_DIR/src/canvas-host/a2ui/a2ui.bundle.js"
 A2UI_RENDERER_DIR="$ROOT_DIR/vendor/a2ui/renderers/lit"
@@ -29,14 +23,6 @@ if [[ ! -d "$A2UI_RENDERER_DIR" || ! -d "$A2UI_APP_DIR" ]]; then
   echo "A2UI sources missing and no prebuilt bundle found at: $OUTPUT_FILE" >&2
   exit 1
 fi
-
-# This entrypoint is also callable outside `pnpm build`. Self-admission closes
-# that practical raw-build bypass while nested build pipelines reuse the exact
-# verified ancestor lease.
-openclaw_heavy_local_slot_require_or_reexec \
-  "bundle-a2ui" \
-  "$ROOT_DIR" \
-  "${REEXEC_COMMAND[@]}"
 
 INPUT_PATHS=(
   "$ROOT_DIR/package.json"

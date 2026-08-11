@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-ORIGINAL_ARGS=("$@")
 
 usage() {
   cat <<'EOF'
@@ -58,14 +57,6 @@ if [[ ! -f "$ROOT/package.json" ]]; then
   echo "Error: no package.json found under $ROOT" >&2
   exit 1
 fi
-
-# shellcheck source=scripts/lib/heavy-local-slot.sh
-source "$SCRIPT_ROOT/scripts/lib/heavy-local-slot.sh"
-openclaw_heavy_local_slot_require_or_reexec \
-  "prewarm-worktree:$(basename "$ROOT"):$PREWARM_MACOS" \
-  "$SCRIPT_ROOT" \
-  "$SCRIPT_ROOT/scripts/prewarm-worktree.sh" \
-  "${ORIGINAL_ARGS[@]}"
 
 source "$ROOT/scripts/lib/validated-node.sh"
 source "$ROOT/scripts/lib/macos-release-gates.sh"

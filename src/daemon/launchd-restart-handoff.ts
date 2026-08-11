@@ -139,7 +139,7 @@ async function waitForLeaseAdmission(params: {
   const deadline = Date.now() + (params.timeoutMs ?? 15_000);
 
   // Callers must not report a scheduled restart until the detached owner has
-  // atomically acquired the machine lease. Yield between receipt probes so a
+  // atomically acquired the gateway resource. Yield between receipt probes so a
   // running gateway keeps serving timers, connections, and stop signals while
   // another owner is being inspected.
   while (Date.now() < deadline) {
@@ -269,6 +269,9 @@ export async function scheduleDetachedLaunchdRestartHandoff(params: {
     // caller's capability, ancestry would validate temporarily but the caller
     // could release that lease before the delayed launchctl mutation.
     delete childEnv.OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN;
+    delete childEnv.OPENCLAW_SHARED_RESOURCE_LOCK;
+    delete childEnv.OPENCLAW_SHARED_RESOURCE_LOCK_FD;
+    delete childEnv.OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY;
     const child = spawn(
       "/bin/sh",
       [

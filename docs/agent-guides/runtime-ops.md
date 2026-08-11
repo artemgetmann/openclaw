@@ -48,7 +48,7 @@
     recipes bypass normal runtime ownership checks and the self-guarded gateway
     lifecycle transaction. Do not use them as routine restart guidance.
   - If incident evidence genuinely requires an unmanaged process replacement,
-    reserve the machine-wide slot explicitly first and keep the exact PID,
+    acquire `gateway-main` explicitly first and keep the exact PID,
     listener, runtime source, and recovery proof in the incident record.
 - Verify with:
   - `openclaw channels status --probe`
@@ -97,17 +97,17 @@ OPENCLAW_CONFIG_PATH="$HOME/Library/Application Support/Jarvis/.jarvis/openclaw.
   - Shared/main full app rebuild + restart: `bash scripts/restart-mac.sh`
 - Shared `main` restart behavior:
   - On macOS, `openclaw gateway restart` admits the complete command through the
-    stable machine-wide heavy-local lease before any unmanaged signal, stale
+    OS-owned `gateway-main` lock before any unmanaged signal, stale
     process cleanup, bootstrap, kickstart, retry, or shared-main recovery
     dispatch. A concurrent owner exits with temporary-unavailable status `75`
     without reaching those mutations.
   - Restart requests originating inside the managed launchd process use a
-    detached handoff that acquires the same lease and confirms admission before
+    detached handoff that acquires the same resource and confirms admission before
     the caller reports that restart was scheduled. When the validated target is
     exactly `ai.jarvis.gateway`, admission does not probe that listener; other
     gateway targets still require healthy Jarvis. Every other host-health and
     ownership gate remains active, and a missing caller acknowledgment is
-    bounded so it cannot pin the machine lease indefinitely.
+    bounded. Process exit releases the kernel lock automatically.
   - `openclaw gateway restart` keeps the fast `launchctl kickstart` path when the shared LaunchAgent is already healthy and pinned to the canonical `main` runtime.
   - If the shared LaunchAgent is unhealthy or the fast path fails with a loaded-but-bad service, restart escalates to `scripts/gateway-recover-main.sh`, which now rebuilds via `scripts/build-shared-runtime.sh` so the canonical runtime always uses validated Node `22.22.1`.
 - Startup guardrail:
@@ -132,14 +132,15 @@ explicitly authorized and proven.
 Keep these lanes separate. They answer different questions, mutate different
 state, and produce different proof:
 
-All package, release, deploy, restart, install, tester-runtime, GUI-runtime, and
-live acceptance campaigns must hold the machine-wide heavy-local slot for their
-full duration. Canonical entrypoints self-acquire it, including their live-only
-paths; read-only help, dry-run, and preflight paths stay lock-free. Public
-Jarvis release work acquires the canonical release lock after the fleet slot.
-This serializes operational state without a coordinator service. It does not
-grant permission for the live action: task authority and the runtime lane below
-still decide whether it may run.
+Protected operations lock only the shared resource they mutate. Gateway and
+launchd work uses `gateway-main`; app replacement uses `app-install`; public
+release publication uses `release-jarvis`; primary-bot acceptance uses
+`live-telegram-main`. Canonical entrypoints self-acquire the applicable named
+lock, while read-only help, dry-run, preflight, isolated builds, and package
+staging stay lock-free. The OS releases each lock with the guarded process, so
+completion never depends on a native chat callback or stale-owner cleanup.
+Resource ownership does not grant permission for the live action: task
+authority and the runtime lane below still decide whether it may run.
 
 ### Approval and autonomous completion
 
@@ -171,10 +172,10 @@ Treat authorization and temporary availability as different states:
   polling cannot make it pass, and bypassing it is forbidden. Preserve the last
   verified checkpoint, report the exact rejected mutations, and request one
   concise approval that names them.
-- A resource-guard refusal or pending external check is temporary availability.
-  Keep the lane queued and use the low-frequency waiting policy in
-  `docs/agent-guides/fleet-resource-control.md`; do not turn it into a new
-  approval request.
+- A named-resource refusal or pending external check is temporary availability.
+  Continue unrelated work and retry the protected entrypoint only after its
+  bounded wait or a fresh availability check; do not turn it into a new
+  approval request or contact another chat to release it.
 
 ### Canonical main-Jarvis hotfix wrapper
 

@@ -23,7 +23,8 @@ describe("consumer runtime dependency deployment", () => {
       "scripts/gateway-lifecycle-command.sh",
       "scripts/with-heavy-local-slot.sh",
       "scripts/lib/heavy-local-slot.sh",
-      "scripts/lib/heavy-local-slot-runner.pl",
+      "scripts/with-shared-resource-lock.pl",
+      "scripts/lib/shared-resource-lock.sh",
     ];
 
     // The consumer runtime is assembled outside npm pack. Each helper therefore

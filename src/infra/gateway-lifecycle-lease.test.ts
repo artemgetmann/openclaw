@@ -48,7 +48,7 @@ describe("gateway lifecycle lease", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("accepts verified ancestry beneath the canonical standard machine lease", async () => {
+  it("accepts an inherited canonical gateway resource lock", async () => {
     const spawnSync = vi.fn(() => ({ status: 0 }));
     const spawn = vi.fn();
 

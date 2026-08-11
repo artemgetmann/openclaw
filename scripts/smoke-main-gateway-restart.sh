@@ -232,8 +232,8 @@ main() {
 
   if (( DRY_RUN != 1 )); then
     # Keep the live send, restart transition, and recovery proof inside one
-    # machine-wide operational reservation. Acquire before live status is read
-    # so the proof snapshot cannot race another campaign. Dry-run stays free.
+    # gateway-main reservation. Acquire before live status is read so the proof
+    # snapshot cannot race another gateway campaign. Dry-run stays free.
     # shellcheck source=scripts/lib/heavy-local-slot.sh
     source "${REPO_ROOT}/scripts/lib/heavy-local-slot.sh"
     openclaw_heavy_local_slot_require_or_reexec \

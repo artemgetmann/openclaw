@@ -12,7 +12,7 @@ const SCRIPT_PATH = path.join(process.cwd(), "scripts", "telegram-live-runtime.s
 function readSourceableRuntimeScript(): string {
   // These unit fixtures copy the operator entrypoint into a temporary directory
   // and source individual functions without executing `main`. Main now imports
-  // the machine-wide heavy-slot helper relative to the repository root, which
+  // the named shared-resource helper relative to the repository root, which
   // intentionally does not exist beside a copied fixture. Strip only that
   // bootstrap import here; production execution keeps the real self-guard.
   return readFileSync(SCRIPT_PATH, "utf8")

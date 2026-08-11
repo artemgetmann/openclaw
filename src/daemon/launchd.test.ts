@@ -699,7 +699,7 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toEqual([]);
   });
 
-  it("returns after a direct gateway restart is re-executed beneath the machine lease", async () => {
+  it("returns after a direct gateway restart is re-executed beneath the gateway lock", async () => {
     const env = createDefaultLaunchdEnv();
     gatewayLifecycleLeaseState.ensureForRestart.mockResolvedValueOnce({
       outcome: "reexecuted",

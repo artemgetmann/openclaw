@@ -331,7 +331,7 @@ async function triggerDetachedLaunchdRestartHandoff(label: string): Promise<{
     mode: "kickstart",
     // This path can be called by a chat command that keeps the gateway alive
     // until launchctl replaces it. Waiting for our own PID would therefore pin
-    // the machine lease forever; a bounded delay lets the receipt flush first.
+    // the gateway lock forever; a bounded delay lets the receipt flush first.
     delayMs: 2000,
   });
   if (!handoff.ok) {
@@ -420,7 +420,7 @@ export async function triggerOpenClawRestart(): Promise<RestartAttempt> {
       };
     }
     // Once this process identifies itself as the service being replaced, every
-    // fallback would mutate outside the refused machine lease. Fail closed
+    // fallback would mutate outside the refused gateway lock. Fail closed
     // before stale cleanup, local scripts, or direct kickstart.
     return {
       ok: false,
@@ -432,7 +432,7 @@ export async function triggerOpenClawRestart(): Promise<RestartAttempt> {
 
   // Non-current lane labels used to fall through to stale-process cleanup and
   // raw launchctl operations. Re-enter the canonical CLI so this branch owns
-  // the same UID-stable machine lease as every other gateway restart. The
+  // the same UID-stable gateway lock as every other gateway restart. The
   // guarded descendant proves inherited ownership and continues exactly once;
   // a contender returns the established temporary-unavailable status before
   // any signal, bootstrap, or kickstart.

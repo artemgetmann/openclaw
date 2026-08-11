@@ -1,111 +1,92 @@
 # Fleet resource control
 
-The Mac is primarily an agent workstation. Ordinary isolated development work
-must run concurrently. Resource control exists to prevent machine damage and
-conflicting shared-state mutation, not to serialize every expensive command.
+The Mac is primarily an agent workstation. Parallel work is the default.
+Resource control prevents measured machine damage and simultaneous mutation of
+the same shared resource; it does not serialize work merely because it is
+expensive.
 
-## Default: no machine-wide slot
+## Ordinary work has no machine lock
 
 Run these directly in their own worktree:
 
 - focused or broad tests;
 - typechecks, lint, formatting, and Codex review;
 - source builds and generated-code checks;
-- dependency installation;
+- dependency installation and worktree preparation;
 - independent read-only analysis;
-- isolated gateway, browser, or app fixtures that use distinct ports, profiles,
-  state directories, and output paths.
+- isolated gateway, browser, or app fixtures with distinct ports, profiles,
+  state directories, and output paths;
+- ChatGPT or provider authentication through the supported UI or CLI.
 
-Two or more of these jobs may run concurrently. Each command should keep its
-own worker count reasonable, and remote CI remains preferred for broad matrices.
-Do not acquire `with-heavy-local-slot.sh` for ordinary work, do not create a
-long-lived waiter, and do not wake another chat merely because a test is busy.
+Keep local worker counts reasonable and prefer remote CI for broad matrices.
+Authentication normally updates the provider profile/config and rechecks
+readiness; it does not acquire a fleet lock or restart the shared gateway under
+the default hybrid reload policy. An explicit `gateway.reload.mode=restart` or
+a separate stale-runtime repair remains shared gateway work.
 
-## Exclusive lane
+## Lock only the resource being changed
 
-Use one narrow machine-wide exclusive transaction only when concurrent owners
-could mutate the same protected resource or invalidate each other's proof:
+Use a named lock only when two operations could mutate the same protected
+resource or invalidate each other's proof:
 
-- package, sign, notarize, publish, or install;
-- the default/shared Jarvis or OpenClaw runtime and gateway;
-- launchd ownership, shared ports, or shared app-support state;
-- protected release artifacts and release metadata;
-- bounded live/external acceptance that claims a shared bot, account, GUI, or
-  provider resource;
-- explicit workstation cleanup or repair that mutates shared fleet state.
+- `release-jarvis`: protected release artifacts, signing/notarization,
+  publication, and release metadata;
+- `gateway-main`: default/shared Jarvis runtime, gateway, launchd ownership,
+  and shared ports;
+- `app-install`: installation or replacement of the same app instance;
+- `live-telegram-main`: bounded acceptance that claims the primary bot/account.
 
-Use the canonical wrapper around the complete mutation and its cleanup:
+Canonical entrypoints select these names themselves. For a new protected
+entrypoint, wrap only the complete shared mutation and its cleanup:
 
 ```bash
-scripts/with-heavy-local-slot.sh \
-  --label "<thread-id>:<exclusive-purpose>" \
-  --wait-seconds 86400 \
+scripts/with-shared-resource-lock.pl \
+  --resource <resource-name> \
+  --label <diagnostic-purpose> \
   -- <command> <args...>
 ```
 
-Do not split preflight, mutation, proof, and cleanup across separate leases.
-Do not bypass an active legitimate owner. When the complete operation is
-already authorized, start this bounded acquire-and-run transaction and keep the
-same model turn attached until it runs once or returns a terminal refusal. Slot
-occupancy is routine scheduling, not a reason to return control to the user.
-A queued shell cannot wake a model turn that already ended, so do not finish the
-turn while its transaction is queued and do not add a cross-chat or Jarvis wake
-as a correctness dependency.
+The operating system owns the lock. It is released automatically when the
+guarded process exits or is killed. The persistent lock file contains no PID,
+thread ID, or owner record and can never become a stale lease. An ephemeral
+capability only proves that a nested command inherited the exact locked file;
+it grants nothing without that descriptor. Labels are diagnostics only.
 
-The slot protects a shared resource, not the abstract category "live test."
-Tests with separate bot tokens, profiles, ports, state, and output may run in
-parallel as isolated fixtures. Tests claiming the same bot, account, GUI,
-runtime, package target, or release artifact remain exclusive; increasing the
-slot count would make their receipts untrustworthy.
+Native Codex thread delivery, wakeups, and chat cleanup must never be required
+to acquire, release, or recover a resource.
 
-The wrapper remains fail-closed for ambiguous owner identity, authorization
-failure, runtime-health termination, and internal guard errors. After an
-ambiguous external effect, inspect state before any retry.
+Different resources run concurrently. Package/build staging should use unique
+output directories and remain lock-free; acquire `release-jarvis` only for the
+protected artifact/publication transaction. Do not invent a global fallback
+resource for an unclassified operation.
+
+The historical `scripts/with-heavy-local-slot.sh` remains a compatibility
+frontend for packaged callers. It maps known protected operations onto the
+named locks above. Do not add new callers to it.
 
 ## Severe host safety stops
 
-Concurrent ordinary work should stop or reduce load only on measured severe
-host pressure. The evidence must identify the actual signal, not merely that
-another command is running.
+Concurrency limits, not locks, handle resource pressure. Stop or reduce new
+local work only on measured severe evidence:
 
-Stop new local work when any of these are true:
+- the data volume is at the severe floor or writes fail from capacity;
+- memory pressure is critical, paging grows materially, or the kernel kills
+  workloads;
+- thermal state is serious/critical;
+- Jarvis health degrades and local load is the plausible cause.
 
-- the data volume is at the repository's severe disk floor or writes are
-  failing from capacity;
-- memory pressure is critical, paging is growing materially across observations,
-  or the kernel is killing workloads;
-- thermal state is serious/critical or the thermal probe itself fails closed
-  for a protected operation;
-- Jarvis health degrades while local load is the plausible cause;
-- a required shared resource has an active exclusive owner.
+Prefer fewer workers, lower process priority, remote CI, or letting admitted
+work finish. Ordinary CPU use, a warm cache, or one healthy build is not a fleet
+incident.
 
-Prefer reducing per-command workers, letting an admitted command finish, or
-moving broad proof to CI. Do not treat ordinary CPU utilization, a warm cache,
-or one healthy concurrent build as a fleet incident.
+## Isolation and cleanup
 
-## Disk recovery
-
-Preserve useful source first: commit and push recoverable work. Hourly
-`ai.openclaw.worktree-gc` owns routine deletion of eligible worktrees and
-artifacts. Do not launch competing cleanup loops from multiple chats.
-
-If disk pressure is already severe and blocks safe work, inspect before
-deleting. Use the repository GC tooling for eligible artifacts, keep active or
-dirty worktrees, and re-measure the disk floor after cleanup. A cleanup receipt
-may justify resuming the same command; it does not grant new runtime, release,
-credential, or destructive authority.
-
-## Isolation rules
-
-Concurrency is safe only when jobs do not share mutable state:
-
-- use separate Git worktrees and output directories;
-- use explicit isolated gateway profiles, configs, state directories, and
-  ports for unmerged runtime proof;
+- use separate worktrees and output directories;
+- use explicit profiles/config/state/ports for unmerged runtime proof;
 - never point a feature worktree at the default shared gateway or primary bot;
-- keep app packaging, installation, signing identities, notarization, and
-  shared live acceptance in the exclusive lane;
-- avoid duplicate owners for the same issue or external scenario.
+- use the same named resource for mutation, proof, and exact cleanup;
+- use hourly `ai.openclaw.worktree-gc` for routine worktree/artifact cleanup;
+- after an ambiguous external effect, inspect state before retrying the effect.
 
-The resource model is intentionally simple: parallel by default, exclusive only
-for shared mutation, and fail closed only on concrete severe safety evidence.
+The model is intentionally small: parallel by default, four named shared
+resources, OS-owned cleanup, and no conversational recovery protocol.

@@ -130,6 +130,8 @@ assert_source_checkout_safe() {
     scripts/ship-jarvis-hotfix.sh \
     scripts/lib/ship-jarvis-hotfix-guarded-entry.sh \
     scripts/lib/heavy-local-slot.sh \
+    scripts/lib/shared-resource-lock.sh \
+    scripts/with-shared-resource-lock.pl \
     scripts/lib/jarvis-release-lock.sh \
     scripts/lib/jarvis-release-disk-preflight.sh || \
     die "release wrapper or helper differs from sacred main HEAD"
@@ -581,13 +583,21 @@ package_hotfix() {
     command+=("PACKAGE_MARKER=${PACKAGE_MARKER}")
   fi
 
-  # Packaging is nested inside the hotfix owner's machine-wide transaction.
-  # Preserve only that short-lived lease through env -i so the package helper
-  # validates the same live ancestor instead of deadlocking on its own owner.
+  # Packaging is nested inside the hotfix owner's release + gateway resource
+  # transaction. Preserve the inherited kernel descriptors through env -i so
+  # the package helper reuses release-jarvis instead of deadlocking on itself.
   if (( DRY_RUN != 1 )); then
-    [[ "${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-}" =~ ^[0-9a-fA-F]{64}$ ]] || \
-      die "hotfix fleet lease is missing before package invocation"
-    command+=("OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN=${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN}")
+    [[ "${OPENCLAW_SHARED_RESOURCE_LOCK:-}" == *release-jarvis* ]] || \
+      die "hotfix release resource is missing before package invocation"
+    [[ "${OPENCLAW_SHARED_RESOURCE_LOCK_FD:-}" =~ ^[0-9]+(,[0-9]+)?$ ]] || \
+      die "hotfix resource descriptors are missing before package invocation"
+    [[ "${OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY:-}" =~ ^[0-9a-f]{64}(,[0-9a-f]{64})?$ ]] || \
+      die "hotfix resource capabilities are missing before package invocation"
+    command+=(
+      "OPENCLAW_SHARED_RESOURCE_LOCK=${OPENCLAW_SHARED_RESOURCE_LOCK}"
+      "OPENCLAW_SHARED_RESOURCE_LOCK_FD=${OPENCLAW_SHARED_RESOURCE_LOCK_FD}"
+      "OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY=${OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY}"
+    )
   fi
   command+=(/bin/bash "${PACKAGE_SCRIPT}")
 
@@ -1034,9 +1044,8 @@ main() {
   load_release_helpers
   trap transaction_exit_guard EXIT
   if (( DRY_RUN != 1 )); then
-    # Fleet admission must wrap the entire live hotfix transaction and precede
-    # the narrower release/runtime mutex acquired below. Dry-run remains a
-    # read-only planning surface and does not consume the machine-wide slot.
+    # The shared gateway lock wraps the live hotfix transaction and precedes
+    # the release mutex acquired below. Dry-run remains lock-free.
     openclaw_heavy_local_slot_require_or_reexec_with_policy \
       "jarvis-remediation" \
       "ship-jarvis-hotfix:pr-${PR_NUMBER}" \
