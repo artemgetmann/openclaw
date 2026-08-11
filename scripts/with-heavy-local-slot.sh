@@ -16,6 +16,7 @@ readonly RUNTIME_MIN_CPU_IDLE_PERCENT=20
 readonly MIN_DISK_FREE_KIB=$((25 * 1024 * 1024))
 readonly DISK_REPORT_BELOW_KIB=$((35 * 1024 * 1024))
 readonly TASK_DISK_RECEIPT_THRESHOLD_KIB=$((1024 * 1024))
+readonly RECLAIM_CODING_DISK_SKILL_PATH="${HOME}/.agents/skills/reclaim-coding-disk/SKILL.md"
 readonly MONITOR_INTERVAL_SECONDS=15
 readonly UNHEALTHY_STRIKES_BEFORE_STOP=2
 readonly HOST_HEALTH_HTTP_TIMEOUT_SECONDS=3
@@ -152,7 +153,7 @@ refusal_next_action() {
       printf '%s' 'restore_native_thermal_telemetry'
       ;;
     disk_pressure)
-      printf '%s' 'reclaim_owner_attributed_space_above_hard_floor'
+      printf '%s' 'invoke_reclaim_coding_disk_then_resume_preserved_command'
       ;;
     disk_measurement_failed)
       printf '%s' 'restore_disk_headroom_telemetry'
@@ -176,6 +177,18 @@ refusal_next_action() {
       printf '%s' 'inspect_receipt_and_retry_only_when_safe'
       ;;
   esac
+}
+
+emit_disk_recovery_guidance() {
+  # Do not print or serialize the guarded argv: build and release commands may
+  # contain sensitive option data. The owning agent already has that command in
+  # its task context and must preserve it across the bounded cleanup workflow.
+  printf 'HEAVY_LOCAL_DISK_RECOVERY recovery_skill=%s target_available_kib=%s cleanup_scope=exact_generated_owner_attributed action=resume_preserved_guarded_command_once\n' \
+    "$(openclaw_heavy_local_slot_safe_text "$RECLAIM_CODING_DISK_SKILL_PATH")" \
+    "$DISK_REPORT_BELOW_KIB" >&2
+  printf 'Disk recovery required: read %s, reclaim one exact reproducible batch only after ownership, process, open-file, heavy-lock, and release-lock checks pass, verify at least %s available KiB, then rerun the exact preserved guarded command once.\n' \
+    "$RECLAIM_CODING_DISK_SKILL_PATH" \
+    "$DISK_REPORT_BELOW_KIB" >&2
 }
 
 emit_refusal() {
@@ -209,6 +222,9 @@ emit_refusal() {
     printf 'Refusing heavy work: %s. Next safe action: %s.\n' \
       "$refusal_message" \
       "$next_action" >&2
+  fi
+  if [ "$refusal_code" = "disk_pressure" ]; then
+    emit_disk_recovery_guidance
   fi
 }
 
@@ -293,6 +309,15 @@ queue_or_refuse() {
   last_refusal_code="$refusal_code"
   last_refusal_message="$refusal_message"
   last_refusal_data="$refusal_data"
+
+  # Disk pressure needs an ownership-aware cleanup transaction; sleeping cannot
+  # prove or create headroom. Return control even when the caller requested a
+  # bounded wait so the same owner can run the reclaim skill and then retry the
+  # exact guarded command once.
+  if [ "$refusal_code" = "disk_pressure" ]; then
+    emit_refusal "$refusal_class" "$refusal_code" "$refusal_message" "$refusal_data"
+    return 1
+  fi
 
   if [ "$wait_seconds" -eq 0 ]; then
     emit_refusal "$refusal_class" "$refusal_code" "$refusal_message" "$refusal_data"
@@ -1155,11 +1180,12 @@ host_health_reason() {
     return 0
   fi
   if [ "$emit_disk_report" = "1" ] && [ "$disk_free" -lt "$DISK_REPORT_BELOW_KIB" ]; then
-    printf 'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=%s report_below_kib=%s hard_floor_kib=%s owner=%s phase=admission outcome=advisory next_action=reclaim_owner_attributed_space_before_hard_floor\n' \
+    printf 'HEAVY_LOCAL_DISK_REPORT status=warning observed_kib=%s report_below_kib=%s hard_floor_kib=%s owner=%s phase=admission outcome=advisory next_action=invoke_reclaim_coding_disk_before_hard_floor recovery_skill=%s\n' \
       "$disk_free" \
       "$DISK_REPORT_BELOW_KIB" \
       "$MIN_DISK_FREE_KIB" \
-      "$telemetry_label" >&2
+      "$telemetry_label" \
+      "$(openclaw_heavy_local_slot_safe_text "$RECLAIM_CODING_DISK_SKILL_PATH")" >&2
   fi
 
   # If Tailscale is configured on this Mac, disconnected means the remote

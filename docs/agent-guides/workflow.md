@@ -761,6 +761,15 @@ ready`.
   Use the owning repository cleanup command when it can classify that exact
   target; a disk receipt alone is accountability, not proof that these gates
   passed.
+- A `disk_pressure` guard receipt does not end or transfer builder, tester, or
+  queue-lease ownership. The same owner must preserve the exact guarded command,
+  immediately apply `/Users/user/.agents/skills/reclaim-coding-disk/SKILL.md`,
+  autonomously reclaim one exact safe generated batch when its gates pass, and
+  resume that command once after verified headroom. Ask only when ownership or
+  liveness is ambiguous, the required target is protected, or no qualifying
+  generated target can restore the floor. Never replace this with broad cleanup,
+  a duplicate worker, or deletion of source, worktrees, user/session/browser
+  data, credentials, release state, or shared/runtime state.
 - Prove the background job is real with
   `bash scripts/install-worktree-gc.sh status`. A plist on disk is not enough;
   status fails unless launchd reports the job loaded and enabled.
