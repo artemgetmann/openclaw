@@ -43,6 +43,8 @@
   - For explicit emergency backports targeting `codex/consumer-openclaw-project`, also read `FORK_CONTRIBUTING.md`
   - For upstream PRs or other targets, read `CONTRIBUTING.md`
 - Read `.github/pull_request_template.md` before opening or updating a PR.
+- Before running or interpreting Codex Review for a fork PR, apply the Codex
+  Review rubric in `FORK_CONTRIBUTING.md`.
 - Do not edit security-owned paths unless a listed owner asked for the change or is already reviewing it.
 - Do not edit generated `docs/zh-CN/**` unless the user explicitly asks.
 - Never edit `node_modules`.
