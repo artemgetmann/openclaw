@@ -579,6 +579,15 @@ package_hotfix() {
   if [[ "${SHIP_TEST_MODE}" == "1" && -n "${PACKAGE_MARKER:-}" ]]; then
     command+=("PACKAGE_MARKER=${PACKAGE_MARKER}")
   fi
+
+  # Packaging is nested inside the hotfix owner's machine-wide transaction.
+  # Preserve only that short-lived lease through env -i so the package helper
+  # validates the same live ancestor instead of deadlocking on its own owner.
+  if (( DRY_RUN != 1 )); then
+    [[ "${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-}" =~ ^[0-9a-fA-F]{64}$ ]] || \
+      die "hotfix fleet lease is missing before package invocation"
+    command+=("OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN=${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN}")
+  fi
   command+=(/bin/bash "${PACKAGE_SCRIPT}")
 
   if (( DRY_RUN == 1 )); then
