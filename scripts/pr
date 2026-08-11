@@ -1590,12 +1590,16 @@ prepare_run() {
 
 is_mainline_drift_critical_path_for_merge() {
   local path="$1"
+  # Cross-file source dependencies cannot be inferred safely from path overlap.
+  # Keep the no-sync fast path intentionally narrow: ordinary reference docs
+  # cannot change candidate behavior, while source, tests, build inputs,
+  # workflow policy, and unknown roots require a fresh integration head.
   case "$path" in
-    package.json|pnpm-lock.yaml|pnpm-workspace.yaml|.npmrc|.oxlintrc.json|.oxfmtrc.json|tsconfig.json|tsconfig.*.json|vitest.config.ts|vitest.*.config.ts|scripts/*|.github/workflows/*)
-      return 0
+    CHANGELOG.md|docs/channels/*|docs/concepts/*|docs/help/*|docs/install/*|docs/platforms/*|docs/providers/*|docs/reference/*|docs/tools/*)
+      return 1
       ;;
   esac
-  return 1
+  return 0
 }
 
 print_file_list_with_limit() {
@@ -1626,6 +1630,16 @@ mainline_drift_requires_sync() {
     return 0
   fi
 
+  # Compare only commits that main gained after this candidate branched. Using
+  # PREP_HEAD_SHA directly as the left side also includes the PR's own patch in
+  # a two-dot diff, which makes every ordinary behind-main PR overlap itself.
+  # A missing merge base is ambiguous ancestry, so require synchronization.
+  local prepared_base_sha
+  if ! prepared_base_sha=$(git merge-base "$prep_head_sha" origin/main) || [ -z "$prepared_base_sha" ]; then
+    echo "Mainline drift relevance: unable to resolve prepared base; require sync."
+    return 0
+  fi
+
   local delta_file
   local pr_files_file
   local overlap_file
@@ -1635,7 +1649,7 @@ mainline_drift_requires_sync() {
   overlap_file=$(mktemp)
   critical_file=$(mktemp)
 
-  git diff --name-only "${prep_head_sha}..origin/main" | sed '/^$/d' | sort -u > "$delta_file"
+  git diff --name-only "${prepared_base_sha}..origin/main" | sed '/^$/d' | sort -u > "$delta_file"
   jq -r '.files[]?.path // empty' .local/pr-meta.json | sed '/^$/d' | sort -u > "$pr_files_file"
   comm -12 "$delta_file" "$pr_files_file" > "$overlap_file" || true
 

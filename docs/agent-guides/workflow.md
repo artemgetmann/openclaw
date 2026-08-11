@@ -51,6 +51,18 @@ cannot be repaired safely. Routine rebases, dependency installation, CI fixes,
 review fixes, and normal merge mechanics are not reasons to return work to the
 user.
 
+An owner that was asked to ship end to end keeps going when another PR lands.
+Fetch the new base, classify the drift, and resolve any in-scope conflict in the
+same worktree. If the effective patch is unchanged and mainline drift touches
+neither the PR paths nor merge-critical infrastructure, retain the existing
+local review and focused proof; `scripts/pr merge-verify` already performs this
+conservative classification for reference-documentation drift. Source or
+unknown drift may affect a cross-file dependency, so sync it and repeat only
+the affected review and proof, then continue through CI and merge.
+Stop only when the intended behavior is genuinely ambiguous, a different live
+owner is editing the same source, required authority is missing, or safe proof
+cannot be produced. Do not ask the user to schedule routine merge order.
+
 ## Two-clone model
 
 `~/Programming_Projects/openclaw` is the sacred home clone on `main`. It is the
@@ -83,8 +95,9 @@ existing branch. Independent worktrees may build and test concurrently; see
 - Record the exact head, base, changed paths, completed proof, remaining proof,
   scope boundary, and rollback in the PR body.
 - Hash or compare the raw current PR diff when exact identity matters. Re-run
-  review and behavior-bearing proof after head changes; rebase-only base drift
-  still requires checking that the effective patch did not change.
+  review and behavior-bearing proof after behavior changes. A mechanical rebase
+  only requires reconciling the effective patch and repeating proof affected by
+  overlapping paths, dependencies, or merge-critical infrastructure.
 
 ## Review and proof
 

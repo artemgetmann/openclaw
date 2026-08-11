@@ -40,7 +40,7 @@ Describe the problem and fix in 2–5 bullets:
 - Focused proof: (exact commands and outcomes on the exact head)
 - Optional nested validation: (`None`, or exact read-only result)
 - Required CI: (exact required check status)
-- Base-drift recovery: (`None`, or old/new base + effective-patch reconciliation + repeated proof)
+- Base-drift recovery: (`None`, unchanged/disjoint + retained local proof + fresh required CI, or overlap + affected proof repeated)
 - GitHub mutation transport: (`host-gh` or authenticated connector + expected head; exactly one)
 - Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
 - Proof still required after merge: (`None — source-only` or exact package/deploy/provider/backend/runtime/GUI/real-user work)
