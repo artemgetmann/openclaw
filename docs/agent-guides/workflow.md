@@ -45,6 +45,13 @@ It does not silently authorize:
 - destructive cleanup or irreversible data changes;
 - live messages, live acceptance, or other user-visible external effects.
 
+Generic completion language such as "ship this end to end" does not authorize
+creating or publishing a Sparkle/app release, installing or updating the app,
+or restarting a shared runtime. Those actions require separate explicit
+language that names the applicable mutation, such as "publish a new app update"
+or "install it and restart Jarvis." Once granted, that explicit authority
+remains valid for the bounded task unless the user narrows or revokes it.
+
 Ask only when one of those boundaries is missing, the requested behavior is
 ambiguous, another owner overlaps the same source, or proof fails in a way that
 cannot be repaired safely. Routine rebases, dependency installation, CI fixes,
