@@ -1,19 +1,8 @@
 {
   "schemaVersion": 1,
-  "sequence": 130,
+  "sequence": 131,
   "nextFence": 38,
-  "mergeLease": {
-    "leaseId": "6d39101d-a561-4570-9c41-37320ffe4d34",
-    "fence": 37,
-    "owner": {
-      "threadId": "/root/disk_autonomy_policy_fix/pr1390_release",
-      "hostId": "local-subagent"
-    },
-    "claimedPr": 1390,
-    "claimedAt": "2026-08-11T05:02:26.449Z",
-    "heartbeatAt": "2026-08-11T05:02:26.449Z",
-    "expiresAt": "2026-08-11T05:22:26.449Z"
-  },
+  "mergeLease": null,
   "items": {
     "1330": {
       "state": "closed",
@@ -4434,7 +4423,7 @@
       }
     },
     "1390": {
-      "state": "claimed",
+      "state": "closed",
       "candidate": {
         "pr": 1390,
         "url": "https://github.com/artemgetmann/openclaw/pull/1390",
@@ -4528,7 +4517,20 @@
       "candidateHistory": [],
       "activeBaseDriftRecovery": null,
       "baseDriftRecoveryHistory": [],
-      "terminalReceipts": [],
+      "terminalReceipts": [
+        {
+          "schemaVersion": 1,
+          "kind": "source-merge",
+          "pr": 1390,
+          "reviewedHeadSha": "fada0135ab6fc8be614bcb967e2e7da800dffc30",
+          "diffFingerprint": "sha256:e55931493c24a53926e19f10fc4828802d595849c5cee6a3358053d74bf53662",
+          "mergeSha": "72eeee6b099036783f27b4d09707f66059a663b4",
+          "normalNonAdmin": true,
+          "expectedHeadProtected": true,
+          "landedTreeMatchesReviewed": true,
+          "targetAncestryProven": true
+        }
+      ],
       "ownershipReceipt": {
         "mode": "queue-lease",
         "owner": {
@@ -4709,10 +4711,10 @@
     }
   },
   "lastTransaction": {
-    "id": "4c3a03bf-c3e7-4bf0-9b79-fd8953c9c3ba",
-    "recordedAt": "2026-08-11T05:02:26.449Z"
+    "id": "426e81aa-ce03-4f6c-aa55-9f56dee26aba",
+    "recordedAt": "2026-08-11T05:05:24.675Z"
   },
-  "updatedAt": "2026-08-11T05:02:26.449Z",
+  "updatedAt": "2026-08-11T05:05:24.675Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
@@ -4742,6 +4744,7 @@
       1387,
       1388,
       1389,
+      1390,
       1391
     ],
     "pausedReason": null,
