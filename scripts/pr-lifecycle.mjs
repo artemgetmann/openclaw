@@ -49,6 +49,7 @@ function usage() {
   scripts/pr-lifecycle handoff-test <PR> --test-kind <read-only|live-external> --transport <nested-read-only|delegated-worker|user-visible-task> --owner-thread <ID> --owner-host <ID> --review-receipt <FILE> [--task-authority <FILE>] [--returning-release-contract <ID>] [--capacity-retry-contract <ID> --capacity-recovery-receipt <FILE>] [--environment-retry-contract <ID>]
   scripts/pr-lifecycle accept-test-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
   scripts/pr-lifecycle record-test-receipt <PR> --receipt <FILE>
+  scripts/pr-lifecycle retire-stale-test <PR> --receipt <FILE>
   scripts/pr-lifecycle close-test <PR> --contract-id <ID> --thread-id <ID> --host-id <ID> --closure <archived|terminal-receipt>
   scripts/pr-lifecycle handoff-release <PR> --transport <queue-lease|user-visible-task> --authority normal-merge --owner-thread <ID> --owner-host <ID> [--task-authority <FILE>] [--queue repo-backed|direct] [--declared-dependencies <FILE>]
   scripts/pr-lifecycle accept-release-owner <PR> --contract-id <ID> --thread-id <ID> --host-id <ID>
@@ -1584,16 +1585,23 @@ function makeReleasePacket(state, contractId) {
   };
 }
 
-function recordTestReceipt(pr, options) {
+function recordTestReceipt(pr, options, { retireStale = false } = {}) {
   const receipt = readReceipt(requireOption(options, "receipt"));
-  const candidate = fetchCandidate(pr);
+  const liveCandidate = fetchCandidate(pr);
   return withStateLock(pr, (state) => {
     if (!state?.tester || state.tester.phase !== "active") {
       fail("tester receipt requires one exact active tester owner");
     }
-    if (!sameCandidate(state.candidate, candidate)) {
+    const candidateDrifted = !sameCandidate(state.candidate, liveCandidate);
+    if (!retireStale && candidateDrifted) {
       fail("PR head/diff changed before the tester receipt was recorded");
     }
+    if (retireStale && !candidateDrifted) {
+      fail("stale tester retirement requires verified candidate drift");
+    }
+    // Retirement validates the terminal receipt against the candidate the
+    // worker actually tested. It never treats that stale proof as live proof.
+    const candidate = retireStale ? state.candidate : liveCandidate;
     const expected = state.tester;
     const validStatus = ["PASS", "FAIL", "BLOCKED"].includes(receipt.status);
     const validOwner =
@@ -1672,8 +1680,42 @@ function recordTestReceipt(pr, options) {
       !Array.isArray(receipt.limitations)
     ) {
       fail(
-        "tester receipt is incomplete or does not match the immutable candidate, dispatcher routing, exact owner, and required warm environment gate",
+        retireStale
+          ? "stale tester retirement requires the exact terminal receipt for the retired candidate and owner"
+          : "tester receipt is incomplete or does not match the immutable candidate, dispatcher routing, exact owner, and required warm environment gate",
       );
+    }
+    if (retireStale) {
+      // The exact terminal receipt proves the worker is no longer live, so the
+      // owner can close without overlap. The next handoff retires this complete
+      // audit record and requires fresh review/test for the live candidate.
+      const recordedAt = new Date().toISOString();
+      expected.receipt = receipt;
+      expected.receiptRecordedAt = recordedAt;
+      expected.closure = {
+        type: "candidate-drift",
+        threadId: expected.owner.threadId,
+        hostId: expected.owner.hostId,
+        recordedAt,
+        liveCandidate: {
+          headSha: liveCandidate.headSha,
+          baseSha: liveCandidate.baseSha,
+          diffFingerprint: liveCandidate.diffFingerprint,
+        },
+      };
+      expected.phase = "closed";
+      state.updatedAt = recordedAt;
+      return {
+        state,
+        output: {
+          action: "tester-retired-for-candidate-drift",
+          contractId: expected.contractId,
+          owner: expected.owner,
+          status: receipt.status,
+          proofReusable: false,
+          nextAction: "obtain-fresh-review-and-test",
+        },
+      };
     }
     expected.receipt = receipt;
     expected.phase = "receipt-recorded";
@@ -2007,6 +2049,9 @@ function main() {
         break;
       case "record-test-receipt":
         output = recordTestReceipt(pr, options);
+        break;
+      case "retire-stale-test":
+        output = recordTestReceipt(pr, options, { retireStale: true });
         break;
       case "close-test":
         output = closeTest(pr, options);
