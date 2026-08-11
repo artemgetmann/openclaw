@@ -56,8 +56,8 @@ openclaw_heavy_local_slot_resource_for() {
       case "$label" in
         *telegram* | prove-main-telegram-runtime*) printf '%s\n' live-telegram-main ;;
         *gateway* | deploy-shared-main-runtime* | restart-mac* | ship-main-gateway-fix*) printf '%s\n' gateway-main ;;
-        *consumer-mac* | build-and-run-mac* | bootstrap-open-computer-use-runtime*) printf '%s\n' app-install ;;
         *release* | package-* | jarvis-sparkle-update-e2e*) printf '%s\n' release-jarvis ;;
+        *consumer-mac* | build-and-run-mac* | bootstrap-open-computer-use-runtime*) printf '%s\n' app-install ;;
         *)
           printf 'SHARED_RESOURCE_LOCK_ERROR label=%s reason=unclassified_canonical_operation\n' \
             "$(openclaw_heavy_local_slot_safe_text "$label")" >&2
