@@ -37,7 +37,7 @@ write_app() {
   local version="$2"
   local build="$3"
   local commit="$4"
-  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/OpenClawRuntime/openclaw"
+  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/OpenClawRuntime/openclaw/dist"
 
   cat >"$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -54,6 +54,10 @@ EOF
   cat >"$app/Contents/Resources/OpenClawRuntime/manifest.json" <<EOF
 {"format":1,"bundleVersion":"$build","gitCommit":"$commit","nodeVersion":"22.22.1","uvVersion":"0.9.21"}
 EOF
+  # Real public apps carry an abbreviated manifest SHA plus this exact build
+  # receipt. Fixtures start exact and opt into abbreviation per case so legacy
+  # failure tests keep testing one variable at a time.
+  printf '{"commit":"%s"}\n' "$commit" >"$app/Contents/Resources/OpenClawRuntime/openclaw/dist/build-info.json"
   printf '{"name":"openclaw","version":"%s"}\n' "$version" >"$app/Contents/Resources/OpenClawRuntime/openclaw/package.json"
   printf 'strict-valid\n' >"$app/.fixture-codesign"
   printf 'strict-valid\n' >"$app/.fixture-gatekeeper"
@@ -481,6 +485,39 @@ protect_signed_app_fixture() {
   printf 'strict-valid\n' >"$fixture/apps/installed/Jarvis.app/.fixture-gatekeeper"
 }
 
+abbreviate_signed_app_fixture() {
+  local fixture="$1"
+  local state="$fixture/live/Jarvis/.jarvis"
+  local old_abbreviated="${OLD_COMMIT:0:10}"
+  local new_abbreviated="${NEW_COMMIT:0:10}"
+
+  protect_signed_app_fixture "$fixture"
+
+  # Model the public signed package and the compatibility copies written from
+  # it. build-info remains exact inside each app, while every receipt field is
+  # regenerated with the full commit.
+  for app in old installed; do
+    jq --arg commit "$old_abbreviated" '.gitCommit = $commit' \
+      "$fixture/apps/$app/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json" \
+      >"$fixture/apps/$app/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json.tmp"
+    mv "$fixture/apps/$app/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json.tmp" \
+      "$fixture/apps/$app/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json"
+  done
+  jq --arg commit "$new_abbreviated" '.gitCommit = $commit' \
+    "$fixture/apps/new/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json" \
+    >"$fixture/apps/new/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json.tmp"
+  mv "$fixture/apps/new/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json.tmp" \
+    "$fixture/apps/new/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json"
+  jq --arg commit "$old_abbreviated" '.gitCommit = $commit' \
+    "$state/.consumer-bundled-runtime.json" >"$state/.consumer-bundled-runtime.json.tmp"
+  mv "$state/.consumer-bundled-runtime.json.tmp" "$state/.consumer-bundled-runtime.json"
+  jq --arg commit "$old_abbreviated" '.compatibilityManifestGitCommit = $commit' \
+    "$state/.consumer-bundled-runtime.protection.json" >"$state/.consumer-bundled-runtime.protection.json.tmp"
+  mv "$state/.consumer-bundled-runtime.protection.json.tmp" \
+    "$state/.consumer-bundled-runtime.protection.json"
+  write_protected_receipt "$fixture"
+}
+
 harness_env() {
   local fixture="$1"
   shift
@@ -614,6 +651,29 @@ signed_protected_output="$(harness_env "$case_root" --protected-hotfix-compatibi
 [[ "$signed_protected_output" == *"proof.protected_runtime=receipt_and_live_bound commit=$PROTECTED_COMMIT"* ]] || \
   fail "signed installed app receipt omitted protected runtime identity"
 pass "signed installed app plus protected runtime receipt is accepted read-only"
+
+case_root="$(copy_case signed-app-abbreviated-manifests)"
+abbreviate_signed_app_fixture "$case_root"
+abbreviated_app_output="$(harness_env "$case_root" --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json")"
+[[ "$abbreviated_app_output" == *"proof.installed_app=signed_app_protected_runtime_compatibility_receipt version=$OLD_VERSION build=$OLD_BUILD commit=$OLD_COMMIT"* ]] || \
+  fail "abbreviated signed app manifest did not expand to the exact installed commit"
+pass "abbreviated signed app manifests bind to exact in-app build-info commits"
+
+case_root="$(copy_case signed-app-abbreviated-manifest-mismatch)"
+abbreviate_signed_app_fixture "$case_root"
+printf '{"commit":"%s"}\n' "7777777777777777777777777777777777777777" \
+  >"$case_root/apps/new/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/dist/build-info.json"
+run_expect_fail "abbreviated signed app manifest mismatch blocks" "$case_root" \
+  "NEW manifest commit ${NEW_COMMIT:0:10} does not match exact bundled runtime build-info commit" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
+
+case_root="$(copy_case signed-app-abbreviated-build-info-non-full)"
+abbreviate_signed_app_fixture "$case_root"
+printf '{"commit":"%s"}\n' "${NEW_COMMIT:0:10}" \
+  >"$case_root/apps/new/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/dist/build-info.json"
+run_expect_fail "abbreviated signed app non-full build-info blocks" "$case_root" \
+  "NEW bundled runtime build-info has missing or non-exact commit" \
+  --protected-hotfix-compatibility-receipt "$case_root/protected-hotfix-receipt.json"
 
 case_root="$(copy_case signed-app-protected-runtime-drift)"
 protect_signed_app_fixture "$case_root"
