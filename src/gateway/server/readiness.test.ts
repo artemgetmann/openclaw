@@ -206,6 +206,40 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("reports an HTTP-alive Telegram poller unhealthy after explicit stall escalation", () => {
+    withReadinessClock(() => {
+      const startedAt = Date.now() - 10 * 60_000;
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 10 * 60_000,
+        accounts: {
+          telegram: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: startedAt,
+            lastPollOutcome: "unhealthy",
+            transportActivity: {
+              mode: "polling",
+              active: false,
+              inFlight: 0,
+              watchdog: {
+                escalation: "Telegram polling unhealthy: repeated polling stalls",
+              },
+            },
+          },
+        },
+      });
+
+      expect(readiness()).toEqual({
+        ready: false,
+        failing: ["telegram"],
+        uptimeMs: 600_000,
+      });
+    });
+  });
+
   it("caches readiness snapshots briefly to keep repeated probes cheap", () => {
     withReadinessClock(() => {
       const { manager, readiness } = createReadinessHarness({

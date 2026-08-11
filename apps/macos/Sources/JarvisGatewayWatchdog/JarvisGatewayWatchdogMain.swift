@@ -97,7 +97,7 @@ enum JarvisGatewayWatchdogMain {
             guard let snapshot = self.readRunningGateway() else {
                 return .unavailable(reason: "gateway-not-running")
             }
-            return await .running(pid: snapshot.pid, healthy: self.healthz())
+            return await .running(pid: snapshot.pid, healthy: self.gatewayReady())
         }
 
         private func readRunningGateway() -> ManagedGatewayJobSnapshot? {
@@ -121,8 +121,10 @@ enum JarvisGatewayWatchdogMain {
             }
         }
 
-        private func healthz() async -> Bool {
-            guard let url = URL(string: "http://127.0.0.1:\(self.environment.port)/healthz") else {
+        private func gatewayReady() async -> Bool {
+            guard let url = URL(
+                string: "http://127.0.0.1:\(self.environment.port)\(ManagedGatewayWatchdogEnvironment.gatewayProbePath)")
+            else {
                 return false
             }
             let configuration = URLSessionConfiguration.ephemeral
