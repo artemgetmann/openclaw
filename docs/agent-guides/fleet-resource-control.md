@@ -39,15 +39,24 @@ Use the canonical wrapper around the complete mutation and its cleanup:
 ```bash
 scripts/with-heavy-local-slot.sh \
   --label "<thread-id>:<exclusive-purpose>" \
+  --wait-seconds 86400 \
   -- <command> <args...>
 ```
 
 Do not split preflight, mutation, proof, and cleanup across separate leases.
-Do not bypass an active legitimate owner. A queued shell does not wake a
-finished model turn, so prefer starting exclusive work only when the lane is
-available. If the client yields, use a continuation mechanism already proven
-for that exact task or report the dependency honestly; never burn tokens with
-model-driven polling.
+Do not bypass an active legitimate owner. When the complete operation is
+already authorized, start this bounded acquire-and-run transaction and keep the
+same model turn attached until it runs once or returns a terminal refusal. Slot
+occupancy is routine scheduling, not a reason to return control to the user.
+A queued shell cannot wake a model turn that already ended, so do not finish the
+turn while its transaction is queued and do not add a cross-chat or Jarvis wake
+as a correctness dependency.
+
+The slot protects a shared resource, not the abstract category "live test."
+Tests with separate bot tokens, profiles, ports, state, and output may run in
+parallel as isolated fixtures. Tests claiming the same bot, account, GUI,
+runtime, package target, or release artifact remain exclusive; increasing the
+slot count would make their receipts untrustworthy.
 
 The wrapper remains fail-closed for ambiguous owner identity, authorization
 failure, runtime-health termination, and internal guard errors. After an

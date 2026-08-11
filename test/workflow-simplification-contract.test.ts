@@ -36,6 +36,26 @@ describe("single-owner workflow contract", () => {
     expect(adoption).not.toContain("capacity-wait-seconds");
   });
 
+  it("keeps routine base drift and exclusive-slot waiting autonomous", () => {
+    const workflow = read("docs/agent-guides/workflow.md");
+    const fleet = read("docs/agent-guides/fleet-resource-control.md");
+    const template = read(".github/pull_request_template.md");
+    const prScript = read("scripts/pr");
+
+    expect(workflow).toContain("Do not ask the user to schedule routine merge order");
+    expect(workflow).toContain("retain the existing");
+    expect(workflow).toContain("local review and focused proof");
+    expect(fleet).toContain("occupancy is routine scheduling");
+    expect(fleet).toContain("separate bot tokens, profiles, ports, state, and output");
+    expect(template).toContain("unchanged/disjoint + retained local proof");
+    expect(template).not.toContain("effective-patch reconciliation + repeated proof");
+    expect(prScript).toContain('git merge-base "$prep_head_sha" origin/main');
+    expect(prScript).toContain('git diff --name-only "${prepared_base_sha}..origin/main"');
+    expect(prScript).not.toContain('git diff --name-only "${prep_head_sha}..origin/main"');
+    expect(prScript).toContain("Cross-file source dependencies cannot be inferred safely");
+    expect(prScript).toContain("CHANGELOG.md|docs/channels/*");
+  });
+
   it("removes the obsolete lifecycle and universal-wait entrypoints", () => {
     for (const relativePath of [
       "scripts/pr-lifecycle",
