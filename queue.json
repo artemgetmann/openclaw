@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 126,
+  "sequence": 127,
   "nextFence": 37,
   "mergeLease": {
     "leaseId": "cd0153f5-57f4-4d90-ad32-83ffac9d80a5",
@@ -11,8 +11,8 @@
     },
     "claimedPr": 1391,
     "claimedAt": "2026-08-11T04:23:59.807Z",
-    "heartbeatAt": "2026-08-11T04:23:59.807Z",
-    "expiresAt": "2026-08-11T04:43:59.807Z"
+    "heartbeatAt": "2026-08-11T04:25:01.421Z",
+    "expiresAt": "2026-08-11T04:45:01.421Z"
   },
   "items": {
     "1330": {
@@ -4584,10 +4584,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1391-claim-exact-head-review",
-    "recordedAt": "2026-08-11T04:23:59.807Z"
+    "id": "pr1391-heartbeat-premerge-exact-head-review",
+    "recordedAt": "2026-08-11T04:25:01.421Z"
   },
-  "updatedAt": "2026-08-11T04:23:59.807Z",
+  "updatedAt": "2026-08-11T04:25:01.421Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
