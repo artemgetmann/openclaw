@@ -236,9 +236,37 @@ jarvis_release_disk_preflight_targets() {
   return 0
 }
 
+jarvis_release_disk_cleanup_can_help() {
+  local required_kib="$1"
+  local cleanup_root="$2"
+  local cleanup_probe
+  local cleanup_filesystem_id
+  local target_probe
+  local target_filesystem_id
+  local target_free_kib
+  shift 2
+
+  cleanup_probe="$(jarvis_release_disk_probe_target "$cleanup_root")" || return 2
+  IFS=$'\t' read -r cleanup_filesystem_id _ _ _ <<<"$cleanup_probe"
+  [[ -n "$cleanup_filesystem_id" ]] || return 2
+
+  while [[ $# -gt 0 ]]; do
+    shift # The label is diagnostic; filesystem identity comes from the path.
+    target_probe="$(jarvis_release_disk_probe_target "$1")" || return 2
+    shift
+    IFS=$'\t' read -r target_filesystem_id _ target_free_kib _ <<<"$target_probe"
+    jarvis_release_disk_is_nonnegative_integer "$target_free_kib" || return 2
+    if [[ "$target_filesystem_id" == "$cleanup_filesystem_id" ]] && ((target_free_kib < required_kib)); then
+      return 0
+    fi
+  done
+  return 1
+}
+
 jarvis_release_disk_ensure_capacity() {
   local repo_root="${1:-}"
   local required_kib="${2:-}"
+  local cleanup_root="${OPENCLAW_BUILD_ARTIFACT_ROOT:-$HOME/Library/Caches/OpenClaw/build-artifacts}"
   local cleanup_status=0
   shift 2 || true
 
@@ -259,6 +287,21 @@ jarvis_release_disk_ensure_capacity() {
   fi
 
   printf 'release_disk_recovery=started\n'
+  if jarvis_release_disk_cleanup_can_help "$required_kib" "$cleanup_root" "$@"; then
+    :
+  else
+    local relevance_status=$?
+    if [[ "$relevance_status" -eq 1 ]]; then
+      printf 'release_disk_cleanup_status=skipped\n'
+      printf 'release_disk_cleanup_reason=cache_filesystem_did_not_fail\n'
+      printf 'release_disk_capacity_status=blocked\n'
+      printf 'release_disk_blocker=external_capacity_required\n'
+      return 1
+    fi
+    printf 'ERROR: release disk cleanup filesystem could not be resolved safely\n' >&2
+    return 2
+  fi
+
   if [[ -n "${JARVIS_RELEASE_DISK_CLEANUP_COMMAND:-}" ]]; then
     [[ -x "$JARVIS_RELEASE_DISK_CLEANUP_COMMAND" ]] || {
       printf 'ERROR: configured release disk cleanup command is not executable\n' >&2

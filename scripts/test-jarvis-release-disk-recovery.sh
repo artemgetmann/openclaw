@@ -17,11 +17,16 @@ fail() {
 PROBE="$TMP_ROOT/probe.sh"
 CLEANUP="$TMP_ROOT/cleanup.sh"
 STATE="$TMP_ROOT/recovered"
+CALLED="$TMP_ROOT/cleanup-called"
 OUTPUT="$TMP_ROOT/output"
 
 cat >"$PROBE" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$1" == "${TEST_EXTERNAL_TARGET:-/never}" ]]; then
+  printf 'external-fs\t/external\t1024\t%s\n' "$1"
+  exit 0
+fi
 if [[ -e "${TEST_RECOVERY_STATE}" ]]; then
   free_kib=4096
 else
@@ -34,6 +39,7 @@ cat >"$CLEANUP" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'cleanup_called=true\n'
+: >"${TEST_CLEANUP_CALLED}"
 [[ "${TEST_CLEANUP_RECOVERS:-0}" == "1" ]] || exit 0
 : >"${TEST_RECOVERY_STATE}"
 EOF
@@ -43,7 +49,9 @@ chmod +x "$PROBE" "$CLEANUP"
 source "$ROOT_DIR/scripts/lib/jarvis-release-disk-preflight.sh"
 
 TEST_RECOVERY_STATE="$STATE" \
+TEST_CLEANUP_CALLED="$CALLED" \
 TEST_CLEANUP_RECOVERS=1 \
+OPENCLAW_BUILD_ARTIFACT_ROOT="$TMP_ROOT/build-cache" \
 JARVIS_RELEASE_DISK_PROBE_COMMAND="$PROBE" \
 JARVIS_RELEASE_DISK_CLEANUP_COMMAND="$CLEANUP" \
   jarvis_release_disk_ensure_capacity \
@@ -53,9 +61,12 @@ grep -Fq 'cleanup_called=true' "$OUTPUT" || fail "cleanup command did not run"
 grep -Fq 'release_disk_capacity_status=recovered' "$OUTPUT" || fail "recovered capacity did not continue"
 
 rm -f "$STATE"
+rm -f "$CALLED"
 set +e
 TEST_RECOVERY_STATE="$STATE" \
+TEST_CLEANUP_CALLED="$CALLED" \
 TEST_CLEANUP_RECOVERS=0 \
+OPENCLAW_BUILD_ARTIFACT_ROOT="$TMP_ROOT/build-cache" \
 JARVIS_RELEASE_DISK_PROBE_COMMAND="$PROBE" \
 JARVIS_RELEASE_DISK_CLEANUP_COMMAND="$CLEANUP" \
   jarvis_release_disk_ensure_capacity \
@@ -66,5 +77,24 @@ set -e
 grep -Fq 'release_disk_capacity_status=blocked' "$OUTPUT" || fail "exhausted cleanup omitted blocker status"
 grep -Fq 'safe_repo_cleanup_exhausted_protected_or_external_capacity_required' "$OUTPUT" || \
   fail "exhausted cleanup omitted the protected-capacity blocker"
+
+rm -f "$CALLED"
+set +e
+TEST_RECOVERY_STATE="$STATE" \
+TEST_CLEANUP_CALLED="$CALLED" \
+TEST_EXTERNAL_TARGET="$TMP_ROOT/external-staging" \
+JARVIS_RELEASE_DISK_PROBE_COMMAND="$PROBE" \
+JARVIS_RELEASE_DISK_CLEANUP_COMMAND="$CLEANUP" \
+OPENCLAW_BUILD_ARTIFACT_ROOT="$TMP_ROOT/build-cache" \
+  jarvis_release_disk_ensure_capacity \
+    "$ROOT_DIR" 2048 release-staging "$TMP_ROOT/external-staging" >"$OUTPUT"
+external_status=$?
+set -e
+[[ "$external_status" -eq 1 ]] || fail "external shortfall returned $external_status instead of 1"
+[[ ! -e "$CALLED" ]] || fail "external shortfall deleted unrelated local caches"
+grep -Fq 'release_disk_cleanup_reason=cache_filesystem_did_not_fail' "$OUTPUT" || \
+  fail "external shortfall omitted cleanup skip reason"
+grep -Fq 'release_disk_blocker=external_capacity_required' "$OUTPUT" || \
+  fail "external shortfall omitted exact blocker"
 
 printf 'PASS: Jarvis release disk recovery is automatic and bounded\n'
