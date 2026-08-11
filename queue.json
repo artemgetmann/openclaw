@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sequence": 128,
+  "sequence": 129,
   "nextFence": 37,
   "mergeLease": null,
   "items": {
@@ -4422,6 +4422,90 @@
         "recordedAt": "2026-08-10T18:49:29.595Z"
       }
     },
+    "1390": {
+      "state": "queued",
+      "candidate": {
+        "pr": 1390,
+        "url": "https://github.com/artemgetmann/openclaw/pull/1390",
+        "headSha": "fada0135ab6fc8be614bcb967e2e7da800dffc30",
+        "baseBranch": "main",
+        "testedBaseSha": "ab75dad2cb66fb37ca0b5287761fb5f396ff52e0",
+        "diffFingerprint": "sha256:e55931493c24a53926e19f10fc4828802d595849c5cee6a3358053d74bf53662",
+        "changedPaths": [
+          "docs/agent-guides/fleet-resource-control.md",
+          "docs/agent-guides/workflow.md",
+          "scripts/pr-lifecycle.mjs",
+          "scripts/test-heavy-local-slot.sh",
+          "scripts/with-heavy-local-slot.sh",
+          "test/scripts/pr-lifecycle.test.ts"
+        ],
+        "title": "fix(fleet): resume work after safe disk reclaim",
+        "prContract": "## Review Fast Path\n\n- Observable claim + acceptance criteria: admission-time `disk_pressure` immediately returns control with the canonical reclaim skill path, preserves the same owner, and permits one exact post-cleanup rerun; runtime termination instead requires command-specific side-effect reconciliation before any resume. Neither path passively waits, prints guarded argv, deletes broadly, or hands routine safe recovery back to the user.\n- Exact head + builder proof: `fada0135ab6fc8be614bcb967e2e7da800dffc30`; guarded coordination and cleanup suites plus all 40 lifecycle tests passed on the rebased code; Bash syntax, formatting, and `git diff --check` passed.\n- Independent reviewer: `PASS`; `/root/disk_autonomy_policy_fix/pr1390_p1_fix_reviewer`; exact head `fada0135ab6fc8be614bcb967e2e7da800dffc30`; diff `sha256:e55931493c24a53926e19f10fc4828802d595849c5cee6a3358053d74bf53662`; no P0/P1 findings after the stale-owner closure repair.\n- Independent tester: `PASS`; `/root/disk_autonomy_policy_fix/pr1390_final_tester`; contract `e6306069-1068-40bc-9c57-c4fdf53d7203`; exact head/diff matched; guarded guard suites and all 40 lifecycle tests passed; terminal worker closure recorded.\n- Delivery boundary: Not required — developer tooling and policy only.\n- Release worker: Pending tester PASS and fenced queue lease.\n- Dependencies / merge order / overlap: Overlaps draft PR #1383 in `docs/agent-guides/fleet-resource-control.md`. Merge this focused disk exception first; #1383 must rebase and preserve it.\n- Remaining proof / cleanup / rollback: Fenced normal merge. Revert the four commits to restore passive disk waiting, the prior generic receipt, and the prior drift-handling behavior.\n- Still hurts: safe reclaim still depends on at least one exact generated, reproducible, inactive target passing the skill gate; ambiguous ownership or runtime replay safety correctly remains a stop.\n\n## Why This Matters\n\n- Disk headroom does not recover by waiting in the blocked guard transaction.\n- The existing cleanup authority was disconnected from the guard receipt, so agents diagnosed correctly and then stopped.\n- The new receipt connects the guard to the safe reclaim workflow without turning the guard into a broad deleter or blindly replaying partial mutations.\n- A tester/base race discovered during this PR now retires only the exact terminal owner, marks stale proof non-reusable, and demands fresh proof instead of stranding or forging the lifecycle ledger.\n\n## Scope Boundary\n\n- Product-wide source policy and fleet tooling only.\n- Changes the disk-pressure refusal/warning receipt, bounded-wait behavior for disk only, focused shell fixtures, operator policy, and one fail-closed stale-tester retirement transition.\n- Does not delete anything, install automation, touch source/user/session/browser data, mutate release state, deploy, restart, package, publish, or change the current public release candidate/runtime.\n\n## Verification\n\n- Red proof: the focused coordination suite failed because disk refusal lacked the autonomous recovery action.\n- Review proof: the Codex sidecar caught unsafe replay guidance after runtime termination; the repaired head now emits reconciliation-only guidance and has a dedicated process-tree regression.\n- Lifecycle review proof: independent review caught premature stale-owner closure; the repaired flow now requires transport-specific archival/resolution before replacement and has an overlap regression.\n- Green proof: `scripts/with-dedicated-agent-slot.sh --label \"disk-policy-builder:p1-regression-proof\" -- bash -c 'bash scripts/test-heavy-local-slot.sh --coordination-only && bash scripts/test-heavy-local-slot.sh --cleanup-only'` passed.\n- Rebased exact-head proof: the guarded focused guard suites and `vitest run test/scripts/pr-lifecycle.test.ts` passed; 40 lifecycle tests passed.\n- `bash -n scripts/with-heavy-local-slot.sh scripts/test-heavy-local-slot.sh`\n- `env PATH=\"/Users/user/Programming_Projects/openclaw/node_modules/.bin:$PATH\" pnpm exec oxfmt --check scripts/with-heavy-local-slot.sh scripts/test-heavy-local-slot.sh docs/agent-guides/fleet-resource-control.md docs/agent-guides/workflow.md`\n- `git diff --check`\n\n## Security Impact\n\n- New permissions/capabilities? No.\n- Secrets/tokens handling changed? No.\n- New/changed network calls? No.\n- Command/tool execution surface changed? Yes — admission disk pressure exits a requested wait and emits a recovery skill path; runtime termination emits reconciliation-only guidance; `retire-stale-test` closes only an exact terminal tester after verified candidate drift and cannot make its proof reusable. The guard executes no cleanup and prints no guarded argv.\n- Data access scope changed? No.\n- Mitigation: exact cleanup remains behind the skill's ownership, native process/open-file, heavy/release lock, reproducibility, and protected-state gates. Partially executed mutations require command-specific replay proof.\n\n## Compatibility / Migration\n\n- Backward compatible? Yes.\n- Config/env changes? No.\n- Migration needed? No.\n\n## AI Assistance\n\n- AI-assisted.\n- Testing degree: targeted local shell and lifecycle proof, independent review, exact-head tester PASS, and complete GitHub CI green; fenced merge pending.\n",
+        "jarvisDeliveryBoundary": null
+      },
+      "builder": {
+        "threadId": "/root/disk_autonomy_policy_fix",
+        "hostId": "local-subagent",
+        "wakeRoute": {
+          "threadId": "/root/disk_autonomy_policy_fix",
+          "hostId": "local-subagent"
+        }
+      },
+      "testerReceipt": {
+        "status": "PASS",
+        "headSha": "fada0135ab6fc8be614bcb967e2e7da800dffc30",
+        "diffFingerprint": "sha256:e55931493c24a53926e19f10fc4828802d595849c5cee6a3358053d74bf53662",
+        "closure": "terminal-receipt",
+        "contractId": "e6306069-1068-40bc-9c57-c4fdf53d7203",
+        "owner": {
+          "threadId": "/root/disk_autonomy_policy_fix/pr1390_final_tester",
+          "hostId": "local-subagent"
+        }
+      },
+      "reviewReceipt": {
+        "schemaVersion": 1,
+        "role": "code-reviewer",
+        "status": "PASS",
+        "owner": {
+          "threadId": "/root/disk_autonomy_policy_fix/pr1390_p1_fix_reviewer",
+          "hostId": "local-subagent"
+        },
+        "headSha": "fada0135ab6fc8be614bcb967e2e7da800dffc30",
+        "diffFingerprint": "sha256:e55931493c24a53926e19f10fc4828802d595849c5cee6a3358053d74bf53662",
+        "unresolvedFindings": []
+      },
+      "capabilityPolicy": {
+        "routine": "routine-release",
+        "escalation": "reasoning-escalation"
+      },
+      "authority": {
+        "schemaVersion": 1,
+        "source": "builder-handoff",
+        "scope": "PR #1390 source merge only",
+        "allowedActions": [
+          "normal-merge"
+        ],
+        "constraints": [
+          "no admin or bypass",
+          "no credentials or OTP",
+          "no irreversible or public release",
+          "no new scope"
+        ]
+      },
+      "lifecycle": {
+        "contractId": "cfaf0631-81bf-46bd-8b75-3b380952e5c7",
+        "stateDirectory": "/Users/user/Programming_Projects/openclaw/.worktrees/disk-pressure-autonomous-recovery/.local/pr-lifecycle"
+      },
+      "declaredDependencies": [],
+      "discoveredBlockers": [],
+      "readyAt": "2026-08-11T05:00:09.549Z",
+      "ownerHistory": [],
+      "mutationIntent": null,
+      "candidateHistory": [],
+      "activeBaseDriftRecovery": null,
+      "baseDriftRecoveryHistory": [],
+      "terminalReceipts": []
+    },
     "1391": {
       "state": "closed",
       "candidate": {
@@ -4586,10 +4670,10 @@
     }
   },
   "lastTransaction": {
-    "id": "pr1391-record-merge-exact-head-review",
-    "recordedAt": "2026-08-11T04:26:02.763Z"
+    "id": "d5d87458-3bd6-4440-9658-b4a58a5d20a2",
+    "recordedAt": "2026-08-11T05:00:09.549Z"
   },
-  "updatedAt": "2026-08-11T04:26:02.763Z",
+  "updatedAt": "2026-08-11T05:00:09.549Z",
   "rollout": {
     "phase": "graduated",
     "threshold": 3,
