@@ -70,6 +70,10 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "telegram-user",
         "telegram-chat-management",
         "nano-pdf",
+        "what-can-you-do",
+        "heartbeat-preference-updater",
+        "skill-creator",
+        "session-logs",
       ]),
     );
   });
@@ -169,6 +173,10 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "monitor-router",
         "find-food",
         "jarvis-computer-use",
+        "what-can-you-do",
+        "heartbeat-preference-updater",
+        "skill-creator",
+        "session-logs",
       ]),
     );
     expect(repaired.config.skills?.allowBundled?.indexOf("find-food")).toBe(
@@ -277,6 +285,23 @@ describe("applyNonInteractiveSkillsConfig", () => {
 
     expect(repaired.changes).toEqual([]);
     expect(repaired.config.skills?.allowBundled).toEqual(["custom-skill", "checkpoint"]);
+  });
+
+  it("preserves explicit opt-outs while adding new consumer defaults", () => {
+    const next = apply({
+      skills: {
+        entries: {
+          "what-can-you-do": { enabled: false },
+          "session-logs": { enabled: false },
+        },
+      },
+    });
+
+    expect(next.skills?.allowBundled).not.toContain("what-can-you-do");
+    expect(next.skills?.allowBundled).not.toContain("session-logs");
+    expect(next.skills?.allowBundled).toEqual(
+      expect.arrayContaining(["heartbeat-preference-updater", "skill-creator"]),
+    );
   });
 
   it("exposes default operator skills to fresh consumer prompts without a model call", async () => {

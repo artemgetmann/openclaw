@@ -451,4 +451,57 @@ describe("startup reconciler", () => {
     expect(result.report.tools).toEqual([]);
     await expect(fs.access(path.join(stateDir, "bin", "himalaya"))).rejects.toThrow();
   });
+
+  it("exposes packaged mcporter through an app-Node launcher without a global install", async () => {
+    const root = await makeTempRoot("startup-reconciler-mcporter");
+    const packageRoot = path.join(root, "package");
+    const stateDir = path.join(root, "state");
+    const entryPath = path.join(
+      packageRoot,
+      "tools",
+      "mcporter",
+      "node_modules",
+      "mcporter",
+      "dist",
+      "cli.js",
+    );
+    await writeExecutable(entryPath, '#!/usr/bin/env node\nconsole.log("0.7.3");\n');
+    await writeManifest({
+      packageRoot,
+      managedTools: [
+        {
+          skillName: "mcporter",
+          installId: "node",
+          label: "MCP Connector Manager",
+          bins: ["mcporter"],
+          versionCommand: ["mcporter", "--version"],
+          versionRegex: "(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
+          recommendedVersion: "0.7.3",
+        },
+      ],
+    });
+    const env = { ...process.env, PATH: "" };
+
+    const result = await runStartupReconciler({
+      packageRoot,
+      stateDir,
+      env,
+      log: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.status).toBe("reconciled");
+    if (result.status !== "reconciled") {
+      throw new Error("expected reconciled result");
+    }
+    expect(result.report.tools[0]).toMatchObject({
+      skillName: "mcporter",
+      managedVersion: "0.7.3",
+      status: "updated",
+    });
+    const launcher = path.join(stateDir, "bin", "mcporter");
+    await expect(fs.readFile(launcher, "utf8")).resolves.toContain(process.execPath);
+    const probe = spawnSync(launcher, ["--version"], { encoding: "utf8", env });
+    expect(probe.stdout.trim()).toBe("0.7.3");
+    expect(env.PATH?.split(path.delimiter).at(0)).toBe(path.join(stateDir, "bin"));
+  });
 });

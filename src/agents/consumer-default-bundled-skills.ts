@@ -38,6 +38,10 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "openai-image-gen",
   "openai-whisper",
   "nano-pdf",
+  "what-can-you-do",
+  "heartbeat-preference-updater",
+  "skill-creator",
+  "session-logs",
 ] as const;
 
 export const LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES: Readonly<Record<string, string>> = {

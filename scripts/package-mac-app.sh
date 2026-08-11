@@ -22,6 +22,7 @@ source "$ROOT_DIR/scripts/lib/macos-runtime-prune.sh"
 source "$ROOT_DIR/scripts/lib/consumer-runtime-manifest.sh"
 source "$ROOT_DIR/scripts/lib/openclaw-runtime-payloads.sh"
 source "$ROOT_DIR/scripts/lib/consumer-gog-runtime.sh"
+source "$ROOT_DIR/scripts/lib/consumer-mcporter-runtime.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 APP_VARIANT="${APP_VARIANT:-consumer}"
@@ -450,6 +451,7 @@ verify_required_capabilities_manifest() {
   local gog_x86_64_path="$runtime_root/openclaw/tools/gog/darwin-x86_64/gog"
   local gog_host_path=""
   local gog_license_path="$runtime_root/openclaw/tools/gog.LICENSE"
+  local mcporter_root="$runtime_root/openclaw/tools/mcporter"
   local gog_version=""
 
   if [[ ! -f "$manifest_path" ]]; then
@@ -464,6 +466,7 @@ verify_required_capabilities_manifest() {
   "$ROOT_DIR/scripts/verify-consumer-packaged-artifacts.sh" \
     "$manifest_path" \
     "$runtime_root/openclaw" || return 1
+  openclaw_verify_consumer_mcporter_runtime "$VALIDATED_NODE_BIN" "$mcporter_root" || return 1
 
   # Cached and smoke-reused runtimes must also carry the app-owned managed CLI
   # payload. Otherwise a cache hit can silently regress clean installs back to
@@ -1253,6 +1256,7 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "scripts/consumer-capabilities-manifest.mjs"
       hash_consumer_runtime_path "scripts/materialize-consumer-packaged-artifacts.sh"
       hash_consumer_runtime_path "scripts/verify-consumer-packaged-artifacts.sh"
+      hash_consumer_runtime_path "scripts/lib/consumer-mcporter-runtime.sh"
       hash_consumer_runtime_path "scripts/package-mac-app.sh"
       hash_consumer_runtime_path "scripts/lib/macos-runtime-prune.sh"
       hash_consumer_runtime_path "scripts/lib/consumer-gog-runtime.sh"
@@ -1520,6 +1524,10 @@ prepare_bundled_consumer_runtime() {
     "$ROOT_DIR/scripts/materialize-consumer-packaged-artifacts.sh" \
       "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json" \
       "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
+    openclaw_package_consumer_mcporter_runtime \
+      "$VALIDATED_NODE_BIN" \
+      "$VALIDATED_NPM_BIN" \
+      "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/tools/mcporter"
     bundle_consumer_managed_tool_payloads \
       "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json"
   fi
