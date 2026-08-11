@@ -2335,9 +2335,44 @@ describe("scripts/pr-lifecycle", () => {
 
     const retired = run(fixture, ["retire-stale-test", "42", "--receipt", receiptPath]);
     expect(retired).toMatchObject({
-      action: "tester-retired-for-candidate-drift",
+      action: "archive-exact-tester-thread",
       contractId: tester.contractId,
       owner: { threadId: "tester-thread", hostId: "tester-host" },
+      status: "PASS",
+      proofReusable: false,
+      nextAction: "close-exact-stale-tester-owner",
+    });
+
+    const overlapping = runFailure(fixture, [
+      "handoff-test",
+      "42",
+      "--test-kind",
+      "live-external",
+      "--transport",
+      "user-visible-task",
+      "--owner-thread",
+      "builder-thread",
+      "--owner-host",
+      "builder-host",
+    ]);
+    expect(overlapping.status).toBe(1);
+    expect(overlapping.stderr).toContain("owner may still be active");
+
+    const closed = run(fixture, [
+      "close-test",
+      "42",
+      "--contract-id",
+      tester.contractId,
+      "--thread-id",
+      "tester-thread",
+      "--host-id",
+      "tester-host",
+      "--closure",
+      "archived",
+    ]);
+    expect(closed).toMatchObject({
+      action: "tester-retired-for-candidate-drift",
+      contractId: tester.contractId,
       status: "PASS",
       proofReusable: false,
       nextAction: "obtain-fresh-review-and-test",
@@ -2353,7 +2388,7 @@ describe("scripts/pr-lifecycle", () => {
     expect(state.history.at(-1)?.tester).toMatchObject({
       contractId: tester.contractId,
       phase: "closed",
-      closure: { type: "candidate-drift" },
+      closure: { type: "candidate-drift", transportClosure: "archived" },
     });
     expect(state.tester.contractId).toBe(replacement.contractId);
     expect(state.tester.receipt).toBeNull();

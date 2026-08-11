@@ -248,9 +248,11 @@ If the candidate changes after the tester returns but before
 `record-test-receipt`, do not forge the live base, discard the owner ledger, or
 create a replacement tester. Run `scripts/pr-lifecycle retire-stale-test` with
 that exact terminal receipt. The transition validates the receipt against the
-retired candidate and exact owner, marks its proof non-reusable, and closes only
-that owner as `candidate-drift`. The same builder then obtains fresh review and
-test proof for the live candidate before release handoff.
+retired candidate and exact owner, marks its proof non-reusable, and returns the
+normal transport-specific archival or resolution action. Only `close-test` with
+that exact identity closes the owner as `candidate-drift`; replacement remains
+forbidden until then. The same builder then obtains fresh review and test proof
+for the live candidate before release handoff.
 
 A capacity or managed-Jarvis health guard refusal before workload start is not
 source proof and is not a generic retry license. New tester contracts handle

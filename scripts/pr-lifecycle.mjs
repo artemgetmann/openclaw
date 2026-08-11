@@ -1686,34 +1686,34 @@ function recordTestReceipt(pr, options, { retireStale = false } = {}) {
       );
     }
     if (retireStale) {
-      // The exact terminal receipt proves the worker is no longer live, so the
-      // owner can close without overlap. The next handoff retires this complete
-      // audit record and requires fresh review/test for the live candidate.
+      // Terminal work and addressable-owner closure are separate facts. Record
+      // the stale proof, but keep the owner active until the caller archives or
+      // resolves that exact transport through close-test.
       const recordedAt = new Date().toISOString();
       expected.receipt = receipt;
       expected.receiptRecordedAt = recordedAt;
-      expected.closure = {
-        type: "candidate-drift",
-        threadId: expected.owner.threadId,
-        hostId: expected.owner.hostId,
-        recordedAt,
-        liveCandidate: {
-          headSha: liveCandidate.headSha,
-          baseSha: liveCandidate.baseSha,
-          diffFingerprint: liveCandidate.diffFingerprint,
-        },
+      expected.candidateDrift = {
+        observedAt: recordedAt,
+        headSha: liveCandidate.headSha,
+        baseSha: liveCandidate.baseSha,
+        diffFingerprint: liveCandidate.diffFingerprint,
       };
-      expected.phase = "closed";
+      expected.phase = "stale-receipt-recorded";
       state.updatedAt = recordedAt;
       return {
         state,
         output: {
-          action: "tester-retired-for-candidate-drift",
+          action:
+            expected.transport === "user-visible-task"
+              ? "archive-exact-tester-thread"
+              : expected.transport === "delegated-worker"
+                ? "resolve-exact-delegated-worker"
+                : "resolve-exact-nested-agent",
           contractId: expected.contractId,
           owner: expected.owner,
           status: receipt.status,
           proofReusable: false,
-          nextAction: "obtain-fresh-review-and-test",
+          nextAction: "close-exact-stale-tester-owner",
         },
       };
     }
@@ -1745,7 +1745,12 @@ function closeTest(pr, options) {
   const closure = requireOption(options, "closure");
   return withStateLock(pr, (state) => {
     const tester = state?.tester;
-    if (!tester || tester.contractId !== contractId || tester.phase !== "receipt-recorded") {
+    const staleReceipt = tester?.phase === "stale-receipt-recorded";
+    if (
+      !tester ||
+      tester.contractId !== contractId ||
+      (!staleReceipt && tester.phase !== "receipt-recorded")
+    ) {
       fail("tester closure requires the matching recorded terminal receipt");
     }
     if (tester.owner.threadId !== threadId || tester.owner.hostId !== hostId) {
@@ -1756,12 +1761,28 @@ function closeTest(pr, options) {
     if (closure !== expectedClosure) {
       fail(`${tester.transport} requires closure=${expectedClosure}`);
     }
-    tester.closure = { type: closure, threadId, hostId, recordedAt: new Date().toISOString() };
+    tester.closure = staleReceipt
+      ? {
+          type: "candidate-drift",
+          transportClosure: closure,
+          threadId,
+          hostId,
+          recordedAt: new Date().toISOString(),
+          liveCandidate: tester.candidateDrift,
+        }
+      : { type: closure, threadId, hostId, recordedAt: new Date().toISOString() };
     tester.phase = "closed";
     state.updatedAt = new Date().toISOString();
     return {
       state,
-      output: { action: "tester-closed", contractId, status: tester.receipt.status },
+      output: {
+        action: staleReceipt ? "tester-retired-for-candidate-drift" : "tester-closed",
+        contractId,
+        status: tester.receipt.status,
+        ...(staleReceipt
+          ? { proofReusable: false, nextAction: "obtain-fresh-review-and-test" }
+          : {}),
+      },
     };
   });
 }
