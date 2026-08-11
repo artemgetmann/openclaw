@@ -5,14 +5,19 @@ import { readSecretFromFile } from "../../acp/secret-file.js";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
 import {
   CONFIG_PATH,
-  loadConfig,
+  isNixMode,
   readConfigFileSnapshot,
   resolveStateDir,
   resolveGatewayPort,
+  writeConfigFile,
 } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
-import { formatGatewayStartupPreflightFailure } from "../../gateway/server-startup-preflight.js";
+import {
+  assertGatewayStagedRestartSnapshotFresh,
+  formatGatewayStartupPreflightFailure,
+  runGatewayStartupConfigPreflight,
+} from "../../gateway/server-startup-preflight.js";
 import {
   prepareGatewayServerRestart,
   startGatewayServer,
@@ -206,7 +211,25 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
 
-  const cfg = loadConfig();
+  // Gateway startup owns legacy migration because it is the only path that can
+  // safely persist, reread, and validate config before runtime side effects.
+  // Use that validated result for CLI defaults too: a strict load here would
+  // reject an auto-migratable packaged config before startup can repair it.
+  let gatewayStartupContext;
+  try {
+    gatewayStartupContext = await runGatewayStartupConfigPreflight({
+      readSnapshot: readConfigFileSnapshot,
+      writeConfig: writeConfigFile,
+      log: gatewayLog,
+      isNixMode,
+    });
+  } catch (err) {
+    const startupPreflightFailure = formatGatewayStartupPreflightFailure(err);
+    defaultRuntime.error(startupPreflightFailure ?? `Gateway failed to start: ${String(err)}`);
+    defaultRuntime.exit(1);
+    return;
+  }
+  const cfg = gatewayStartupContext.config;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");
@@ -231,7 +254,29 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
+  // CLI owns potentially destructive port cleanup before the server is even
+  // constructed. Recheck the write-capable preflight snapshot immediately
+  // before each such action so a concurrent config edit cannot kill a process
+  // selected by stale defaults. Server startup repeats this check to cover the
+  // later gap between CLI preparation and runtime activation.
+  const ensureStartupContextFreshBeforeSideEffect = async () => {
+    try {
+      assertGatewayStagedRestartSnapshotFresh({
+        prepared: gatewayStartupContext.preflightSnapshot,
+        current: await readConfigFileSnapshot(),
+      });
+      return true;
+    } catch (err) {
+      const startupPreflightFailure = formatGatewayStartupPreflightFailure(err);
+      defaultRuntime.error(startupPreflightFailure ?? `Gateway failed to start: ${String(err)}`);
+      defaultRuntime.exit(1);
+      return false;
+    }
+  };
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    if (!(await ensureStartupContextFreshBeforeSideEffect())) {
+      return;
+    }
     const stale = cleanStaleGatewayProcessesSync(port);
     if (stale.length > 0) {
       gatewayLog.info(
@@ -240,6 +285,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     }
   }
   if (opts.force) {
+    if (!(await ensureStartupContextFreshBeforeSideEffect())) {
+      return;
+    }
     try {
       const { killed, waitedMs, escalatedToSigkill } = await forceFreePortAndWait(port, {
         timeoutMs: 2000,
@@ -454,6 +502,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           auth: authOverride,
           tailscale: tailscaleOverride,
           preparedRestart,
+          // The initial CLI preflight already performed the write-capable
+          // migration transaction used for option defaults. Hand that exact
+          // context to the server so startup validates freshness instead of
+          // repeating migrations and other write-capable repairs.
+          startupContext: preparedRestart ? undefined : gatewayStartupContext,
         }),
     });
 
