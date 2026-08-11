@@ -30,8 +30,9 @@ describe("single-owner workflow contract", () => {
     const adoption = read("scripts/adopt-codex-worktree.sh");
 
     expect(agents).toContain("Ordinary isolated tests, typechecks, builds");
-    expect(fleet).toContain("Default: no machine-wide slot");
-    expect(fleet).toContain("package, sign, notarize, publish, or install");
+    expect(fleet).toContain("Ordinary work has no machine lock");
+    expect(fleet).toContain("Lock only the resource being changed");
+    expect(fleet).toContain("ChatGPT or provider authentication");
     expect(adoption).not.toContain("with-heavy-local-slot.sh");
     expect(adoption).not.toContain("capacity-wait-seconds");
   });
@@ -45,8 +46,8 @@ describe("single-owner workflow contract", () => {
     expect(workflow).toContain("Do not ask the user to schedule routine merge order");
     expect(workflow).toContain("retain the existing");
     expect(workflow).toContain("local review and focused proof");
-    expect(fleet).toContain("occupancy is routine scheduling");
-    expect(fleet).toContain("separate bot tokens, profiles, ports, state, and output");
+    expect(fleet).toContain("Different resources run concurrently");
+    expect(fleet).toContain("Native Codex thread delivery, wakeups, and chat cleanup");
     expect(template).toContain("unchanged/disjoint + retained local proof");
     expect(template).not.toContain("effective-patch reconciliation + repeated proof");
     expect(prScript).toContain('git merge-base "$prep_head_sha" origin/main');

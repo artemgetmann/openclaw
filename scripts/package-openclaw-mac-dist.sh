@@ -1443,9 +1443,8 @@ case "$PACKAGE_PHASE" in
     ;;
 esac
 
-# Fleet admission is intentionally outside and before the release mutex. When
-# delegated by jarvis-public-release.sh, the wrapper-owned live token is reused;
-# a direct package command re-execs through the same machine-wide supervisor.
+# release-jarvis is intentionally outside and before the package mutex. A
+# direct package command re-execs through the same named resource wrapper.
 openclaw_heavy_local_slot_require_or_reexec \
   "package-openclaw-mac-dist:${PACKAGE_PHASE}" \
   "$ROOT_DIR" \

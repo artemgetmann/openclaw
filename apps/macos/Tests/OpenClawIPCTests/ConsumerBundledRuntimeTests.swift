@@ -26,11 +26,13 @@ struct ConsumerBundledRuntimeTests {
         "scripts/gateway-lifecycle-command.sh",
         "scripts/with-heavy-local-slot.sh",
         "scripts/lib/heavy-local-slot.sh",
-        "scripts/lib/heavy-local-slot-runner.pl",
+        "scripts/with-shared-resource-lock.pl",
+        "scripts/lib/shared-resource-lock.sh",
     ]
     private static let executableGatewayLifecycleToolingPaths = [
         "scripts/gateway-lifecycle-command.sh",
         "scripts/with-heavy-local-slot.sh",
+        "scripts/with-shared-resource-lock.pl",
     ]
 
     @Test func `seeding writes bundled runtime into app prefix and is idempotent`() throws {

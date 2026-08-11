@@ -5,8 +5,6 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 source "${ROOT}/scripts/lib/validated-node.sh"
 source "${ROOT}/scripts/lib/worktree-guards.sh"
-# shellcheck source=scripts/lib/heavy-local-slot.sh
-source "${ROOT}/scripts/lib/heavy-local-slot.sh"
 
 log() {
   printf '[build-shared-runtime] %s\n' "$*"
@@ -85,12 +83,6 @@ EOF
 main() {
   local expected_version=""
   local shell_node_bin=""
-
-  openclaw_heavy_local_slot_require_or_reexec \
-    "build-shared-runtime" \
-    "$ROOT" \
-    "$ROOT/scripts/build-shared-runtime.sh" \
-    "$@"
 
   # Sacred home clones are runtime anchors. They must stay on their base branch
   # and free of tracked implementation edits unless the operator has explicitly

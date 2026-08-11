@@ -136,7 +136,7 @@ worktree_guard_require_sacred_home_clone_base_branch "$ROOT" "scripts/restart-lo
 worktree_guard_reject_sacred_home_edits "$ROOT" worktree --context "scripts/restart-local-gateway.sh"
 
 # A script running inside the LaunchAgent it is replacing cannot safely keep a
-# machine lease alive after launchd tears down that process tree. Those callers
+# gateway resource lock alive after launchd tears down that process tree. Those callers
 # must use the CLI/run-loop handoff, whose detached owner holds the lease through
 # the cutover. Refuse the legacy detached recipe before any signal or launchctl
 # mutation instead of creating an unowned helper.

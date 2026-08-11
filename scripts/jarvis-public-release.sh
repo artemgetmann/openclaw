@@ -549,8 +549,7 @@ fi
 
 if [[ "$DRY_RUN" != "1" ]]; then
   # Authorization and dry-run intentionally remain lightweight. Executed
-  # release orchestration acquires the fleet lease before intent/state work and
-  # before the release lock, making the global order fleet -> release.
+  # release orchestration acquires release-jarvis before intent/state work.
   openclaw_heavy_local_slot_require_or_reexec \
     "jarvis-public-release:${FORCED_PHASE}" \
     "$ROOT_DIR" \

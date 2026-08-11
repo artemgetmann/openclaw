@@ -97,6 +97,13 @@ describe("scripts/ship-main-gateway-fix.sh worktree safety", () => {
     const worktreeScript = path.join(worktreeRepo, "scripts", "ship-main-gateway-fix.sh");
     const mainGuard = path.join(mainRepo, "scripts", "lib", "heavy-local-slot.sh");
     const worktreeGuard = path.join(worktreeRepo, "scripts", "lib", "heavy-local-slot.sh");
+    const mainResourceGuard = path.join(mainRepo, "scripts", "lib", "shared-resource-lock.sh");
+    const worktreeResourceGuard = path.join(
+      worktreeRepo,
+      "scripts",
+      "lib",
+      "shared-resource-lock.sh",
+    );
 
     fs.mkdirSync(path.dirname(mainScript), { recursive: true });
     fs.mkdirSync(path.dirname(worktreeScript), { recursive: true });
@@ -109,6 +116,14 @@ describe("scripts/ship-main-gateway-fix.sh worktree safety", () => {
     // checkouts so this test reaches the linked-worktree delegation boundary.
     fs.copyFileSync(path.join(ROOT, "scripts", "lib", "heavy-local-slot.sh"), mainGuard);
     fs.copyFileSync(path.join(ROOT, "scripts", "lib", "heavy-local-slot.sh"), worktreeGuard);
+    fs.copyFileSync(
+      path.join(ROOT, "scripts", "lib", "shared-resource-lock.sh"),
+      mainResourceGuard,
+    );
+    fs.copyFileSync(
+      path.join(ROOT, "scripts", "lib", "shared-resource-lock.sh"),
+      worktreeResourceGuard,
+    );
     fs.chmodSync(mainScript, 0o755);
     fs.chmodSync(worktreeScript, 0o755);
     fs.chmodSync(mainGuard, 0o755);

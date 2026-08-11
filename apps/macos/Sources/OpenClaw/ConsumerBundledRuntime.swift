@@ -40,10 +40,11 @@ enum ConsumerBundledRuntime {
     private static let requiredExecutableGatewayLifecycleToolingFiles = [
         "scripts/gateway-lifecycle-command.sh",
         "scripts/with-heavy-local-slot.sh",
+        "scripts/with-shared-resource-lock.pl",
     ]
     private static let requiredReadableGatewayLifecycleToolingFiles = [
         "scripts/lib/heavy-local-slot.sh",
-        "scripts/lib/heavy-local-slot-runner.pl",
+        "scripts/lib/shared-resource-lock.sh",
     ]
 
     struct Manifest: Codable, Equatable {

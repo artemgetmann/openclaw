@@ -101,7 +101,15 @@ enum BundledRuntimeFixtureHelper {
             atomically: true,
             encoding: .utf8)
         try "#!/usr/bin/env perl\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/scripts/lib/heavy-local-slot-runner.pl"),
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/with-shared-resource-lock.pl"),
+            atomically: true,
+            encoding: .utf8)
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: bundledRoot.appendingPathComponent(
+                "openclaw/scripts/with-shared-resource-lock.pl").path)
+        try "#!/usr/bin/env bash\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/lib/shared-resource-lock.sh"),
             atomically: true,
             encoding: .utf8)
 

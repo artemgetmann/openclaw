@@ -261,9 +261,8 @@ if [[ "${OCU_BUILD_CONFIGURATION}" != "debug" && "${OCU_BUILD_CONFIGURATION}" !=
   exit 1
 fi
 
-# Hold one machine-wide reservation across clone/fetch, Swift proof, package
-# construction, and installation. A partial lease around only `swift test`
-# would still allow another campaign to collide with the app replacement.
+# Hold app-install across the final package construction and installation so
+# another campaign cannot collide with replacement of the same app instance.
 openclaw_heavy_local_slot_require_or_reexec \
   "bootstrap-open-computer-use-runtime" \
   "$ROOT_DIR" \

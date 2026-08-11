@@ -23,7 +23,7 @@ printf 'fixture-fs\t/fixture\t%s\t%s\n' "${TEST_FREE_KIB}" "$1"
 EOF
 cat >"${PACKAGE_SCRIPT_FIXTURE}" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-}" >"${PACKAGE_MARKER}"
+printf '%s|%s|%s\n' "${OPENCLAW_SHARED_RESOURCE_LOCK:-}" "${OPENCLAW_SHARED_RESOURCE_LOCK_FD:-}" "${OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY:-}" >"${PACKAGE_MARKER}"
 EOF
 chmod +x "${PROBE_SCRIPT}" "${PACKAGE_SCRIPT_FIXTURE}"
 
@@ -39,27 +39,31 @@ fi
 pass "clean-entry sentinel rejects explicit bash and imported functions"
 
 GUARDED_FIXTURE="${TMP_ROOT}/guarded-entry"
-GUARDED_TOKEN="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+GUARDED_CAPABILITIES="$(printf 'b%.0s' {1..64}),$(printf 'c%.0s' {1..64})"
 mkdir -p "${GUARDED_FIXTURE}/scripts/lib"
 cp "${ROOT_DIR}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" \
   "${GUARDED_FIXTURE}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh"
 cat >"${GUARDED_FIXTURE}/scripts/ship-jarvis-hotfix.sh" <<'EOF'
 #!/usr/bin/env bash
 root="$(cd "$(dirname "$0")/.." && pwd)"
-printf '%s|%s|%s\n' \
+printf '%s|%s|%s|%s|%s\n' \
   "${OPENCLAW_HOTFIX_CLEAN_ENTRY:-missing}" \
-  "${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-missing}" \
+  "${OPENCLAW_SHARED_RESOURCE_LOCK:-missing}" \
+  "${OPENCLAW_SHARED_RESOURCE_LOCK_FD:-missing}" \
+  "${OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY:-missing}" \
   "${AMBIENT_POISON:-unset}" >"${root}/guarded-entry.out"
 EOF
 chmod +x \
   "${GUARDED_FIXTURE}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" \
   "${GUARDED_FIXTURE}/scripts/ship-jarvis-hotfix.sh"
 AMBIENT_POISON=must-not-survive \
-OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN="${GUARDED_TOKEN}" \
+OPENCLAW_SHARED_RESOURCE_LOCK="gateway-main,release-jarvis" \
+OPENCLAW_SHARED_RESOURCE_LOCK_FD="8,9" \
+OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY="${GUARDED_CAPABILITIES}" \
   "${GUARDED_FIXTURE}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" --pr 1
-[[ "$(<"${GUARDED_FIXTURE}/guarded-entry.out")" == "1|${GUARDED_TOKEN}|unset" ]] || \
-  fail "guarded hotfix entry did not preserve only the fleet lease"
-pass "guarded hotfix entry preserves the lease across environment sanitization"
+[[ "$(<"${GUARDED_FIXTURE}/guarded-entry.out")" == "1|gateway-main,release-jarvis|8,9|${GUARDED_CAPABILITIES}|unset" ]] || \
+  fail "guarded hotfix entry did not preserve only the shared resource proof"
+pass "guarded hotfix entry preserves the resource locks across environment sanitization"
 
 DIRTY_FIXTURE="${TMP_ROOT}/dirty-checkout"
 DIRTY_MARKER="${TMP_ROOT}/dirty-helper-ran"
@@ -136,13 +140,15 @@ grep -q '^status=fail$' "${TMP_ROOT}/low.out" || fail "low disk omitted fail rec
 pass "low disk stops before package invocation"
 
 export TEST_FREE_KIB=100
-export OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+export OPENCLAW_SHARED_RESOURCE_LOCK="gateway-main,release-jarvis"
+export OPENCLAW_SHARED_RESOURCE_LOCK_FD="8,9"
+export OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY="$(printf 'a%.0s' {1..64}),$(printf 'b%.0s' {1..64})"
 preflight_and_package_hotfix 1 2026.7.16 arm64 >"${TMP_ROOT}/enough.out" 2>&1
 [[ -e "${PACKAGE_MARKER}" ]] || fail "sufficient disk did not invoke package helper"
-[[ "$(<"${PACKAGE_MARKER}")" == "${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN}" ]] || \
-  fail "package helper did not inherit the hotfix owner's fleet lease"
+[[ "$(<"${PACKAGE_MARKER}")" == "${OPENCLAW_SHARED_RESOURCE_LOCK}|${OPENCLAW_SHARED_RESOURCE_LOCK_FD}|${OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY}" ]] || \
+  fail "package helper did not inherit the hotfix resource locks"
 grep -q '^status=pass$' "${TMP_ROOT}/enough.out" || fail "sufficient disk omitted pass receipt"
-pass "sufficient disk proceeds under the hotfix owner's fleet lease"
+pass "sufficient disk proceeds under the hotfix resource locks"
 
 rm -f "${PACKAGE_MARKER}"
 (

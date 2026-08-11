@@ -1216,7 +1216,7 @@ export async function restartLaunchAgent({
 
   if (isGatewayServiceKind(serviceEnv)) {
     // Some setup, doctor, and daemon-configuration callers invoke the service
-    // API directly. Re-enter the canonical CLI beneath the machine lease here,
+    // API directly. Re-enter the canonical CLI beneath the gateway lock here,
     // at the final common mutation boundary, so none can bypass admission.
     // A guarded CLI descendant proves inherited ownership and continues below
     // without another process hop.

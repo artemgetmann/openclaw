@@ -185,8 +185,8 @@ if [[ "$APP_SCOPE" != "self" && "$APP_SCOPE" != "all" ]]; then
   fail "Unknown --app-scope value '${APP_SCOPE}'. Use self or all."
 fi
 
-# The global lease must precede this script's restart mutex, process kills,
-# cache deletion, Swift build, packaging, and LaunchAgent mutation.
+# The app-install resource must precede this script's restart mutex, process
+# kills, cache deletion, packaging, and LaunchAgent mutation.
 openclaw_heavy_local_slot_require_or_reexec \
   "restart-mac:${APP_SCOPE}" \
   "$ROOT_DIR" \

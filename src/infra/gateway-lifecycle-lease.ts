@@ -46,7 +46,6 @@ export type GatewayLifecycleLeasePaths = {
   root: string;
   wrapper: string;
   helper: string;
-  runner: string;
   commandHelper: string;
 };
 
@@ -69,12 +68,10 @@ export function resolveGatewayLifecycleLeasePaths(
     root,
     wrapper: path.join(root, "scripts", "with-heavy-local-slot.sh"),
     helper: path.join(root, "scripts", "lib", "heavy-local-slot.sh"),
-    runner: path.join(root, "scripts", "lib", "heavy-local-slot-runner.pl"),
     commandHelper: path.join(root, "scripts", "gateway-lifecycle-command.sh"),
   };
   return deps.fileExists(paths.wrapper) &&
     deps.fileExists(paths.helper) &&
-    deps.fileExists(paths.runner) &&
     deps.fileExists(paths.commandHelper)
     ? paths
     : null;

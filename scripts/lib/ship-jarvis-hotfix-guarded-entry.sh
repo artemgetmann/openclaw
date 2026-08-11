@@ -2,12 +2,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-LEASE_TOKEN="${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-}"
+LOCK_RESOURCES="${OPENCLAW_SHARED_RESOURCE_LOCK:-}"
+LOCK_FDS="${OPENCLAW_SHARED_RESOURCE_LOCK_FD:-}"
+LOCK_CAPABILITIES="${OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY:-}"
 
-# The fleet runner grants the lease to this exact descendant. Carry only that
-# capability across the second clean environment; the canonical hotfix script
-# still validates the live owner, token, policy, and process ancestry itself.
-if [[ ! "${LEASE_TOKEN}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+# Preserve only the inherited kernel-lock proof across the second clean
+# environment. The canonical hotfix script validates both required resources,
+# their exact descriptors, and their per-acquisition capabilities.
+if [[ "${LOCK_RESOURCES}" != "gateway-main,release-jarvis" ]] ||
+  [[ ! "${LOCK_FDS}" =~ ^[0-9]+,[0-9]+$ ]] ||
+  [[ ! "${LOCK_CAPABILITIES}" =~ ^[0-9a-f]{64},[0-9a-f]{64}$ ]]; then
   printf '%s\n' 'HEAVY_LOCAL_SLOT_REFUSAL class=guard_internal code=inherited_lease_missing' >&2
   exit 75
 fi
@@ -16,5 +20,7 @@ exec /usr/bin/env -i \
   PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
   HOME=/Users/user \
   OPENCLAW_HOTFIX_CLEAN_ENTRY=1 \
-  OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN="${LEASE_TOKEN}" \
+  OPENCLAW_SHARED_RESOURCE_LOCK="${LOCK_RESOURCES}" \
+  OPENCLAW_SHARED_RESOURCE_LOCK_FD="${LOCK_FDS}" \
+  OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY="${LOCK_CAPABILITIES}" \
   /bin/bash "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh" "$@"

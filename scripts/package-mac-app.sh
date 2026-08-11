@@ -413,11 +413,13 @@ verify_required_gateway_lifecycle_tooling() {
     "scripts/gateway-lifecycle-command.sh"
     "scripts/with-heavy-local-slot.sh"
     "scripts/lib/heavy-local-slot.sh"
-    "scripts/lib/heavy-local-slot-runner.pl"
+    "scripts/with-shared-resource-lock.pl"
+    "scripts/lib/shared-resource-lock.sh"
   )
   local required_executable_paths=(
     "scripts/gateway-lifecycle-command.sh"
     "scripts/with-heavy-local-slot.sh"
+    "scripts/with-shared-resource-lock.pl"
   )
 
   # A bundled runtime must be able to acquire the same UID-stable lease as a
@@ -1264,7 +1266,8 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "scripts/gateway-lifecycle-command.sh"
       hash_consumer_runtime_path "scripts/with-heavy-local-slot.sh"
       hash_consumer_runtime_path "scripts/lib/heavy-local-slot.sh"
-      hash_consumer_runtime_path "scripts/lib/heavy-local-slot-runner.pl"
+      hash_consumer_runtime_path "scripts/with-shared-resource-lock.pl"
+      hash_consumer_runtime_path "scripts/lib/shared-resource-lock.sh"
       hash_consumer_runtime_path "dist"
       hash_consumer_runtime_path "extensions"
       hash_consumer_runtime_path "skills"
@@ -1499,8 +1502,10 @@ prepare_bundled_consumer_runtime() {
     "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/with-heavy-local-slot.sh"
   cp "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" \
     "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/lib/heavy-local-slot.sh"
-  cp "$ROOT_DIR/scripts/lib/heavy-local-slot-runner.pl" \
-    "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/lib/heavy-local-slot-runner.pl"
+  cp "$ROOT_DIR/scripts/with-shared-resource-lock.pl" \
+    "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/with-shared-resource-lock.pl"
+  cp "$ROOT_DIR/scripts/lib/shared-resource-lock.sh" \
+    "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/lib/shared-resource-lock.sh"
 
   if [[ -d "$ROOT_DIR/skills" ]]; then
     rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"

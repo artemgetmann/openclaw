@@ -38,6 +38,9 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       HOME: "/Users/test",
       OPENCLAW_PROFILE: "default",
       OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN: "a".repeat(64),
+      OPENCLAW_SHARED_RESOURCE_LOCK: "gateway-main",
+      OPENCLAW_SHARED_RESOURCE_LOCK_FD: "9",
+      OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY: "a".repeat(64),
     };
     spawnMock.mockImplementation((_file: string, args: string[]) => {
       receiptDirs.push(args[6]);
@@ -75,6 +78,9 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[3]).toMatch(/scripts\/with-heavy-local-slot\.sh$/);
     expect(args[4]).toMatch(/scripts\/gateway-lifecycle-command\.sh$/);
     expect(options.env.OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN).toBeUndefined();
+    expect(options.env.OPENCLAW_SHARED_RESOURCE_LOCK).toBeUndefined();
+    expect(options.env.OPENCLAW_SHARED_RESOURCE_LOCK_FD).toBeUndefined();
+    expect(options.env.OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY).toBeUndefined();
     expect(fs.readFileSync(`${args[6]}/ack`, "utf8")).toBe("observed\n");
     expect(result.cancel?.()).toBe(true);
     expect(fs.readFileSync(`${args[6]}/cancel`, "utf8")).toBe("stop superseded restart\n");
