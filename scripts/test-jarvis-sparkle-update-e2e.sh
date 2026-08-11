@@ -132,7 +132,10 @@ EOF
 
   cat >"$fixture/bin/ps" <<'EOF'
 #!/usr/bin/env bash
-cat "${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}/control/processes"
+case "$*" in
+  *comm=*) cat "${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}/control/process-executables" ;;
+  *) cat "${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}/control/processes" ;;
+esac
 EOF
 
   cat >"$fixture/bin/df" <<'EOF'
@@ -353,6 +356,7 @@ make_fixture() {
   write_gateway_plist "$fixture"
   write_shims "$fixture"
   : >"$fixture/control/processes"
+  : >"$fixture/control/process-executables"
   printf 'loaded=1\npid=101\n' >"$fixture/control/gateway-state"
   cat >"$fixture/feed.xml" <<EOF
 <?xml version="1.0"?><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel>
@@ -926,8 +930,15 @@ printf '{"format":1,"bundleVersion":"%s","gitCommit":"33333333333333333333333333
 run_expect_fail "mismatched managed manifest blocks" "$case_root" "live managed manifest is newer or mismatched"
 
 case_root="$(copy_case debug-owner)"
-printf '404 /tmp/Debug Jarvis.app/Contents/MacOS/OpenClaw\n' >"$case_root/control/processes"
+printf '404 /tmp/Debug Jarvis.app/Contents/MacOS/OpenClaw\n' >"$case_root/control/process-executables"
 run_expect_fail "active debug Jarvis app blocks" "$case_root" "quit every Jarvis/OpenClaw app"
+
+case_root="$(copy_case unrelated-app-jarvis-argument)"
+printf '403 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n' >"$case_root/control/process-executables"
+printf '403 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/Users/fixture/Library/Application Support/Jarvis/Chrome\n' \
+  >"$case_root/control/processes"
+harness_env "$case_root" >/dev/null
+pass "unrelated app argument containing a Jarvis path does not block"
 
 case_root="$(copy_case unrelated-sparkle-owner)"
 printf '403 /Applications/Astropad Workbench.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate\n' >"$case_root/control/processes"

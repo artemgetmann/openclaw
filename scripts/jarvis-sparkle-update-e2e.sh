@@ -822,13 +822,35 @@ inspect_release_and_process_owners() {
 }
 
 current_app_package_or_sparkle_owners() {
-  "$PS_BIN" -axo pid=,command= | awk -v self="$$" '
+  local app_owners
+  local package_or_sparkle_owners
+
+  # Match app ownership from the executable path only. Full command arguments
+  # may legitimately contain Jarvis paths (for example a browser profile), but
+  # they do not make that unrelated process a Jarvis/OpenClaw app owner.
+  app_owners="$("$PS_BIN" -axo pid=,comm= | awk -v self="$$" '
     $1 == self { next }
-    /\.app\/Contents\/MacOS\// && /(Jarvis|OpenClaw)/ { print; next }
+    {
+      executable = $0
+      sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", executable)
+      marker = "/Contents/MacOS/"
+      marker_at = index(executable, marker)
+      if (marker_at == 0) { next }
+      bundle = substr(executable, 1, marker_at - 1)
+      sub(/^.*\//, "", bundle)
+      binary = substr(executable, marker_at + length(marker))
+      if (bundle ~ /(Jarvis|OpenClaw).*\.app$/ || binary ~ /^(Jarvis|OpenClaw)$/) { print }
+    }
+  ')"
+
+  package_or_sparkle_owners="$("$PS_BIN" -axo pid=,command= | awk -v self="$$" '
+    $1 == self { next }
     /(package-openclaw-mac-dist|jarvis-public-release|package-consumer-mac-app|package-jarvis-consumer-rc)\.sh/ { print; next }
     /(org\.sparkle-project\.Sparkle|Autoupdate|InstallerLauncher|InstallerStatus|Sparkle.*Downloader)/ && \
       /(Jarvis|OpenClaw|ai\.jarvis\.mac|ai\.openclaw\.)/ { print }
-  '
+  ')"
+
+  printf '%s\n%s\n' "$app_owners" "$package_or_sparkle_owners" | awk 'NF && !seen[$0]++'
 }
 
 verify_actual_disk_headroom() {
