@@ -15,6 +15,14 @@ function resolveModel(model?: string): string {
   return trimmed || DEFAULT_OPENAI_AUDIO_MODEL;
 }
 
+function resolveUploadFileName(fileName: string): string {
+  const trimmed = fileName.trim() || "audio";
+  // WhatsApp commonly labels valid Ogg/Opus voice notes with the `.oga`
+  // alias. OpenAI validates the multipart filename against a narrower
+  // extension allowlist, so present the same bytes with its canonical suffix.
+  return path.extname(trimmed).toLowerCase() === ".oga" ? `${trimmed.slice(0, -4)}.ogg` : trimmed;
+}
+
 export async function transcribeOpenAiCompatibleAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
@@ -25,7 +33,7 @@ export async function transcribeOpenAiCompatibleAudio(
 
   const model = resolveModel(params.model);
   const form = new FormData();
-  const fileName = params.fileName?.trim() || path.basename(params.fileName) || "audio";
+  const fileName = resolveUploadFileName(params.fileName);
   const bytes = new Uint8Array(params.buffer);
   const blob = new Blob([bytes], {
     type: params.mime ?? "application/octet-stream",

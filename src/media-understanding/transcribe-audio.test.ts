@@ -71,11 +71,25 @@ describe("transcribeAudioFile", () => {
   function transcriptionResult(
     transcript: string | undefined,
     outcome: MediaUnderstandingDecisionOutcome = "success",
+    failureReason?: string,
   ) {
     return {
       transcript,
       attachments: [],
-      decision: { capability: "audio" as const, outcome, attachments: [] },
+      decision: {
+        capability: "audio" as const,
+        outcome,
+        attachments: failureReason
+          ? [
+              {
+                attachmentIndex: 0,
+                attempts: [
+                  { type: "provider" as const, outcome: "failed" as const, reason: failureReason },
+                ],
+              },
+            ]
+          : [],
+      },
     };
   }
 
@@ -124,7 +138,7 @@ describe("transcribeAudioFile", () => {
   });
 
   it("returns undefined when helper returns no transcript", async () => {
-    runAudioTranscription.mockResolvedValue({ transcript: undefined, attachments: [] });
+    runAudioTranscription.mockResolvedValue(transcriptionResult(undefined));
     const filePath = await writeAudioFile("missing.wav");
 
     const result = await transcribeAudioFile({
@@ -148,6 +162,46 @@ describe("transcribeAudioFile", () => {
         cfg,
       }),
     ).rejects.toThrow("boom");
+  });
+
+  it("surfaces the provider failure when a short file produces no transcript", async () => {
+    const filePath = await writeAudioFile("note.oga");
+    runAudioTranscription.mockResolvedValue(
+      transcriptionResult(undefined, "skipped", "Error: Unsupported file format oga"),
+    );
+
+    await expect(
+      transcribeAudioFile({
+        filePath,
+        cfg: {} as OpenClawConfig,
+        mime: "audio/ogg",
+      }),
+    ).rejects.toThrow("Unsupported file format oga");
+  });
+
+  it("preserves successful silence after an earlier provider failure", async () => {
+    const filePath = await writeAudioFile("silent.ogg");
+    runAudioTranscription.mockResolvedValue({
+      transcript: undefined,
+      attachments: [],
+      decision: {
+        capability: "audio",
+        outcome: "success",
+        attachments: [
+          {
+            attachmentIndex: 0,
+            attempts: [
+              { type: "provider", outcome: "failed", reason: "Error: first provider failed" },
+              { type: "provider", outcome: "success" },
+            ],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      transcribeAudioFile({ filePath, cfg: {} as OpenClawConfig, mime: "audio/ogg" }),
+    ).resolves.toEqual({ text: undefined });
   });
 
   it("chunks an oversized local file and joins chunk transcripts in order", async () => {
@@ -187,7 +241,7 @@ describe("transcribeAudioFile", () => {
     runFfprobe.mockResolvedValue("audio\n901");
     mockChunkFiles(1);
     runAudioTranscription
-      .mockResolvedValueOnce({ transcript: undefined, attachments: [] })
+      .mockResolvedValueOnce(transcriptionResult(undefined, "skipped"))
       .mockResolvedValueOnce(transcriptionResult("long transcript"));
 
     await expect(
@@ -220,7 +274,7 @@ describe("transcribeAudioFile", () => {
   it("rejects a no-text file with no audio stream", async () => {
     const filePath = await writeAudioFile("silent-video.mp4");
     runFfprobe.mockResolvedValue("120");
-    runAudioTranscription.mockResolvedValue({ transcript: undefined, attachments: [] });
+    runAudioTranscription.mockResolvedValue(transcriptionResult(undefined));
 
     await expect(transcribeAudioFile({ filePath, cfg: {} as OpenClawConfig })).rejects.toThrow(
       /requires an audio stream/i,
