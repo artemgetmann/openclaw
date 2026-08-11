@@ -302,6 +302,17 @@ jarvis_release_disk_ensure_capacity() {
     return 2
   fi
 
+  # Capacity probes can be slow enough for a caller's authorization to change.
+  # Give mutation-owning entrypoints one last read-only validation immediately
+  # before cleanup; the helper itself stays independent of release-intent state.
+  if [[ -n "${JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION:-}" ]]; then
+    declare -F "$JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION" >/dev/null || {
+      printf 'ERROR: configured release disk cleanup validator is not a function\n' >&2
+      return 2
+    }
+    "$JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION" || return $?
+  fi
+
   if [[ -n "${JARVIS_RELEASE_DISK_CLEANUP_COMMAND:-}" ]]; then
     [[ -x "$JARVIS_RELEASE_DISK_CLEANUP_COMMAND" ]] || {
       printf 'ERROR: configured release disk cleanup command is not executable\n' >&2

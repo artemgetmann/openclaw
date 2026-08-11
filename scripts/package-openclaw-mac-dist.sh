@@ -214,11 +214,19 @@ require_release_disk_preflight() {
 
   # Preserve the helper's complete multi-target report on stdout. Operators
   # need each target, filesystem, free-space, shortfall, and final status line.
-  jarvis_release_disk_ensure_capacity "$ROOT_DIR" "$required_kib" \
+  JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION=require_release_disk_cleanup_authorization \
+    jarvis_release_disk_ensure_capacity "$ROOT_DIR" "$required_kib" \
     release-output "$ROOT_DIR/dist" \
     release-staging "$staging_path" \
     package-temp "$package_temp_path" \
     dmg-temp /tmp
+}
+
+require_release_disk_cleanup_authorization() {
+  # The initial intent check authorizes the read-only scan. Revalidate after
+  # those probes and immediately before automatic cleanup mutates host caches.
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "release disk cleanup"
 }
 
 release_phase_now_ms() {
