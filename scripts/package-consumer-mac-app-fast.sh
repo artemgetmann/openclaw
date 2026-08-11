@@ -48,9 +48,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PACKAGE_ARGS=()
+PACKAGE_COMMAND=("$ROOT_DIR/scripts/package-consumer-mac-app.sh")
 if [[ -n "$INSTANCE_ID" ]]; then
-  PACKAGE_ARGS+=(--instance "$INSTANCE_ID")
+  PACKAGE_COMMAND+=(--instance "$INSTANCE_ID")
 fi
 
 # Fresh or partially bootstrapped lanes may not have a built runtime yet. Fall
@@ -70,4 +70,4 @@ CI="${CI:-true}" \
 OPENCLAW_CONSUMER_REUSE_RUNTIME="$REUSE_RUNTIME" \
 SKIP_RUNTIME_PAYLOAD_CODESIGN="${SKIP_RUNTIME_PAYLOAD_CODESIGN:-$REUSE_RUNTIME}" \
 OPENCLAW_CONSUMER_INSTANCE_ID="$INSTANCE_ID" \
-  "$ROOT_DIR/scripts/package-consumer-mac-app.sh" "${PACKAGE_ARGS[@]}"
+  "${PACKAGE_COMMAND[@]}"
