@@ -501,7 +501,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       100,
-      "⚙️ Compacting this conversation — this may take a few minutes.",
+      "⚙️ I’m condensing our conversation so we can keep talking. This may take a few minutes.",
       expect.objectContaining({ message_thread_id: 42 }),
     );
     expect(sendMessage.mock.invocationCallOrder[0]).toBeLessThan(

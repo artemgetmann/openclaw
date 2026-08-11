@@ -38,10 +38,10 @@ describe("proactive compaction", () => {
     fixtureRoots.clear();
   });
 
-  it("waits until fresh post-turn usage reaches the conservative threshold", () => {
+  it("reserves enough post-turn headroom for a large incoming message", () => {
     expect(
       resolveProactiveCompactionDecision({
-        totalTokens: 84_999,
+        totalTokens: 69_999,
         totalTokensFresh: true,
         contextTokens: 100_000,
       }),
@@ -49,9 +49,19 @@ describe("proactive compaction", () => {
 
     expect(
       resolveProactiveCompactionDecision({
-        totalTokens: 85_000,
+        totalTokens: 70_000,
         totalTokensFresh: true,
         contextTokens: 100_000,
+      }),
+    ).toMatchObject({ shouldCompact: true, reason: "threshold-reached" });
+
+    // Regression: this was the live pre-turn usage before two attached images
+    // pushed the next request into an eight-minute reactive compaction.
+    expect(
+      resolveProactiveCompactionDecision({
+        totalTokens: 196_000,
+        totalTokensFresh: true,
+        contextTokens: 272_000,
       }),
     ).toMatchObject({ shouldCompact: true, reason: "threshold-reached" });
 

@@ -71,6 +71,7 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import { emitCompactionLifecycleEvent } from "./run/compaction-events.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import {
@@ -1195,6 +1196,14 @@ export async function runEmbeddedPiAgent(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
               let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              // Overflow recovery bypasses the SDK subscription that normally
+              // emits compaction lifecycle events. Notify the channel before
+              // the awaited work so a multi-minute recovery is visible.
+              await emitCompactionLifecycleEvent({
+                onAgentEvent: params.onAgentEvent,
+                phase: "start",
+                warn: (message) => log.warn(message),
+              });
               // When the engine owns compaction, hooks are not fired inside
               // compactEmbeddedPiSessionDirect (which is bypassed).  Fire them
               // here so subscribers (memory extensions, usage trackers) are
@@ -1258,6 +1267,13 @@ export async function runEmbeddedPiAgent(
                 );
                 compactResult = { ok: false, compacted: false, reason: String(compactErr) };
               }
+              await emitCompactionLifecycleEvent({
+                onAgentEvent: params.onAgentEvent,
+                phase: "end",
+                completed: compactResult.ok && compactResult.compacted,
+                willRetry: compactResult.compacted,
+                warn: (message) => log.warn(message),
+              });
               if (
                 compactResult.ok &&
                 compactResult.compacted &&

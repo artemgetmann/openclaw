@@ -3827,7 +3827,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(draftB.clear).not.toHaveBeenCalled();
   });
 
-  it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
+  it("shows a plain-language notice during auto-compaction and resumes thinking", async () => {
+    const progressStream = createDraftStream(77);
+    createTelegramDraftStream.mockReturnValue(progressStream);
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),
       setCompacting: vi.fn(async () => {}),
@@ -3850,9 +3852,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       context: createContext({
         statusReactionController: statusReactionController as never,
       }),
-      streamMode: "off",
     });
 
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "I’m condensing our conversation so we can keep talking. This may take a few minutes.",
+    );
     expect(statusReactionController.setCompacting).toHaveBeenCalledTimes(1);
     expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setThinking).toHaveBeenCalledTimes(2);

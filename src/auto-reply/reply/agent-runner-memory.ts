@@ -647,7 +647,10 @@ export async function runMemoryFlushIfNeeded(params: {
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
+              // Overflow recovery also emits an end event when compaction
+              // fails. Only a completed rewrite makes the old token snapshot
+              // and CLI resume state stale.
+              if (phase === "end" && evt.data.completed === true) {
                 memoryCompactionCompleted = true;
               }
             }

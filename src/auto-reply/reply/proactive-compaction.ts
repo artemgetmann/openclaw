@@ -14,7 +14,10 @@ import { incrementCompactionCount } from "./session-updates.js";
 
 const log = createSubsystemLogger("proactive-compaction");
 
-export const PROACTIVE_COMPACTION_THRESHOLD_RATIO = 0.85;
+// Keep enough room for one unusually large inbound turn, including attachments.
+// The previous 85% threshold let a 72%-full live chat jump straight into an
+// eight-minute reactive compaction when the next message contained two images.
+export const PROACTIVE_COMPACTION_THRESHOLD_RATIO = 0.7;
 export const PROACTIVE_COMPACTION_MIN_CONVERSATION_RATIO = 0.2;
 export const PROACTIVE_COMPACTION_IDLE_DELAY_MS = 10_000;
 
