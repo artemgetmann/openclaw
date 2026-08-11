@@ -39,6 +39,7 @@ check_mapping() {
 
 check_mapping standard jarvis-public-release:full release-jarvis
 check_mapping standard package-mac-app:consumer release-jarvis
+check_mapping standard package-consumer-mac-app:auto release-jarvis
 check_mapping gateway-lifecycle gateway-restart:ai.jarvis.gateway gateway-main
 check_mapping jarvis-remediation ship-jarvis-hotfix:pr-1 gateway-main,release-jarvis
 check_mapping standard prove-main-telegram-runtime live-telegram-main
