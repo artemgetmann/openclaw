@@ -395,6 +395,21 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
   });
 
+  it("refuses to append when the caller locked a different transcript", async () => {
+    writeTranscriptStore();
+    const actualSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+
+    await expect(
+      appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Must remain ordered with the lock",
+        storePath: fixture.storePath(),
+        expectedSessionFile: path.join(fixture.sessionsDir(), "pre-reset-session.jsonl"),
+      }),
+    ).resolves.toEqual({ ok: false, reason: "session mapping changed before transcript append" });
+    expect(fs.existsSync(actualSessionFile)).toBe(false);
+  });
+
   it("ignores malformed transcript lines when checking mirror idempotency", async () => {
     writeTranscriptStore();
 

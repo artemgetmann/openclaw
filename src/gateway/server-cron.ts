@@ -31,7 +31,13 @@ import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import {
+  MONITOR_RESULT_IDEMPOTENCY_PREFIX,
+  resolveMonitorTranscriptPath,
+  syncOriginContextIntoMonitor,
+} from "../monitor/context-sync.js";
+import {
   resolveMonitorExecutionPlan,
+  resolveMonitorOriginDelivery,
   resolveMonitorRecordWatchDelivery,
 } from "../monitor/delivery.js";
 import {
@@ -441,12 +447,54 @@ export function buildGatewayCronService(params: {
         originDelivery: monitor.originDelivery,
         watchDelivery: resolveMonitorRecordWatchDelivery(monitor),
       });
+      const originDelivery = resolveMonitorOriginDelivery({
+        originSessionKey: monitor.originSessionKey,
+        originDelivery: monitor.originDelivery,
+      });
+      const fallbackTargetsOrigin =
+        monitorExecution.fallbackDelivery?.mode === "announce" &&
+        originDelivery?.mode === "announce" &&
+        monitorExecution.fallbackDelivery.channel === originDelivery.channel &&
+        monitorExecution.fallbackDelivery.to === originDelivery.to &&
+        monitorExecution.fallbackDelivery.accountId === originDelivery.accountId;
+      const originTranscriptAvailable =
+        fallbackTargetsOrigin &&
+        Boolean(
+          resolveMonitorTranscriptPath({
+            cfg: runtimeConfig,
+            agentId: monitor.agentId,
+            sessionKey: monitor.originSessionKey,
+          }),
+        );
       const wakeMessage = buildMonitorWakeMessage({
         monitor,
         nowIso: new Date(nowMs).toISOString(),
         wakeReason: `cron:${job.id}`,
         watchDeliveryConfigured: monitorExecution.watchDeliveryConfigured,
       });
+      // Import live-chat turns written after monitor creation before this
+      // continuation acts, while keeping autonomous state in its own session.
+      const originSync = await syncOriginContextIntoMonitor({
+        cfg: runtimeConfig,
+        monitor,
+        abortSignal,
+      });
+      if (!originSync.ok) {
+        cronLogger.warn(
+          { monitorId: monitor.monitorId, reason: originSync.reason },
+          "monitor: could not import new origin context before wake",
+        );
+      }
+      const deliveryMirror = originTranscriptAvailable
+        ? {
+            agentId: monitor.agentId,
+            sessionKey: monitor.originSessionKey,
+            storePath: resolveStorePath(runtimeConfig.session?.store, {
+              agentId: monitor.agentId,
+            }),
+            idempotencyPrefix: `${MONITOR_RESULT_IDEMPOTENCY_PREFIX}${monitor.monitorId}:`,
+          }
+        : undefined;
       const result = await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
@@ -462,9 +510,12 @@ export function buildGatewayCronService(params: {
         agentId: monitor.agentId,
         sessionKey: monitor.monitorSessionKey,
         lane: "cron",
-        deliveryContract: monitorExecution.deliveryContract,
+        // Origin-routed notifications use cron-owned direct delivery. This
+        // disables the message tool for that route so the only visible send
+        // occurs inside the short provider-send/transcript-mirror lock.
+        deliveryContract: fallbackTargetsOrigin ? "cron-owned" : monitorExecution.deliveryContract,
         deliveryPromptMode: monitorExecution.deliveryPromptMode,
-        ...(monitorExecution.messageToolTarget
+        ...(!fallbackTargetsOrigin && monitorExecution.messageToolTarget
           ? {
               messageToolTarget: {
                 channel: monitorExecution.messageToolTarget.channel,
@@ -483,6 +534,7 @@ export function buildGatewayCronService(params: {
         // Forcing the legacy daily cron reset here would recreate the same
         // "fresh mini-brain on every wake" bug this redesign is fixing.
         sessionDefaultResetMode: "manual",
+        ...(deliveryMirror ? { deliveryMirror } : {}),
       });
       let stopJob = false;
       await withMonitorStoreWriteLock(monitorStorePath, async () => {

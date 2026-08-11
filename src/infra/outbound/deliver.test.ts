@@ -1011,6 +1011,60 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("reports mirror failure without discarding provider acceptance", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
+      new Error("session rotated"),
+    );
+
+    const onMirrorResult = vi.fn();
+    await expect(
+      deliverOutboundPayloads({
+        cfg: telegramChunkConfig,
+        channel: "telegram",
+        to: "123",
+        payloads: [{ text: "monitor result" }],
+        deps: { sendTelegram },
+        mirror: {
+          sessionKey: "agent:main:main",
+          text: "monitor result",
+          idempotencyKey: "idem-required-mirror",
+        },
+        onMirrorResult,
+      }),
+    ).resolves.not.toHaveLength(0);
+    expect(sendTelegram).toHaveBeenCalled();
+    expect(onMirrorResult).toHaveBeenCalledWith({ ok: false, reason: "session rotated" });
+  });
+
+  it("does not mirror a partially delivered best-effort batch", async () => {
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", chatId: "c1" })
+      .mockRejectedValueOnce(new Error("second payload failed"));
+    const onError = vi.fn();
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const results = await deliverOutboundPayloads({
+      cfg: telegramChunkConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "delivered result" }, { text: "missing appendix" }],
+      deps: { sendTelegram },
+      bestEffort: true,
+      onError,
+      mirror: {
+        sessionKey: "agent:main:main",
+        text: "delivered result\n\nmissing appendix",
+        idempotencyKey: "idem-partial-batch",
+      },
+    });
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
   it("emits message_sent success for text-only deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });

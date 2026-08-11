@@ -15,6 +15,7 @@ import {
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { CronDelivery } from "../cron/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { recordMonitorOriginSyncCursor } from "./context-sync.js";
 import {
   buildMonitorAutonomyLines,
   buildMonitorAuthorityLines,
@@ -188,6 +189,7 @@ export function buildMonitorBootstrapPrompt(params: {
 export async function seedMonitorSession(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  monitorId: string;
   sessionKey: string;
   sessionId: string;
   label: string;
@@ -284,6 +286,16 @@ export async function seedMonitorSession(params: {
       originDelivery: params.originDelivery,
     }),
     timestamp: Date.now(),
+  });
+  // The fork already contains origin history through this exact leaf. Persist
+  // that captured boundary so later wakes import only new live-chat activity.
+  // A fresh fallback intentionally stays uncursored: its first bounded sync
+  // must import recent context because no origin history was copied.
+  recordMonitorOriginSyncCursor({
+    sessionManager,
+    monitorId: params.monitorId,
+    originSessionKey: params.originSessionKey,
+    sourceEntryId: forked?.sourceLeafId,
   });
   emitSessionTranscriptUpdate(sessionFile);
 }

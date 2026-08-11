@@ -17,6 +17,8 @@ function isValidLockNumber(value: unknown): value is number {
 
 type HeldLock = {
   count: number;
+  /** Prevent unrelated in-process work from treating this lock as nested. */
+  blockReentrant: boolean;
   handle: fs.FileHandle;
   lockPath: string;
   acquiredAt: number;
@@ -395,7 +397,7 @@ export async function cleanStaleLockFiles(params: {
   };
 }): Promise<{ locks: SessionLockInspection[]; cleaned: SessionLockInspection[] }> {
   const sessionsDir = path.resolve(params.sessionsDir);
-  const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
+  const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS, { allowInfinity: true });
   const removeStale = params.removeStale !== false;
   const nowMs = params.nowMs ?? Date.now();
 
@@ -447,12 +449,29 @@ export async function acquireSessionWriteLock(params: {
   staleMs?: number;
   maxHoldMs?: number;
   allowReentrant?: boolean;
+  /**
+   * Make this acquisition exclusive even against later calls in this process.
+   * Use for short cross-system commit windows where a provider-visible event
+   * and its transcript write must stay ordered with a concurrent live turn.
+   */
+  blockReentrant?: boolean;
+  /** Cancel a queued acquisition without reclaiming the current owner's lock. */
+  abortSignal?: AbortSignal;
 }): Promise<{
   release: () => Promise<void>;
 }> {
   registerCleanupHandlers();
+  const throwIfAborted = () => {
+    if (!params.abortSignal?.aborted) {
+      return;
+    }
+    throw params.abortSignal.reason instanceof Error
+      ? params.abortSignal.reason
+      : new Error("session lock acquisition aborted");
+  };
+  throwIfAborted();
   const timeoutMs = resolvePositiveMs(params.timeoutMs, 10_000, { allowInfinity: true });
-  const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
+  const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS, { allowInfinity: true });
   const maxHoldMs = resolvePositiveMs(params.maxHoldMs, DEFAULT_MAX_HOLD_MS);
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
@@ -468,7 +487,7 @@ export async function acquireSessionWriteLock(params: {
 
   const allowReentrant = params.allowReentrant ?? true;
   const held = HELD_LOCKS.get(normalizedSessionFile);
-  if (allowReentrant && held) {
+  if (allowReentrant && held && !held.blockReentrant && params.blockReentrant !== true) {
     held.count += 1;
     return {
       release: async () => {
@@ -480,6 +499,7 @@ export async function acquireSessionWriteLock(params: {
   const startedAt = Date.now();
   let attempt = 0;
   while (Date.now() - startedAt < timeoutMs) {
+    throwIfAborted();
     attempt += 1;
     let handle: fs.FileHandle | null = null;
     try {
@@ -493,6 +513,7 @@ export async function acquireSessionWriteLock(params: {
       await handle.writeFile(JSON.stringify(lockPayload, null, 2), "utf8");
       const createdHeld: HeldLock = {
         count: 1,
+        blockReentrant: params.blockReentrant === true,
         handle,
         lockPath,
         acquiredAt: Date.now(),
@@ -543,7 +564,22 @@ export async function acquireSessionWriteLock(params: {
       }
 
       const delay = Math.min(1000, 50 * attempt);
-      await new Promise((r) => setTimeout(r, delay));
+      await new Promise<void>((resolve, reject) => {
+        const signal = params.abortSignal;
+        const timer = setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, delay);
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(
+            signal?.reason instanceof Error
+              ? signal.reason
+              : new Error("session lock acquisition aborted"),
+          );
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
     }
   }
 

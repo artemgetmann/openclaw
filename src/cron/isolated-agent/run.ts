@@ -50,6 +50,7 @@ import {
 import type { SessionResetMode } from "../../config/sessions/reset.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import type { DeliveryMirror } from "../../infra/outbound/mirror.js";
 import { logWarn } from "../../logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -331,6 +332,10 @@ export async function runCronIsolatedAgentTurn(params: {
   messageToolTarget?: CronMessageToolTarget;
   disableGoalTools?: boolean;
   sessionDefaultResetMode?: SessionResetMode;
+  deliveryMirror?: Pick<DeliveryMirror, "agentId" | "sessionKey"> & {
+    storePath: string;
+    idempotencyPrefix: string;
+  };
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
@@ -1021,6 +1026,7 @@ export async function runCronIsolatedAgentTurn(params: {
     deliveryRequested,
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
+    deliveryMirror: params.deliveryMirror,
     deliveryBestEffort,
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,

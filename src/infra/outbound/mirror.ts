@@ -1,6 +1,10 @@
 export type OutboundMirror = {
   sessionKey: string;
   agentId?: string;
+  /** Optional non-default session store used by isolated runtimes and tests. */
+  storePath?: string;
+  /** Refuse to append if the session mapping no longer points at this locked transcript. */
+  expectedSessionFile?: string;
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
