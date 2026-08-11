@@ -23,6 +23,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "peekaboo",
   "summarize",
   "tldr",
+  "plain-language",
   "weather",
   "wacli",
   "mcporter",

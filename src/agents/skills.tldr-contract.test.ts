@@ -5,19 +5,31 @@ import { CONSUMER_DEFAULT_BUNDLED_SKILLS } from "./consumer-default-bundled-skil
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./skills/frontmatter.js";
 
 describe("tldr skill contract", () => {
-  it("stays available to both explicit commands and natural-language requests", () => {
+  it("stays available only to explicit commands", () => {
     // Read the shipped source so this test catches metadata drift in the actual
     // skill instead of proving a hand-built fixture that users never receive.
-    // Natural-language requests need model invocation enabled; otherwise Jarvis
-    // omits TLDR from its active catalog and silently falls back to summarize.
+    // Keep the description valid for the loader while preventing the model
+    // from selecting this command without an explicit user invocation.
     const skillPath = path.join(process.cwd(), "skills", "tldr", "SKILL.md");
     const frontmatter = parseFrontmatter(fs.readFileSync(skillPath, "utf8"));
 
     expect(frontmatter.description?.trim()).toBe("Rewrite the last response in plain language.");
     expect(resolveSkillInvocationPolicy(frontmatter)).toEqual({
       userInvocable: true,
-      disableModelInvocation: false,
+      disableModelInvocation: true,
     });
+  });
+
+  it("ships a minimal command-only plain-language skill", () => {
+    const skillPath = path.join(process.cwd(), "skills", "plain-language", "SKILL.md");
+    const frontmatter = parseFrontmatter(fs.readFileSync(skillPath, "utf8"));
+
+    expect(frontmatter.description?.trim()).toBe("Repeat the last response in plain language.");
+    expect(resolveSkillInvocationPolicy(frontmatter)).toEqual({
+      userInvocable: true,
+      disableModelInvocation: true,
+    });
+    expect(CONSUMER_DEFAULT_BUNDLED_SKILLS).toContain("plain-language");
   });
 
   it("ships in the default Jarvis skill set", () => {

@@ -41,6 +41,38 @@ class TestQuickValidate(TestCase):
         self.assertFalse(valid)
         self.assertEqual(message, "Invalid frontmatter format")
 
+    def test_rejects_empty_description(self):
+        # The runtime loader drops skills whose descriptions are blank, so the
+        # authoring validator must reject them before packaging.
+        skill_dir = self.temp_dir / "empty-description"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = '---\nname: empty-description\ndescription: ""\n---\n# Skill\n'
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "Description cannot be empty")
+
+    def test_accepts_command_only_invocation_fields(self):
+        # These fields are part of OpenClaw's runtime invocation policy and are
+        # required to keep slash commands out of automatic model selection.
+        skill_dir = self.temp_dir / "command-only"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: command-only
+description: Run only when explicitly invoked.
+user-invocable: true
+disable-model-invocation: true
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertTrue(valid, message)
+
     def test_fallback_parser_handles_multiline_frontmatter_without_pyyaml(self):
         skill_dir = self.temp_dir / "multiline-skill"
         skill_dir.mkdir(parents=True, exist_ok=True)
