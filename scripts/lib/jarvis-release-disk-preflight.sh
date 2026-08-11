@@ -227,8 +227,10 @@ jarvis_release_disk_preflight_targets() {
     # owner can safely reclaim one proven-generated batch and retry exactly
     # once. Emit the canonical skill and a stable action instead of vague
     # operator guidance that agents tend to hand back to the user.
-    printf 'recovery_skill=%s/.agents/skills/reclaim-coding-disk/SKILL.md\n' "${HOME}"
-    printf 'next_operator_action=invoke_reclaim_coding_disk_then_rerun_preflight_once\n'
+    if [[ "${JARVIS_RELEASE_DISK_MANUAL_RECOVERY_HINTS:-1}" == "1" ]]; then
+      printf 'recovery_skill=%s/.agents/skills/reclaim-coding-disk/SKILL.md\n' "${HOME}"
+      printf 'next_operator_action=invoke_reclaim_coding_disk_then_rerun_preflight_once\n'
+    fi
     return 1
   fi
 
@@ -278,7 +280,8 @@ jarvis_release_disk_ensure_capacity() {
   # The first measurement remains visible so a recovered release has an exact
   # before receipt. Capacity failures are the only recoverable result; malformed
   # configuration or an unreadable filesystem must fail without deleting data.
-  if jarvis_release_disk_preflight_targets "$required_kib" "$@"; then
+  if JARVIS_RELEASE_DISK_MANUAL_RECOVERY_HINTS=0 \
+    jarvis_release_disk_preflight_targets "$required_kib" "$@"; then
     printf 'release_disk_capacity_status=ready\n'
     return 0
   else
@@ -330,7 +333,8 @@ jarvis_release_disk_ensure_capacity() {
 
   # Re-measure even if cleanup reported a partial failure: another safe entry may
   # still have restored enough capacity. This is the sole automatic retry.
-  if jarvis_release_disk_preflight_targets "$required_kib" "$@"; then
+  if JARVIS_RELEASE_DISK_MANUAL_RECOVERY_HINTS=0 \
+    jarvis_release_disk_preflight_targets "$required_kib" "$@"; then
     printf 'release_disk_capacity_status=recovered\n'
     return 0
   else

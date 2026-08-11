@@ -69,6 +69,8 @@ JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION=authorize_cleanup \
   jarvis_release_disk_ensure_capacity \
     "$ROOT_DIR" 2048 release-output "$TMP_ROOT/dist" >"$OUTPUT"
 grep -Fq 'release_disk_recovery=started' "$OUTPUT" || fail "low capacity did not start cleanup"
+! grep -Fq 'next_operator_action=invoke_reclaim_coding_disk_then_rerun_preflight_once' "$OUTPUT" || \
+  fail "automatic recovery emitted the obsolete manual cleanup action"
 grep -Fq 'cleanup_called=true' "$OUTPUT" || fail "cleanup command did not run"
 grep -Fq 'release_disk_capacity_status=recovered' "$OUTPUT" || fail "recovered capacity did not continue"
 
