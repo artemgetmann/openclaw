@@ -153,6 +153,7 @@ export type AcpxPluginConfig = {
   strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
+  agentCommands?: Record<string, string>;
   mcpServers?: Record<string, McpServerConfig>;
 };
 
@@ -169,6 +170,7 @@ export type ResolvedAcpxPluginConfig = {
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
+  agentCommands: Record<string, string>;
   mcpServers: Record<string, McpServerConfig>;
 };
 
@@ -225,6 +227,35 @@ function isMcpServerConfig(value: unknown): value is McpServerConfig {
   return true;
 }
 
+function normalizeAgentCommands(
+  value: unknown,
+): { ok: true; value: Record<string, string> } | { ok: false; message: string } {
+  if (value === undefined) {
+    return { ok: true, value: {} };
+  }
+  if (!isRecord(value)) {
+    return { ok: false, message: "agentCommands must be an object" };
+  }
+
+  const normalized: Record<string, string> = {};
+  for (const [rawName, rawCommand] of Object.entries(value)) {
+    const name = rawName.trim().toLowerCase();
+    if (!name) {
+      return { ok: false, message: "agentCommands keys must be non-empty agent names" };
+    }
+    if (typeof rawCommand !== "string" || rawCommand.trim() === "") {
+      return {
+        ok: false,
+        message: `agentCommands.${rawName} must be a non-empty string`,
+      };
+    }
+    // Normalize names once at config load so runtime lookups remain deterministic
+    // across user casing and whitespace without rewriting the command itself.
+    normalized[name] = rawCommand.trim();
+  }
+  return { ok: true, value: normalized };
+}
+
 function parseAcpxPluginConfig(value: unknown): ParseResult {
   if (value === undefined) {
     return { ok: true, value: undefined };
@@ -241,6 +272,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     "strictWindowsCmdWrapper",
     "timeoutSeconds",
     "queueOwnerTtlSeconds",
+    "agentCommands",
     "mcpServers",
   ]);
   for (const key of Object.keys(value)) {
@@ -313,6 +345,11 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     return { ok: false, message: "queueOwnerTtlSeconds must be a non-negative number" };
   }
 
+  const agentCommands = normalizeAgentCommands(value.agentCommands);
+  if (!agentCommands.ok) {
+    return agentCommands;
+  }
+
   const mcpServers = value.mcpServers;
   if (mcpServers !== undefined) {
     if (!isRecord(mcpServers)) {
@@ -342,6 +379,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
       timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
       queueOwnerTtlSeconds:
         typeof queueOwnerTtlSeconds === "number" ? queueOwnerTtlSeconds : undefined,
+      agentCommands: agentCommands.value,
       mcpServers: mcpServers as Record<string, McpServerConfig> | undefined,
     },
   };
@@ -400,6 +438,10 @@ export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
         strictWindowsCmdWrapper: { type: "boolean" },
         timeoutSeconds: { type: "number", minimum: 0.001 },
         queueOwnerTtlSeconds: { type: "number", minimum: 0 },
+        agentCommands: {
+          type: "object",
+          additionalProperties: { type: "string", minLength: 1 },
+        },
         mcpServers: {
           type: "object",
           additionalProperties: {
@@ -478,6 +520,7 @@ export function resolveAcpxPluginConfig(params: {
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    agentCommands: normalized.agentCommands ?? {},
     mcpServers: normalized.mcpServers ?? {},
   };
 }

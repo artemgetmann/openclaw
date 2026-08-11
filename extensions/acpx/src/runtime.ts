@@ -223,7 +223,9 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly logger?: PluginLogger;
   private readonly queueOwnerTtlSeconds: number;
   private readonly spawnCommandCache: SpawnCommandCache = {};
-  private readonly mcpProxyAgentCommandCache = new Map<string, string>();
+  // Cache both direct adapter overrides and MCP-proxied commands. The config is
+  // immutable for one runtime instance, so cwd + agent fully identifies it.
+  private readonly resolvedAgentCommandCache = new Map<string, string>();
   private readonly spawnCommandOptions: SpawnCommandOptions;
   private readonly loggedSpawnResolutions = new Set<string>();
 
@@ -810,11 +812,13 @@ export class AcpxRuntime implements AcpRuntime {
     agent: string;
     cwd: string;
   }): Promise<string | null> {
-    if (Object.keys(this.config.mcpServers).length === 0) {
+    const normalizedAgent = params.agent.trim().toLowerCase();
+    const configuredAgentCommand = this.config.agentCommands[normalizedAgent];
+    if (!configuredAgentCommand && Object.keys(this.config.mcpServers).length === 0) {
       return null;
     }
     const cacheKey = `${params.cwd}::${params.agent}`;
-    const cached = this.mcpProxyAgentCommandCache.get(cacheKey);
+    const cached = this.resolvedAgentCommandCache.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -822,14 +826,21 @@ export class AcpxRuntime implements AcpRuntime {
       acpxCommand: this.config.command,
       cwd: params.cwd,
       agent: params.agent,
+      agentCommands: this.config.agentCommands,
       stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       spawnOptions: this.spawnCommandOptions,
     });
+    if (Object.keys(this.config.mcpServers).length === 0) {
+      // A direct adapter override needs no proxy. Passing it through --agent is
+      // enough for acpx to keep the normal persistent-session lifecycle.
+      this.resolvedAgentCommandCache.set(cacheKey, targetCommand);
+      return targetCommand;
+    }
     const resolved = buildMcpProxyAgentCommand({
       targetCommand,
       mcpServers: toAcpMcpServers(this.config.mcpServers),
     });
-    this.mcpProxyAgentCommandCache.set(cacheKey, resolved);
+    this.resolvedAgentCommandCache.set(cacheKey, resolved);
     return resolved;
   }
 

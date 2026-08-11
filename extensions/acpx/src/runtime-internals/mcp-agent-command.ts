@@ -120,10 +120,17 @@ export async function resolveAcpxAgentCommand(params: {
   acpxCommand: string;
   cwd: string;
   agent: string;
+  agentCommands?: Record<string, string>;
   stripProviderAuthEnvVars?: boolean;
   spawnOptions?: SpawnCommandOptions;
 }): Promise<string> {
   const normalizedAgent = normalizeAgentName(params.agent);
+  // Plugin-scoped commands are explicit for this OpenClaw runtime and must win
+  // over machine-global ACPX state so deployments stay isolated and reproducible.
+  const pluginCommand = params.agentCommands?.[normalizedAgent]?.trim();
+  if (pluginCommand) {
+    return pluginCommand;
+  }
   const overrides = await loadAgentOverrides({
     acpxCommand: params.acpxCommand,
     cwd: params.cwd,
