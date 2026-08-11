@@ -9,6 +9,7 @@ SKIP_TEAM_ID_CHECK="${SKIP_TEAM_ID_CHECK:-0}"
 SKIP_RUNTIME_PAYLOAD_CODESIGN="${SKIP_RUNTIME_PAYLOAD_CODESIGN:-0}"
 PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
 source "$(cd "$(dirname "$0")" && pwd)/lib/openclaw-runtime-payloads.sh"
+source "$(cd "$(dirname "$0")" && pwd)/lib/consumer-mcporter-runtime.sh"
 ENT_TMP_BASE=$(mktemp -t openclaw-entitlements-base.XXXXXX)
 ENT_TMP_APP_BASE=$(mktemp -t openclaw-entitlements-app-base.XXXXXX)
 ENT_TMP_RUNTIME=$(mktemp -t openclaw-entitlements-runtime.XXXXXX)
@@ -387,6 +388,18 @@ else
   done < <(openclaw_runtime_payload_files "$APP_BUNDLE")
 fi
 phase_log_elapsed "$runtime_payload_started_ms" "Sign runtime payloads"
+
+# The mcporter receipt hashes its native Rolldown bindings. Signing those
+# Mach-O files changes their bytes, so refresh the receipt after payload
+# signing and before sealing nested apps and the outer bundle. Reused runtimes
+# skip payload signing and already carry a receipt for their signed bytes.
+mcporter_root="$APP_BUNDLE/Contents/Resources/OpenClawRuntime/openclaw/tools/mcporter"
+if [[ "$SKIP_RUNTIME_PAYLOAD_CODESIGN" != "1" && -f "$mcporter_root/receipt.json" ]]; then
+  openclaw_verify_consumer_mcporter_runtime \
+    "${OPENCLAW_NODE_BIN:-node}" \
+    "$mcporter_root" \
+    write
+fi
 
 # Seal nested runtime apps only after their Mach-O children have the Jarvis
 # identity. Signing a child afterward would invalidate the nested bundle.
