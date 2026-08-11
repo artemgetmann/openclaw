@@ -34,7 +34,6 @@
 - Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - Before package/sign/notarize/install work, shared runtime or gateway mutation, or bounded live/external acceptance, read `docs/agent-guides/fleet-resource-control.md` and use its narrow exclusive lane. Ordinary isolated tests, typechecks, builds, dependency installation, reviews, and independent worktrees run concurrently and must not acquire a machine-wide slot.
 - For every implementation PR, follow `docs/agent-guides/workflow.md`. One primary chat owns the issue through implementation, Codex review when required, focused proof, CI, normal non-admin merge, and any already-authorized delivery. Optional nested read-only validation is useful for an immutable risky diff, but separate tester/release chats, native wake callbacks, and chat archival are never correctness requirements. Package, deploy, restart, install, shared-runtime mutation, credentials, destructive cleanup, and live/external actions retain their explicit authority boundaries.
-- The Control Tower skill is an emergency-only incident playbook. Never self-elect or create a Tower/dashboard from ordinary implementation, parallel work, repo reading, open PRs, worktree count, or resource pressure. Use `.agents/skills/codex-control-tower-emergency/SKILL.md` only when the user explicitly invokes `Control Tower` or an authorized incident owner declares a fleet incident.
 - When the user says “Ship this PR to my main Jarvis” or equivalent, read `docs/agent-guides/runtime-ops.md` and invoke `scripts/ship-jarvis-hotfix.sh --pr <number>` directly from the sacred main clone so its clean production shebang owns process startup; do not invoke it through `bash`, assemble the deployment manually, or route it through a personal/global skill.
 - For consumer macOS packaging/relaunch iteration, prefer `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>` and the notes in `apps/macos/README.md` instead of rediscovering the warm-path flags by hand.
 - For a sendable Jarvis DMG or app update, follow the canonical release lane in `apps/macos/README.md`; keep this file as a pointer, not the release playbook.
@@ -112,7 +111,6 @@
 
 ## Repo-local skills
 
-- `.agents/skills/codex-control-tower-emergency/SKILL.md`
 - `.agents/skills/codex-thread-control-recovery/SKILL.md`
 - `.agents/skills/telegram-live-e2e/SKILL.md`
 - `.agents/skills/parallels-discord-roundtrip/SKILL.md`
