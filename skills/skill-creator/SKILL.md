@@ -328,7 +328,35 @@ Write the YAML frontmatter with `name` and `description`:
 - Quote YAML string values, especially `description`, because colons, quotes, and punctuation can break unquoted YAML.
 - Do not declare a skill valid until the frontmatter parses with a real YAML parser or the package validator; visual inspection is not enough.
 
-Do not include any other fields in YAML frontmatter.
+For Codex-only skills, do not include other fields in YAML frontmatter. OpenClaw
+supports additional invocation fields as described below.
+
+##### Invocation policy
+
+When the user asks for a skill that must be explicit-only, manual-only, or not
+invoked automatically, first identify the target runtime. Do not assume Codex
+and OpenClaw use the same metadata.
+
+- **Codex**: Keep `SKILL.md` frontmatter limited to `name` and `description`.
+  Add `agents/openai.yaml` with:
+
+  ```yaml
+  policy:
+    allow_implicit_invocation: false
+  ```
+
+- **OpenClaw/Jarvis**: Add these fields to `SKILL.md` frontmatter:
+
+  ```yaml
+  user-invocable: true
+  disable-model-invocation: true
+  ```
+
+- **Both runtimes**: Apply both configurations in their respective files.
+
+If automatic semantic invocation is desired, omit the explicit-only controls.
+Keep a concise, meaningful `description`; do not replace it with an empty or
+single-character value.
 
 ##### Body
 

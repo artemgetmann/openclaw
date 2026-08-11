@@ -41,6 +41,25 @@ class TestQuickValidate(TestCase):
         self.assertFalse(valid)
         self.assertEqual(message, "Invalid frontmatter format")
 
+    def test_accepts_openclaw_explicit_only_fields(self):
+        # OpenClaw keeps slash-command access while hiding an explicit-only
+        # skill from automatic model selection through these frontmatter keys.
+        skill_dir = self.temp_dir / "explicit-only"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: explicit-only
+description: Run only after an explicit user command.
+user-invocable: true
+disable-model-invocation: true
+---
+# Explicit Only
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertTrue(valid, message)
+
     def test_fallback_parser_handles_multiline_frontmatter_without_pyyaml(self):
         skill_dir = self.temp_dir / "multiline-skill"
         skill_dir.mkdir(parents=True, exist_ok=True)
