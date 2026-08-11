@@ -21,7 +21,7 @@ source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-disk-preflight.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
-source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+source "$ROOT_DIR/scripts/lib/shared-resource-lock.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
@@ -214,11 +214,19 @@ require_release_disk_preflight() {
 
   # Preserve the helper's complete multi-target report on stdout. Operators
   # need each target, filesystem, free-space, shortfall, and final status line.
-  jarvis_release_disk_preflight_targets "$required_kib" \
+  JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION=require_release_disk_cleanup_authorization \
+    jarvis_release_disk_ensure_capacity "$ROOT_DIR" "$required_kib" \
     release-output "$ROOT_DIR/dist" \
     release-staging "$staging_path" \
     package-temp "$package_temp_path" \
     dmg-temp /tmp
+}
+
+require_release_disk_cleanup_authorization() {
+  # The initial intent check authorizes the read-only scan. Revalidate after
+  # those probes and immediately before automatic cleanup mutates host caches.
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "release disk cleanup"
 }
 
 release_phase_now_ms() {
@@ -1445,7 +1453,8 @@ esac
 
 # release-jarvis is intentionally outside and before the package mutex. A
 # direct package command re-execs through the same named resource wrapper.
-openclaw_heavy_local_slot_require_or_reexec \
+openclaw_shared_resource_lock_require_or_reexec \
+  release-jarvis \
   "package-openclaw-mac-dist:${PACKAGE_PHASE}" \
   "$ROOT_DIR" \
   "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \

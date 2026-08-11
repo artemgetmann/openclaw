@@ -16,7 +16,7 @@ GITHUB_RELEASE_REPO="artemgetmann/openclaw"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
-source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+source "$ROOT_DIR/scripts/lib/shared-resource-lock.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
@@ -550,7 +550,8 @@ fi
 if [[ "$DRY_RUN" != "1" ]]; then
   # Authorization and dry-run intentionally remain lightweight. Executed
   # release orchestration acquires release-jarvis before intent/state work.
-  openclaw_heavy_local_slot_require_or_reexec \
+  openclaw_shared_resource_lock_require_or_reexec \
+    release-jarvis \
     "jarvis-public-release:${FORCED_PHASE}" \
     "$ROOT_DIR" \
     "$ROOT_DIR/scripts/jarvis-public-release.sh" \

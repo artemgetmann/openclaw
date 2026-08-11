@@ -4,6 +4,7 @@
 #
 # Public interfaces:
 #   jarvis_release_disk_preflight_targets <required-kib> <label> <path> [<label> <path> ...]
+#   jarvis_release_disk_ensure_capacity <repo-root> <required-kib> <label> <path> [...]
 #   jarvis_release_disk_preflight <target-path> [required-kib]  # compatibility
 #
 # The default 25 GiB floor is capacity insurance for the full release lane, not
@@ -226,13 +227,124 @@ jarvis_release_disk_preflight_targets() {
     # owner can safely reclaim one proven-generated batch and retry exactly
     # once. Emit the canonical skill and a stable action instead of vague
     # operator guidance that agents tend to hand back to the user.
-    printf 'recovery_skill=%s/.agents/skills/reclaim-coding-disk/SKILL.md\n' "${HOME}"
-    printf 'next_operator_action=invoke_reclaim_coding_disk_then_rerun_preflight_once\n'
+    if [[ "${JARVIS_RELEASE_DISK_MANUAL_RECOVERY_HINTS:-1}" == "1" ]]; then
+      printf 'recovery_skill=%s/.agents/skills/reclaim-coding-disk/SKILL.md\n' "${HOME}"
+      printf 'next_operator_action=invoke_reclaim_coding_disk_then_rerun_preflight_once\n'
+    fi
     return 1
   fi
 
   printf 'status=pass\n'
   return 0
+}
+
+jarvis_release_disk_cleanup_can_help() {
+  local required_kib="$1"
+  local cleanup_root="$2"
+  local cleanup_probe
+  local cleanup_filesystem_id
+  local target_probe
+  local target_filesystem_id
+  local target_free_kib
+  shift 2
+
+  cleanup_probe="$(jarvis_release_disk_probe_target "$cleanup_root")" || return 2
+  IFS=$'\t' read -r cleanup_filesystem_id _ _ _ <<<"$cleanup_probe"
+  [[ -n "$cleanup_filesystem_id" ]] || return 2
+
+  while [[ $# -gt 0 ]]; do
+    shift # The label is diagnostic; filesystem identity comes from the path.
+    target_probe="$(jarvis_release_disk_probe_target "$1")" || return 2
+    shift
+    IFS=$'\t' read -r target_filesystem_id _ target_free_kib _ <<<"$target_probe"
+    jarvis_release_disk_is_nonnegative_integer "$target_free_kib" || return 2
+    if [[ "$target_filesystem_id" == "$cleanup_filesystem_id" ]] && ((target_free_kib < required_kib)); then
+      return 0
+    fi
+  done
+  return 1
+}
+
+jarvis_release_disk_ensure_capacity() {
+  local repo_root="${1:-}"
+  local required_kib="${2:-}"
+  local cleanup_root="${OPENCLAW_BUILD_ARTIFACT_ROOT:-$HOME/Library/Caches/OpenClaw/build-artifacts}"
+  local cleanup_status=0
+  shift 2 || true
+
+  [[ -n "$repo_root" ]] || {
+    printf 'ERROR: release disk recovery requires the repository root\n' >&2
+    return 2
+  }
+
+  # The first measurement remains visible so a recovered release has an exact
+  # before receipt. Capacity failures are the only recoverable result; malformed
+  # configuration or an unreadable filesystem must fail without deleting data.
+  if JARVIS_RELEASE_DISK_MANUAL_RECOVERY_HINTS=0 \
+    jarvis_release_disk_preflight_targets "$required_kib" "$@"; then
+    printf 'release_disk_capacity_status=ready\n'
+    return 0
+  else
+    local preflight_status=$?
+    [[ "$preflight_status" -eq 1 ]] || return "$preflight_status"
+  fi
+
+  printf 'release_disk_recovery=started\n'
+  if jarvis_release_disk_cleanup_can_help "$required_kib" "$cleanup_root" "$@"; then
+    :
+  else
+    local relevance_status=$?
+    if [[ "$relevance_status" -eq 1 ]]; then
+      printf 'release_disk_cleanup_status=skipped\n'
+      printf 'release_disk_cleanup_reason=cache_filesystem_did_not_fail\n'
+      printf 'release_disk_capacity_status=blocked\n'
+      printf 'release_disk_blocker=external_capacity_required\n'
+      return 1
+    fi
+    printf 'ERROR: release disk cleanup filesystem could not be resolved safely\n' >&2
+    return 2
+  fi
+
+  # Capacity probes can be slow enough for a caller's authorization to change.
+  # Give mutation-owning entrypoints one last read-only validation immediately
+  # before cleanup; the helper itself stays independent of release-intent state.
+  if [[ -n "${JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION:-}" ]]; then
+    declare -F "$JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION" >/dev/null || {
+      printf 'ERROR: configured release disk cleanup validator is not a function\n' >&2
+      return 2
+    }
+    "$JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION" || return $?
+  fi
+
+  if [[ -n "${JARVIS_RELEASE_DISK_CLEANUP_COMMAND:-}" ]]; then
+    [[ -x "$JARVIS_RELEASE_DISK_CLEANUP_COMMAND" ]] || {
+      printf 'ERROR: configured release disk cleanup command is not executable\n' >&2
+      return 2
+    }
+    "$JARVIS_RELEASE_DISK_CLEANUP_COMMAND" || cleanup_status=$?
+  else
+    # The repository cleanup owns candidate classification. It removes only old,
+    # reproducible, inactive build-cache entries and preserves release receipts,
+    # current/newest staging, protected markers, open files, and ambiguous data.
+    /bin/bash "$repo_root/scripts/cleanup-build-artifacts.sh" \
+      --build-cache --apply --json || cleanup_status=$?
+  fi
+  printf 'release_disk_cleanup_status=%s\n' "$cleanup_status"
+
+  # Re-measure even if cleanup reported a partial failure: another safe entry may
+  # still have restored enough capacity. This is the sole automatic retry.
+  if JARVIS_RELEASE_DISK_MANUAL_RECOVERY_HINTS=0 \
+    jarvis_release_disk_preflight_targets "$required_kib" "$@"; then
+    printf 'release_disk_capacity_status=recovered\n'
+    return 0
+  else
+    local retry_status=$?
+    [[ "$retry_status" -eq 1 ]] || return "$retry_status"
+  fi
+
+  printf 'release_disk_capacity_status=blocked\n'
+  printf 'release_disk_blocker=safe_repo_cleanup_exhausted_protected_or_external_capacity_required\n'
+  return 1
 }
 
 jarvis_release_disk_preflight() {

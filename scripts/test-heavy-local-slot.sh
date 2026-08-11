@@ -19,7 +19,9 @@ for script in \
   scripts/bootstrap-worktree-runtime.sh \
   scripts/new-worktree.sh \
   scripts/build-shared-runtime.sh \
-  scripts/jarvis-release-worktree.sh; do
+  scripts/jarvis-release-worktree.sh \
+  scripts/jarvis-public-release.sh \
+  scripts/package-openclaw-mac-dist.sh; do
   if grep -Fq 'openclaw_heavy_local_slot_require_or_reexec' "$ROOT_DIR/$script"; then
     fail "$script still serializes ordinary isolated work"
   fi
