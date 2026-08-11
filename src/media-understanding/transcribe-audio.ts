@@ -13,7 +13,7 @@ import {
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.js";
-import type { MediaUnderstandingDecisionOutcome } from "./types.js";
+import type { MediaUnderstandingDecision, MediaUnderstandingDecisionOutcome } from "./types.js";
 
 const MAX_AUDIO_CHUNK_DURATION_SECONDS = 15 * 60;
 const AUDIO_CHUNK_BITRATE_KBPS = 32;
@@ -22,6 +22,24 @@ const AUDIO_CHUNK_SIZE_SAFETY_RATIO = 0.8;
 const AUDIO_CHUNK_TIMEOUT_GRACE_MS = 60_000;
 const UNKNOWN_AUDIO_CHUNK_TIMEOUT_MS = 10 * 60_000;
 const MAX_AUDIO_CHUNK_TIMEOUT_MS = 2 * 60 * 60_000;
+
+function findProviderFailure(decision: MediaUnderstandingDecision): string | undefined {
+  // A later provider can successfully transcribe silence after an earlier
+  // fallback failed. In that case the chain succeeded and the old error is no
+  // longer the terminal result exposed by explicit file transcription.
+  if (decision.outcome === "success") {
+    return undefined;
+  }
+  for (const attachment of decision.attachments) {
+    const failedAttempt = attachment.attempts.find(
+      (attempt) => attempt.outcome === "failed" && attempt.reason?.trim(),
+    );
+    if (failedAttempt?.reason) {
+      return failedAttempt.reason.trim();
+    }
+  }
+  return undefined;
+}
 
 function resolveAudioMaxBytes(cfg: OpenClawConfig): number {
   const audioConfig = cfg.tools?.media?.audio;
@@ -294,7 +312,7 @@ export async function transcribeAudioFile(params: {
     return await transcribeAudioChunks({ ...params, maxBytes, durationSeconds });
   }
 
-  const { transcript } = await runAudioTranscription({
+  const { transcript, decision } = await runAudioTranscription({
     ctx: { MediaPath: params.filePath, MediaType: params.mime },
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -309,6 +327,13 @@ export async function transcribeAudioFile(params: {
   const durationSeconds = await inspectAudioDuration(params.filePath);
   if (durationSeconds > MAX_AUDIO_CHUNK_DURATION_SECONDS) {
     return await transcribeAudioChunks({ ...params, maxBytes, durationSeconds });
+  }
+  const providerFailure = findProviderFailure(decision);
+  if (providerFailure) {
+    // The general media runner records provider failures so chat ingestion can
+    // continue. Explicit file transcription must expose that diagnostic rather
+    // than collapsing it into the misleading "no transcript" CLI fallback.
+    throw new Error(`Audio transcription provider failed: ${providerFailure}`);
   }
   return { text: undefined };
 }

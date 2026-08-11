@@ -68,6 +68,23 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     }
   });
 
+  it("normalizes WhatsApp Ogg audio filenames for OpenAI uploads", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio-bytes"),
+      fileName: "whatsapp-voice.oga",
+      mime: "audio/ogg; codecs=opus",
+      apiKey: "test-key",
+      timeoutMs: 1234,
+      fetchFn,
+    });
+
+    const form = getRequest().init?.body as FormData;
+    const file = form.get("file") as Blob | { name?: string } | null;
+    expect(file && "name" in file ? file.name : undefined).toBe("whatsapp-voice.ogg");
+  });
+
   it("throws when the provider response omits text", async () => {
     const { fetchFn } = createRequestCaptureJsonFetch({});
 
