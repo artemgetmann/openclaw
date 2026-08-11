@@ -35,19 +35,12 @@ Describe the problem and fix in 2–5 bullets:
 - Exact head SHA:
 - Base branch + exact SHA:
 - Diff fingerprint + changed paths:
-- Builder proof completed on that head:
-- Builder owner: (exact thread ID + host ID when required)
-- Tester transport: (`nested-read-only` for short deterministic proof; otherwise receipt-bound `delegated-worker` or `user-visible-task`)
-- Tester dispatcher + eligibility rationale: (`builder` + why nested was eligible, or why a user-visible task was required)
-- Tester authority: (exact direct-user packet for delegated `live-external`, otherwise `Not required`)
-- Tester environment: (credential-free warm adoption/readiness receipt, or exact pre-collection `BLOCKED` classification)
-- Independent tester: (`PASS`/`FAIL`/environment-only `BLOCKED` + exact worker identity/head/diff + receipt)
-- Tester/runtime cleanup:
-- Tester lifecycle closure: (exact task archive, or exact nested-agent terminal receipt)
-- Release worker: (repo-backed lease ID + fence + distinct owner, or direct rollback task ID + host ID; include typed task-authority packet)
-- Release acceptance: (queue `builderSuspended=true` ownership receipt, or direct rollback exact builder `archived=true` receipt)
-- Source return / re-acceptance: (`None`, or exact finding + same-builder `archived=false` receipt + repaired-head re-archive receipt)
-- Base-drift recovery: (`None`, or typed attempt ID + old/new base + classification + fresh review/test/queue-refresh receipts)
+- Primary owner: (chat/thread identity when useful)
+- Codex review: (`PASS`, not required with rationale, or timeout plus direct-review receipt)
+- Focused proof: (exact commands and outcomes on the exact head)
+- Optional nested validation: (`None`, or exact read-only result)
+- Required CI: (exact required check status)
+- Base-drift recovery: (`None`, or old/new base + effective-patch reconciliation + repeated proof)
 - GitHub mutation transport: (`host-gh` or authenticated connector + expected head; exactly one)
 - Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
 - Proof still required after merge: (`None — source-only` or exact package/deploy/provider/backend/runtime/GUI/real-user work)

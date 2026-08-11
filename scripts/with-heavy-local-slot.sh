@@ -28,13 +28,14 @@ usage() {
 Usage:
   scripts/with-heavy-local-slot.sh --label <owner> --check
   scripts/with-heavy-local-slot.sh --cpu-policy standard --label <owner> --check
-  scripts/with-dedicated-agent-slot.sh --label <owner> --check
   scripts/with-heavy-local-slot.sh --label <owner> --wait-seconds <seconds> -- <command> [args...]
   scripts/with-heavy-local-slot.sh --label <owner> -- <command> [args...]
 
-Serializes CPU- or memory-intensive local work across all worktrees and clones
-owned by this user. On macOS it also refuses to start when memory, CPU
-headroom, Tailscale, or the managed Jarvis gateway are unhealthy.
+Serializes genuinely exclusive shared-state operations across all worktrees and
+clones owned by this user. Ordinary isolated tests, typechecks, builds,
+dependency installation, and reviews must run directly without this wrapper.
+On macOS the wrapper also refuses protected mutation when severe host or Jarvis
+health evidence makes it unsafe.
 
 --wait-seconds performs one bounded acquire-and-run transaction. It waits
 without holding the lease, prints at most one queue notice, and executes the
@@ -44,8 +45,6 @@ The default dedicated-agent CPU policy records CPU-idle telemetry but does not
 use CPU idle to refuse admission or stop work. Every non-CPU safety gate
 remains enforced. Use --cpu-policy standard only for a shared or interactive
 session that needs the conservative 35% admission and 20% runtime idle floors.
-The named scripts/with-dedicated-agent-slot.sh entrypoint remains available for
-callers that want an explicit, non-overridable dedicated-work declaration.
 EOF
   exit 2
 }

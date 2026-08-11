@@ -60,11 +60,6 @@ else
   PR_REQUIRED_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-required-status.sh"
 fi
 if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
-  PR_RELEASE_QUEUE_SCRIPT="${OPENCLAW_SHIP_PR_RELEASE_QUEUE_SCRIPT:-${MAIN_REPO}/scripts/pr-release-queue}"
-else
-  PR_RELEASE_QUEUE_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/pr-release-queue.mjs"
-fi
-if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
   PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
   OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
   PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
@@ -219,7 +214,6 @@ require_preflight_tools() {
   require_command "${UNAME_BIN}"
   require_command "${PLISTBUDDY_BIN}"
   [[ -x "${PR_REQUIRED_SCRIPT}" ]] || die "required-check helper is missing or not executable: ${PR_REQUIRED_SCRIPT}"
-  [[ -r "${PR_RELEASE_QUEUE_SCRIPT}" ]] || die "release-queue helper is missing or unreadable: ${PR_RELEASE_QUEUE_SCRIPT}"
   [[ -x "${PACKAGE_SCRIPT}" ]] || die "package helper is missing or not executable: ${PACKAGE_SCRIPT}"
   [[ -x "${OPEN_APP_SCRIPT}" ]] || die "app-open helper is missing or not executable: ${OPEN_APP_SCRIPT}"
   [[ -x "${PROTECT_SCRIPT}" ]] || die "runtime-protection helper is missing or not executable: ${PROTECT_SCRIPT}"
@@ -296,7 +290,7 @@ assert_pr_can_ship() {
 
   [[ "${base}" == "main" ]] || die "refusing PR #${PR_NUMBER}: baseRefName=${base:-missing}, expected main"
   [[ "${state}" == "MERGED" ]] || \
-    die "refusing PR #${PR_NUMBER}: state=${state:-missing}; source merge must complete through the fenced builder -> tester -> release lifecycle first"
+    die "refusing PR #${PR_NUMBER}: state=${state:-missing}; source merge must complete first"
 }
 
 print_command() {
@@ -395,149 +389,17 @@ associated_main_pr_json() {
   "${GH_BIN}" pr view "${pr_number}" --json number,state,baseRefName,mergeCommit
 }
 
-release_queue_item_json() {
-  local pr="$1"
-  local status=""
-  if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
-    status="$("${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
-  else
-    local node_bin=""
-    local gh_bin=""
-    local -a queue_env=()
-    for node_bin in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
-      [[ -x "${node_bin}" ]] && break
-    done
-    [[ -x "${node_bin}" ]] || die "trusted Node binary is unavailable for queue proof"
-    for gh_bin in /opt/homebrew/bin/gh /usr/local/bin/gh /usr/bin/gh; do
-      [[ -x "${gh_bin}" ]] && break
-    done
-    [[ -x "${gh_bin}" ]] || die "trusted gh binary is unavailable for queue proof"
-    /usr/bin/env -i PATH=/usr/bin:/bin HOME="${HOME}" /usr/bin/git -C "${MAIN_REPO}" \
-      diff --quiet HEAD -- scripts/pr-release-queue.mjs || \
-      die "authoritative queue executable differs from sacred main HEAD"
-    queue_env=(/usr/bin/env -i
-      PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
-      HOME="${HOME}"
-      OPENCLAW_PR_RELEASE_QUEUE_REPO=artemgetmann/openclaw
-      OPENCLAW_PR_RELEASE_QUEUE_GH="${gh_bin}")
-    [[ -n "${GH_TOKEN:-}" ]] && queue_env+=(GH_TOKEN="${GH_TOKEN}")
-    [[ -n "${GITHUB_TOKEN:-}" ]] && queue_env+=(GITHUB_TOKEN="${GITHUB_TOKEN}")
-    [[ -n "${NO_COLOR:-}" ]] && queue_env+=(NO_COLOR="${NO_COLOR}")
-    [[ -n "${TERM:-}" ]] && queue_env+=(TERM="${TERM}")
-    status="$("${queue_env[@]}" "${node_bin}" "${PR_RELEASE_QUEUE_SCRIPT}" status --pr "${pr}")"
-  fi
-  # The wrapper emits a secret-silent preflight receipt before the JSON body.
-  # Select the first JSON object instead of trusting a fixed line count.
-  printf '%s\n' "${status}" | /usr/bin/sed -n '/^{/,$p' | "${JQ_BIN}" -c --arg pr "${pr}" '
-    if .action == "status" and
-      (.revision | test("^[0-9a-f]{40}$")) and
-      .state.schemaVersion == 1 and
-      (.state.sequence | type == "number")
-    then .state.items[$pr] // empty
-    else empty
-    end
-  '
-}
-
-release_queue_proves_reviewed_merge() {
+pr_proves_normal_merge() {
   local pr="$1"
   local commit_sha="$2"
-  local item=""
-  item="$(release_queue_item_json "${pr}")"
-  [[ -n "${item}" ]] || return 1
-  printf '%s\n' "${item}" | "${JQ_BIN}" -e --argjson pr "${pr}" --arg commit "${commit_sha}" '
-    (.state | IN("merged", "delivery-barrier", "delivered", "closed")) and
-    (.candidate.pr == $pr) and
-    (.candidate.url == ("https://github.com/artemgetmann/openclaw/pull/" + ($pr | tostring))) and
-    ((.candidate.title // "") | test("\\S")) and
-    ((.candidate.prContract // "") | test("\\S")) and
-    (.candidate.baseBranch == "main") and
-    (.candidate.testedBaseSha | test("^[0-9a-f]{40}$")) and
-    (.candidate.headSha | test("^[0-9a-f]{40}$")) and
-    (.candidate.diffFingerprint | test("^sha256:[0-9a-f]{64}$")) and
-    (.candidate.changedPaths | type == "array" and length > 0) and
-    (all(.candidate.changedPaths[];
-      type == "string" and
-      test("\\S") and
-      . == gsub("^\\s+|\\s+$"; "") and
-      (startswith("/") | not) and
-      (test("(^|/)\\.\\.(/|$)") | not)
-    )) and
-    ((.builder.threadId // "") | test("\\S")) and
-    ((.builder.hostId // "") | test("\\S")) and
-    (.builder.threadId == (.builder.threadId | gsub("^\\s+|\\s+$"; ""))) and
-    (.builder.hostId == (.builder.hostId | gsub("^\\s+|\\s+$"; ""))) and
-    (.builder.wakeRoute.threadId == .builder.threadId) and
-    (.builder.wakeRoute.hostId == .builder.hostId) and
-    (.reviewReceipt.schemaVersion == 1) and
-    (.reviewReceipt.role == "code-reviewer") and
-    (.reviewReceipt.status == "PASS") and
-    (.reviewReceipt.headSha == .candidate.headSha) and
-    (.reviewReceipt.diffFingerprint == .candidate.diffFingerprint) and
-    ((.reviewReceipt.owner.threadId // "") | test("\\S")) and
-    ((.reviewReceipt.owner.hostId // "") | test("\\S")) and
-    (.reviewReceipt.owner.threadId == (.reviewReceipt.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
-    (.reviewReceipt.owner.hostId == (.reviewReceipt.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
-    (.reviewReceipt.unresolvedFindings | type == "array") and
-    (all(.reviewReceipt.unresolvedFindings[]; .severity | IN("low", "medium", "high", "critical"))) and
-    ([.reviewReceipt.unresolvedFindings[]? | select(.severity == "high" or .severity == "critical")] | length == 0) and
-    (.testerReceipt.status == "PASS") and
-    (.testerReceipt.headSha == .candidate.headSha) and
-    (.testerReceipt.diffFingerprint == .candidate.diffFingerprint) and
-    (.testerReceipt.closure | IN("archived", "terminal-receipt")) and
-    ((.testerReceipt.contractId // "") | test("\\S")) and
-    ((.testerReceipt.owner.threadId // "") | test("\\S")) and
-    ((.testerReceipt.owner.hostId // "") | test("\\S")) and
-    (.testerReceipt.owner.threadId == (.testerReceipt.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
-    (.testerReceipt.owner.hostId == (.testerReceipt.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
-    ((.reviewReceipt.owner.threadId != .testerReceipt.owner.threadId) or (.reviewReceipt.owner.hostId != .testerReceipt.owner.hostId)) and
-    ((.reviewReceipt.owner.threadId != .builder.threadId) or (.reviewReceipt.owner.hostId != .builder.hostId)) and
-    ((.testerReceipt.owner.threadId != .builder.threadId) or (.testerReceipt.owner.hostId != .builder.hostId)) and
-    (.authority.schemaVersion == 1) and
-    (.authority.source == "builder-handoff") and
-    (.authority.scope == ("PR #" + ($pr | tostring) + " source merge only")) and
-    (.authority.allowedActions == ["normal-merge"]) and
-    (.authority.constraints | type == "array") and
-    ((.authority.constraints | sort) == (["no admin or bypass", "no credentials or OTP", "no irreversible or public release", "no new scope"] | sort)) and
-    ((.lifecycle.contractId // "") | test("\\S")) and
-    ((.lifecycle.stateDirectory // "") | startswith("/")) and
-    (.capabilityPolicy.routine == "routine-release") and
-    (.capabilityPolicy.escalation == "reasoning-escalation") and
-    (.ownershipReceipt.mode == "queue-lease") and
-    (.ownershipReceipt.builderSuspended == true) and
-    (.ownershipReceipt.builder.threadId == .builder.threadId) and
-    (.ownershipReceipt.builder.hostId == .builder.hostId) and
-    ((.ownershipReceipt.leaseId // "") | test("\\S")) and
-    (.ownershipReceipt.fence | type == "number" and . > 0) and
-    ((.ownershipReceipt.owner.threadId // "") | test("\\S")) and
-    ((.ownershipReceipt.owner.hostId // "") | test("\\S")) and
-    (.ownershipReceipt.owner.threadId == (.ownershipReceipt.owner.threadId | gsub("^\\s+|\\s+$"; ""))) and
-    (.ownershipReceipt.owner.hostId == (.ownershipReceipt.owner.hostId | gsub("^\\s+|\\s+$"; ""))) and
-    ((.ownershipReceipt.owner.threadId != .builder.threadId) or (.ownershipReceipt.owner.hostId != .builder.hostId)) and
-    ((.ownershipReceipt.owner.threadId != .reviewReceipt.owner.threadId) or (.ownershipReceipt.owner.hostId != .reviewReceipt.owner.hostId)) and
-    ((.ownershipReceipt.owner.threadId != .testerReceipt.owner.threadId) or (.ownershipReceipt.owner.hostId != .testerReceipt.owner.hostId)) and
-    (.ownerHistory | type == "array" and length > 0) and
-    (any(.ownerHistory[]?;
-      .leaseId == $item.ownershipReceipt.leaseId and
-      .fence == $item.ownershipReceipt.fence and
-      .claimedPr == $pr and
-      .owner == $item.ownershipReceipt.owner
-    )) and
-    (.terminalReceipts | type == "array") and
-    ([.terminalReceipts[]? | select(.kind == "source-merge" and .pr == $pr)] | length == 1) and
-    (any(.terminalReceipts[]?;
-      .kind == "source-merge" and
-      .schemaVersion == 1 and
-      .pr == $pr and
-      .reviewedHeadSha == $item.candidate.headSha and
-      .diffFingerprint == $item.candidate.diffFingerprint and
-      .mergeSha == $commit and
-      .normalNonAdmin == true and
-      .expectedHeadProtected == true and
-      .landedTreeMatchesReviewed == true and
-      .targetAncestryProven == true
-    ))
-  ' --argjson item "${item}" >/dev/null
+  local json=""
+  json="$("${GH_BIN}" pr view "${pr}" --json number,state,baseRefName,mergeCommit)"
+  printf '%s\n' "${json}" | "${JQ_BIN}" -e --argjson pr "${pr}" --arg commit "${commit_sha}" '
+    .number == $pr and
+    .state == "MERGED" and
+    .baseRefName == "main" and
+    .mergeCommit.oid == $commit
+  ' >/dev/null
 }
 
 moving_main_path_requires_new_approval() {
@@ -559,25 +421,25 @@ moving_main_path_requires_new_approval() {
   return 1
 }
 
-release_queue_paths_are_routine() {
+pr_paths_are_routine() {
   local pr="$1"
-  local item=""
+  local json=""
   local target_path=""
-  item="$(release_queue_item_json "${pr}")"
-  [[ -n "${item}" ]] || return 1
-  [[ "$(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths | type')" == "array" ]] || return 1
-  [[ "$(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths | length')" -gt 0 ]] || return 1
+  json="$("${GH_BIN}" pr view "${pr}" --json files)"
+  [[ "$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.files | type')" == "array" ]] || return 1
+  [[ "$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.files | length')" -gt 0 ]] || return 1
   while IFS= read -r target_path; do
     [[ -n "${target_path}" ]] || continue
     moving_main_path_requires_new_approval "${target_path}" && return 1
-  done < <(printf '%s\n' "${item}" | "${JQ_BIN}" -r '.candidate.changedPaths[]?')
+  done < <(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.files[].path')
   return 0
 }
 
-require_requested_pr_fenced_merge() {
+require_requested_pr_merge() {
   local merge_sha="$1"
-  release_queue_proves_reviewed_merge "${PR_NUMBER}" "${merge_sha}" || \
-    die "requested PR #${PR_NUMBER} lacks exact-head fenced source-merge receipts for ${merge_sha}"
+  pr_proves_normal_merge "${PR_NUMBER}" "${merge_sha}" || \
+    die "requested PR #${PR_NUMBER} is not a normal merged main PR at ${merge_sha}"
+  run_pr_required --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
 }
 
 dry_run_reviewed_remote_main() {
@@ -595,7 +457,7 @@ dry_run_reviewed_remote_main() {
   [[ -n "${repo}" ]] || die "could not resolve GitHub repository for dry-run main proof"
   head_sha="$(${GH_BIN} api "repos/${repo}/commits/main" --jq '.sha')"
   valid_commit "${head_sha}" || die "remote main HEAD is missing or invalid in dry-run"
-  require_requested_pr_fenced_merge "${merge_sha}"
+  require_requested_pr_merge "${merge_sha}"
   commit_matches "${merge_sha}" "${head_sha}" && {
     printf '%s\n' "${head_sha}"
     return 0
@@ -610,9 +472,9 @@ dry_run_reviewed_remote_main() {
   while IFS= read -r commit_sha; do
     json="$(associated_main_pr_json "${commit_sha}")"
     pr="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.number // empty')"
-    release_queue_proves_reviewed_merge "${pr}" "${commit_sha}" || \
-      die "dry-run main commit ${commit_sha} PR #${pr:-unknown} lacks exact-head fenced receipts"
-    release_queue_paths_are_routine "${pr}" || \
+    pr_proves_normal_merge "${pr}" "${commit_sha}" || \
+      die "dry-run main commit ${commit_sha} PR #${pr:-unknown} is not a normal merged main PR"
+    pr_paths_are_routine "${pr}" || \
       die "dry-run main commit ${commit_sha} PR #${pr:-unknown} touches security/release-class paths"
     run_pr_required --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
   done < <(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.commits[].sha')

@@ -13,21 +13,15 @@ The CI runs on every push to `main` and every pull request. It uses smart scopin
 
 ## Autonomous PR Lifecycle and Merge Policy
 
-For a normal, scoped implementation, the default outcome is a merged PR. The
-worker lifecycle collectively owns the full path. Under the canonical contract
-in `docs/agent-guides/workflow.md`, the builder investigates, implements,
-handles actionable review findings, and satisfies required CI, but never merges.
-After exact-head tester `PASS`, one distinct fenced queue lease owns the normal
-repo-backed merge. Native Codex tasks are optional coordination. The documented
-direct rollback still requires one fresh user-visible release worker. Neither
-path may bypass required checks, merge a draft, use an admin override, or treat
-queued or pending checks as passed.
+For a normal scoped implementation, one primary chat owns diagnosis,
+implementation, focused proof, Codex review when required, CI fixes, and the
+normal non-admin merge when the task authority includes merge. Separate tester
+or release chats, wake callbacks, and chat archival are not merge gates.
 
 Routine review, pending CI, and ordinary base drift are continuation states.
-The builder waits or diagnoses, refreshes/rebases when needed, repeats affected
-proof, and continues on the same task. The release worker merges only the exact
-reviewed and tested head; if a new commit is required, ownership returns to the
-builder and review, CI, and fresh tester validation must apply to that new head.
+The primary owner waits or diagnoses, refreshes or rebases when needed, repeats
+affected proof, and continues on the same task. A new behavior-bearing commit
+invalidates prior exact-head review and proof.
 
 Stop before merge when any of these are true:
 
@@ -46,10 +40,9 @@ change, and a revert cannot necessarily undo external or already-live effects.
 
 ## PR Merge Policy
 
-GitHub provides the CI and merge mechanisms. Builders own diagnosis, review-bot
-handling, and failed-CI fixes. The one release worker defined by the canonical
-lifecycle owns the merge decision; runtime shipping remains a separate explicit
-permission after the merge.
+GitHub provides the CI and merge mechanisms. The primary owner handles review
+findings and failed CI, then merges normally when authorized. Runtime shipping
+remains a separate explicit permission after merge.
 
 This boundary matters: an agent saying "CI is queued" or "CI is pending" is not
 proof. A PR is merge-ready only when the relevant checks have completed
@@ -65,7 +58,7 @@ Before GitHub reads or mutation, the helper performs the canonical
 secret-silent authenticated API preflight from
 `docs/agent-guides/workflow.md`. A restricted failure is indeterminate until
 the same read-only probe succeeds in authorized host context or an authenticated
-connector confirms access. The release worker selects one mutation transport
+connector confirms access. The primary owner selects one mutation transport
 and binds merge or auto-merge to the tested head; an ambiguous mutation result
 is reconciled read-only and is never retried automatically.
 
@@ -145,19 +138,9 @@ Builders should:
 - Push narrowly scoped fixes for failed CI.
 - Report exact check names and statuses, not vibes.
 
-The release worker should use the helpers below only after the canonical tester
-and handoff gates pass. Runtime changes ship only after merge and only when
-explicitly requested.
-
-Before using any merge helper, the builder must have produced and consumed the
-release contract with `scripts/pr-lifecycle handoff-release`; that command
-fails closed unless the immutable tester `PASS` and exact task closure are
-recorded. The shell emits the contract, while the native agent creates the
-fresh user-visible task and records its exact identity. Before review or merge,
-that release task archives the exact builder, verifies `archived=true`, and
-records `release-handoff-accepted`. A source finding returns and unarchives that
-same builder; repaired proof resumes the same release task and requires a fresh
-builder-archive acceptance receipt.
+Use merge helpers only after focused proof, required CI, and required Codex
+review are complete on the current effective patch. Runtime changes ship only
+after merge and only when explicitly requested.
 
 Agents should not:
 
@@ -199,10 +182,10 @@ PR and required-check workflows should run on GitHub-hosted runners and
 through Blacksmith runners or sticky disks; a missing third-party runner should
 never leave a mergeable PR in a long-lived queued state.
 
-Treat GitHub `BEHIND` and `DIRTY` merge states as builder-refresh-needed. The
-fast-path helper stops before mutation so the builder can refresh or rebase the
-candidate, repeat affected proof, and obtain a fresh tester receipt for the new
-head. If that refresh conflicts after a reused branch was squash-merged earlier,
+Treat GitHub `BEHIND` and `DIRTY` merge states as refresh-needed. The fast-path
+helper stops before mutation so the primary owner can refresh or rebase the
+candidate and repeat affected proof on the new head. If that refresh conflicts
+after a reused branch was squash-merged earlier,
 stop fighting the branch shape: create a clean branch from current `main`,
 cherry-pick only the intended commits, open a replacement PR, and close the
 conflicted PR with a short explanation.

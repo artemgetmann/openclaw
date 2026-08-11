@@ -39,8 +39,8 @@ For behavior requests, interpret the smallest amount of language needed:
 
 State the classification and delivery target in the plan, PR, and closeout.
 Use the enforceable receipt in
-`docs/agent-guides/jarvis-delivery-boundary.md`; CI and `scripts/pr-lifecycle`
-reject missing or inflated Jarvis receipts. A merge to `main`, deployment to
+`docs/agent-guides/jarvis-delivery-boundary.md`; CI rejects missing or inflated
+Jarvis receipts. A merge to `main`, deployment to
 Artem's main Jarvis, and a shipped Jarvis product release are separate claims.
 Main-Jarvis proof covers one installation only; product shipping requires the
 applicable package, upgrade, release, and end-user receipts.
