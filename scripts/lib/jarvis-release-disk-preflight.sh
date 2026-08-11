@@ -4,6 +4,7 @@
 #
 # Public interfaces:
 #   jarvis_release_disk_preflight_targets <required-kib> <label> <path> [<label> <path> ...]
+#   jarvis_release_disk_ensure_capacity <repo-root> <required-kib> <label> <path> [...]
 #   jarvis_release_disk_preflight <target-path> [required-kib]  # compatibility
 #
 # The default 25 GiB floor is capacity insurance for the full release lane, not
@@ -233,6 +234,59 @@ jarvis_release_disk_preflight_targets() {
 
   printf 'status=pass\n'
   return 0
+}
+
+jarvis_release_disk_ensure_capacity() {
+  local repo_root="${1:-}"
+  local required_kib="${2:-}"
+  local cleanup_status=0
+  shift 2 || true
+
+  [[ -n "$repo_root" ]] || {
+    printf 'ERROR: release disk recovery requires the repository root\n' >&2
+    return 2
+  }
+
+  # The first measurement remains visible so a recovered release has an exact
+  # before receipt. Capacity failures are the only recoverable result; malformed
+  # configuration or an unreadable filesystem must fail without deleting data.
+  if jarvis_release_disk_preflight_targets "$required_kib" "$@"; then
+    printf 'release_disk_capacity_status=ready\n'
+    return 0
+  else
+    local preflight_status=$?
+    [[ "$preflight_status" -eq 1 ]] || return "$preflight_status"
+  fi
+
+  printf 'release_disk_recovery=started\n'
+  if [[ -n "${JARVIS_RELEASE_DISK_CLEANUP_COMMAND:-}" ]]; then
+    [[ -x "$JARVIS_RELEASE_DISK_CLEANUP_COMMAND" ]] || {
+      printf 'ERROR: configured release disk cleanup command is not executable\n' >&2
+      return 2
+    }
+    "$JARVIS_RELEASE_DISK_CLEANUP_COMMAND" || cleanup_status=$?
+  else
+    # The repository cleanup owns candidate classification. It removes only old,
+    # reproducible, inactive build-cache entries and preserves release receipts,
+    # current/newest staging, protected markers, open files, and ambiguous data.
+    /bin/bash "$repo_root/scripts/cleanup-build-artifacts.sh" \
+      --build-cache --apply --json || cleanup_status=$?
+  fi
+  printf 'release_disk_cleanup_status=%s\n' "$cleanup_status"
+
+  # Re-measure even if cleanup reported a partial failure: another safe entry may
+  # still have restored enough capacity. This is the sole automatic retry.
+  if jarvis_release_disk_preflight_targets "$required_kib" "$@"; then
+    printf 'release_disk_capacity_status=recovered\n'
+    return 0
+  else
+    local retry_status=$?
+    [[ "$retry_status" -eq 1 ]] || return "$retry_status"
+  fi
+
+  printf 'release_disk_capacity_status=blocked\n'
+  printf 'release_disk_blocker=safe_repo_cleanup_exhausted_protected_or_external_capacity_required\n'
+  return 1
 }
 
 jarvis_release_disk_preflight() {

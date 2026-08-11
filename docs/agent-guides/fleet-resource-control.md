@@ -61,8 +61,9 @@ protected artifact/publication transaction. Do not invent a global fallback
 resource for an unclassified operation.
 
 The historical `scripts/with-heavy-local-slot.sh` remains a compatibility
-frontend for packaged callers. It maps known protected operations onto the
-named locks above. Do not add new callers to it.
+frontend for older protected callers. Current Jarvis public-release and package
+entrypoints acquire `release-jarvis` directly. Do not add new compatibility
+callers.
 
 ## Severe host safety stops
 
@@ -81,14 +82,14 @@ incident.
 
 Disk pressure before a build or release starts is an autonomous recovery state,
 not a reason to end the task or ask the user to repeat existing authority. The
-same owner must read `/Users/user/.agents/skills/reclaim-coding-disk/SKILL.md`,
-apply its report-first safety gates, and reclaim one narrow batch only when each
-target is generated, reproducible, inactive, and unprotected. After verifying
-the required headroom, rerun the same preflight or guarded command once. Stop
-only when ownership or liveness is ambiguous, a protected target would be
-required, no safe target can restore the floor, or the one retry fails again.
-Never replay an in-flight command that may have partial side effects without
-first reconciling its command-specific receipts.
+Jarvis packaging owns this recovery before its first heavy write: it measures
+every output filesystem, applies the repository's conservative build-cache
+cleanup once, and remeasures automatically. That cleanup preserves current and
+newest release staging, receipts, protected markers, open files, dirty source,
+runtime state, and ambiguous entries. Only a remaining shortfall after that
+bounded attempt is a blocker; it means protected or external capacity is
+required. Never replay an in-flight command that may have partial side effects
+without first reconciling its command-specific receipts.
 
 ## Isolation and cleanup
 
