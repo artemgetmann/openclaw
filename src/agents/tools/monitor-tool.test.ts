@@ -212,6 +212,19 @@ describe("monitor tool", () => {
     expect(tool.description).toContain("omit watchDelivery");
   });
 
+  it("describes conversation-scoped email reply checks", () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    expect(tool.description).toContain("bind the check to the conversation");
+    expect(tool.description).toContain("not only to the outbound recipient's exact From address");
+    expect(tool.description).toContain("provider's stable thread id");
+    expect(tool.description).toContain("sent-at lower bound");
+    expect(tool.description).toContain("subject or reply headers");
+    expect(tool.description).toContain(
+      "exact sender-only filter only when the user explicitly requires",
+    );
+  });
+
   it("passes explicit goal snapshots through monitor.create", async () => {
     const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
 
