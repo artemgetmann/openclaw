@@ -14,6 +14,7 @@ import {
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
+  assertGatewayStagedRestartSnapshotFresh,
   formatGatewayStartupPreflightFailure,
   runGatewayStartupConfigPreflight,
 } from "../../gateway/server-startup-preflight.js";
@@ -253,7 +254,29 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
+  // CLI owns potentially destructive port cleanup before the server is even
+  // constructed. Recheck the write-capable preflight snapshot immediately
+  // before each such action so a concurrent config edit cannot kill a process
+  // selected by stale defaults. Server startup repeats this check to cover the
+  // later gap between CLI preparation and runtime activation.
+  const ensureStartupContextFreshBeforeSideEffect = async () => {
+    try {
+      assertGatewayStagedRestartSnapshotFresh({
+        prepared: gatewayStartupContext.preflightSnapshot,
+        current: await readConfigFileSnapshot(),
+      });
+      return true;
+    } catch (err) {
+      const startupPreflightFailure = formatGatewayStartupPreflightFailure(err);
+      defaultRuntime.error(startupPreflightFailure ?? `Gateway failed to start: ${String(err)}`);
+      defaultRuntime.exit(1);
+      return false;
+    }
+  };
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    if (!(await ensureStartupContextFreshBeforeSideEffect())) {
+      return;
+    }
     const stale = cleanStaleGatewayProcessesSync(port);
     if (stale.length > 0) {
       gatewayLog.info(
@@ -262,6 +285,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     }
   }
   if (opts.force) {
+    if (!(await ensureStartupContextFreshBeforeSideEffect())) {
+      return;
+    }
     try {
       const { killed, waitedMs, escalatedToSigkill } = await forceFreePortAndWait(port, {
         timeoutMs: 2000,

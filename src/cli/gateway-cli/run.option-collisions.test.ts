@@ -15,6 +15,7 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
 }));
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
+const cleanStaleGatewayProcessesSync = vi.fn((_port: number) => []);
 const createStartupContext = (config: Record<string, unknown>) => ({
   config,
   preflightSnapshot: configState.snapshot,
@@ -23,6 +24,7 @@ const createStartupContext = (config: Record<string, unknown>) => ({
   diagnosticsEnabled: false,
 });
 const runGatewayStartupConfigPreflight = vi.fn(async () => createStartupContext(configState.cfg));
+const assertGatewayStagedRestartSnapshotFresh = vi.fn((_params: unknown) => undefined);
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
@@ -69,6 +71,8 @@ vi.mock("../../gateway/auth.js", () => ({
 }));
 
 vi.mock("../../gateway/server-startup-preflight.js", () => ({
+  assertGatewayStagedRestartSnapshotFresh: (params: unknown) =>
+    assertGatewayStagedRestartSnapshotFresh(params),
   formatGatewayStartupPreflightFailure: (err: unknown) => {
     const candidate = err as { name?: string; phase?: string; message?: string };
     return candidate?.name === "GatewayStartupPreflightError"
@@ -76,6 +80,10 @@ vi.mock("../../gateway/server-startup-preflight.js", () => ({
       : null;
   },
   runGatewayStartupConfigPreflight: () => runGatewayStartupConfigPreflight(),
+}));
+
+vi.mock("../../infra/restart-stale-pids.js", () => ({
+  cleanStaleGatewayProcessesSync: (port: number) => cleanStaleGatewayProcessesSync(port),
 }));
 
 vi.mock("../../gateway/server.js", () => ({
@@ -159,10 +167,13 @@ describe("gateway run option collisions", () => {
     forceFreePortAndWait.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
+    cleanStaleGatewayProcessesSync.mockClear();
     runGatewayStartupConfigPreflight.mockClear();
     runGatewayStartupConfigPreflight.mockImplementation(async () =>
       createStartupContext(configState.cfg),
     );
+    assertGatewayStagedRestartSnapshotFresh.mockClear();
+    assertGatewayStagedRestartSnapshotFresh.mockImplementation(() => undefined);
     runGatewayLoop.mockClear();
   });
 
@@ -288,6 +299,53 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors).toContain(
       "Gateway startup phase failed (config_validation): Invalid config at /tmp/openclaw.json",
     );
+    expect(forceFreePortAndWait).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale preflight context before service cleanup", async () => {
+    assertGatewayStagedRestartSnapshotFresh.mockImplementationOnce(() => {
+      throw {
+        name: "GatewayStartupPreflightError",
+        phase: "config_validation",
+        message: "Config changed after startup preflight",
+      };
+    });
+    process.env.OPENCLAW_SERVICE_MARKER = "test-service";
+
+    try {
+      await expect(
+        runGatewayCli(["gateway", "run", "--force", "--allow-unconfigured"]),
+      ).rejects.toThrow("__exit__:1");
+    } finally {
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+    }
+
+    expect(runtimeErrors).toContain(
+      "Gateway startup phase failed (config_validation): Config changed after startup preflight",
+    );
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    expect(forceFreePortAndWait).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale preflight context before forced port cleanup", async () => {
+    assertGatewayStagedRestartSnapshotFresh.mockImplementationOnce(() => {
+      throw {
+        name: "GatewayStartupPreflightError",
+        phase: "config_validation",
+        message: "Config changed after startup preflight",
+      };
+    });
+
+    await expect(
+      runGatewayCli(["gateway", "run", "--force", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      "Gateway startup phase failed (config_validation): Config changed after startup preflight",
+    );
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
     expect(forceFreePortAndWait).not.toHaveBeenCalled();
     expect(startGatewayServer).not.toHaveBeenCalled();
   });
