@@ -261,8 +261,60 @@ app_manifest_path() {
   printf '%s/Contents/Resources/OpenClawRuntime/manifest.json\n' "$1"
 }
 
+app_build_info_path() {
+  printf '%s/Contents/Resources/OpenClawRuntime/openclaw/dist/build-info.json\n' "$1"
+}
+
 app_package_path() {
   printf '%s/Contents/Resources/OpenClawRuntime/openclaw/package.json\n' "$1"
+}
+
+canonicalize_commit_against_exact() {
+  local commit="$1"
+  local exact_commit="$2"
+  local label="$3"
+
+  is_git_commit "$commit" || die "preflight blocked: $label has missing or invalid git commit"
+  is_full_git_commit "$exact_commit" || die "preflight blocked: $label exact commit is missing or invalid"
+  if is_full_git_commit "$commit"; then
+    # Preserve the established exact-value validators and their field-specific
+    # failures. This helper only supplies identity bits that are actually absent.
+    printf '%s\n' "$commit"
+    return 0
+  fi
+
+  # Compatibility and managed manifests are unsigned copies of a signed app
+  # manifest. They may retain that manifest's display-length SHA, but they may
+  # only expand toward the exact app identity already established separately.
+  [[ "$exact_commit" == "$commit"* ]] || \
+    die "preflight blocked: $label commit $commit does not match exact app commit $exact_commit"
+  printf '%s\n' "$exact_commit"
+}
+
+canonicalize_app_manifest_commit() {
+  local app="$1"
+  local commit="$2"
+  local label="$3"
+  local build_info
+  local build_commit
+
+  is_git_commit "$commit" || die "preflight blocked: $label manifest has invalid gitCommit"
+  if is_full_git_commit "$commit"; then
+    printf '%s\n' "$commit"
+    return 0
+  fi
+
+  # Public app manifests use a display-length SHA. Expand it only from the
+  # exact build receipt inside the same signed bundle; Git state or the
+  # compatibility receipt must never supply the missing identity bits.
+  build_info="$(app_build_info_path "$app")"
+  require_readable_file "$build_info" "$label bundled runtime build-info"
+  build_commit="$(manifest_value "$build_info" '.commit // empty')"
+  is_full_git_commit "$build_commit" || \
+    die "preflight blocked: $label bundled runtime build-info has missing or non-exact commit"
+  [[ "$build_commit" == "$commit"* ]] || \
+    die "preflight blocked: $label manifest commit $commit does not match exact bundled runtime build-info commit $build_commit"
+  printf '%s\n' "$build_commit"
 }
 
 read_app_truth() {
@@ -288,12 +340,11 @@ read_app_truth() {
   package="$(app_package_path "$app")"
   require_readable_file "$manifest" "$prefix bundled runtime manifest"
   require_readable_file "$package" "$prefix bundled package metadata"
-  commit="$(manifest_commit "$manifest")"
+  commit="$(canonicalize_app_manifest_commit "$app" "$(manifest_commit "$manifest")" "$prefix")"
   package_version="$(manifest_value "$package" '.version // empty')"
   bundle_id="$(app_plist_value "$app" CFBundleIdentifier)"
   [[ "$bundle_id" == "$OFFICIAL_BUNDLE_ID" ]] || \
     die "preflight blocked: $prefix app bundle id is not $OFFICIAL_BUNDLE_ID"
-  [[ "$commit" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "preflight blocked: $prefix manifest has invalid gitCommit"
   [[ "$(manifest_build "$manifest")" == "$build" ]] || die "preflight blocked: $prefix manifest bundleVersion does not match app build"
   [[ "$package_version" == "$version" ]] || die "preflight blocked: $prefix package version does not match app version"
 
@@ -527,11 +578,14 @@ verify_protected_hotfix_compatibility_receipt() {
 
   require_readable_file "$MANAGED_MANIFEST" "protected-hotfix compatibility manifest"
   require_readable_file "$PROTECTION_MARKER" "protected-hotfix protection marker"
-  compatibility_commit="$(manifest_commit "$MANAGED_MANIFEST")"
+  compatibility_commit="$(canonicalize_commit_against_exact \
+    "$(manifest_commit "$MANAGED_MANIFEST")" "$INSTALLED_COMMIT" "compatibility manifest")"
   compatibility_build="$(manifest_build "$MANAGED_MANIFEST")"
   raw_protected_commit="$(manifest_value "$PROTECTION_MARKER" '.protectedRuntimeGitCommit // empty')"
   protected_commit="$(canonicalize_protected_provenance_commit "$raw_protected_commit" "protection marker")"
-  marker_compatibility_commit="$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestGitCommit // empty')"
+  marker_compatibility_commit="$(canonicalize_commit_against_exact \
+    "$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestGitCommit // empty')" \
+    "$INSTALLED_COMMIT" "protection marker compatibility")"
   marker_compatibility_build="$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestBundleVersion // empty')"
   marker_source="$(manifest_value "$PROTECTION_MARKER" '.compatibilityManifestSource // empty')"
   backup_path="$(manifest_value "$PROTECTION_MARKER" '.backupPath // empty')"
@@ -691,7 +745,8 @@ verify_live_managed_baseline() {
 
   require_readable_file "$MANAGED_MANIFEST" "live managed runtime manifest"
   live_build="$(manifest_build "$MANAGED_MANIFEST")"
-  live_commit="$(manifest_commit "$MANAGED_MANIFEST")"
+  live_commit="$(canonicalize_commit_against_exact \
+    "$(manifest_commit "$MANAGED_MANIFEST")" "$OLD_COMMIT" "live managed manifest")"
 
   # Exact old-baseline equality is the safe rule. Merely being numerically
   # older is insufficient because a debug runtime can carry unrelated code.
@@ -1136,11 +1191,20 @@ wait_for_live_managed_manifest() {
   local deadline=$((SECONDS + TIMEOUT_SECONDS))
   local live_build
   local live_commit
+  local raw_live_commit
 
   while (( SECONDS < deadline )); do
     if [[ -r "$MANAGED_MANIFEST" ]]; then
       live_build="$(manifest_build "$MANAGED_MANIFEST")"
-      live_commit="$(manifest_commit "$MANAGED_MANIFEST")"
+      raw_live_commit="$(manifest_commit "$MANAGED_MANIFEST")"
+      live_commit="$raw_live_commit"
+      # The app publishes its managed manifest asynchronously after relaunch.
+      # A stale old abbreviation is a not-ready observation, not a fatal
+      # provenance failure. Canonicalize only a prefix of the exact target;
+      # every other value keeps the bounded poll alive until reseed or timeout.
+      if is_git_commit "$raw_live_commit" && [[ "$NEW_COMMIT" == "$raw_live_commit"* ]]; then
+        live_commit="$NEW_COMMIT"
+      fi
       if [[ "$live_build" == "$NEW_BUILD" && "$live_commit" == "$NEW_COMMIT" ]]; then
         log "proof.managed_runtime=ok bundle_version=$live_build git_commit=$live_commit"
         return 0
@@ -1249,7 +1313,9 @@ run_apply() {
       die "updated disposable CodeDirectory hash does not match the receipt-bound signed candidate"
   fi
   [[ "$(manifest_build "$(app_manifest_path "$DISPOSABLE_APP")")" == "$NEW_BUILD" ]] || die "updated disposable manifest build mismatch"
-  [[ "$(manifest_commit "$(app_manifest_path "$DISPOSABLE_APP")")" == "$NEW_COMMIT" ]] || die "updated disposable manifest commit mismatch"
+  [[ "$(canonicalize_app_manifest_commit "$DISPOSABLE_APP" \
+    "$(manifest_commit "$(app_manifest_path "$DISPOSABLE_APP")")" "updated disposable")" == "$NEW_COMMIT" ]] || \
+    die "updated disposable manifest commit mismatch"
   log "proof.sparkle_transition=ok from_version=$OLD_VERSION from_build=$OLD_BUILD to_version=$NEW_VERSION to_build=$NEW_BUILD"
 
   # Relaunch the replaced bundle explicitly. This is the event that lets the
