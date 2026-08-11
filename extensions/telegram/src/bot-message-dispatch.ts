@@ -3183,7 +3183,7 @@ export const dispatchTelegramMessage = async ({
           // Compaction can legitimately take minutes. A reaction alone looks
           // indistinguishable from a hung bot, so expose the actual operation.
           await updateAnswerProgressFromBlock(
-            "Compacting this conversation — this may take a few minutes.",
+            "I’m condensing our conversation so we can keep talking. This may take a few minutes.",
           );
           await statusReactionController?.setCompacting();
         },

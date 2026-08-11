@@ -772,7 +772,7 @@ export const registerTelegramNativeCommands = ({
               fn: () =>
                 bot.api.sendMessage(
                   chatId,
-                  "⚙️ Compacting this conversation — this may take a few minutes.",
+                  "⚙️ I’m condensing our conversation so we can keep talking. This may take a few minutes.",
                   threadParams,
                 ),
             }).catch(() => undefined);
