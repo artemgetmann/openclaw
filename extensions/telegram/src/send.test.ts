@@ -2172,6 +2172,39 @@ describe("editMessageTelegram", () => {
     }
   });
 
+  it("keeps long markdown readable when a legacy final edit falls back to plain text", async () => {
+    const text = [
+      "#### Confirmed facts",
+      "This is a deliberately dense final response with **important context**.",
+      "",
+      "#### Updater preferences",
+      "- Automatic checks are enabled.",
+      "- Automatic downloads are enabled.",
+      "",
+      "#### Relevant update logs",
+      "No signature, eligibility, or download error was found.",
+    ].join("\n");
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, text, {
+      token: "tok",
+      cfg: {},
+      richMessages: false,
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(2);
+    const fallbackText = String((botApi.editMessageText.mock.calls[1] ?? [])[2] ?? "");
+    expect(fallbackText).toContain(
+      "Confirmed facts\n\nThis is a deliberately dense final response",
+    );
+    expect(fallbackText).toContain("• Automatic checks are enabled.");
+    expect(fallbackText).toContain("\n\nRelevant update logs\n\n");
+    expect(fallbackText).not.toContain("####");
+    expect(fallbackText).not.toContain("**");
+  });
+
   it("preserves one-tap-copy draft blocks during legacy message edits", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
