@@ -33,6 +33,17 @@ wait_for_file() {
   done
 }
 
+wait_for_pattern() {
+  local path="$1"
+  local pattern="$2"
+  local attempts=0
+  while ! grep -q "$pattern" "$path" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -le 200 ] || fail "timed out waiting for $pattern in $path"
+    sleep 0.01
+  done
+}
+
 start_holder() {
   local resource="$1"
   local ready_path="$2"
@@ -118,6 +129,36 @@ grep -q "SHARED_RESOURCE_LOCK_WAITING resource=$wait_resource" "$TEST_DIR/wait.e
   fail "bounded wait omitted its queue receipt"
 wait "$wait_holder_pid"
 remove_background_pid "$wait_holder_pid"
+
+# An explicit foreground wait is safe only while its caller remains attached.
+# Cancelling that waiter must leave the current owner alone and must never run
+# the protected command after the owner eventually releases the resource.
+cancel_resource="$RESOURCE_PREFIX-cancel"
+start_holder "$cancel_resource" "$TEST_DIR/cancel.ready"
+cancel_holder_pid="$HOLDER_PID"
+"$WRAPPER" --resource "$cancel_resource" --label cancelled-foreground-wait --wait-seconds 5 -- \
+  /usr/bin/touch "$TEST_DIR/cancelled-wait-ran" \
+  >"$TEST_DIR/cancel.out" 2>"$TEST_DIR/cancel.err" &
+cancel_waiter_pid=$!
+BACKGROUND_PIDS+=("$cancel_waiter_pid")
+wait_for_pattern "$TEST_DIR/cancel.err" "SHARED_RESOURCE_LOCK_WAITING resource=$cancel_resource"
+kill -TERM "$cancel_waiter_pid"
+set +e
+wait "$cancel_waiter_pid"
+cancel_waiter_status=$?
+set -e
+remove_background_pid "$cancel_waiter_pid"
+[ "$cancel_waiter_status" -eq 143 ] ||
+  fail "cancelled foreground wait returned $cancel_waiter_status instead of 143"
+[ ! -e "$TEST_DIR/cancelled-wait-ran" ] ||
+  fail "cancelled foreground wait ran its protected command"
+kill -TERM "$cancel_holder_pid"
+wait "$cancel_holder_pid"
+remove_background_pid "$cancel_holder_pid"
+[ ! -e "$TEST_DIR/cancelled-wait-ran" ] ||
+  fail "cancelled foreground wait survived and ran after the owner exited"
+$WRAPPER --resource "$cancel_resource" --label after-cancel --check >/dev/null ||
+  fail "resource remained locked after the foreground waiter was cancelled"
 
 # Canonical protected entrypoints fail fast. A foreground shell wait cannot
 # promise that a closed-source agent turn will remain alive or report the

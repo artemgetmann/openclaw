@@ -59,7 +59,28 @@ Canonical protected entrypoints fail fast with temporary-unavailable status
 `75` when another process owns the resource. The low-level wrapper supports an
 explicit bounded foreground wait for callers that can prove their process and
 result channel stay alive. That wait is not an agent continuation mechanism and
-must never be described as resuming a Codex turn after it ends.
+must never be described as resuming a Codex turn after it ends. The wrapper
+cannot observe Codex's private transport state; the caller must establish that
+connection before opting in.
+
+Use that exception only when the wrapper remains the active foreground command
+in the same live turn:
+
+```bash
+scripts/with-shared-resource-lock.pl \
+  --resource <resource-name> \
+  --label <diagnostic-purpose> \
+  --wait-seconds <bounded-seconds> \
+  -- <canonical-entrypoint> <args...>
+```
+
+Do not detach the waiter, move it to a background session, or end the turn and
+call it queued. The supervising caller must explicitly terminate the foreground
+waiter when the command is cancelled or its result connection disappears. A
+lost terminal or result connection does not itself prove that the waiter
+stopped. After an ambiguous disconnect, terminate and verify that the waiter is
+gone before starting another protected operation. If that supervision cannot
+be established, use the canonical fail-fast behavior.
 
 Different resources run concurrently. Package/build staging should use unique
 output directories and remain lock-free; acquire `release-jarvis` only for the
