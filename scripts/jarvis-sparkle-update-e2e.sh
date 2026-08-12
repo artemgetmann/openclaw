@@ -35,6 +35,7 @@ JARVIS_STATE_DIR="${JARVIS_HOME}/.jarvis"
 MANAGED_MANIFEST="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json"
 PROTECTION_MARKER="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json"
 LIVE_RUNTIME_BUILD_INFO="${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/build-info.json"
+DEVICE_IDENTITY_FILE="${JARVIS_STATE_DIR}/identity/device.json"
 GATEWAY_PLIST="${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist"
 PREFERENCES_PLIST="${HOME}/Library/Preferences/${PREFERENCES_DOMAIN}.plist"
 SPARKLE_CACHE_ROOT="${HOME}/Library/Caches/${PREFERENCES_DOMAIN}/org.sparkle-project.Sparkle"
@@ -72,6 +73,8 @@ PREFERENCES_EXISTED=0
 GATEWAY_RESTART_STARTED=0
 GATEWAY_RESTART_FINISHED=0
 APP_PIDS=""
+SPARKLE_RELAUNCH_ADOPTED=0
+APP_NODE_ID=""
 SPARKLE_CACHE_SNAPSHOT=""
 BASELINE_MODE="normal_signed"
 
@@ -110,7 +113,7 @@ Options:
                            Short-lived receipt for one exact protected private
                            baseline and one exact signed public target.
   --timeout SECONDS        Per-transition timeout (default: 900).
-  --download-grace SECONDS Wait before asking the old app to terminate (default: 120).
+  --download-grace SECONDS Legacy compatibility option; validated but unused.
   --min-free-gb GB         Minimum actual free space (default: 12).
 
 Test-only:
@@ -948,6 +951,7 @@ configure_test_root() {
   MANAGED_MANIFEST="$JARVIS_STATE_DIR/.consumer-bundled-runtime.json"
   PROTECTION_MARKER="$JARVIS_STATE_DIR/.consumer-bundled-runtime.protection.json"
   LIVE_RUNTIME_BUILD_INFO="$JARVIS_STATE_DIR/lib/openclaw-bundled/dist/build-info.json"
+  DEVICE_IDENTITY_FILE="$JARVIS_STATE_DIR/identity/device.json"
   GATEWAY_PLIST="$TEST_ROOT/live/LaunchAgents/$GATEWAY_LABEL.plist"
   PREFERENCES_PLIST="$TEST_ROOT/live/Preferences/$PREFERENCES_DOMAIN.plist"
   SPARKLE_CACHE_ROOT="$TEST_ROOT/live/Caches/$PREFERENCES_DOMAIN/org.sparkle-project.Sparkle"
@@ -1099,6 +1103,9 @@ cleanup() {
   trap - EXIT HUP INT TERM
   set +e
 
+  # Adopt a Sparkle-launched replacement even when the main transition failed
+  # before its normal post-install ownership scan.
+  adopt_sparkle_relaunched_apps
   stop_tracked_apps
   audit_new_sparkle_cache_entries || cache_status="$?"
   restore_preferences || preferences_status="$?"
@@ -1184,29 +1191,140 @@ launch_disposable_app() {
   fi
 }
 
+wait_for_app_update_node() {
+  local deadline=$((SECONDS + TIMEOUT_SECONDS))
+  local expected_node_id
+  local nodes_json
+  local exact_node_connected
+  local matched_node_id
+
+  require_readable_file "$DEVICE_IDENTITY_FILE" "Jarvis app device identity"
+  expected_node_id="$(manifest_value "$DEVICE_IDENTITY_FILE" '.deviceId // empty')"
+  [[ "$expected_node_id" =~ ^[0-9A-Za-z._:-]{8,128}$ ]] || \
+    die "Jarvis app device identity has a missing or invalid deviceId"
+
+  # The disposable copy uses the same app-owned state directory and therefore
+  # the exact signed device identity. Poll that identity through startup; never
+  # select a different Mac merely because it advertises updater commands.
+  while (( SECONDS < deadline )); do
+    nodes_json="$("$OPENCLAW_BIN" nodes status --connected --json 2>/dev/null)" || true
+    exact_node_connected="$("$JQ_BIN" -r --arg node_id "$expected_node_id" '
+      any(.nodes[]?; .nodeId == $node_id and .connected == true)
+    ' <<<"$nodes_json" 2>/dev/null || true)"
+    matched_node_id="$("$JQ_BIN" -r --arg node_id "$expected_node_id" '
+      [.nodes[]? | select(
+        .nodeId == $node_id and
+        .connected == true and
+        ((.commands // []) | index("system.appUpdate.status")) != null and
+        ((.commands // []) | index("system.appUpdate.install")) != null
+      )] as $nodes |
+      if ($nodes | length) == 1 then $nodes[0].nodeId else empty end
+    ' <<<"$nodes_json" 2>/dev/null || true)"
+    if [[ "$matched_node_id" == "$expected_node_id" ]]; then
+      APP_NODE_ID="$matched_node_id"
+      return 0
+    fi
+    if [[ "$exact_node_connected" == "true" ]]; then
+      die "old Jarvis baseline is incompatible with retained-update acceptance: exact app node lacks system.appUpdate.status/install"
+    fi
+    sleep 2
+  done
+  die "exact disposable Jarvis app node did not connect with signed-update commands"
+}
+
+wait_for_ready_app_update() {
+  local deadline
+  local invoke_json
+  local status_json
+
+  wait_for_app_update_node
+  # Node startup and Sparkle preparation are separate transitions. Give the
+  # ready-state poll its full timeout after exact node discovery completes.
+  deadline=$((SECONDS + TIMEOUT_SECONDS))
+
+  # Jarvis deliberately retains Sparkle's install-on-quit handler until an
+  # exact version/build is confirmed. Poll the app-owned state instead of
+  # assuming that terminating the menu-bar app will install the download.
+  while (( SECONDS < deadline )); do
+    invoke_json="$("$OPENCLAW_BIN" nodes invoke \
+      --node "$APP_NODE_ID" \
+      --command system.appUpdate.status \
+      --params '{}' \
+      --invoke-timeout 15000)" || true
+    status_json="$("$JQ_BIN" -c '.payload // empty' <<<"$invoke_json" 2>/dev/null || true)"
+    if [[ "$("$JQ_BIN" -r '.readyToInstall // false' <<<"$status_json" 2>/dev/null || true)" == "true" && \
+      "$("$JQ_BIN" -r '.version // empty' <<<"$status_json" 2>/dev/null || true)" == "$NEW_VERSION" && \
+      "$("$JQ_BIN" -r '.build // empty' <<<"$status_json" 2>/dev/null || true)" == "$NEW_BUILD" ]]; then
+      log "proof.app_update_ready=ok node_id=$APP_NODE_ID version=$NEW_VERSION build=$NEW_BUILD"
+      return 0
+    fi
+    sleep 2
+  done
+  die "signed app update did not become ready for the exact target version/build"
+}
+
+install_ready_app_update() {
+  local params
+  local result
+
+  params="$("$JQ_BIN" -nc --arg version "$NEW_VERSION" --arg build "$NEW_BUILD" \
+    '{expectedVersion:$version,expectedBuild:$build}')"
+  result="$("$OPENCLAW_BIN" nodes invoke \
+    --node "$APP_NODE_ID" \
+    --command system.appUpdate.install \
+    --params "$params" \
+    --invoke-timeout 15000)" || \
+    die "Jarvis app rejected the exact ready signed update"
+  [[ "$("$JQ_BIN" -r '.ok // false' <<<"$result" 2>/dev/null || true)" == "true" ]] || \
+    die "Jarvis app rejected the exact ready signed update"
+  log "proof.app_update_install=accepted node_id=$APP_NODE_ID version=$NEW_VERSION build=$NEW_BUILD"
+}
+
 wait_for_disposable_update() {
   local deadline=$((SECONDS + TIMEOUT_SECONDS))
-  local quit_at=$((SECONDS + DOWNLOAD_GRACE_SECONDS))
-  local quit_requested=0
   local version
   local build
 
   while (( SECONDS < deadline )); do
+    adopt_sparkle_relaunched_apps
     version="$(app_plist_value "$DISPOSABLE_APP" CFBundleShortVersionString)"
     build="$(app_plist_value "$DISPOSABLE_APP" CFBundleVersion)"
-    if [[ "$version" == "$NEW_VERSION" && "$build" == "$NEW_BUILD" ]]; then
+    if [[ "$version" == "$NEW_VERSION" && "$build" == "$NEW_BUILD" && \
+      "$SPARKLE_RELAUNCH_ADOPTED" == "1" ]]; then
       return 0
     fi
 
-    # Sparkle's automatic install commonly completes when the old app exits.
-    # Terminate only PIDs launched by this run; never target a bundle id broadly.
-    if [[ "$quit_requested" == "0" ]] && (( SECONDS >= quit_at )); then
-      stop_tracked_apps
-      quit_requested=1
-    fi
     sleep 2
   done
-  die "Sparkle transition timed out before exact version/build appeared"
+  die "Sparkle transition timed out before exact version/build and owned relaunch appeared"
+}
+
+adopt_sparkle_relaunched_apps() {
+  local executable
+  local executable_path
+  local pid
+
+  executable="$(app_plist_value "$DISPOSABLE_APP" CFBundleExecutable)"
+  executable_path="$DISPOSABLE_APP/Contents/MacOS/$executable"
+  [[ -n "$DISPOSABLE_APP" && -d "$DISPOSABLE_APP" ]] || return 0
+  # Sparkle may relaunch the replaced bundle outside the PID lineage started by
+  # this shell. Adopt only processes whose executable is the exact disposable
+  # path, preserving the harness's narrow process-ownership boundary.
+  while read -r pid; do
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    if [[ " $APP_PIDS " != *" $pid "* ]]; then
+      record_app_pid "$pid"
+      SPARKLE_RELAUNCH_ADOPTED=1
+      log "tracked_sparkle_relaunch_pid=$pid"
+    fi
+  done < <("$PS_BIN" -axo pid=,comm= | awk -v executable="$executable_path" '
+    {
+      pid = $1
+      $1 = ""
+      sub(/^[[:space:]]+/, "")
+      if ($0 == executable) { print pid }
+    }
+  ')
 }
 
 wait_for_live_managed_manifest() {
@@ -1324,6 +1442,8 @@ run_apply() {
   prepare_owned_run
   backup_and_force_sparkle_preferences
   launch_disposable_app old
+  wait_for_ready_app_update
+  install_ready_app_update
   wait_for_disposable_update
 
   verify_strict_app_trust "$DISPOSABLE_APP" updated-disposable
@@ -1353,7 +1473,7 @@ main() {
   parse_args "$@"
   configure_test_root
 
-  if [[ "$MODE" == "apply" ]]; then
+  if [[ "$MODE" == "apply" && -z "$TEST_ROOT" ]]; then
     # Inspection stays lock-free. The apply campaign owns one reservation
     # before its live preflight snapshot and keeps it across app replacement,
     # reseed, restart, rollback handling, and optional Telegram proof.
@@ -1364,6 +1484,10 @@ main() {
       "$ROOT_DIR" \
       "$ROOT_DIR/scripts/jarvis-sparkle-update-e2e.sh" \
       "${ORIGINAL_ARGS[@]}"
+  elif [[ "$MODE" == "apply" ]]; then
+    # Test mode is already constrained to fixture-local HOME, state, commands,
+    # and scratch paths. It must not contend with a real release owner.
+    log "shared_resource_lock=skipped reason=fixture_isolation"
   fi
 
   run_preflight

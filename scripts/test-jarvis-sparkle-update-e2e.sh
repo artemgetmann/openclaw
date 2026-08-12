@@ -191,7 +191,6 @@ EOF
 set -euo pipefail
 root="${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}"
 app="$1"
-next_info=""
 count_file="$root/control/launch-count"
 count=0
 [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
@@ -205,28 +204,10 @@ mkdir -p "$root/live/Caches/ai.jarvis.mac/org.sparkle-project.Sparkle/run-create
 printf 'staged\n' >"$root/live/Caches/ai.jarvis.mac/org.sparkle-project.Sparkle/run-created/payload"
 
 if [[ "$count" == "1" && ! -e "$root/control/no-transition" ]]; then
-  new="$root/apps/new/Jarvis.app"
-  next_info="$app/Contents/Info.plist.fixture-next"
-
-  # wait_for_disposable_update treats the target version/build in Info.plist as
-  # the completed-update signal. Stage that signal first, but publish it only
-  # after every payload and signing fixture has reached its final state. This
-  # models Sparkle's completed bundle replacement and prevents the harness from
-  # observing a new version paired with stale signer metadata.
-  cp "$new/Contents/Info.plist" "$next_info"
-  cp "$new/Contents/Resources/OpenClawRuntime/manifest.json" "$app/Contents/Resources/OpenClawRuntime/manifest.json"
-  cp "$new/Contents/Resources/OpenClawRuntime/openclaw/package.json" "$app/Contents/Resources/OpenClawRuntime/openclaw/package.json"
-  cp "$new/.fixture-codesign" "$app/.fixture-codesign"
-  cp "$new/.fixture-gatekeeper" "$app/.fixture-gatekeeper"
-  cp "$new/.fixture-team" "$app/.fixture-team"
-  cp "$new/.fixture-cdhash" "$app/.fixture-cdhash"
-  if [[ -e "$root/control/post-update-foreign-team" ]]; then
-    printf 'OTHERTEAM\n' >"$app/.fixture-team"
-  fi
-  if [[ -e "$root/control/post-update-cdhash-drift" ]]; then
-    printf '8888888888888888888888888888888888888888\n' >"$app/.fixture-cdhash"
-  fi
-
+  # The signed app has downloaded the update and retained Sparkle's immediate
+  # installation callback. The node command must invoke it; app termination by
+  # itself deliberately does not replace the bundle.
+  printf '%s\n' "$app" >"$root/control/update-ready-app"
 fi
 
 if [[ "$count" -ge "2" ]]; then
@@ -249,17 +230,39 @@ if [[ "$count" -ge "2" && ! -e "$root/control/no-reseed" ]]; then
   printf 'managed manifest reseeded\n' >>"$root/logs/actions"
 fi
 
-if [[ -n "$next_info" ]]; then
-  # Publish the completion marker after every first-launch side effect,
-  # including intentionally foreign cache residue. Readers therefore see
-  # either the old marker or a fully settled synthetic Sparkle transaction.
-  mv "$next_info" "$app/Contents/Info.plist"
-fi
-
-# Give the harness an explicit test-only startup handshake. Without this, the
-# one-second production quit grace can interrupt a background fixture process
-# before its atomic synthetic update is published on a contended host.
+# Give the harness an explicit test-only startup handshake so it cannot poll
+# the node shim before the synthetic app publishes its retained-update state.
 : >"$root/control/app-hook-settled-$count"
+EOF
+
+  cat >"$fixture/bin/apply-update" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+root="${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}"
+app="$(cat "$root/control/update-ready-app")"
+new="$root/apps/new/Jarvis.app"
+next_info="$app/Contents/Info.plist.fixture-next"
+
+# Publish the version marker last so the harness never observes a new version
+# paired with stale payload or signer metadata.
+cp "$new/Contents/Info.plist" "$next_info"
+cp "$new/Contents/Resources/OpenClawRuntime/manifest.json" "$app/Contents/Resources/OpenClawRuntime/manifest.json"
+cp "$new/Contents/Resources/OpenClawRuntime/openclaw/package.json" "$app/Contents/Resources/OpenClawRuntime/openclaw/package.json"
+cp "$new/.fixture-codesign" "$app/.fixture-codesign"
+cp "$new/.fixture-gatekeeper" "$app/.fixture-gatekeeper"
+cp "$new/.fixture-team" "$app/.fixture-team"
+cp "$new/.fixture-cdhash" "$app/.fixture-cdhash"
+[[ ! -e "$root/control/post-update-foreign-team" ]] || printf 'OTHERTEAM\n' >"$app/.fixture-team"
+[[ ! -e "$root/control/post-update-cdhash-drift" ]] || \
+  printf '8888888888888888888888888888888888888888\n' >"$app/.fixture-cdhash"
+mv "$next_info" "$app/Contents/Info.plist"
+
+# Model Sparkle relaunching the replaced app outside the original process
+# lineage. The harness must discover and own this exact disposable executable.
+"$app/Contents/MacOS/OpenClaw" >/dev/null 2>&1 &
+relaunch_pid="$!"
+printf '%s\n' "$relaunch_pid" >"$root/control/sparkle-relaunch-pid"
+printf '%s %s\n' "$relaunch_pid" "$app/Contents/MacOS/OpenClaw" >>"$root/control/process-executables"
 EOF
 
   cat >"$fixture/bin/launchctl" <<'EOF'
@@ -318,6 +321,36 @@ set -e
 root="${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}"
 printf 'openclaw %s\n' "$*" >>"$root/logs/actions"
 case "$*" in
+  *'nodes status --connected --json'*)
+    count_file="$root/control/node-status-count"
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$count_file"
+    if [[ "$count" == "1" ]]; then
+      printf '{"nodes":[]}\n'
+    elif [[ -e "$root/control/update-commands-missing" ]]; then
+      printf '{"nodes":[{"nodeId":"fixture-app-node","connected":true,"commands":[]}]}\n'
+    else
+      printf '{"nodes":[{"nodeId":"unrelated-app-node","connected":true,"commands":["system.appUpdate.status","system.appUpdate.install"]},{"nodeId":"fixture-app-node","connected":true,"commands":["system.appUpdate.status","system.appUpdate.install"]}]}\n'
+    fi
+    ;;
+  *'nodes invoke'*'system.appUpdate.status'*)
+    if [[ -e "$root/control/update-ready-app" ]]; then
+      printf '{"payload":{"available":true,"readyToInstall":true,"version":"2026.7.15.1","build":"2026071501"}}\n'
+    else
+      printf '{"payload":{"available":false,"readyToInstall":false}}\n'
+    fi
+    ;;
+  *'nodes invoke'*'system.appUpdate.install'*)
+    [[ "$*" == *'2026.7.15.1'* && "$*" == *'2026071501'* ]] || exit 11
+    if [[ -e "$root/control/install-reject" ]]; then
+      printf '{"ok":false,"error":{"code":"UNAVAILABLE","message":"fixture rejection"}}\n'
+      exit 0
+    fi
+    "$root/bin/apply-update"
+    printf '{"ok":true}\n'
+    ;;
   *'telegram-user precheck'*) printf '{"ok":true}\n' ;;
   *'telegram-user send'*)
     nonce="$(printf '%s\n' "$*" | sed -E 's/.*Reply exactly ([A-Z0-9_]+).*/\1/')"
@@ -352,6 +385,9 @@ make_fixture() {
   printf 'keep\n' >"$fixture/live/Caches/ai.jarvis.mac/org.sparkle-project.Sparkle/preexisting/payload"
   cp "$fixture/apps/old/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json" \
     "$fixture/live/Jarvis/.jarvis/.consumer-bundled-runtime.json"
+  mkdir -p "$fixture/live/Jarvis/.jarvis/identity"
+  printf '{"deviceId":"fixture-app-node","publicKey":"fixture-public","privateKey":"fixture-private","createdAtMs":1}\n' \
+    >"$fixture/live/Jarvis/.jarvis/identity/device.json"
   printf 'unrelatedKey=preserve-me\n' >"$fixture/live/Preferences/ai.jarvis.mac.plist"
   write_gateway_plist "$fixture"
   write_shims "$fixture"
@@ -1004,11 +1040,26 @@ plist_after="$(shasum -a 256 "$case_root/live/LaunchAgents/ai.jarvis.gateway.pli
 [[ "$(jq -r '.gitCommit' "$case_root/live/Jarvis/.jarvis/.consumer-bundled-runtime.json")" == "$NEW_COMMIT" ]] || fail "apply did not poll/reach live managed receipt"
 [[ "$apply_output" == *"proof.public_feed=ok"* ]] || fail "apply omitted public_feed proof"
 [[ "$apply_output" == *"proof.installed_app=normal_signed_baseline"* ]] || fail "apply omitted installed_app proof"
+[[ "$apply_output" == *"proof.app_update_ready=ok node_id=fixture-app-node version=$NEW_VERSION build=$NEW_BUILD"* ]] || \
+  fail "apply did not bind readiness to the exact app-owned update"
+[[ "$apply_output" == *"proof.app_update_install=accepted node_id=fixture-app-node version=$NEW_VERSION build=$NEW_BUILD"* ]] || \
+  fail "apply did not invoke the exact retained Sparkle installer"
 [[ "$apply_output" == *"proof.sparkle_transition=ok"* ]] || fail "apply omitted sparkle_transition proof"
 [[ "$apply_output" == *"proof.managed_runtime=ok"* ]] || fail "apply omitted managed_runtime proof"
 [[ "$apply_output" == *"proof.gateway=ok"* ]] || fail "apply omitted gateway proof"
 [[ "$apply_output" == *"proof.telegram=ok sent_message_id=501 reply_message_id=502"* ]] || fail "apply omitted Telegram message-id proof"
 grep -q 'app launch 2' "$case_root/logs/actions" || fail "updated app was not explicitly relaunched for reseed"
+grep -q 'nodes invoke --node fixture-app-node --command system.appUpdate.install' "$case_root/logs/actions" || \
+  fail "apply bypassed the app-owned exact install command"
+if grep -q 'nodes invoke --node unrelated-app-node' "$case_root/logs/actions"; then
+  fail "apply invoked updater commands on an unrelated connected Mac"
+fi
+[[ "$(cat "$case_root/control/node-status-count")" -ge 2 ]] || \
+  fail "apply did not poll through disposable app node startup"
+sparkle_relaunch_pid="$(cat "$case_root/control/sparkle-relaunch-pid")"
+! kill -0 "$sparkle_relaunch_pid" >/dev/null 2>&1 || fail "apply left Sparkle's relaunched app process alive"
+[[ "$apply_output" == *"tracked_sparkle_relaunch_pid=$sparkle_relaunch_pid"* ]] || \
+  fail "apply did not adopt Sparkle's exact relaunched app process"
 grep -q 'launchctl bootout' "$case_root/logs/actions" || fail "exact gateway bootout was not called"
 grep -q 'launchctl bootstrap' "$case_root/logs/actions" || fail "exact gateway bootstrap was not called"
 grep -q -- '--after-id 501' "$case_root/logs/actions" || fail "Telegram wait did not anchor after sent message id"
@@ -1017,6 +1068,32 @@ if grep -q -- '--sender-id' "$case_root/logs/actions"; then
 fi
 find "$case_root/runs" -mindepth 1 -print -quit | grep -q . && fail "successful apply left sentinel-owned run files"
 pass "apply proves all layers in order and restores owned state"
+
+case_root="$(copy_case unsupported-old-app)"
+: >"$case_root/control/update-commands-missing"
+set +e
+unsupported_old_output="$(harness_env "$case_root" --apply --timeout 30 2>&1)"
+unsupported_old_status="$?"
+set -e
+[[ "$unsupported_old_status" -ne 0 && \
+  "$unsupported_old_output" == *"old Jarvis baseline is incompatible with retained-update acceptance"* ]] || \
+  fail "unsupported old app did not fail with an immediate compatibility error"
+[[ "$(cat "$case_root/control/node-status-count")" == "2" ]] || \
+  fail "unsupported old app waited after its exact node advertised no update commands"
+pass "pre-command baseline fails with explicit compatibility error"
+
+case_root="$(copy_case install-rejection)"
+: >"$case_root/control/install-reject"
+set +e
+install_rejection_output="$(harness_env "$case_root" --apply 2>&1)"
+install_rejection_status="$?"
+set -e
+[[ "$install_rejection_status" -ne 0 && \
+  "$install_rejection_output" == *"Jarvis app rejected the exact ready signed update"* ]] || \
+  fail "app-owned install rejection did not fail immediately"
+[[ "$install_rejection_output" != *"proof.app_update_install=accepted"* ]] || \
+  fail "app-owned install rejection emitted false acceptance proof"
+pass "app-owned install rejection blocks false acceptance"
 
 case_root="$(copy_case telegram-exact)"
 : >"$case_root/control/telegram-embedded-reply"
