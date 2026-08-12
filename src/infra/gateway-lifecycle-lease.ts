@@ -23,6 +23,7 @@ type GatewayLifecycleLeaseDeps = {
   cwd: string;
   moduleUrl: string;
   fileExists: (filePath: string) => boolean;
+  fileDescriptorIsOpen: (fd: number) => boolean;
   spawnSync: typeof spawnSync;
   spawn: typeof spawn;
 };
@@ -37,6 +38,14 @@ function defaultDeps(): GatewayLifecycleLeaseDeps {
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
     fileExists: fssync.existsSync,
+    fileDescriptorIsOpen: (fd) => {
+      try {
+        fssync.fstatSync(fd);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     spawnSync,
     spawn,
   };
@@ -79,7 +88,7 @@ export function resolveGatewayLifecycleLeasePaths(
 
 function inheritedMachineLeaseIsValid(
   paths: GatewayLifecycleLeasePaths,
-  deps: Pick<GatewayLifecycleLeaseDeps, "env" | "spawnSync">,
+  deps: Pick<GatewayLifecycleLeaseDeps, "env" | "fileDescriptorIsOpen" | "spawnSync">,
 ): boolean {
   // The shell helper validates the capability token against live owner
   // metadata and proves this process tree descends from that exact PID/start
@@ -87,6 +96,19 @@ function inheritedMachineLeaseIsValid(
   // process forge admission.
   const allowStandardOwner =
     deps.env.OPENCLAW_LAUNCHD_LABEL?.trim() === "ai.jarvis.gateway" ? "0" : "1";
+  // Node closes non-stdio descriptors in spawned children unless each one is
+  // explicitly mapped. Preserve only open descriptors named by the canonical
+  // lock wrapper so the shell verifier can inspect the real kernel lock
+  // instead of rejecting its own parent as a competing owner.
+  const inheritedFds = (deps.env.OPENCLAW_SHARED_RESOURCE_LOCK_FD ?? "")
+    .split(",")
+    .filter((value) => /^[0-9]+$/.test(value))
+    .map(Number)
+    .filter((fd) => Number.isSafeInteger(fd) && fd >= 3 && deps.fileDescriptorIsOpen(fd));
+  const stdio: Array<"ignore" | number> = ["ignore", "ignore", "ignore"];
+  for (const fd of inheritedFds) {
+    stdio[fd] = fd;
+  }
   const result = deps.spawnSync(
     "/bin/bash",
     [
@@ -98,7 +120,7 @@ function inheritedMachineLeaseIsValid(
     ],
     {
       env: deps.env,
-      stdio: "ignore",
+      stdio,
     },
   );
   return result.status === 0;
