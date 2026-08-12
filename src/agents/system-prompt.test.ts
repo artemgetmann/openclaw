@@ -612,6 +612,22 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("clean openclaw");
   });
 
+  it("requires clear closeout receipts only for the Jarvis product prompt", () => {
+    const jarvisPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/jarvis",
+      jarvisBrowserPolicy: true,
+    });
+    const openClawPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(jarvisPrompt).toContain("## Clear Answers and Work Closeouts");
+    expect(jarvisPrompt).toContain("Outcome: <what is proven now>");
+    expect(jarvisPrompt).toContain("Remaining: <unfinished work, or None>");
+    expect(jarvisPrompt).toContain("Do not send a second summary message");
+    expect(openClawPrompt).not.toContain("## Clear Answers and Work Closeouts");
+  });
+
   it("keeps the isolated browser guidance for generic OpenClaw", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

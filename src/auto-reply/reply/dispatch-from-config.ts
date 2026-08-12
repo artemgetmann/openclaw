@@ -63,11 +63,19 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { resolveOpenClawAssistantPhase } from "./assistant-phase.js";
 import {
+  extractCloseoutReceipt,
+  findLikelyCloseoutSignals,
+  recordCloseoutReceipt,
+} from "./closeout-receipt.js";
+import {
   isControlCommandReplyPayload,
   markControlCommandReplyPayload,
 } from "./control-command-reply.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
-import { markCaptionlessFinalMediaSupplement } from "./final-media-supplement.js";
+import {
+  isCaptionlessFinalMediaSupplement,
+  markCaptionlessFinalMediaSupplement,
+} from "./final-media-supplement.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
@@ -404,6 +412,7 @@ const resolveSessionStoreLookup = (
   cfg: OpenClawConfig,
 ): {
   sessionKey?: string;
+  storePath?: string;
   entry?: SessionEntry;
 } => {
   const targetSessionKey =
@@ -418,11 +427,13 @@ const resolveSessionStoreLookup = (
     const store = loadSessionStore(storePath);
     return {
       sessionKey,
+      storePath,
       entry: resolveSessionStoreEntry({ store, sessionKey }).existing,
     };
   } catch {
     return {
       sessionKey,
+      storePath,
     };
   }
 };
@@ -499,6 +510,50 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
+  const receiptSessionKey = sessionStoreEntry.sessionKey;
+  const receiptStorePath = sessionStoreEntry.storePath;
+  const receiptSessionId = sessionStoreEntry.entry?.sessionId;
+  let separateFinalDelivered = false;
+  const recordConfirmedCloseout = async (payload: ReplyPayload) => {
+    const text = payload.text?.trim();
+    if (!text || (!extractCloseoutReceipt(text) && findLikelyCloseoutSignals(text).length === 0)) {
+      return;
+    }
+    separateFinalDelivered = true;
+    if (!receiptSessionKey || !receiptStorePath) {
+      return;
+    }
+    try {
+      await recordCloseoutReceipt({
+        storePath: receiptStorePath,
+        sessionKey: receiptSessionKey,
+        sessionId: receiptSessionId,
+        payloads: [payload],
+      });
+    } catch (error) {
+      logVerbose(
+        `dispatch-from-config: closeout receipt persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+  if (receiptSessionKey && receiptStorePath) {
+    // A queued reply is not proof that the user received it. Persist closeout
+    // meaning only from the dispatcher's post-delivery callback.
+    params.dispatcher.addDeliveryListener?.(async (payload, info) => {
+      if (info.kind !== "final" && info.kind !== "finalized-block") {
+        return;
+      }
+      if (isMarkedFinalTtsSupplement(payload) || isCaptionlessFinalMediaSupplement(payload)) {
+        return;
+      }
+      // One turn has one authoritative closeout. Later final payloads are
+      // additive voice, media, or failure supplements and must not supersede it.
+      if (separateFinalDelivered) {
+        return;
+      }
+      await recordConfirmedCloseout(payload);
+    });
+  }
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const visibilityChannel = normalizeMessageChannel(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
@@ -803,6 +858,7 @@ export async function dispatchReplyFromConfig(params: {
         queuedFinal = result.ok;
         if (result.ok) {
           routedFinalCount += 1;
+          await recordConfirmedCloseout(payload);
         }
         if (!result.ok) {
           logVerbose(
@@ -1207,6 +1263,7 @@ export async function dispatchReplyFromConfig(params: {
           queuedFinal = result.ok || queuedFinal;
           if (result.ok) {
             routedFinalCount += 1;
+            await recordConfirmedCloseout(durableFinalPayload);
           }
         } else {
           queuedFinal = dispatcher.sendFinalReply(durableFinalPayload) || queuedFinal;
@@ -1374,7 +1431,11 @@ export async function dispatchReplyFromConfig(params: {
         !isMarkedFinalTtsSupplement(reply) &&
         !isControlCommandReplyPayload(reply);
       if (shouldSplitTelegramFinalMedia && replyFinalText) {
-        const deliverSplitFinalPayload = async (payload: ReplyPayload, label: string) => {
+        const deliverSplitFinalPayload = async (
+          payload: ReplyPayload,
+          label: string,
+          authoritative = false,
+        ) => {
           if (shouldRouteToOriginating && originatingChannel && originatingTo) {
             const result = await routeReply({
               payload,
@@ -1395,6 +1456,9 @@ export async function dispatchReplyFromConfig(params: {
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
               routedFinalCount += 1;
+              if (authoritative) {
+                await recordConfirmedCloseout(payload);
+              }
             }
             return;
           }
@@ -1421,7 +1485,7 @@ export async function dispatchReplyFromConfig(params: {
             },
           },
         });
-        await deliverSplitFinalPayload(durableFinalPayload, "mixed-final-text");
+        await deliverSplitFinalPayload(durableFinalPayload, "mixed-final-text", true);
         await dispatcher.finalizeBlockReply?.();
 
         const { text: _fullFinalCaption, ...mediaOnlyPayload } = reply;
@@ -1521,6 +1585,7 @@ export async function dispatchReplyFromConfig(params: {
           queuedFinal = result.ok || queuedFinal;
           if (result.ok) {
             routedFinalCount += 1;
+            await recordConfirmedCloseout(durableFinalPayload);
           }
         } else {
           queuedFinal = dispatcher.sendFinalReply(durableFinalPayload) || queuedFinal;
@@ -1619,8 +1684,9 @@ export async function dispatchReplyFromConfig(params: {
       }
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
+        const deliveredPayload = sanitizeTelegramVisiblePayload(ttsReply);
         const result = await routeReply({
-          payload: sanitizeTelegramVisiblePayload(ttsReply),
+          payload: deliveredPayload,
           channel: originatingChannel,
           to: originatingTo,
           sessionKey: ctx.SessionKey,
@@ -1638,6 +1704,7 @@ export async function dispatchReplyFromConfig(params: {
         queuedFinal = result.ok || queuedFinal;
         if (result.ok) {
           routedFinalCount += 1;
+          await recordConfirmedCloseout(deliveredPayload);
         }
       } else {
         queuedFinal =
