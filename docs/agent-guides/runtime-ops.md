@@ -146,6 +146,14 @@ authority and the runtime lane below still decide whether it may run.
 
 Treat authorization and temporary availability as different states:
 
+- Interpret `fix this on my Jarvis`, `ship this to my main Jarvis`, or
+  equivalent end-to-end language as approval for the canonical installed
+  deployment, required restart, one smallest symptom-specific live acceptance,
+  and exact artifacts/topic cleanup. A request to investigate, review, or make
+  a PR is source authority only. When wording does not authorize required main
+  adoption, complete safe source work and report the installed boundary as
+  blocked instead of deploying or pretending the incident is closed.
+
 - Before a protected end-to-end run, translate broad completion language into
   one explicit approval that names every planned mutation: app-support/runtime
   deployment, shared-gateway restart, live Telegram reads or sends, temporary

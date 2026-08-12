@@ -89,4 +89,27 @@ describe("single-owner workflow contract", () => {
     expect(workflow).toContain("ai.openclaw.worktree-gc");
     expect(workflow).toContain("--interval-secs 3600");
   });
+
+  it("requires selective main-Jarvis closure without restoring lifecycle ceremony", () => {
+    const boundary = read("docs/agent-guides/jarvis-delivery-boundary.md");
+    const workflow = read("docs/agent-guides/workflow.md");
+    const telegram = read("docs/agent-guides/telegram-live.md");
+
+    expect(boundary).toContain("Use the lowest proof layer that can close the reported problem");
+    expect(boundary).toContain(
+      "A bug observed on Artem's main Jarvis targets `installed-runtime` by default",
+    );
+    expect(boundary).toContain("Internal agent workflow, repository policy, documentation, CI");
+    expect(boundary).toContain("one smallest symptom-specific acceptance");
+    expect(boundary).toContain("BLOCKED — NOT YET ON MAIN JARVIS");
+    expect(boundary).toContain("Archive state is housekeeping, never delivery proof");
+    expect(workflow).toContain("repository-only behavior");
+    expect(telegram).toContain("harness-created disposable topic");
+    expect(telegram).toContain("delete that exact topic");
+
+    for (const text of [boundary, workflow, telegram]) {
+      expect(text).not.toContain("scripts/pr-lifecycle");
+      expect(text).not.toContain("handoff-test");
+    }
+  });
 });

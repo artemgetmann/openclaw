@@ -142,6 +142,14 @@ already authorizes them and follow their dedicated runbook:
 - live Telegram proof: `telegram-live.md`;
 - release/security work: `release-and-security.md`.
 
+Apply the failure-surface decision rule in
+`jarvis-delivery-boundary.md`. A bug reported on Artem's main Jarvis remains
+open through installed adoption and one smallest symptom-specific acceptance.
+Internal workflow, docs, CI, test infrastructure, and behavior-neutral
+refactors normally stop at source proof. Do not deploy main Jarvis to validate
+repository-only behavior, and do not expand a focused runtime acceptance into a
+generic live suite.
+
 Exclusive delivery operations use the narrow resource lane documented in
 `fleet-resource-control.md`. The same primary owner may execute them; a separate
 release chat is not required.
@@ -168,3 +176,8 @@ bash scripts/install-worktree-gc.sh install --interval-secs 3600
 After command or API ambiguity, inspect state before retrying. Never repeat a
 merge, deploy, restart, send, credential change, or destructive action merely
 because the first response was unclear.
+
+Do not use `safe to archive` as a synonym for shipped. Use the closeout labels
+in `jarvis-delivery-boundary.md`; a main-Jarvis incident with pending installed
+acceptance remains `BLOCKED — NOT YET ON MAIN JARVIS` even when its source PR is
+merged.

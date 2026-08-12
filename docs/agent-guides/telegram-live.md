@@ -62,6 +62,14 @@ topic session. `sessions.delete` archives the transcript as
 `*.deleted.<timestamp>`; that archive is residual evidence, not permanent
 erasure.
 
+For a main-Jarvis incident, run only the smallest scenario that reproduces the
+original symptom. Use the harness-created disposable topic, confirm the proof
+before cleanup, then delete that exact topic and clean only its matching local
+session. Do not add unrelated Telegram, browser, permission, provider, monitor,
+or restart scenarios merely to make the acceptance look broader. Topic
+isolation protects conversation routing; it does not make the shared runtime
+or primary bot non-production.
+
 ## Required precheck before any live Telegram validation
 
 - Confirm the current git branch has a real name and is not `HEAD`.
