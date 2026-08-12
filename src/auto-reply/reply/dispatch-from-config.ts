@@ -898,11 +898,14 @@ export async function dispatchReplyFromConfig(params: {
         ttsAuto: turnTtsAuto,
       });
       // The speech projection deliberately flattens Markdown and caps path-heavy
-      // answers at 1,000 characters. It is only valid when synthesis produced a
-      // voice attachment; otherwise restore the complete, directive-cleaned
-      // visible final so speech-only controls never leak into chat.
+      // answers at 1,000 characters. For Telegram it is only valid when
+      // synthesis produced a voice attachment; otherwise restore the complete,
+      // directive-cleaned final so speech-only controls never leak into chat.
       const deliveredPayload =
-        kind === "final" && typeof payload.text === "string" && !isFinalTtsAudioPayload(ttsPayload)
+        isTelegramProvider &&
+        kind === "final" &&
+        typeof payload.text === "string" &&
+        !isFinalTtsAudioPayload(ttsPayload)
           ? {
               ...ttsPayload,
               text: cleanVisibleTtsDirectives(payload.text, cfg) || ttsPayload.text,
