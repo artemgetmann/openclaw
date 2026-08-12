@@ -594,6 +594,11 @@ fixed system plus Apple Silicon/Intel Homebrew `PATH`, never tmux's saved
 original pane even if another pane becomes active, and `clear` refuses to kill
 the session while any pane in it is still running.
 
+For a one-release Sparkle build override, pass `--app-build <number>` to
+`jarvis-public-release.sh --authorize`. The generated direct and persistent
+commands retain that value, and the authorization binds it to the release.
+This avoids editing a persistent `APP_BUILD` in `release.env` for each build.
+
 tmux session state and scrollback are transport evidence only. They do not
 authorize, resume, or classify a release. The wrapper's intent, repository
 lock, strict checkpoints, and printed `recovery_command` remain authoritative.

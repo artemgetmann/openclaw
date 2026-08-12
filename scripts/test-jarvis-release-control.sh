@@ -330,17 +330,18 @@ exit 99'
       --parallel-safe-local-assets \
       --urgent-sparkle \
       --phase verify-sparkle-assets-only \
+      --app-build 2026081201 \
       --size-report \
       >"$out"
 
   [[ ! -e "$gh_sentinel" ]] \
     || fail "authorization resolved --latest-release-tag instead of preserving it inertly"
   grep -Fqx \
-    'next_command=bash scripts/jarvis-public-release.sh --release-intent operator-future-run --verify-public-assets --latest-release-tag --parallel-safe-local-assets --urgent-sparkle --phase verify-sparkle-assets-only --size-report' \
+    'next_command=bash scripts/jarvis-public-release.sh --release-intent operator-future-run --verify-public-assets --latest-release-tag --parallel-safe-local-assets --urgent-sparkle --phase verify-sparkle-assets-only --size-report --app-build 2026081201' \
     "$out" \
     || fail "future authorization did not print the complete executable wrapper command"
   grep -Fqx \
-    'persistent_command=bash scripts/jarvis-public-release-session.sh start -- --release-intent operator-future-run --verify-public-assets --latest-release-tag --parallel-safe-local-assets --urgent-sparkle --phase verify-sparkle-assets-only --size-report' \
+    'persistent_command=bash scripts/jarvis-public-release-session.sh start -- --release-intent operator-future-run --verify-public-assets --latest-release-tag --parallel-safe-local-assets --urgent-sparkle --phase verify-sparkle-assets-only --size-report --app-build 2026081201' \
     "$out" \
     || fail "future authorization did not print the matching durable transport command"
   [[ -n "$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT)" ]] \
@@ -363,6 +364,7 @@ exit 99'
       --parallel-safe-local-assets \
       --urgent-sparkle \
       --phase verify-sparkle-assets-only \
+      --app-build 2026081200 \
       --size-report \
       >"$out" 2>"$err"
   status=$?

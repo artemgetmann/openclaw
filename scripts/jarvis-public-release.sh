@@ -36,6 +36,7 @@ export GITHUB_RELEASE_REPO
 TIMING_REPORT="${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-$ROOT_DIR/dist/jarvis-release-timing.tsv}"
 SUMMARY_REPORT="${OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY:-$ROOT_DIR/dist/jarvis-public-release-summary.env}"
 RUN_SIZE_REPORT=0
+REQUESTED_APP_BUILD=""
 PARALLEL_SAFE_LOCAL_ASSETS=0
 URGENT_SPARKLE_ONLY=0
 AUTHORIZE_RELEASE=0
@@ -98,6 +99,10 @@ Options:
   --size-report
       Run scripts/report-jarvis-release-size.sh after a successful executed
       phase. This is read-only and never deletes bundle contents.
+  --app-build <number>
+      Use this Sparkle build number for the authorized release. This explicit
+      argument overrides APP_BUILD from the canonical release.env and survives
+      the durable release session.
 
 Env:
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT=/path
@@ -142,7 +147,8 @@ release_action_fingerprint() {
     && "$LATEST_RELEASE_TAG" == "0" \
     && "$PARALLEL_SAFE_LOCAL_ASSETS" == "0" \
     && "$URGENT_SPARKLE_ONLY" == "0" \
-    && "$RUN_SIZE_REPORT" == "0" ]]; then
+    && "$RUN_SIZE_REPORT" == "0" \
+    && -z "$REQUESTED_APP_BUILD" ]]; then
     printf '\n'
     return 0
   fi
@@ -158,6 +164,7 @@ release_action_fingerprint() {
     printf 'parallel=%s\0' "$PARALLEL_SAFE_LOCAL_ASSETS"
     printf 'urgent=%s\0' "$URGENT_SPARKLE_ONLY"
     printf 'size=%s\0' "$RUN_SIZE_REPORT"
+    printf 'app-build=%s\0' "$REQUESTED_APP_BUILD"
   } | /usr/bin/shasum -a 256 | /usr/bin/awk '{ print $1 }'
 }
 
@@ -455,6 +462,14 @@ while [[ $# -gt 0 ]]; do
       RUN_SIZE_REPORT=1
       shift
       ;;
+    --app-build)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --app-build requires a numeric value." >&2
+        exit 1
+      fi
+      REQUESTED_APP_BUILD="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -466,6 +481,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "$REQUESTED_APP_BUILD" && ! "$REQUESTED_APP_BUILD" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: --app-build must be numeric for Sparkle compare (CFBundleVersion). Got: $REQUESTED_APP_BUILD" >&2
+  exit 1
+fi
 
 if [[ "$PUBLISH_RELEASE_ASSETS" == "1" && "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
   echo "ERROR: choose --publish-release-assets or --verify-public-assets, not both." >&2
@@ -533,6 +553,7 @@ if [[ "$AUTHORIZE_RELEASE" == "1" ]]; then
   [[ "$URGENT_SPARKLE_ONLY" != "1" ]] || AUTHORIZED_ARGS+=(--urgent-sparkle)
   [[ "$FORCED_PHASE" == "auto" ]] || AUTHORIZED_ARGS+=(--phase "$FORCED_PHASE")
   [[ "$RUN_SIZE_REPORT" != "1" ]] || AUTHORIZED_ARGS+=(--size-report)
+  [[ -z "$REQUESTED_APP_BUILD" ]] || AUTHORIZED_ARGS+=(--app-build "$REQUESTED_APP_BUILD")
 
   printf 'next_command='
   quote_cmd_exact bash scripts/jarvis-public-release.sh "${AUTHORIZED_ARGS[@]}"
@@ -576,6 +597,13 @@ if [[ "$DRY_RUN" != "1" ]]; then
     echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
     exit 2
   fi
+fi
+
+# Apply the authorized build before checkpoint discovery. Resume validation and
+# the delegated package child must compare artifacts against the same build;
+# otherwise a stale release.env can turn a safe resume into a needless rebuild.
+if [[ -n "$REQUESTED_APP_BUILD" ]]; then
+  export APP_BUILD="$REQUESTED_APP_BUILD"
 fi
 
 if [[ "$LATEST_RELEASE_TAG" == "1" ]]; then
@@ -730,6 +758,7 @@ echo "  selected_phase=$SELECTED_PHASE"
 echo "  parallel_safe_local_assets=$PARALLEL_SAFE_LOCAL_ASSETS"
 echo "  urgent_sparkle_only=$URGENT_SPARKLE_ONLY"
 echo "  state_root=$STATE_ROOT"
+echo "  app_build=${APP_BUILD:-auto}"
 echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
 echo "  command=$COMMAND_TEXT"
 if [[ "$URGENT_SPARKLE_ONLY" == "1" || "$SELECTED_PHASE" == "publish-sparkle-assets-only" || "$SELECTED_PHASE" == "verify-sparkle-assets-only" ]]; then
