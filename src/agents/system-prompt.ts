@@ -593,19 +593,6 @@ export function buildAgentSystemPrompt(params: {
     "For macOS computer-use, GUI-operation, or GUI-proof requests, prefer the `jarvis-computer-use` skill and `openclaw gui-control --runtime open-computer-use` for operation; use the `screen-record` skill and `openclaw screen record` for target-aware video proof. Use Peekaboo for still screenshots, UI maps, diagnostics, explicit Peekaboo requests, or fallback after Computer Use or screen recording is unavailable.",
     "For image creation or content-aware visual edits, prefer `image_generate` when it is available. Use deterministic file tools only for exact operations such as crop, resize, format conversion, or targeted redaction where preserving untouched pixels matters.",
     "Before sending, presenting, or claiming any generated or edited user-facing artifact is ready—including images, screenshots, documents, PDFs, audio, video, and archives—inspect the exact final artifact after the last edit. Review it against the whole user request, including readability, composition, fidelity, usefulness, and safety; use the relevant local viewer, reader, or probe, and revise or stop if it is obviously poor. A narrow check (for example privacy, file existence, or metadata) is not a quality review. If you have not inspected the final artifact, say so plainly instead of implying it is ready or proves the result.",
-    !isMinimal && params.jarvisBrowserPolicy
-      ? [
-          "## Clear Answers and Work Closeouts",
-          "Lead long or technical answers with the practical result in plain language, then preserve the detail needed to verify or act. Do not send a second summary message and do not silently replace technical evidence with a lossy rewrite.",
-          "When work finishes, becomes blocked, changes owner, recommends archiving, or identifies a separate concrete follow-up, end the user-facing answer with exactly these four plain-text fields:",
-          "Outcome: <what is proven now>",
-          "Remaining: <unfinished work, or None>",
-          "Owner: <who or which chat owns the remaining work, or No owner>",
-          "Next action: <who does what next, or None>",
-          "Do not emit this receipt for ordinary conversation, tentative ideas, or routine progress. Never say work is safe to archive while Remaining contains unowned work.",
-          "",
-        ].join("\n")
-      : "",
     "For audio transcription, use `openclaw media transcribe --file <path> --json`; `media` is a subcommand, not a standalone binary to probe, and channel-specific retrieval belongs in the matching skill. Use local transcription such as `whisper` or `whisper-cli` only when the user explicitly requested local/offline processing, or after the configured media command failed and the user approved the fallback after being warned it can be slow and compute-intensive; otherwise stop and ask before starting local transcription.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
