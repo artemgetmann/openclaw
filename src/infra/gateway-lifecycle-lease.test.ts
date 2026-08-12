@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -18,6 +19,7 @@ describe("gateway lifecycle lease", () => {
   it("runs in the current process only when ancestry proves the inherited lifecycle lease", async () => {
     const spawnSync = vi.fn(() => ({ status: 0 }));
     const spawn = vi.fn();
+    const lockFd = fs.openSync("/dev/null", "r");
 
     const result = await ensureGatewayLifecycleLease({
       platform: "darwin",
@@ -28,11 +30,13 @@ describe("gateway lifecycle lease", () => {
       env: {
         ...process.env,
         OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN: "a".repeat(64),
+        OPENCLAW_SHARED_RESOURCE_LOCK_FD: String(lockFd),
       },
       fileExists: () => true,
       spawnSync: spawnSync as never,
       spawn: spawn as never,
     });
+    fs.closeSync(lockFd);
 
     expect(result).toEqual({ outcome: "held" });
     expect(spawnSync).toHaveBeenCalledTimes(1);
@@ -43,9 +47,61 @@ describe("gateway lifecycle lease", () => {
           "openclaw_heavy_local_slot_inherited_lease_is_valid gateway-lifecycle",
         ),
       ]),
-      expect.any(Object),
+      expect.objectContaining({
+        stdio: expect.objectContaining({ [lockFd]: lockFd }),
+      }),
     );
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("does not inherit closed, stdio, or malformed lock descriptor values", async () => {
+    const spawnSync = vi.fn(() => ({ status: 1 }));
+
+    await ensureGatewayLifecycleLease({
+      platform: "darwin",
+      cwd: process.cwd(),
+      argv: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway", "restart"],
+      execPath: process.execPath,
+      env: {
+        ...process.env,
+        OPENCLAW_SHARED_RESOURCE_LOCK_FD: "2,9x,9007199254740992",
+      },
+      fileExists: () => true,
+      spawnSync: spawnSync as never,
+      spawn: vi.fn(() => createSpawnedChild(75)) as never,
+    });
+
+    const calls = spawnSync.mock.calls as unknown as Array<
+      [string, string[], { stdio: Array<"ignore" | number> }]
+    >;
+    const options = calls[0][2];
+    expect(options.stdio).toEqual(["ignore", "ignore", "ignore"]);
+  });
+
+  it("preserves a valid inherited lock descriptor above 256", async () => {
+    const lockFd = 257;
+    const spawnSync = vi.fn(() => ({ status: 0 }));
+
+    const result = await ensureGatewayLifecycleLease({
+      platform: "darwin",
+      cwd: process.cwd(),
+      argv: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway", "restart"],
+      execPath: process.execPath,
+      env: {
+        ...process.env,
+        OPENCLAW_SHARED_RESOURCE_LOCK_FD: String(lockFd),
+      },
+      fileExists: () => true,
+      fileDescriptorIsOpen: (fd) => fd === lockFd,
+      spawnSync: spawnSync as never,
+      spawn: vi.fn() as never,
+    });
+
+    expect(result).toEqual({ outcome: "held" });
+    const calls = spawnSync.mock.calls as unknown as Array<
+      [string, string[], { stdio: Array<"ignore" | number> }]
+    >;
+    expect(calls[0][2].stdio[lockFd]).toBe(lockFd);
   });
 
   it("accepts an inherited canonical gateway resource lock", async () => {
