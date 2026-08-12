@@ -243,6 +243,24 @@ export type SessionGoal = {
   usageLimitedAt?: number;
 };
 
+export type SessionCloseoutReceipt = {
+  schemaVersion: 1;
+  outcome: string;
+  remaining: string[];
+  owner: string;
+  nextAction: string;
+  sourceTextSha256: string;
+  sourceSessionId?: string;
+  updatedAt: number;
+};
+
+export type SessionCloseoutReceiptAudit = {
+  status: "present" | "review-needed";
+  sourceTextSha256: string;
+  signals: string[];
+  updatedAt: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -265,6 +283,10 @@ export type SessionEntry = {
   spawnedBy?: string;
   /** Core-owned durable goal state for this session. */
   goal?: SessionGoal;
+  /** Latest explicit user-facing closeout receipt extracted from the accepted final answer. */
+  closeoutReceipt?: SessionCloseoutReceipt;
+  /** Cheap post-turn check used by triage to find likely closeouts that omitted a receipt. */
+  closeoutReceiptAudit?: SessionCloseoutReceiptAudit;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
   spawnedWorkspaceDir?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */

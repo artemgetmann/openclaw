@@ -290,7 +290,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('Call update_goal(status="complete") only with evidence');
     expect(prompt).toContain("When a request implies a delayed, multi-step external outcome");
     expect(prompt).toContain("offer or use a `goal` in the same turn");
-    expect(prompt).toContain("even if another skill handled the action");
+    expect(prompt).toContain("even if another skill handles the action");
     expect(prompt).toContain("verify active skills/tools cover the required external actions");
     expect(prompt).toContain("offer tracking/planning only");
     expect(prompt).toContain("Ask at most one high-value missing boundary");
@@ -348,7 +348,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(goalToolsSection).toContain("delayed, multi-step external outcome");
     expect(goalToolsSection).toContain("offer or use a `goal` in the same turn");
-    expect(goalToolsSection).toContain("even if another skill handled the action");
+    expect(goalToolsSection).toContain("even if another skill handles the action");
     expect(goalToolsSection).toContain(
       "verify active skills/tools cover the required external actions",
     );
@@ -610,6 +610,22 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("without offering another browser or exposing internal profile names");
     expect(prompt).not.toContain('profile="openclaw"');
     expect(prompt).not.toContain("clean openclaw");
+  });
+
+  it("requires clear closeout receipts only for the Jarvis product prompt", () => {
+    const jarvisPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/jarvis",
+      jarvisBrowserPolicy: true,
+    });
+    const openClawPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(jarvisPrompt).toContain("## Clear Answers and Work Closeouts");
+    expect(jarvisPrompt).toContain("Outcome: <what is proven now>");
+    expect(jarvisPrompt).toContain("Remaining: <unfinished work, or None>");
+    expect(jarvisPrompt).toContain("Do not send a second summary message");
+    expect(openClawPrompt).not.toContain("## Clear Answers and Work Closeouts");
   });
 
   it("keeps the isolated browser guidance for generic OpenClaw", () => {

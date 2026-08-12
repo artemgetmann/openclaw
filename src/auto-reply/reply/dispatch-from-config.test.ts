@@ -78,6 +78,9 @@ const sessionStoreMocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
 }));
+const closeoutReceiptMocks = vi.hoisted(() => ({
+  recordCloseoutReceipt: vi.fn(async (_params: unknown) => null),
+}));
 const ttsMocks = vi.hoisted(() => {
   const state = {
     autoMode: "off",
@@ -224,6 +227,13 @@ vi.mock("../../tts/tts.js", () => ({
   resolveTtsPrefsPath: () => ttsMocks.resolveTtsPrefsPath(),
   shouldSkipTtsForMediaDirectiveText: (text: string) => text.includes("MEDIA:"),
 }));
+vi.mock("./closeout-receipt.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./closeout-receipt.js")>();
+  return {
+    ...actual,
+    recordCloseoutReceipt: (params: unknown) => closeoutReceiptMocks.recordCloseoutReceipt(params),
+  };
+});
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 const { markControlCommandReplyPayload } = await import("./control-command-reply.js");
@@ -243,6 +253,7 @@ function createDispatcher(): ReplyDispatcher {
     finalizeBlockReply: vi.fn(async () => {}),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    addDeliveryListener: vi.fn(),
     markComplete: vi.fn(),
   };
 }
@@ -331,6 +342,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+    closeoutReceiptMocks.recordCloseoutReceipt.mockClear();
     ttsMocks.state.autoMode = "off";
     ttsMocks.state.cleanedFinalText = undefined;
     ttsMocks.state.lastAttempt = undefined;
@@ -341,6 +353,110 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.resolveTtsConfig.mockClear();
     ttsMocks.resolveTtsConfig.mockReturnValue({
       mode: "final",
+    });
+  });
+  it("records closeout meaning from the confirmed final-delivery callback", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { sessionId: "session-123" };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:direct:123",
+    });
+    const replyResolver = async () => ({ text: "Final answer." });
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    const listener = (dispatcher.addDeliveryListener as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0];
+    expect(listener).toBeTypeOf("function");
+
+    const receiptText = [
+      "Outcome: PR merged",
+      "Remaining: Publish the release",
+      "Owner: Release chat",
+      "Next action: Release chat publishes after approval",
+    ].join("\n");
+    await listener({ text: receiptText }, { kind: "finalized-block" });
+    await listener(
+      { text: "Completed voice summary without the four receipt fields." },
+      { kind: "final" },
+    );
+
+    expect(closeoutReceiptMocks.recordCloseoutReceipt).toHaveBeenCalledTimes(1);
+    expect(closeoutReceiptMocks.recordCloseoutReceipt).toHaveBeenCalledWith({
+      storePath: "/tmp/mock-sessions.json",
+      sessionKey: "agent:main:telegram:direct:123",
+      sessionId: "session-123",
+      payloads: [{ text: receiptText }],
+    });
+  });
+  it("waits past non-closeout finals and ignores marked supplements", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { sessionId: "session-multipart" };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:direct:123",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "Ordinary answer." }),
+    });
+    const listener = (dispatcher.addDeliveryListener as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0];
+    await listener({ mediaUrl: "voice.ogg" }, { kind: "final" });
+    await listener(
+      {
+        text: "Completed voice summary without a receipt.",
+        channelData: { openclaw: { finalTtsSupplement: true } },
+      },
+      { kind: "final" },
+    );
+    const receiptText = [
+      "Outcome: Release completed",
+      "Remaining: None",
+      "Owner: This chat",
+      "Next action: None",
+    ].join("\n");
+    await listener({ text: receiptText }, { kind: "final" });
+
+    expect(closeoutReceiptMocks.recordCloseoutReceipt).toHaveBeenCalledTimes(1);
+    expect(closeoutReceiptMocks.recordCloseoutReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ payloads: [{ text: receiptText }] }),
+    );
+  });
+  it("records closeout meaning after successful cross-channel delivery", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { sessionId: "session-routed" };
+    const receiptText = [
+      "Outcome: Investigation completed",
+      "Remaining: None",
+      "Owner: This chat",
+      "Next action: None",
+    ].join("\n");
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      SessionKey: "agent:main:telegram:direct:123",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: receiptText }),
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalled();
+    expect(closeoutReceiptMocks.recordCloseoutReceipt).toHaveBeenCalledWith({
+      storePath: "/tmp/mock-sessions.json",
+      sessionKey: "agent:main:telegram:direct:123",
+      sessionId: "session-routed",
+      payloads: [expect.objectContaining({ text: receiptText })],
     });
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
