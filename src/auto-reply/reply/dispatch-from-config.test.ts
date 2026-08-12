@@ -1265,7 +1265,7 @@ describe("dispatchReplyFromConfig", () => {
       ChatType: "group",
       SessionKey: "agent:main:telegram:group:structured-tts-off",
     });
-    const finalText = [
+    const visibleFinalText = [
       "### Confirmed facts",
       "",
       "#### 1. Installed application",
@@ -1276,6 +1276,10 @@ describe("dispatchReplyFromConfig", () => {
       "",
       "The remaining diagnostic detail must stay visible. ".repeat(30).trimEnd(),
     ].join("\n");
+    const finalText = [
+      `[[tts:voice=alloy]]${visibleFinalText}`,
+      "[[tts:text]]Private speech direction.[[/tts:text]]",
+    ].join("\n");
 
     await dispatchReplyFromConfig({
       ctx,
@@ -1285,7 +1289,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(finalText.length).toBeGreaterThan(1_000);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: finalText });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: visibleFinalText });
   });
 
   it("suppresses direct Telegram text-session tool summaries when verbose is off", async () => {

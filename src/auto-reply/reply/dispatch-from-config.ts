@@ -83,6 +83,25 @@ const NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINES = 6;
 const NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINE_CHARS = 180;
 const NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_LINES = 3;
 const NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_CHARS = 240;
+const FALLBACK_TTS_DIRECTIVE_POLICY: ResolvedTtsModelOverrides = {
+  enabled: true,
+  allowText: true,
+  allowProvider: false,
+  allowVoice: true,
+  allowModelId: true,
+  allowVoiceSettings: true,
+  allowNormalization: true,
+  allowSeed: true,
+};
+
+function cleanVisibleTtsDirectives(text: string, cfg: OpenClawConfig): string {
+  const config = resolveTtsConfig(cfg);
+  return parseTtsDirectives(
+    text,
+    config.modelOverrides ?? FALLBACK_TTS_DIRECTIVE_POLICY,
+    config.openai?.baseUrl,
+  ).cleanedText.trim();
+}
 
 function hasTtsDirective(text: string): boolean {
   return /\[\[tts(?::|\]|\s)/i.test(text);
@@ -880,10 +899,14 @@ export async function dispatchReplyFromConfig(params: {
       });
       // The speech projection deliberately flattens Markdown and caps path-heavy
       // answers at 1,000 characters. It is only valid when synthesis produced a
-      // voice attachment; otherwise it must never replace the visible final.
+      // voice attachment; otherwise restore the complete, directive-cleaned
+      // visible final so speech-only controls never leak into chat.
       const deliveredPayload =
         kind === "final" && typeof payload.text === "string" && !isFinalTtsAudioPayload(ttsPayload)
-          ? { ...ttsPayload, text: payload.text }
+          ? {
+              ...ttsPayload,
+              text: cleanVisibleTtsDirectives(payload.text, cfg) || ttsPayload.text,
+            }
           : ttsPayload;
       // `/tts on` is a control reply and intentionally passes through TTS so
       // the acknowledgement can be spoken. Some TTS implementations rebuild the
@@ -1144,22 +1167,7 @@ export async function dispatchReplyFromConfig(params: {
       const blockFinalTextForDelivery = deriveVisibleBlockFinalText(durableBlockFinalTextTrimmed);
       let visibleDurableBlockFinalText = blockFinalTextForDelivery;
       if (shouldCaptionFinalTtsSupplement && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
-        const resolvedTtsConfig = resolveTtsConfig(cfg);
-        const fallbackDirectivePolicy: ResolvedTtsModelOverrides = {
-          enabled: true,
-          allowText: true,
-          allowProvider: false,
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-          allowNormalization: true,
-          allowSeed: true,
-        };
-        const visibleDurableText = parseTtsDirectives(
-          blockFinalTextForDelivery,
-          resolvedTtsConfig.modelOverrides ?? fallbackDirectivePolicy,
-          resolvedTtsConfig.openai?.baseUrl,
-        ).cleanedText.trim();
+        const visibleDurableText = cleanVisibleTtsDirectives(blockFinalTextForDelivery, cfg);
         const durableFinalPayload = sanitizeTelegramVisiblePayload({
           text: visibleDurableText || blockFinalTextForDelivery,
           ...(durableBlockErrorCount > 0 ? { isError: true } : {}),
