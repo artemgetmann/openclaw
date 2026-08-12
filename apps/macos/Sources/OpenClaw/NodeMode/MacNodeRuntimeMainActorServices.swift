@@ -4,6 +4,7 @@ import OpenClawKit
 
 @MainActor
 protocol MacNodeRuntimeMainActorServices: Sendable {
+    func checkForAppUpdate() async -> OpenClawAppUpdateStatus
     func appUpdateStatus() -> OpenClawAppUpdateStatus
     func installAppUpdate(expectedVersion: String, expectedBuild: String) throws
 
@@ -29,6 +30,10 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
 final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
     private let screenRecorder = ScreenRecordService()
     private let locationService = MacNodeLocationService()
+
+    func checkForAppUpdate() async -> OpenClawAppUpdateStatus {
+        await AppUpdateControllerRegistry.shared.checkForUpdatesInBackground()
+    }
 
     func appUpdateStatus() -> OpenClawAppUpdateStatus {
         AppUpdateControllerRegistry.shared.status()

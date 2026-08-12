@@ -52,6 +52,10 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen record uses injected services`() async throws {
         @MainActor
         final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            func checkForAppUpdate() -> OpenClawAppUpdateStatus {
+                OpenClawAppUpdateStatus(available: false, readyToInstall: false)
+            }
+
             func appUpdateStatus() -> OpenClawAppUpdateStatus {
                 OpenClawAppUpdateStatus(available: false, readyToInstall: false)
             }
@@ -120,8 +124,14 @@ struct MacNodeRuntimeTests {
     @Test func `app update commands pin installation to the approved release`() async throws {
         @MainActor
         final class FakeUpdateServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            var checkedForUpdate = false
             var installedVersion: String?
             var installedBuild: String?
+
+            func checkForAppUpdate() -> OpenClawAppUpdateStatus {
+                self.checkedForUpdate = true
+                return self.appUpdateStatus()
+            }
 
             func appUpdateStatus() -> OpenClawAppUpdateStatus {
                 OpenClawAppUpdateStatus(
@@ -169,6 +179,20 @@ struct MacNodeRuntimeTests {
 
         let services = await MainActor.run { FakeUpdateServices() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let checkResponse = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "app-update-check",
+                command: OpenClawSystemCommand.appUpdateCheck.rawValue))
+        #expect(checkResponse.ok)
+        let checkJSON = try #require(checkResponse.payloadJSON)
+        let checkStatus = try JSONDecoder().decode(
+            OpenClawAppUpdateStatus.self,
+            from: Data(checkJSON.utf8))
+        #expect(checkStatus.version == "2026.7.29")
+        await MainActor.run {
+            #expect(services.checkedForUpdate)
+        }
+
         let statusResponse = await runtime.handleInvoke(
             BridgeInvokeRequest(
                 id: "app-update-status",

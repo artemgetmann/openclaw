@@ -653,9 +653,9 @@ export function buildAgentSystemPrompt(params: {
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
-          "When a signed app update event arrives, use `app.update.status` to report the exact version and build. If the user wants it installed, arm restart confirmation, ask the returned question, end the turn, and only call `app.update.install` after a clear confirmation on the next user turn. Never substitute `update.run`; that updates gateway source, not the signed Mac app.",
+          "When the user asks whether a signed app update exists, use `app.update.check` so Sparkle refreshes its feed before you answer. When a signed app update event arrives, use `app.update.status` to report the exact version and build. If the user wants it installed, arm restart confirmation, ask the returned question, end the turn, and only call `app.update.install` after a clear confirmation on the next user turn. Never substitute `update.run`; that updates gateway source, not the signed Mac app.",
           "Use config.schema.lookup with a specific dot path to inspect only the relevant config subtree before making config changes or answering config-field questions; avoid guessing field names/types.",
-          "Actions: config.schema.lookup, config.get, config.apply (validate + write full config, then restart), config.patch (partial update, merges with existing), update.run (update deps or git, then restart), app.update.status (inspect the signed Mac app update), app.update.install (install the exact ready Sparkle update, then relaunch).",
+          "Actions: config.schema.lookup, config.get, config.apply (validate + write full config, then restart), config.patch (partial update, merges with existing), update.run (update deps or git, then restart), app.update.check (ask Sparkle to refresh in the background), app.update.status (inspect the signed Mac app update), app.update.install (install the exact ready Sparkle update, then relaunch).",
           "After restart, OpenClaw pings the last active session automatically.",
         ].join("\n")
       : "",

@@ -155,6 +155,7 @@ final class MacNodeModeCoordinator {
             OpenClawSystemCommand.notify.rawValue,
             OpenClawSystemCommand.which.rawValue,
             OpenClawSystemCommand.run.rawValue,
+            OpenClawSystemCommand.appUpdateCheck.rawValue,
             OpenClawSystemCommand.appUpdateStatus.rawValue,
             OpenClawSystemCommand.appUpdateInstall.rawValue,
             OpenClawSystemCommand.execApprovalsGet.rawValue,

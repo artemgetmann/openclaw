@@ -4,6 +4,7 @@ public enum OpenClawSystemCommand: String, Codable, Sendable {
     case run = "system.run"
     case which = "system.which"
     case notify = "system.notify"
+    case appUpdateCheck = "system.appUpdate.check"
     case appUpdateStatus = "system.appUpdate.status"
     case appUpdateInstall = "system.appUpdate.install"
     case execApprovalsGet = "system.execApprovals.get"

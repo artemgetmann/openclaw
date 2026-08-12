@@ -367,8 +367,10 @@ describe("resolveNodeCommandAllowlist", () => {
       },
     );
 
+    expect(macAllow.has("system.appUpdate.check")).toBe(true);
     expect(macAllow.has("system.appUpdate.status")).toBe(true);
     expect(macAllow.has("system.appUpdate.install")).toBe(true);
+    expect(iosAllow.has("system.appUpdate.check")).toBe(false);
     expect(iosAllow.has("system.appUpdate.status")).toBe(false);
     expect(iosAllow.has("system.appUpdate.install")).toBe(false);
   });
