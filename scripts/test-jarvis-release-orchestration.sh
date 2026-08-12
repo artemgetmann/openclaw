@@ -387,6 +387,8 @@ test_wrapper_dry_run() {
   local accepted_app_out="$TMP_DIR/wrapper-accepted-app.out"
   local accepted_dmg_root="$TMP_DIR/wrapper-accepted-dmg"
   local accepted_dmg_out="$TMP_DIR/wrapper-accepted-dmg.out"
+  local stale_build_env="$TMP_DIR/wrapper-stale-build.env"
+  local explicit_build_out="$TMP_DIR/wrapper-explicit-build.out"
   local release_home release_name
   local status
 
@@ -409,6 +411,19 @@ test_wrapper_dry_run() {
     fail "wrapper dry run did not stay dry"
   fi
   pass "wrapper dry run synthetic state"
+
+  printf 'export APP_BUILD=1178\n' >"$stale_build_env"
+  OPENCLAW_RELEASE_ENV_FILE="$stale_build_env" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --app-build 1179 \
+      >"$explicit_build_out"
+  grep -q '^  app_build=1179$' "$explicit_build_out" \
+    || fail "explicit --app-build did not override stale release.env APP_BUILD"
+  grep -q '^  selected_phase=poll-app-notarization$' "$explicit_build_out" \
+    || fail "explicit --app-build was applied after resumable checkpoint selection"
+  pass "wrapper explicit app build overrides stale release env"
 
   seed_wrapper_checkpoints "$accepted_app_root" accepted
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$accepted_app_root" \
