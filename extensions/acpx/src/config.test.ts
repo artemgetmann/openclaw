@@ -173,6 +173,34 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.stripProviderAuthEnvVars).toBe(false);
   });
 
+  it("normalizes per-agent ACP adapter command overrides", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agentCommands: {
+          " Research-Agent ": " custom-acp-adapter --stdio ",
+        },
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.agentCommands).toEqual({
+      "research-agent": "custom-acp-adapter --stdio",
+    });
+  });
+
+  it("rejects empty ACP adapter command overrides", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          agentCommands: {
+            "research-agent": "   ",
+          },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("agentCommands.research-agent must be a non-empty string");
+  });
+
   it("resolves relative command paths against workspace directory", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {

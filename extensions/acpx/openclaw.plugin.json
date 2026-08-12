@@ -35,6 +35,13 @@
         "type": "number",
         "minimum": 0
       },
+      "agentCommands": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
       "mcpServers": {
         "type": "object",
         "additionalProperties": {
@@ -94,6 +101,11 @@
     "queueOwnerTtlSeconds": {
       "label": "Queue Owner TTL Seconds",
       "help": "Idle queue-owner TTL for acpx prompt turns. Keep this short in OpenClaw to avoid delayed completion after each turn.",
+      "advanced": true
+    },
+    "agentCommands": {
+      "label": "ACP Agent Commands",
+      "help": "Optional per-agent ACP adapter commands. OpenClaw plugin configuration takes precedence over machine-global ACPX configuration.",
       "advanced": true
     },
     "mcpServers": {

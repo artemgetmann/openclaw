@@ -11,6 +11,20 @@ vi.mock("./process.js", () => ({
 import { __testing, resolveAcpxAgentCommand } from "./mcp-agent-command.js";
 
 describe("resolveAcpxAgentCommand", () => {
+  it("prefers the plugin-scoped adapter command over machine-global acpx config", async () => {
+    const command = await resolveAcpxAgentCommand({
+      acpxCommand: "/plugin/node_modules/.bin/acpx",
+      cwd: "/plugin",
+      agent: "Research-Agent",
+      agentCommands: {
+        "research-agent": "custom-acp-adapter --stdio",
+      },
+    });
+
+    expect(command).toBe("custom-acp-adapter --stdio");
+    expect(spawnAndCollectMock).not.toHaveBeenCalled();
+  });
+
   it("threads stripProviderAuthEnvVars through the config show probe", async () => {
     spawnAndCollectMock.mockResolvedValueOnce({
       stdout: JSON.stringify({
