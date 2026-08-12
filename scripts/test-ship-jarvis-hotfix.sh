@@ -213,4 +213,20 @@ fi
 pr_paths_are_routine 42 || fail "routine merged PR path was rejected"
 pass "hotfix source proof uses exact GitHub merge identity and changed paths"
 
+compare_with_merged_side_branch='{
+  "commits": [
+    {"sha":"side","parents":[{"sha":"base"}]},
+    {"sha":"merge","parents":[{"sha":"base"},{"sha":"side"}]},
+    {"sha":"head","parents":[{"sha":"merge"}]}
+  ]
+}'
+mainline="$(first_parent_main_commits "${compare_with_merged_side_branch}" base head)"
+[[ "${mainline}" == $'head\nmerge' ]] || \
+  fail "first-parent proof included a merged side-branch commit: ${mainline}"
+if first_parent_main_commits '{"commits":[{"sha":"head","parents":[{"sha":"missing"}]}]}' base head \
+    >/dev/null 2>&1; then
+  fail "incomplete first-parent history unexpectedly passed"
+fi
+pass "hotfix source proof excludes merged side-branch commits from mainline review"
+
 printf 'All ship-jarvis-hotfix disk preflight tests passed.\n'

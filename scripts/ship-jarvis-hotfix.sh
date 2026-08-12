@@ -438,6 +438,33 @@ pr_paths_are_routine() {
   return 0
 }
 
+first_parent_main_commits() {
+  local compare="$1"
+  local merge_sha="$2"
+  local head_sha="$3"
+
+  # GitHub's compare response includes commits from the merged side branch.
+  # Those commits are not commits on main and do not have the merge commit as
+  # their associated PR identity. Walk parents from remote main instead so the
+  # approval gate reviews only the exact first-parent mainline that will ship.
+  printf '%s\n' "${compare}" | "${JQ_BIN}" -er \
+    --arg merge "${merge_sha}" \
+    --arg head "${head_sha}" '
+      (.commits | map({ key: .sha, value: . }) | from_entries) as $by_sha |
+      def first_parent($sha):
+        if $sha == $merge then []
+        else
+          ($by_sha[$sha] // null) as $commit |
+          if $commit == null or ($commit.parents[0].sha // "") == "" then
+            error("compare response does not contain the complete first-parent mainline")
+          else
+            [$sha] + first_parent($commit.parents[0].sha)
+          end
+        end;
+      first_parent($head)[]
+    '
+}
+
 require_requested_pr_merge() {
   local merge_sha="$1"
   pr_proves_normal_merge "${PR_NUMBER}" "${merge_sha}" || \
@@ -455,6 +482,7 @@ dry_run_reviewed_remote_main() {
   local commit_sha=""
   local pr=""
   local json=""
+  local mainline_commits=""
 
   repo="$(${GH_BIN} repo view --json nameWithOwner --jq '.nameWithOwner')"
   [[ -n "${repo}" ]] || die "could not resolve GitHub repository for dry-run main proof"
@@ -472,6 +500,11 @@ dry_run_reviewed_remote_main() {
   returned="$(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.commits | length')"
   [[ "${total}" =~ ^[0-9]+$ && "${total}" == "${returned}" ]] || \
     die "dry-run compare did not return every intervening main commit"
+  if ! mainline_commits="$(first_parent_main_commits "${compare}" "${merge_sha}" "${head_sha}")"; then
+    die "dry-run compare did not contain a complete first-parent mainline"
+  fi
+  [[ -n "${mainline_commits}" ]] || \
+    die "dry-run compare returned an empty first-parent mainline"
   while IFS= read -r commit_sha; do
     json="$(associated_main_pr_json "${commit_sha}")"
     pr="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.number // empty')"
@@ -480,7 +513,7 @@ dry_run_reviewed_remote_main() {
     pr_paths_are_routine "${pr}" || \
       die "dry-run main commit ${commit_sha} PR #${pr:-unknown} touches security/release-class paths"
     run_pr_required --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
-  done < <(printf '%s\n' "${compare}" | "${JQ_BIN}" -r '.commits[].sha')
+  done <<<"${mainline_commits}"
   printf '%s\n' "${head_sha}"
 }
 
