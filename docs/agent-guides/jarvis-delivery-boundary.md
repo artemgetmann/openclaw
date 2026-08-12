@@ -23,6 +23,42 @@ Choose the requested delivery boundary: `local-only`, `source`, `package`,
 product-wide behavior targets `public-release`; a request explicitly limited to
 source or a PR may target `source`.
 
+## Choose the proof boundary from the failure surface
+
+Use the lowest proof layer that can close the reported problem. Do not require
+installed-runtime or live-channel proof merely because a change mentions
+Jarvis.
+
+- A bug observed on Artem's main Jarvis targets `installed-runtime` by default.
+  It is complete only after the fix is merged, the main runtime reports the
+  expected commit, and one smallest symptom-specific acceptance passes.
+- Internal agent workflow, repository policy, documentation, CI, test
+  infrastructure, and behavior-neutral refactors target `source` unless the
+  user explicitly requests a later boundary. Main-Jarvis deployment adds no
+  useful proof for these changes.
+- Behavior that needs a running gateway, provider, or channel but not Artem's
+  personal production state should first use an isolated runtime. Isolated
+  proof is sufficient when the original acceptance surface is isolated; it
+  does not close a bug originally observed on main Jarvis until that installed
+  runtime adopts the fix.
+- Packaging, runtime seeding, signing, installation, update, or migration work
+  requires the matching package/install/upgrade proof. Main-Jarvis proof alone
+  does not prove a public release.
+
+Keep acceptance narrow. Test only the changed or originally failing behavior,
+once, after lower proof layers pass. Do not add broad Telegram, browser,
+permissions, restart, or provider scenarios unless those surfaces changed or
+the focused scenario depends on them.
+
+Authorization comes from the user's requested action, not from this
+classification. `Fix this on my Jarvis`, `ship this to my main Jarvis`, or an
+equivalent end-to-end request authorizes the canonical deployment plus one
+targeted acceptance and exact cleanup. `Investigate`, `review`, or `make a PR`
+does not authorize deployment, restart, live traffic, or cleanup. If main
+acceptance is required but not authorized, finish safe source work and stop at
+`blocked-at-boundary` with the missing actions named; do not silently downgrade
+the target to source.
+
 Classification does not need approval. Reversible source work proceeds in the
 normal isolated worktree. Return only at a real credential, destructive
 migration, live/shared-runtime, signing/notarization, or publication boundary.
@@ -64,6 +100,22 @@ are different receipts.
 Local experiments graduate by opening product-wide work with a new receipt.
 The local evidence may be referenced as discovery input, but it cannot be
 relabelled as source, package, migration, release, or end-user proof.
+
+## Closeout and archive labels
+
+Begin the final closeout with exactly one plain-language status that matches the
+receipt:
+
+- `SOURCE COMPLETE — MAIN JARVIS NOT REQUIRED`
+- `BLOCKED — NOT YET ON MAIN JARVIS`
+- `COMPLETE — ON MAIN JARVIS, TARGETED TEST PASSED`
+- `PUBLICLY RELEASED`
+
+A main-Jarvis incident is not fully closed and must not be described as safe to
+archive while installed adoption or its targeted acceptance remains pending.
+Source-only work may be archived when its declared source boundary is complete,
+but the closeout must make the absence or non-requirement of deployment
+unmistakable. Archive state is housekeeping, never delivery proof.
 
 ## Commands and enforcement
 
