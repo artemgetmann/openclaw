@@ -2205,6 +2205,28 @@ describe("editMessageTelegram", () => {
     expect(fallbackText).not.toContain("**");
   });
 
+  it("does not expand hidden link targets beyond the legacy edit limit", async () => {
+    const text = Array.from(
+      { length: 24 },
+      (_value, index) => `[Doc ${index}](https://example.com/${"a".repeat(180)}/${index})`,
+    ).join("\n");
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, text, {
+      token: "tok",
+      cfg: {},
+      richMessages: false,
+    });
+
+    const fallbackText = String((botApi.editMessageText.mock.calls[1] ?? [])[2] ?? "");
+    expect(fallbackText).toContain("Doc 0");
+    expect(fallbackText).toContain("Doc 23");
+    expect(fallbackText).not.toContain("example.com");
+    expect(fallbackText.length).toBeLessThanOrEqual(4096);
+  });
+
   it("preserves one-tap-copy draft blocks during legacy message edits", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 

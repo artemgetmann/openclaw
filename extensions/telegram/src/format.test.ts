@@ -5,6 +5,7 @@ import {
   rewriteMarkdownBlockquotesAsCopyBlocks,
   splitTelegramHtmlChunks,
   splitTelegramRichMessageTextChunks,
+  telegramHtmlToPlainTextFallback,
 } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
@@ -589,6 +590,17 @@ describe("markdownToTelegramHtml", () => {
 
     expect(chunk?.text).toContain("<table bordered striped>");
     expect(chunk?.plainText).toBe("Name | Score\nAda | 9");
+  });
+
+  it("can omit hidden link targets for bounded edit fallbacks", () => {
+    const html = '<a href="https://example.com/hidden">Visible label</a>';
+
+    expect(telegramHtmlToPlainTextFallback(html)).toBe(
+      "Visible label (https://example.com/hidden)",
+    );
+    expect(telegramHtmlToPlainTextFallback(html, { includeLinkTargets: false })).toBe(
+      "Visible label",
+    );
   });
 
   it("accounts for escaped fenced-code bytes before splitting rich chunks", () => {

@@ -1443,7 +1443,9 @@ export async function editMessageTelegram(
   // does not interpret without parse_mode, producing the raw `####`/`**` UX.
   // Project from the rendered HTML so the fallback keeps the same readable
   // text, list markers, links, and block spacing without unsupported entities.
-  const plainText = telegramHtmlToPlainTextFallback(htmlText);
+  const plainText = telegramHtmlToPlainTextFallback(htmlText, {
+    includeLinkTargets: false,
+  });
 
   // Reply markup semantics:
   // - buttons === undefined → don't send reply_markup (keep existing)
