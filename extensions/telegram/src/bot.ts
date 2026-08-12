@@ -8,6 +8,11 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../../../src/auto-reply/reply/history.js";
+import { getQueuedFollowupState } from "../../../src/auto-reply/reply/queue.js";
+import {
+  clearDurableFollowupTelegramPendingUseNow,
+  loadDurableTelegramPendingUseNow,
+} from "../../../src/auto-reply/reply/queue/durable-store.js";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
@@ -43,6 +48,8 @@ import {
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
+import { buildTelegramDeferredButtons } from "./queue-buttons.js";
+import { buildInlineKeyboard } from "./send.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramBusyAwareSequentialKey, getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -71,6 +78,84 @@ export type TelegramBotOptions = {
     mediaBurstGraceMs?: number;
     textFragmentGapMs?: number;
   };
+};
+
+// A polling transport can be recreated many times inside one healthy gateway.
+// Reconcile only on the first bot for each account: later creations belong to
+// the same process whose three-second timers are still authoritative.
+const reconciledPendingUseNowAccounts = new Set<string>();
+const MESSAGE_NOT_MODIFIED_RE =
+  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
+
+async function reconcilePendingUseNowReceipts(params: {
+  bot: Bot;
+  accountId?: string;
+  runtime: RuntimeEnv;
+}): Promise<void> {
+  const accountKey = params.accountId ?? "default";
+  if (reconciledPendingUseNowAccounts.has(accountKey)) {
+    return;
+  }
+  reconciledPendingUseNowAccounts.add(accountKey);
+  try {
+    const receipts = await loadDurableTelegramPendingUseNow(params.accountId);
+    let shouldRetry = false;
+    for (const receipt of receipts) {
+      try {
+        const state = await getQueuedFollowupState({
+          durableId: receipt.durableId,
+          expectedTelegramRoute: {
+            chatId: receipt.chatId,
+            accountId: receipt.accountId,
+            threadId: receipt.threadId,
+          },
+        });
+        const remainsQueued = state === "queued";
+        const keyboard =
+          remainsQueued && receipt.buttonsAllowed
+            ? buildInlineKeyboard(buildTelegramDeferredButtons(receipt.durableId))
+            : undefined;
+        await params.bot.api.editMessageText(
+          receipt.chatId,
+          receipt.messageId,
+          remainsQueued
+            ? "I’ll handle this after the current task."
+            : "This message has already moved on.",
+          { reply_markup: keyboard ?? { inline_keyboard: [] } },
+        );
+        await clearDurableFollowupTelegramPendingUseNow(receipt.durableId);
+      } catch (err) {
+        if (MESSAGE_NOT_MODIFIED_RE.test(formatUncaughtError(err))) {
+          // A prior process completed the Telegram edit but died before the
+          // local marker unlink. Identical content proves the receipt is true.
+          await clearDurableFollowupTelegramPendingUseNow(receipt.durableId);
+          continue;
+        }
+        // One stale/deleted receipt must not block every later repair for this
+        // account. Leave only this marker for the next transport recreation.
+        params.runtime.error?.(
+          `telegram pending Use now receipt reconciliation failed: ${String(err)}`,
+        );
+        shouldRetry = true;
+      }
+    }
+    if (shouldRetry) {
+      // Polling creates a fresh bot after recoverable transport failures. Let
+      // that next generation retry only the markers that remain on disk.
+      reconciledPendingUseNowAccounts.delete(accountKey);
+    }
+  } catch (err) {
+    // A transient Telegram failure should retry on the next transport
+    // recreation. The durable input remains safe regardless of receipt state.
+    reconciledPendingUseNowAccounts.delete(accountKey);
+    params.runtime.error?.(`telegram pending Use now reconciliation failed: ${String(err)}`);
+  }
+}
+
+export const __testing = {
+  resetPendingUseNowReconciliation(): void {
+    reconciledPendingUseNowAccounts.clear();
+  },
 };
 
 export { getTelegramBusyAwareSequentialKey, getTelegramSequentialKey };
@@ -556,6 +641,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     shouldSkipUpdate,
     processMessage,
     logger,
+  });
+
+  // Do not hold channel startup on cosmetic receipt repair. The durable queue
+  // already owns the user input; this only makes a pre-restart selection true.
+  void reconcilePendingUseNowReceipts({
+    bot,
+    accountId: account.accountId,
+    runtime,
   });
 
   const originalStop = bot.stop.bind(bot);

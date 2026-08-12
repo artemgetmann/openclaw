@@ -33,11 +33,19 @@ import {
 import { resolveTelegramFetch } from "./fetch.js";
 
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
-const { createTelegramBot, getTelegramBusyAwareSequentialKey } = await import("./bot.js");
+const {
+  createTelegramBot,
+  getTelegramBusyAwareSequentialKey,
+  __testing: botTesting,
+} = await import("./bot.js");
 const { setActiveEmbeddedRun, __testing: embeddedRunTesting } =
   await import("../../../src/agents/pi-embedded-runner/runs.js");
 const { FOLLOWUP_QUEUES, getFollowupQueue } =
   await import("../../../src/auto-reply/reply/queue/state.js");
+const { scheduleTelegramAutoSteer, __testing: queueButtonTesting } =
+  await import("./queue-buttons.js");
+const { markDurableFollowupTelegramPendingUseNow, persistDurableFollowup } =
+  await import("../../../src/auto-reply/reply/queue/durable-store.js");
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -202,7 +210,7 @@ describe("createTelegramBot", () => {
             chat: { id: 1234, type: "private" },
             date: 1736380800,
             message_id: 10,
-            text: "Queued behind the current task.",
+            text: "Adding this to what I’m doing now.",
           },
         },
         me: { username: "openclaw_bot" },
@@ -215,13 +223,13 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy).toHaveBeenCalledWith(
         1234,
         10,
-        "Steering the current task.",
+        "Adding this now.",
         expect.objectContaining({
           reply_markup: expect.objectContaining({
             inline_keyboard: [
               [
                 expect.objectContaining({
-                  text: "✓ Steer",
+                  text: "✓ Using now",
                   callback_data: `oqd:${durableId}`,
                 }),
               ],
@@ -233,6 +241,137 @@ describe("createTelegramBot", () => {
     } finally {
       embeddedRunTesting.resetActiveEmbeddedRuns();
       FOLLOWUP_QUEUES.clear();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      if (priorStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = priorStateDir;
+      }
+    }
+  });
+  it("keeps a follow-up deferred when After this is tapped during the grace period", async () => {
+    const durableId = "12345678-1234-4234-8234-123456789abc";
+    const autoSteer = vi.fn();
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    scheduleTelegramAutoSteer(durableId, autoSteer, 10_000);
+    try {
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-defer",
+          data: `oqk:${durableId}`,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 10,
+            text: "Adding this to what I’m doing now.",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-defer");
+      expect(autoSteer).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledWith(
+        1234,
+        10,
+        "I’ll handle this after the current task.",
+        expect.objectContaining({
+          reply_markup: expect.objectContaining({
+            inline_keyboard: [
+              [
+                expect.objectContaining({
+                  text: "✓ After this",
+                  callback_data: `oqd:${durableId}`,
+                }),
+              ],
+            ],
+          }),
+        }),
+      );
+    } finally {
+      queueButtonTesting.resetAutoSteers();
+    }
+  });
+  it("replaces a selected Use now receipt after a gateway restart", async () => {
+    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-use-now-restart-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    botTesting.resetPendingUseNowReconciliation();
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    try {
+      const record = await persistDurableFollowup({
+        queueKey: "telegram-use-now-restart",
+        settings: {
+          mode: "followup",
+          debounceMs: 0,
+          cap: 20,
+          dropPolicy: "summarize",
+        },
+        run: {
+          prompt: "keep this safe",
+          messageId: "telegram:restart",
+          enqueuedAt: Date.now(),
+          originatingChannel: "telegram",
+          originatingTo: "1234",
+          originatingAccountId: "default",
+          run: {
+            agentId: "main",
+            agentDir: "/tmp/agent",
+            sessionId: "restart-session",
+            sessionKey: "agent:main:telegram:dm:1234",
+            sessionFile: "/tmp/session.jsonl",
+            workspaceDir: "/tmp/workspace",
+            config: {},
+            provider: "test",
+            model: "test",
+            timeoutMs: 1_000,
+            blockReplyBreak: "message_end",
+          },
+        },
+      });
+      await markDurableFollowupTelegramPendingUseNow({
+        id: record.id,
+        receipt: {
+          accountId: "default",
+          buttonsAllowed: true,
+          chatId: "1234",
+          messageId: 77,
+        },
+      });
+
+      createTelegramBot({ token: "tok" });
+
+      await vi.waitFor(() =>
+        expect(editMessageTextSpy).toHaveBeenCalledWith(
+          "1234",
+          77,
+          "I’ll handle this after the current task.",
+          expect.objectContaining({
+            reply_markup: expect.objectContaining({
+              inline_keyboard: [
+                [
+                  expect.objectContaining({
+                    text: "✓ After this",
+                    callback_data: `oqd:${record.id}`,
+                  }),
+                ],
+              ],
+            }),
+          }),
+        ),
+      );
+    } finally {
+      botTesting.resetPendingUseNowReconciliation();
       fs.rmSync(stateDir, { recursive: true, force: true });
       if (priorStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

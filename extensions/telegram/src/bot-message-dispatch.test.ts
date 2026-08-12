@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Bot } from "grammy";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isDurableFollowupMessageProcessed,
   loadDurableFollowups,
@@ -12,6 +12,7 @@ import {
   createSequencedTestDraftStream,
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
+import { __testing as queueButtonTesting } from "./queue-buttons.js";
 import { clearSentMessageCache, getSentMessageMetadata } from "./sent-message-cache.js";
 import { __testing as workLogTesting } from "./work-log.js";
 
@@ -94,6 +95,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     loadSessionStore.mockReturnValue({});
     cancelProactiveCompactionForIncomingTurn.mockReset().mockReturnValue("none");
     scheduleProactiveCompactionAfterDelivery.mockReset().mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    queueButtonTesting.resetAutoSteers();
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -281,7 +286,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   });
 
-  it("shows an exact Queue receipt only after a busy follow-up is durably accepted", async () => {
+  it("shows immediate steer-first controls only after a busy follow-up is durably accepted", async () => {
     const durableId = "12345678-1234-4234-8234-123456789abc";
     const bot = createBot();
     vi.mocked(bot.api.sendMessage).mockResolvedValue({
@@ -304,7 +309,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(bot.api.sendMessage).toHaveBeenCalledWith(
       123,
-      "Queued as the next task — no action needed. Steer works only while the current task can accept live changes.",
+      "I’ll use this in my current task. Tap After this if it can wait.",
       expect.objectContaining({
         message_thread_id: 777,
         reply_parameters: {
@@ -315,11 +320,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           inline_keyboard: [
             [
               expect.objectContaining({
-                text: "✓ Queue",
+                text: "After this",
                 callback_data: `oqk:${durableId}`,
               }),
               expect.objectContaining({
-                text: "Steer",
+                text: "✓ Use now",
                 callback_data: `oqs:${durableId}`,
               }),
             ],
@@ -359,7 +364,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(bot.api.sendMessage).toHaveBeenCalledWith(
       123,
-      "Queued behind the current task.",
+      "Adding this to what I’m doing now.",
       expect.not.objectContaining({ reply_markup: expect.anything() }),
     );
   });

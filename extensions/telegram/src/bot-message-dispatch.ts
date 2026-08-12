@@ -16,7 +16,12 @@ import {
   scheduleProactiveCompactionAfterDelivery,
 } from "../../../src/auto-reply/reply/proactive-compaction.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
-import { completeDurableFollowup } from "../../../src/auto-reply/reply/queue/durable-store.js";
+import { promoteQueuedFollowupToSteer } from "../../../src/auto-reply/reply/queue.js";
+import {
+  clearDurableFollowupTelegramPendingUseNow,
+  completeDurableFollowup,
+  markDurableFollowupTelegramPendingUseNow,
+} from "../../../src/auto-reply/reply/queue/durable-store.js";
 import { buildFinalTtsCaptionPreview } from "../../../src/auto-reply/reply/tts-caption-preview.js";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../src/channels/ack-reactions.js";
@@ -74,7 +79,12 @@ import {
   createTelegramProgressController,
   type TelegramProgressController,
 } from "./progress-controller.js";
-import { buildTelegramQueuedButtons } from "./queue-buttons.js";
+import {
+  buildTelegramDeferredButtons,
+  buildTelegramQueuedButtons,
+  buildTelegramSteeredButtons,
+  scheduleTelegramAutoSteer,
+} from "./queue-buttons.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -3201,9 +3211,9 @@ export const dispatchTelegramMessage = async ({
           durableDirectTurnId = durableId;
         },
         onFollowupQueued: async ({ durableId }) => {
-          // This receipt is emitted only from the persist-before-enqueue
-          // boundary. It therefore means "queued behind active work", not the
-          // generic reaction state shown for every accepted Telegram update.
+          // Persistence happens before this callback, so the short grace period
+          // can never trade responsiveness for message safety. Until promotion
+          // succeeds, the ordinary durable FIFO still owns the exact input.
           const queueKeyboard = canShowQueueButtons
             ? buildInlineKeyboard(buildTelegramQueuedButtons(durableId))
             : undefined;
@@ -3211,8 +3221,8 @@ export const dispatchTelegramMessage = async ({
           // render. The shorter fallback still makes the queue state explicit
           // to both a person and an agent reading message history.
           const queueReceiptText = queueKeyboard
-            ? "Queued as the next task — no action needed. Steer works only while the current task can accept live changes."
-            : "Queued behind the current task.";
+            ? "I’ll use this in my current task. Tap After this if it can wait."
+            : "Adding this to what I’m doing now.";
           const sent = await bot.api.sendMessage(chatId, queueReceiptText, {
             ...buildTelegramThreadParams(threadSpec),
             reply_parameters: {
@@ -3227,6 +3237,9 @@ export const dispatchTelegramMessage = async ({
             messageThreadId: threadSpec?.id,
             durableFollowupId: durableId,
           });
+          // The active model turn cannot survive a gateway replacement. Keep
+          // enough opaque receipt identity on disk for the next process to
+          // replace the selected live-steer promise with a truthful state.
           recordChannelActivity({
             channel: "telegram",
             accountId: route.accountId,
@@ -3235,6 +3248,106 @@ export const dispatchTelegramMessage = async ({
           runtime.log?.(
             `telegram.queue.receipt chat=${chatId} thread=${threadSpec?.id ?? "none"} message=${sent.message_id}`,
           );
+
+          scheduleTelegramAutoSteer(durableId, async () => {
+            let promoted = false;
+            try {
+              const promotion = await promoteQueuedFollowupToSteer({
+                durableId,
+                expectedTelegramRoute: {
+                  chatId: String(chatId),
+                  accountId: route.accountId,
+                  threadId: threadSpec?.id,
+                },
+              });
+              if (promotion.status !== "promoted") {
+                runtime.log?.(
+                  `telegram.auto-steer.skipped chat=${chatId} durable=${durableId} status=${promotion.status}`,
+                );
+                const remainsQueued =
+                  promotion.status === "still-queued" && promotion.reason === "not-streaming";
+                await editMessageTelegram(
+                  chatId,
+                  sent.message_id,
+                  remainsQueued
+                    ? "I’ll handle this after the current task."
+                    : "This message has already moved on.",
+                  {
+                    api: bot.api,
+                    cfg,
+                    accountId: route.accountId,
+                    buttons:
+                      canShowQueueButtons && remainsQueued
+                        ? buildTelegramDeferredButtons(durableId)
+                        : [],
+                    richMessages: false,
+                  },
+                );
+                await clearDurableFollowupTelegramPendingUseNow(durableId);
+                return;
+              }
+              promoted = true;
+              // Promotion acknowledges and removes the durable record. This is
+              // intentionally best-effort for the narrow race where unlinking
+              // failed after Pi accepted the steer.
+              await editMessageTelegram(chatId, sent.message_id, "Adding this now.", {
+                api: bot.api,
+                cfg,
+                accountId: route.accountId,
+                // Preserve the conversation's inline-button scope on edits too;
+                // the send helper does not repeat that authorization check.
+                buttons: canShowQueueButtons ? buildTelegramSteeredButtons(durableId) : [],
+                richMessages: false,
+              });
+              await clearDurableFollowupTelegramPendingUseNow(durableId);
+              runtime.log?.(`telegram.auto-steer.promoted chat=${chatId} durable=${durableId}`);
+            } catch (err) {
+              runtime.error?.(
+                promoted
+                  ? `telegram auto-steer promoted but receipt edit failed: ${String(err)}`
+                  : `telegram auto-steer failed; follow-up remains queued: ${String(err)}`,
+              );
+              if (!promoted) {
+                try {
+                  await editMessageTelegram(
+                    chatId,
+                    sent.message_id,
+                    "I’ll handle this after the current task.",
+                    {
+                      api: bot.api,
+                      cfg,
+                      accountId: route.accountId,
+                      buttons: canShowQueueButtons ? buildTelegramDeferredButtons(durableId) : [],
+                      richMessages: false,
+                    },
+                  );
+                  await clearDurableFollowupTelegramPendingUseNow(durableId);
+                } catch (receiptErr) {
+                  runtime.error?.(
+                    `telegram auto-steer fallback receipt failed: ${String(receiptErr)}`,
+                  );
+                }
+              }
+            }
+          });
+          // Register the cancellable timer before awaiting marker I/O. A fast
+          // After this tap must never be overwritten by a later registration.
+          try {
+            await markDurableFollowupTelegramPendingUseNow({
+              id: durableId,
+              receipt: {
+                accountId: route.accountId,
+                buttonsAllowed: Boolean(queueKeyboard),
+                chatId: String(chatId),
+                threadId: threadSpec?.id,
+                messageId: sent.message_id,
+              },
+            });
+          } catch (err) {
+            // Receipt repair is cosmetic. The advertised default must still
+            // run even when its optional restart marker cannot be persisted.
+            runtime.error?.(`telegram pending Use now marker failed: ${String(err)}`);
+          }
         },
       },
     }));

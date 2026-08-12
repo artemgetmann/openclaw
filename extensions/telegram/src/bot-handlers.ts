@@ -13,7 +13,11 @@ import {
   formatTelegramProviderCategoryText,
 } from "../../../src/auto-reply/reply/commands-models.js";
 import { resolveStoredModelOverride } from "../../../src/auto-reply/reply/model-selection.js";
-import { promoteQueuedFollowupToSteer } from "../../../src/auto-reply/reply/queue.js";
+import {
+  getQueuedFollowupState,
+  promoteQueuedFollowupToSteer,
+} from "../../../src/auto-reply/reply/queue.js";
+import { clearDurableFollowupTelegramPendingUseNow } from "../../../src/auto-reply/reply/queue/durable-store.js";
 import { listSkillCommandsForAgents } from "../../../src/auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../../../src/auto-reply/status.js";
 import { shouldDebounceTextInbound } from "../../../src/channels/inbound-debounce-policy.js";
@@ -110,8 +114,10 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import {
+  buildTelegramDeferredButtons,
   buildTelegramQueuedButtons,
   buildTelegramSteeredButtons,
+  cancelTelegramAutoSteer,
   parseTelegramQueueCallback,
 } from "./queue-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
@@ -1659,11 +1665,59 @@ export const registerTelegramHandlers = ({
           logVerbose("Blocked Telegram queue callback with mismatched receipt metadata");
           return;
         }
-        if (queueCallback.action === "queue" || queueCallback.action === "settled") {
+        if (queueCallback.action === "settled") {
+          return;
+        }
+
+        if (queueCallback.action === "queue") {
+          const cancellation = cancelTelegramAutoSteer(queueCallback.durableId);
+          if (cancellation === "in-flight") {
+            const keyboard = buildInlineKeyboard(
+              buildTelegramSteeredButtons(queueCallback.durableId),
+            );
+            await editCallbackMessage("Already adding this now.", {
+              reply_markup: keyboard ?? { inline_keyboard: [] },
+            });
+            return;
+          }
+          if (cancellation === "missing") {
+            const callbackThreadId = messageThreadId ?? resolvedThreadId ?? dmThreadId ?? undefined;
+            const state = await getQueuedFollowupState({
+              durableId: queueCallback.durableId,
+              expectedTelegramRoute: {
+                chatId: String(chatId),
+                accountId,
+                threadId: callbackThreadId,
+              },
+            });
+            if (state !== "queued") {
+              await editCallbackMessage("This message has already moved on.", {
+                reply_markup: { inline_keyboard: [] },
+              });
+              return;
+            }
+          }
+          const keyboard = buildInlineKeyboard(
+            buildTelegramDeferredButtons(queueCallback.durableId),
+          );
+          await editCallbackMessage("I’ll handle this after the current task.", {
+            reply_markup: keyboard ?? { inline_keyboard: [] },
+          });
+          await clearDurableFollowupTelegramPendingUseNow(queueCallback.durableId);
           return;
         }
 
         const callbackThreadId = messageThreadId ?? resolvedThreadId ?? dmThreadId ?? undefined;
+        const autoSteer = cancelTelegramAutoSteer(queueCallback.durableId);
+        if (autoSteer === "in-flight") {
+          const keyboard = buildInlineKeyboard(
+            buildTelegramSteeredButtons(queueCallback.durableId),
+          );
+          await editCallbackMessage("Already adding this now.", {
+            reply_markup: keyboard ?? { inline_keyboard: [] },
+          });
+          return;
+        }
         const promotion = await promoteQueuedFollowupToSteer({
           durableId: queueCallback.durableId,
           expectedTelegramRoute: {
@@ -1680,19 +1734,23 @@ export const registerTelegramHandlers = ({
           const keyboard = buildInlineKeyboard(
             buildTelegramSteeredButtons(queueCallback.durableId),
           );
-          await editCallbackMessage("Steering the current task.", {
+          await editCallbackMessage("Adding this now.", {
             reply_markup: keyboard ?? { inline_keyboard: [] },
           });
+          await clearDurableFollowupTelegramPendingUseNow(queueCallback.durableId);
           return;
         }
         if (promotion.status === "still-queued" && promotion.reason === "not-streaming") {
-          const keyboard = buildInlineKeyboard(buildTelegramQueuedButtons(queueCallback.durableId));
+          const keyboard = buildInlineKeyboard(
+            buildTelegramDeferredButtons(queueCallback.durableId),
+          );
           await editCallbackMessage(
-            "Queued as the next task — no action needed. The current task can’t accept live changes right now.",
+            "I’ll handle this after the current task. It can’t accept changes right now.",
             {
               reply_markup: keyboard ?? { inline_keyboard: [] },
             },
           );
+          await clearDurableFollowupTelegramPendingUseNow(queueCallback.durableId);
           return;
         }
 

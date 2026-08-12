@@ -19,6 +19,8 @@ type ExpectedTelegramRoute = {
   threadId?: number;
 };
 
+export type QueuedFollowupState = "queued" | "in-flight" | "missing" | "route-mismatch";
+
 function matchesExpectedTelegramRoute(
   item: {
     originatingChannel?: string;
@@ -48,6 +50,42 @@ function matchesExpectedTelegramRoute(
       ? undefined
       : Number(item.originatingThreadId);
   return itemThread === expected.threadId;
+}
+
+/** Read the durable/RAM ownership state without moving or acknowledging work. */
+export async function getQueuedFollowupState(params: {
+  durableId: string;
+  expectedTelegramRoute: ExpectedTelegramRoute;
+}): Promise<QueuedFollowupState> {
+  const durableId = params.durableId.trim();
+  for (const queue of FOLLOWUP_QUEUES.values()) {
+    const item = queue.items.find((candidate) => candidate.durableId === durableId);
+    const summarized = queue.summarizedDurableFollowups?.has(durableId);
+    if (!item && !summarized && !queue.inFlightDurableIds.has(durableId)) {
+      continue;
+    }
+    if (queue.inFlightDurableIds.has(durableId)) {
+      return "in-flight";
+    }
+    if (item) {
+      return matchesExpectedTelegramRoute(item, params.expectedTelegramRoute)
+        ? "queued"
+        : "route-mismatch";
+    }
+  }
+
+  // Startup can receive a callback before RAM restoration finishes. The disk
+  // record remains the authoritative proof that this exact input is deferred.
+  const record = (await loadDurableFollowups()).find(
+    (candidate) => candidate.id === durableId && !candidate.delivery,
+  );
+  if (!record) {
+    return "missing";
+  }
+  const item = hydrateDurableFollowup(record, loadConfig());
+  return matchesExpectedTelegramRoute(item, params.expectedTelegramRoute)
+    ? "queued"
+    : "route-mismatch";
 }
 
 /**

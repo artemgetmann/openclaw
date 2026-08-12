@@ -22,6 +22,7 @@ vi.mock("../../../infra/json-files.js", async (importOriginal) => {
 import {
   ackDurableFollowup,
   ackDurableFollowupsForQueueSync,
+  clearDurableFollowupTelegramPendingUseNow,
   cleanupDurableProcessedMessages,
   completeDurableFollowup,
   DurableFollowupCancelledError,
@@ -32,6 +33,8 @@ import {
   isDurableFollowupRecordProcessed,
   loadDurableFollowupDelivery,
   loadDurableFollowups,
+  loadDurableTelegramPendingUseNow,
+  markDurableFollowupTelegramPendingUseNow,
   markDurableFollowupRestartContinuationConsumed,
   markDurableFollowupRestartContinuationDelivering,
   markDurableFollowupRestartContinuationFailed,
@@ -635,5 +638,42 @@ describe("durable followup queue", () => {
     await expect(loadDurableFollowups()).resolves.toEqual([record]);
     await ackDurableFollowup(record.id);
     await expect(loadDurableFollowups()).resolves.toEqual([]);
+  });
+
+  it("keeps a pending Use now receipt across queue acknowledgement until Telegram reconciles it", async () => {
+    const record = await persistDurableFollowup({
+      queueKey: "telegram-use-now-restart",
+      settings,
+      run: createRun("join the active task"),
+    });
+    await expect(
+      markDurableFollowupTelegramPendingUseNow({
+        id: record.id,
+        receipt: {
+          accountId: "default",
+          buttonsAllowed: true,
+          chatId: "-100123",
+          threadId: 42,
+          messageId: 987,
+        },
+      }),
+    ).resolves.toBe(true);
+
+    await ackDurableFollowup(record.id);
+    await expect(loadDurableFollowups()).resolves.toEqual([]);
+    await expect(loadDurableTelegramPendingUseNow("default")).resolves.toEqual([
+      {
+        version: 1,
+        durableId: record.id,
+        accountId: "default",
+        buttonsAllowed: true,
+        chatId: "-100123",
+        threadId: 42,
+        messageId: 987,
+      },
+    ]);
+
+    await expect(clearDurableFollowupTelegramPendingUseNow(record.id)).resolves.toBe(true);
+    await expect(loadDurableTelegramPendingUseNow("default")).resolves.toEqual([]);
   });
 });
