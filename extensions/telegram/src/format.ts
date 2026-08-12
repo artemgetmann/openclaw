@@ -603,10 +603,7 @@ function parseTelegramRichHtmlTableRows(tableHtml: string): string[][] {
   return rows;
 }
 
-export function telegramHtmlToPlainTextFallback(
-  html: string,
-  options: { includeLinkTargets?: boolean } = {},
-): string {
+export function telegramHtmlToPlainTextFallback(html: string): string {
   const withPlainTables = html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml) =>
     parseTelegramRichHtmlTableRows(tableHtml)
       .map((row) => row.join(" | "))
@@ -626,12 +623,6 @@ export function telegramHtmlToPlainTextFallback(
         doubleQuotedHref ?? singleQuotedHref ?? unquotedHref ?? "",
       ).trim();
       const label = stripTelegramHtmlForPlainText(labelHtml).trim();
-      // Message edits cannot split an oversized fallback. Allow that caller to
-      // retain only the already-visible label instead of materializing hidden
-      // href bytes beyond Telegram's text limit.
-      if (options.includeLinkTargets === false) {
-        return label;
-      }
       if (!href || label === href) {
         return label || href;
       }

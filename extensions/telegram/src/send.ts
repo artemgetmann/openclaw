@@ -31,7 +31,6 @@ import {
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   splitTelegramRichMessageTextChunks,
-  telegramHtmlToPlainTextFallback,
 } from "./format.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -1438,14 +1437,6 @@ export async function editMessageTelegram(
     tableMode,
     copySafeBlockquotes: opts.copySafeBlockquotes,
   });
-  // A parse-error retry must not expose the original Markdown source. Preview
-  // finalization edits can contain headings, emphasis, and lists that Telegram
-  // does not interpret without parse_mode, producing the raw `####`/`**` UX.
-  // Project from the rendered HTML so the fallback keeps the same readable
-  // text, list markers, links, and block spacing without unsupported entities.
-  const plainText = telegramHtmlToPlainTextFallback(htmlText, {
-    includeLinkTargets: false,
-  });
 
   // Reply markup semantics:
   // - buttons === undefined → don't send reply_markup (keep existing)
@@ -1527,8 +1518,8 @@ export async function editMessageTelegram(
         requestWithEditShouldLog(
           () =>
             Object.keys(plainParams).length > 0
-              ? api.editMessageText(chatId, messageId, plainText, plainParams)
-              : api.editMessageText(chatId, messageId, plainText),
+              ? api.editMessageText(chatId, messageId, text, plainParams)
+              : api.editMessageText(chatId, messageId, text),
           retryLabel,
           (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
         ),
