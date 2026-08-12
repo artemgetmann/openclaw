@@ -489,7 +489,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Self.logger.info("opening settings window")
-        SettingsWindowOpener.shared.reveal(tab: preferredSettingsTab ?? .general)
+        // A generic reveal raises the existing Settings window without changing
+        // its navigation. A newly created Settings scene already starts on
+        // General, while explicit callers can still request a specific pane.
+        SettingsWindowOpener.shared.reveal(
+            tab: Self.settingsTabForVisibleSurface(preferredSettingsTab: preferredSettingsTab))
     }
 
     @MainActor
@@ -547,6 +551,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         didLaunchFromFinder: Bool) -> Bool
     {
         isConsumer && (onboardingPending || didLaunchFromFinder)
+    }
+
+    static func settingsTabForVisibleSurface(preferredSettingsTab: SettingsTab?) -> SettingsTab? {
+        // Nil is intentional: SettingsWindowOpener treats it as "preserve the
+        // current pane." Defaulting here to General caused repeated AppKit
+        // reopen events to overwrite the user's Channels/Permissions choice.
+        preferredSettingsTab
     }
 
     static func shouldRevealScheduledInitialSurface(
