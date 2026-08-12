@@ -10,7 +10,7 @@ vi.mock("../../../agents/pi-embedded.js", () => ({
   queueEmbeddedPiMessageAsync,
 }));
 
-const { promoteQueuedFollowupToSteer } = await import("./promote.js");
+const { getQueuedFollowupState, promoteQueuedFollowupToSteer } = await import("./promote.js");
 const { FOLLOWUP_QUEUES, getFollowupQueue } = await import("./state.js");
 const { loadDurableFollowups, persistDurableFollowup } = await import("./durable-store.js");
 const { enqueueFollowupRunDurableWithReceipt } = await import("./enqueue.js");
@@ -83,6 +83,19 @@ describe("promoteQueuedFollowupToSteer", () => {
       "session-1",
       "Use the new constraint.",
     );
+  });
+
+  it("reports exact queued ownership without moving the durable item", async () => {
+    const queue = getFollowupQueue("session-key", { mode: "collect" });
+    queue.items.push(createRun());
+
+    await expect(
+      getQueuedFollowupState({
+        durableId: DURABLE_ID,
+        expectedTelegramRoute: ROUTE,
+      }),
+    ).resolves.toBe("queued");
+    expect(queue.items).toHaveLength(1);
   });
 
   it("leaves the item queued when the active run cannot accept steering", async () => {

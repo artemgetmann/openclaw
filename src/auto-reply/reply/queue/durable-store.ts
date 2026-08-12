@@ -13,6 +13,7 @@ const STORE_VERSION = 1;
 const QUEUE_DIRNAME = "followup-queue";
 const CANCELLATION_DIRNAME = "followup-queue-cancellations";
 const PROCESSED_MESSAGE_DIRNAME = "followup-queue-processed";
+const TELEGRAM_PENDING_USE_NOW_DIRNAME = "followup-queue-telegram-use-now";
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const PROCESSED_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROCESSED_MESSAGES = 10_000;
@@ -128,6 +129,116 @@ export type DurableFollowupRecord = {
   createdAt: number;
   expiresAt: number;
 };
+
+export type DurableTelegramPendingUseNow = {
+  version: typeof STORE_VERSION;
+  durableId: string;
+  accountId?: string;
+  buttonsAllowed: boolean;
+  chatId: string;
+  threadId?: number;
+  messageId: number;
+};
+
+function resolveTelegramPendingUseNowDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), TELEGRAM_PENDING_USE_NOW_DIRNAME);
+}
+
+function resolveTelegramPendingUseNowPath(
+  id: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return path.join(resolveTelegramPendingUseNowDir(env), `${id}.json`);
+}
+
+/** Attach the already-sent Telegram receipt to the durable input it describes. */
+export async function markDurableFollowupTelegramPendingUseNow(params: {
+  id: string;
+  receipt: Omit<DurableTelegramPendingUseNow, "version" | "durableId">;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  return await withDurableFollowupMutationLock(async () => {
+    const env = params.env ?? process.env;
+    const record = (await loadDurableFollowups({ env })).find(
+      (candidate) => candidate.id === params.id,
+    );
+    if (!record) {
+      return false;
+    }
+    await writeJsonAtomic(
+      resolveTelegramPendingUseNowPath(params.id, env),
+      { version: STORE_VERSION, durableId: params.id, ...params.receipt },
+      {
+        mode: 0o600,
+        ensureDirMode: 0o700,
+        trailingNewline: true,
+      },
+    );
+    return true;
+  });
+}
+
+/** Remove a transient Telegram selection after its receipt becomes truthful. */
+export async function clearDurableFollowupTelegramPendingUseNow(
+  id: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  return await withDurableFollowupMutationLock(async () => {
+    try {
+      await fs.unlink(resolveTelegramPendingUseNowPath(id, env));
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      throw err;
+    }
+  });
+}
+
+/** Read only receipts owned by one Telegram account; raw prompts stay private. */
+export async function loadDurableTelegramPendingUseNow(
+  accountId?: string,
+): Promise<DurableTelegramPendingUseNow[]> {
+  const dir = resolveTelegramPendingUseNowDir();
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
+  const receipts: DurableTelegramPendingUseNow[] = [];
+  for (const name of names.toSorted()) {
+    if (!name.endsWith(".json")) {
+      continue;
+    }
+    const filePath = path.join(dir, name);
+    try {
+      const parsed = JSON.parse(
+        await fs.readFile(filePath, "utf8"),
+      ) as Partial<DurableTelegramPendingUseNow>;
+      if (
+        parsed.version !== STORE_VERSION ||
+        typeof parsed.durableId !== "string" ||
+        typeof parsed.buttonsAllowed !== "boolean" ||
+        typeof parsed.chatId !== "string" ||
+        !Number.isInteger(parsed.messageId) ||
+        parsed.accountId !== accountId
+      ) {
+        continue;
+      }
+      receipts.push(parsed as DurableTelegramPendingUseNow);
+    } catch {
+      // A corrupt UI receipt cannot affect the durable user input. Remove it
+      // so every bot recreation does not repeat the same failed parse.
+      await fs.rm(filePath, { force: true }).catch(() => undefined);
+    }
+  }
+  return receipts;
+}
 
 function resolveDurableFollowupDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), QUEUE_DIRNAME);
