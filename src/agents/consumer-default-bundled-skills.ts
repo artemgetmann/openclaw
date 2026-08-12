@@ -22,9 +22,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "jarvis-computer-use",
   "peekaboo",
   "summarize",
-  "plain-language",
   "tldr",
-  "builder-priority-triage",
   "weather",
   "wacli",
   "mcporter",
@@ -49,6 +47,14 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
 export const LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES: Readonly<Record<string, string>> = {
   "jarvis-gui-control": "jarvis-computer-use",
 };
+
+// These were briefly shipped as consumer defaults even though they are
+// personal Codex/Jarvis workflow tools. Keep their names only long enough to
+// recognize and repair generated allowlists from that release.
+const RETIRED_CONSUMER_DEFAULT_BUNDLED_SKILLS = new Set([
+  "plain-language",
+  "builder-priority-triage",
+]);
 
 export function buildConsumerBundledSkillAllowlist(config: OpenClawConfig): string[] {
   const existingAllowlist = config.skills?.allowBundled;
@@ -87,11 +93,13 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   const normalizedAllowlist = normalizeLegacyBundledSkillNames(currentAllowlist, workingConfig);
   const renameChanged = !sameStringArray(currentAllowlist, normalizedAllowlist);
   const defaultSkills = new Set<string>(CONSUMER_DEFAULT_BUNDLED_SKILLS);
-  const current = new Set(normalizedAllowlist);
-  const hasEnoughDefaultSkillsToLookGenerated = normalizedAllowlist.length >= 3;
+  const allowlistWithoutRetiredDefaults = normalizedAllowlist.filter(
+    (skillName) => !RETIRED_CONSUMER_DEFAULT_BUNDLED_SKILLS.has(skillName),
+  );
+  const hasEnoughDefaultSkillsToLookGenerated = allowlistWithoutRetiredDefaults.length >= 3;
   const looksLikeGeneratedConsumerDefault =
     hasEnoughDefaultSkillsToLookGenerated &&
-    normalizedAllowlist.every((skillName) => defaultSkills.has(skillName));
+    allowlistWithoutRetiredDefaults.every((skillName) => defaultSkills.has(skillName));
 
   if (!looksLikeGeneratedConsumerDefault) {
     if (!renameChanged && entryMigration.changes.length === 0) {
@@ -116,7 +124,13 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
     };
   }
 
-  const nextAllowlist = [...normalizedAllowlist];
+  // Only generated lists are product-owned. A custom list may intentionally
+  // reference an externally installed skill with the same name, so preserve it.
+  const retiredDefaultsRemoved = normalizedAllowlist.filter((skillName) =>
+    RETIRED_CONSUMER_DEFAULT_BUNDLED_SKILLS.has(skillName),
+  );
+  const nextAllowlist = [...allowlistWithoutRetiredDefaults];
+  const current = new Set(nextAllowlist);
   const added: string[] = [];
   for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
     const explicitlyDisabled = isBundledSkillExplicitlyDisabled(workingConfig, skillName);
@@ -128,13 +142,21 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
     added.push(skillName);
   }
 
-  if (added.length === 0 && !renameChanged && entryMigration.changes.length === 0) {
+  if (
+    added.length === 0 &&
+    retiredDefaultsRemoved.length === 0 &&
+    !renameChanged &&
+    entryMigration.changes.length === 0
+  ) {
     return { config, changes: [] };
   }
 
   const changes = [...entryMigration.changes];
   if (renameChanged) {
     changes.push("skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use");
+  }
+  if (retiredDefaultsRemoved.length > 0) {
+    changes.push(`skills.allowBundled -= ${retiredDefaultsRemoved.join(",")}`);
   }
   if (added.length > 0) {
     changes.push(`skills.allowBundled += ${added.join(",")}`);

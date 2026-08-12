@@ -184,6 +184,35 @@ describe("applyNonInteractiveSkillsConfig", () => {
     );
   });
 
+  it("removes retired personal tools from generated consumer allowlists", () => {
+    const previousGeneratedAllowlist = [
+      ...CONSUMER_DEFAULT_BUNDLED_SKILLS.slice(0, 22),
+      "plain-language",
+      "builder-priority-triage",
+      ...CONSUMER_DEFAULT_BUNDLED_SKILLS.slice(22),
+    ];
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: previousGeneratedAllowlist },
+    });
+
+    expect(repaired.config.skills?.allowBundled).toEqual([...CONSUMER_DEFAULT_BUNDLED_SKILLS]);
+    expect(repaired.changes).toContain(
+      "skills.allowBundled -= plain-language,builder-priority-triage",
+    );
+  });
+
+  it("preserves personal tool names in genuinely custom allowlists", () => {
+    const customAllowlist = ["custom-skill", "plain-language", "builder-priority-triage"];
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: customAllowlist },
+    });
+
+    expect(repaired.config.skills?.allowBundled).toEqual(customAllowlist);
+    expect(repaired.changes).toEqual([]);
+  });
+
   it("renames legacy Jarvis GUI Control allowlist entries without widening custom allowlists", () => {
     const repaired = repairConsumerDefaultBundledSkillAllowlist({
       skills: { allowBundled: ["jarvis-gui-control"] },

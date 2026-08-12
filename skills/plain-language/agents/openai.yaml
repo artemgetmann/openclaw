@@ -1,4 +1,0 @@
-interface:
-  display_name: "Plain Language"
-  short_description: "Rewrite an answer clearly without losing important detail"
-  default_prompt: "Rewrite the last answer in plain language without losing important details."
