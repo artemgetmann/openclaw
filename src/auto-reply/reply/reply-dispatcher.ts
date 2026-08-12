@@ -24,11 +24,6 @@ type ReplyDispatchDeliverer = (
   info: { kind: ReplyDispatchKind },
 ) => Promise<void>;
 
-type ReplyDeliveryListener = (
-  payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind | "finalized-block" },
-) => Promise<void> | void;
-
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 
@@ -96,8 +91,6 @@ export type ReplyDispatcher = {
   finalizeBlockReply?: () => Promise<string | void>;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
-  /** Observe only payloads whose channel delivery completed successfully. */
-  addDeliveryListener?: (listener: ReplyDeliveryListener) => void;
   markComplete: () => void;
 };
 
@@ -143,8 +136,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
-  const deliveryListeners = new Set<ReplyDeliveryListener>();
-  let deliveredBlockPayloads: ReplyPayload[] = [];
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -185,19 +176,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
-        if (kind === "block") {
-          deliveredBlockPayloads.push(normalized);
-        }
-        // Listeners run only after the channel accepts delivery. They are part
-        // of the serialized chain so waitForIdle also waits for their receipts.
-        for (const listener of deliveryListeners) {
-          try {
-            await listener(normalized, { kind });
-          } catch {
-            // Receipt persistence is an observer. Delivery already succeeded,
-            // so an observer failure must not become a false channel failure.
-          }
-        }
       })
       .catch((err) => {
         options.onError?.(err, { kind, payload: normalized });
@@ -248,37 +226,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       // Preserve the no-flash contract: cleanup hooks must run only after every
       // queued block send has settled, so the durable text is visible first.
       await sendChain;
-      const finalizedText = await options.onBlockReplyFinalized?.();
-      if (deliveredBlockPayloads.length > 0) {
-        // A block stream becomes an authoritative final only at this explicit
-        // seam. Notify listeners with the channel-confirmed payload, using the
-        // cleaned finalized text when the channel supplies it.
-        const lastDeliveredBlockPayload = deliveredBlockPayloads.at(-1) as ReplyPayload;
-        const deliveredBlockText = deliveredBlockPayloads
-          .map((payload) => payload.text?.trim())
-          .filter(Boolean)
-          .join("\n\n");
-        const finalizedPayload =
-          typeof finalizedText === "string" && finalizedText.trim()
-            ? { ...lastDeliveredBlockPayload, text: finalizedText.trim() }
-            : deliveredBlockText
-              ? { ...lastDeliveredBlockPayload, text: deliveredBlockText }
-              : lastDeliveredBlockPayload;
-        for (const listener of deliveryListeners) {
-          try {
-            await listener(finalizedPayload, { kind: "finalized-block" });
-          } catch {
-            // Finalization follows confirmed block delivery. Keep observer
-            // failures isolated from the channel-visible completion boundary.
-          }
-        }
-        deliveredBlockPayloads = [];
-      }
-      return finalizedText;
+      return await options.onBlockReplyFinalized?.();
     },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
-    addDeliveryListener: (listener) => deliveryListeners.add(listener),
     markComplete,
   };
 }
