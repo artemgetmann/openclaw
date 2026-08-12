@@ -1255,6 +1255,39 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Typed silent response." });
   });
 
+  it("keeps the complete structured final visible when TTS is off", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { ttsAuto: "off" };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      SessionKey: "agent:main:telegram:group:structured-tts-off",
+    });
+    const finalText = [
+      "### Confirmed facts",
+      "",
+      "#### 1. Installed application",
+      "- `/a/b/c/d/e/f/g/h/i/j`",
+      "",
+      "#### 2. Runtime state",
+      "- `/k/l/m/n/o/p/q/r/s/t`",
+      "",
+      "The remaining diagnostic detail must stay visible. ".repeat(30).trimEnd(),
+    ].join("\n");
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => ({ text: finalText }) satisfies ReplyPayload),
+    });
+
+    expect(finalText.length).toBeGreaterThan(1_000);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: finalText });
+  });
+
   it("suppresses direct Telegram text-session tool summaries when verbose is off", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

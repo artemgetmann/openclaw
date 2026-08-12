@@ -878,13 +878,20 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: turnTtsAuto,
       });
+      // The speech projection deliberately flattens Markdown and caps path-heavy
+      // answers at 1,000 characters. It is only valid when synthesis produced a
+      // voice attachment; otherwise it must never replace the visible final.
+      const deliveredPayload =
+        kind === "final" && typeof payload.text === "string" && !isFinalTtsAudioPayload(ttsPayload)
+          ? { ...ttsPayload, text: payload.text }
+          : ttsPayload;
       // `/tts on` is a control reply and intentionally passes through TTS so
       // the acknowledgement can be spoken. Some TTS implementations rebuild the
       // payload while adding media, so reapply the structural marker after TTS
       // instead of relying on object-spread behavior in every TTS provider.
       return shouldPreserveControlCommandMarker
-        ? markControlCommandReplyPayload(ttsPayload)
-        : ttsPayload;
+        ? markControlCommandReplyPayload(deliveredPayload)
+        : deliveredPayload;
     };
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
