@@ -1,4 +1,0 @@
-interface:
-  display_name: "Builder Priority Triage"
-  short_description: "Turn messy work into a strict action-first priority report"
-  default_prompt: "Review my current build work and tell me only what needs my action now."
