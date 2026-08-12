@@ -312,6 +312,19 @@ struct SettingsViewSmokeTests {
             applicationIsActive: true) == .deferToAppKit)
     }
 
+    @Test func `repeated generic reopen preserves the selected settings pane`() {
+        // A nil selection tells SettingsWindowOpener to reveal the existing
+        // window without posting a tab-selection notification. Repeating the
+        // same accepted reopen must therefore leave Channels/Permissions alone.
+        for _ in 0..<3 {
+            #expect(AppDelegate.settingsTabForVisibleSurface(preferredSettingsTab: nil) == nil)
+        }
+
+        // Explicit navigation still selects the pane requested by its caller.
+        #expect(AppDelegate.settingsTabForVisibleSurface(preferredSettingsTab: .general) == .general)
+        #expect(AppDelegate.settingsTabForVisibleSurface(preferredSettingsTab: .permissions) == .permissions)
+    }
+
     @Test func `consumer background open does not reveal or reset about`() {
         // `open -gja` delivers a reopen AppleEvent while Jarvis is inactive.
         // Suppression occurs before SettingsWindowOpener can activate the app
