@@ -119,26 +119,31 @@ grep -q "SHARED_RESOURCE_LOCK_WAITING resource=$wait_resource" "$TEST_DIR/wait.e
 wait "$wait_holder_pid"
 remove_background_pid "$wait_holder_pid"
 
-# Canonical protected entrypoints wait by default. This is the user-facing
-# path used by release/package callers; proving only the low-level option would
-# allow those callers to regress to immediate status 75 again.
-canonical_wait_resource="$RESOURCE_PREFIX-canonical-wait"
-"$WRAPPER" --resource "$canonical_wait_resource" --label canonical-holder -- \
+# Canonical protected entrypoints fail fast. A foreground shell wait cannot
+# promise that a closed-source agent turn will remain alive or report the
+# eventual result, so callers must opt into bounded waiting explicitly.
+canonical_refusal_resource="$RESOURCE_PREFIX-canonical-refusal"
+"$WRAPPER" --resource "$canonical_refusal_resource" --label canonical-holder -- \
   /usr/bin/perl -MTime::HiRes=sleep -e \
-  'open my $fh, q{>}, $ARGV[0] or die $!; close $fh; sleep 0.2' \
-  "$TEST_DIR/canonical-wait.ready" &
-canonical_wait_holder_pid=$!
-BACKGROUND_PIDS+=("$canonical_wait_holder_pid")
-wait_for_file "$TEST_DIR/canonical-wait.ready"
-canonical_wait_output="$(bash -c \
-  'source "$1/scripts/lib/shared-resource-lock.sh"; openclaw_shared_resource_lock_require_or_reexec "$2" canonical-wait "$1" /usr/bin/printf "%s" canonical-helper-admitted' \
-  _ "$ROOT_DIR" "$canonical_wait_resource" 2>"$TEST_DIR/canonical-wait.err")"
-[ "$canonical_wait_output" = "canonical-helper-admitted" ] ||
-  fail "canonical helper did not resume after contention cleared"
-grep -q "SHARED_RESOURCE_LOCK_WAITING resource=$canonical_wait_resource" "$TEST_DIR/canonical-wait.err" ||
-  fail "canonical helper omitted its queue receipt"
-wait "$canonical_wait_holder_pid"
-remove_background_pid "$canonical_wait_holder_pid"
+  'open my $fh, q{>}, $ARGV[0] or die $!; close $fh; sleep 5' \
+  "$TEST_DIR/canonical-refusal.ready" &
+canonical_refusal_holder_pid=$!
+BACKGROUND_PIDS+=("$canonical_refusal_holder_pid")
+wait_for_file "$TEST_DIR/canonical-refusal.ready"
+set +e
+canonical_refusal_output="$(bash -c \
+  'source "$1/scripts/lib/shared-resource-lock.sh"; openclaw_shared_resource_lock_require_or_reexec "$2" canonical-refusal "$1" /usr/bin/touch "$3"' \
+  _ "$ROOT_DIR" "$canonical_refusal_resource" "$TEST_DIR/canonical-ran" 2>&1)"
+canonical_refusal_status=$?
+set -e
+[ "$canonical_refusal_status" -eq 75 ] ||
+  fail "canonical helper returned $canonical_refusal_status instead of failing fast"
+[[ "$canonical_refusal_output" == *"SHARED_RESOURCE_LOCK_REFUSED resource=$canonical_refusal_resource"*"wait_seconds=0"* ]] ||
+  fail "canonical helper omitted its immediate contention receipt"
+[ ! -e "$TEST_DIR/canonical-ran" ] || fail "canonical helper ran while the resource was held"
+kill -TERM "$canonical_refusal_holder_pid"
+wait "$canonical_refusal_holder_pid" 2>/dev/null || true
+remove_background_pid "$canonical_refusal_holder_pid"
 
 # A live owner that outlasts the explicit bound remains a clear terminal
 # blocker. Waiting must never weaken ownership or run the guarded command late.

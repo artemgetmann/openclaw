@@ -434,12 +434,12 @@ notary, publish, or verify work.
 Follow the launcher's printed next steps, then run the release commands from the
 release lane.
 
-Mutating release phases also acquire one bounded-wait, user-scoped machine lock
+Mutating release phases also acquire one fail-fast, user-scoped machine lock
 shared by every clone and worktree. If a live owner holds it, the canonical
-entrypoint waits for up to one hour and resumes exactly once after the kernel
-releases the resource. A longer conflict exits `75` as a terminal blocker for
-that run. Never improvise a `ps`-scanning `SIGSTOP`/`SIGKILL` guard: the
-canonical lock never signals a process. The wrapper's true
+entrypoint exits `75`; reconcile that owner before starting a new release turn.
+Never treat an unattended shell wait as proof that Codex will remain active or
+report the eventual result. Never improvise a `ps`-scanning `SIGSTOP`/`SIGKILL`
+guard: the canonical lock never signals a process. The wrapper's true
 read-only path, `jarvis-public-release.sh --dry-run`, exits before delegated
 package work and does not acquire the lock. Real wrapper runs acquire before
 inspecting release state, then atomically transfer verified ownership to the
