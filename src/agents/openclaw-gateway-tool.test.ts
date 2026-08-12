@@ -14,6 +14,7 @@ import { createGatewayTool } from "./tools/gateway-tool.js";
 
 const appUpdateMockState = vi.hoisted(() => ({
   gatewayRestartRequired: true,
+  supportsCheck: true,
 }));
 
 vi.mock("./tools/gateway.js", () => ({
@@ -51,12 +52,27 @@ vi.mock("./tools/gateway.js", () => ({
               displayName: "Test Mac",
               platform: "macos",
               connected: true,
-              commands: ["system.appUpdate.status", "system.appUpdate.install"],
+              commands: [
+                ...(appUpdateMockState.supportsCheck ? ["system.appUpdate.check"] : []),
+                "system.appUpdate.status",
+                "system.appUpdate.install",
+              ],
             },
           ],
         };
       }
       if (method === "node.invoke") {
+        if (params.command === "system.appUpdate.check") {
+          return {
+            payload: {
+              available: true,
+              readyToInstall: false,
+              gatewayRestartRequired: true,
+              version: "2026.7.29",
+              build: "2026072901",
+            },
+          };
+        }
         if (params.command === "system.appUpdate.status") {
           return {
             payload: {
@@ -303,6 +319,49 @@ describe("gateway tool", () => {
       expect.any(Object),
       expect.objectContaining({ command: "system.appUpdate.status" }),
     );
+  });
+
+  it("asks Sparkle to refresh without restart confirmation", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("app-update-check", {
+      action: "app.update.check",
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      nodeId: "mac-test",
+      result: {
+        available: true,
+        readyToInstall: false,
+        version: "2026.7.29",
+        build: "2026072901",
+      },
+    });
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.objectContaining({ timeoutMs: 45_000 }),
+      expect.objectContaining({ command: "system.appUpdate.check" }),
+    );
+  });
+
+  it("keeps status available for older app nodes without background refresh", async () => {
+    appUpdateMockState.supportsCheck = false;
+    try {
+      const tool = requireGatewayTool();
+      const result = await tool.execute("app-update-status-legacy-node", {
+        action: "app.update.status",
+      });
+
+      expect(result.details).toMatchObject({
+        ok: true,
+        nodeId: "mac-test",
+        result: { available: true },
+      });
+    } finally {
+      appUpdateMockState.supportsCheck = true;
+    }
   });
 
   it("blocks signed app installation without a later-turn confirmation", async () => {

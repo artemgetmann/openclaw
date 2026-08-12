@@ -49,7 +49,11 @@ const SMS_DANGEROUS_COMMANDS = ["sms.send"];
 
 // Installation is still owner-only and later-turn confirmation-gated by the
 // gateway tool. These defaults only let a declared Mac app RPC reach that gate.
-const MACOS_APP_UPDATE_COMMANDS = ["system.appUpdate.status", "system.appUpdate.install"];
+const MACOS_APP_UPDATE_COMMANDS = [
+  "system.appUpdate.check",
+  "system.appUpdate.status",
+  "system.appUpdate.install",
+];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];

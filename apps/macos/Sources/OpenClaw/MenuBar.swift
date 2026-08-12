@@ -653,6 +653,7 @@ protocol UpdaterProviding: AnyObject {
     var isAvailable: Bool { get }
     var updateStatus: UpdateStatus { get }
     func checkForUpdates(_ sender: Any?)
+    func checkForUpdatesInBackground() async -> OpenClawAppUpdateStatus
     func appUpdateStatus() -> OpenClawAppUpdateStatus
     func installAppUpdate(expectedVersion: String, expectedBuild: String) throws
     func setAppUpdateEventSink(_ sink: (@Sendable (String, String?) async -> Void)?)
@@ -665,6 +666,10 @@ final class DisabledUpdaterController: UpdaterProviding {
     let isAvailable: Bool = false
     let updateStatus = UpdateStatus()
     func checkForUpdates(_: Any?) {}
+    func checkForUpdatesInBackground() async -> OpenClawAppUpdateStatus {
+        self.appUpdateStatus()
+    }
+
     func appUpdateStatus() -> OpenClawAppUpdateStatus {
         OpenClawAppUpdateStatus(
             available: false,
@@ -715,6 +720,16 @@ final class AppUpdateControllerRegistry {
             available: false,
             readyToInstall: false,
             error: "The app updater has not finished starting.")
+    }
+
+    func checkForUpdatesInBackground() async -> OpenClawAppUpdateStatus {
+        guard let controller else {
+            return OpenClawAppUpdateStatus(
+                available: false,
+                readyToInstall: false,
+                error: "The app updater has not finished starting.")
+        }
+        return await controller.checkForUpdatesInBackground()
     }
 
     func install(expectedVersion: String, expectedBuild: String) throws {
@@ -773,6 +788,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     private var immediateInstallHandler: (() -> Void)?
     private var eventSink: (@Sendable (String, String?) async -> Void)?
     private var lastAnnouncedUpdate: String?
+    private var pendingBackgroundChecks: [UUID: CheckedContinuation<OpenClawAppUpdateStatus, Never>] = [:]
 
     init(savedAutoUpdate: Bool) {
         super.init()
@@ -798,6 +814,43 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
 
     func checkForUpdates(_ sender: Any?) {
         self.controller.checkForUpdates(sender)
+    }
+
+    func checkForUpdatesInBackground() async -> OpenClawAppUpdateStatus {
+        // Use Sparkle's non-UI path so Jarvis can refresh a stale feed without
+        // Accessibility permission or a visible updater window. Sparkle still
+        // owns eligibility, signature validation, download, and install state.
+        if self.controller.updater.sessionInProgress,
+           self.updateStatus.availableVersion != nil
+        {
+            // didFindValidUpdate already proved the feed result. A later check
+            // can arrive while Sparkle downloads or prepares that same item;
+            // return the known state instead of waiting for a second discovery
+            // callback that Sparkle will not send for the active session.
+            return self.appUpdateStatus()
+        }
+
+        let requestID = UUID()
+        return await withCheckedContinuation { continuation in
+            self.pendingBackgroundChecks[requestID] = continuation
+
+            // Join a scheduled check already in flight instead of asking
+            // Sparkle to reject a duplicate session.
+            if !self.controller.updater.sessionInProgress {
+                self.controller.updater.checkForUpdatesInBackground()
+            }
+
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(30))
+                guard let self,
+                      let continuation = self.pendingBackgroundChecks.removeValue(forKey: requestID)
+                else {
+                    return
+                }
+                self.updateStatus.lastError = "The update check did not finish within 30 seconds."
+                continuation.resume(returning: self.appUpdateStatus())
+            }
+        }
     }
 
     func appUpdateStatus() -> OpenClawAppUpdateStatus {
@@ -858,6 +911,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         self.updateStatus.availableBuild = item.versionString
         self.updateStatus.lastError = nil
         self.emitAvailableUpdateIfNeeded()
+        self.finishBackgroundChecks()
     }
 
     func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
@@ -918,14 +972,30 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
         self.clearAvailableUpdate()
+        self.updateStatus.lastError = nil
+        self.finishBackgroundChecks()
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
         self.clearAvailableUpdate()
+        self.updateStatus.lastError = error.localizedDescription
+        self.finishBackgroundChecks()
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
         self.updateStatus.lastError = error.localizedDescription
+        self.finishBackgroundChecks()
+    }
+
+    private func finishBackgroundChecks() {
+        let status = self.appUpdateStatus()
+        // Copy the continuations before clearing their owning dictionary.
+        // Dictionary.Values is a live view and would otherwise become empty.
+        let checks = Array(self.pendingBackgroundChecks.values)
+        self.pendingBackgroundChecks.removeAll()
+        for continuation in checks {
+            continuation.resume(returning: status)
+        }
     }
 
     private func clearAvailableUpdate() {

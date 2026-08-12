@@ -71,6 +71,8 @@ actor MacNodeRuntime {
                 return try await self.handleSystemWhich(req)
             case OpenClawSystemCommand.notify.rawValue:
                 return try await self.handleSystemNotify(req)
+            case OpenClawSystemCommand.appUpdateCheck.rawValue:
+                return try await self.handleAppUpdateCheck(req)
             case OpenClawSystemCommand.appUpdateStatus.rawValue:
                 return try await self.handleAppUpdateStatus(req)
             case OpenClawSystemCommand.appUpdateInstall.rawValue:
@@ -85,6 +87,12 @@ actor MacNodeRuntime {
         } catch {
             return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
         }
+    }
+
+    private func handleAppUpdateCheck(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let services = await self.mainActorServices()
+        let status = await services.checkForAppUpdate()
+        return try BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: Self.encodePayload(status))
     }
 
     private func handleAppUpdateStatus(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {

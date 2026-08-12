@@ -26,6 +26,7 @@ import { listNodes } from "./nodes-utils.js";
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
+const DEFAULT_APP_UPDATE_CHECK_TIMEOUT_MS = 45_000;
 
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
@@ -48,6 +49,7 @@ const GATEWAY_ACTIONS = [
   "config.apply",
   "config.patch",
   "update.run",
+  "app.update.check",
   "app.update.status",
   "app.update.install",
 ] as const;
@@ -73,7 +75,7 @@ const GatewayToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
-  // app.update.status, app.update.install
+  // app.update.check, app.update.status, app.update.install
   node: Type.Optional(Type.String()),
   expectedVersion: Type.Optional(Type.String()),
   expectedBuild: Type.Optional(Type.String()),
@@ -92,7 +94,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, arm restart confirmation for the current chat, inspect or change gateway config, update gateway source, or inspect/install a signed Sparkle app update. Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation. Only after that action succeeds, ask the confirmation question returned by the tool, end the turn, and wait for the user's reply. app.update.status is read-only. app.update.install requires the exact version/build returned by status and a later-turn confirmation. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Always pass a human-readable completion message via the note parameter so the system can deliver it after restart.",
+      "Restart, arm restart confirmation for the current chat, inspect or change gateway config, update gateway source, or check/inspect/install a signed Sparkle app update. Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation. Only after that action succeeds, ask the confirmation question returned by the tool, end the turn, and wait for the user's reply. app.update.check asks Sparkle to refresh in the background without installing. app.update.status is read-only. app.update.install requires the exact version/build returned by status and a later-turn confirmation. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Always pass a human-readable completion message via the note parameter so the system can deliver it after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -206,11 +208,12 @@ export function createGatewayTool(opts?: {
 
       const gatewayOpts = readGatewayCallOptions(params);
 
-      const resolveAppUpdateNode = async () => {
+      const resolveAppUpdateNode = async (
+        requiredCommands = ["system.appUpdate.status", "system.appUpdate.install"],
+      ) => {
         const requestedNode =
           typeof params.node === "string" && params.node.trim() ? params.node.trim() : undefined;
         const nodes = await listNodes(gatewayOpts);
-        const requiredCommands = ["system.appUpdate.status", "system.appUpdate.install"];
         const capable = nodes.filter(
           (node) =>
             node.connected === true &&
@@ -243,15 +246,20 @@ export function createGatewayTool(opts?: {
 
       const invokeAppUpdateNode = async (
         nodeId: string,
-        command: "system.appUpdate.status" | "system.appUpdate.install",
+        command: "system.appUpdate.check" | "system.appUpdate.status" | "system.appUpdate.install",
         commandParams: Record<string, unknown> = {},
+        commandGatewayOpts = gatewayOpts,
       ) => {
-        const result = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
-          nodeId,
-          command,
-          params: commandParams,
-          idempotencyKey: randomUUID(),
-        });
+        const result = await callGatewayTool<{ payload?: unknown }>(
+          "node.invoke",
+          commandGatewayOpts,
+          {
+            nodeId,
+            command,
+            params: commandParams,
+            idempotencyKey: randomUUID(),
+          },
+        );
         return result?.payload ?? {};
       };
 
@@ -346,6 +354,23 @@ export function createGatewayTool(opts?: {
       if (action === "app.update.status") {
         const node = await resolveAppUpdateNode();
         const result = await invokeAppUpdateNode(node.nodeId, "system.appUpdate.status");
+        return jsonResult({ ok: true, nodeId: node.nodeId, result });
+      }
+      if (action === "app.update.check") {
+        const node = await resolveAppUpdateNode([
+          "system.appUpdate.check",
+          "system.appUpdate.status",
+          "system.appUpdate.install",
+        ]);
+        const result = await invokeAppUpdateNode(
+          node.nodeId,
+          "system.appUpdate.check",
+          {},
+          {
+            ...gatewayOpts,
+            timeoutMs: Math.max(gatewayOpts.timeoutMs ?? 0, DEFAULT_APP_UPDATE_CHECK_TIMEOUT_MS),
+          },
+        );
         return jsonResult({ ok: true, nodeId: node.nodeId, result });
       }
       if (action === "app.update.install") {
