@@ -176,6 +176,9 @@ for my $lock_resource (@resources) {
 }
 
 if (!$acquired && $wait_seconds > 0) {
+    # Emit one bounded queue receipt. The sanitized label is diagnostic only;
+    # kernel ownership still decides admission and process exit releases it.
+    print STDERR "SHARED_RESOURCE_LOCK_WAITING resource=$resource label=$label wait_seconds=$wait_seconds\n";
     my $deadline = clock_gettime(CLOCK_MONOTONIC) + $wait_seconds;
     while (!$acquired) {
         my $remaining = $deadline - clock_gettime(CLOCK_MONOTONIC);
@@ -184,6 +187,10 @@ if (!$acquired && $wait_seconds > 0) {
         # A short bounded poll avoids platform-specific alarm interruption while
         # still admitting promptly when the current process exits.
         sleep($remaining < 0.05 ? $remaining : 0.05);
+        # Do not launch after the deadline merely because the owner released
+        # during the final sleep. The bounded transaction must either acquire
+        # within its window or return the terminal contention receipt.
+        last if clock_gettime(CLOCK_MONOTONIC) >= $deadline;
         @lock_fhs = ();
         @capabilities = ();
         $acquired = 1;

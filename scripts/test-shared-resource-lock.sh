@@ -112,10 +112,52 @@ wait_holder_pid=$!
 BACKGROUND_PIDS+=("$wait_holder_pid")
 wait_for_file "$TEST_DIR/wait.ready"
 wait_output="$($WRAPPER --resource "$wait_resource" --label bounded-wait --wait-seconds 2 -- \
-  /usr/bin/printf '%s' admitted-after-wait)"
+  /usr/bin/printf '%s' admitted-after-wait 2>"$TEST_DIR/wait.err")"
 [ "$wait_output" = "admitted-after-wait" ] || fail "bounded wait did not run after release"
+grep -q "SHARED_RESOURCE_LOCK_WAITING resource=$wait_resource" "$TEST_DIR/wait.err" ||
+  fail "bounded wait omitted its queue receipt"
 wait "$wait_holder_pid"
 remove_background_pid "$wait_holder_pid"
+
+# Canonical protected entrypoints wait by default. This is the user-facing
+# path used by release/package callers; proving only the low-level option would
+# allow those callers to regress to immediate status 75 again.
+canonical_wait_resource="$RESOURCE_PREFIX-canonical-wait"
+"$WRAPPER" --resource "$canonical_wait_resource" --label canonical-holder -- \
+  /usr/bin/perl -MTime::HiRes=sleep -e \
+  'open my $fh, q{>}, $ARGV[0] or die $!; close $fh; sleep 0.2' \
+  "$TEST_DIR/canonical-wait.ready" &
+canonical_wait_holder_pid=$!
+BACKGROUND_PIDS+=("$canonical_wait_holder_pid")
+wait_for_file "$TEST_DIR/canonical-wait.ready"
+canonical_wait_output="$(bash -c \
+  'source "$1/scripts/lib/shared-resource-lock.sh"; openclaw_shared_resource_lock_require_or_reexec "$2" canonical-wait "$1" /usr/bin/printf "%s" canonical-helper-admitted' \
+  _ "$ROOT_DIR" "$canonical_wait_resource" 2>"$TEST_DIR/canonical-wait.err")"
+[ "$canonical_wait_output" = "canonical-helper-admitted" ] ||
+  fail "canonical helper did not resume after contention cleared"
+grep -q "SHARED_RESOURCE_LOCK_WAITING resource=$canonical_wait_resource" "$TEST_DIR/canonical-wait.err" ||
+  fail "canonical helper omitted its queue receipt"
+wait "$canonical_wait_holder_pid"
+remove_background_pid "$canonical_wait_holder_pid"
+
+# A live owner that outlasts the explicit bound remains a clear terminal
+# blocker. Waiting must never weaken ownership or run the guarded command late.
+timeout_resource="$RESOURCE_PREFIX-timeout"
+start_holder "$timeout_resource" "$TEST_DIR/timeout.ready"
+timeout_holder_pid="$HOLDER_PID"
+set +e
+timeout_output="$($WRAPPER --resource "$timeout_resource" --label timeout-contender --wait-seconds 1 -- \
+  /usr/bin/true 2>&1)"
+timeout_status=$?
+set -e
+[ "$timeout_status" -eq 75 ] || fail "bounded timeout returned $timeout_status instead of 75"
+[[ "$timeout_output" == *"SHARED_RESOURCE_LOCK_WAITING resource=$timeout_resource"* ]] ||
+  fail "bounded timeout omitted its queue receipt"
+[[ "$timeout_output" == *"SHARED_RESOURCE_LOCK_REFUSED resource=$timeout_resource"*"wait_seconds=1"* ]] ||
+  fail "bounded timeout omitted its terminal blocker"
+kill -TERM "$timeout_holder_pid"
+wait "$timeout_holder_pid"
+remove_background_pid "$timeout_holder_pid"
 
 # Normal process exit releases the kernel lock without an explicit cleanup path.
 kill -TERM "$same_holder_pid"

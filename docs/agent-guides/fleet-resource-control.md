@@ -55,6 +55,12 @@ it grants nothing without that descriptor. Labels are diagnostics only.
 Native Codex thread delivery, wakeups, and chat cleanup must never be required
 to acquire, release, or recover a resource.
 
+Canonical protected entrypoints wait for the existing kernel owner for up to
+one hour, then continue exactly once when the OS admits them. Contention that
+outlasts that bound returns temporary-unavailable status `75` with the resource,
+label, and wait duration. A timeout is a real terminal blocker for that run; it
+never steals the lock, signals the owner, or expands the original authority.
+
 Different resources run concurrently. Package/build staging should use unique
 output directories and remain lock-free; acquire `release-jarvis` only for the
 protected artifact/publication transaction. Do not invent a global fallback

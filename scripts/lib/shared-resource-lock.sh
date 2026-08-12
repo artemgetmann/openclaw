@@ -33,6 +33,15 @@ openclaw_shared_resource_lock_is_held() {
   return 1
 }
 
+openclaw_shared_resource_lock_canonical_wait_seconds() {
+  # Canonical protected entrypoints already own an authorized end-to-end task.
+  # Give a normal package, install, runtime, or live-proof owner time to finish
+  # without turning temporary contention into another user approval request.
+  # The bound stays below the default two-hour Jarvis release-intent lifetime,
+  # so admission cannot consume the entire authorization window.
+  printf '%s\n' 3600
+}
+
 openclaw_shared_resource_lock_require_or_reexec() {
   local resource="$1"
   local label="$2"
@@ -46,10 +55,15 @@ openclaw_shared_resource_lock_require_or_reexec() {
 
   local primary="${resource%%,*}"
   local secondary=""
+  local wait_seconds=""
   local args=(--resource "$primary")
   if [[ "$resource" == *,* ]]; then
     secondary="${resource#*,}"
     args+=(--also-resource "$secondary")
   fi
-  exec "$root/scripts/with-shared-resource-lock.pl" "${args[@]}" --label "$label" -- "$entrypoint" "$@"
+  wait_seconds="$(openclaw_shared_resource_lock_canonical_wait_seconds)" || return 75
+  exec "$root/scripts/with-shared-resource-lock.pl" "${args[@]}" \
+    --label "$label" \
+    --wait-seconds "$wait_seconds" \
+    -- "$entrypoint" "$@"
 }
