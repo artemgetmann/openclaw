@@ -16,6 +16,13 @@ user explicitly asks.
 
 ## Work Scope Contract
 
+Discussion is not implementation approval. Before changing Jarvis behavior,
+state the one observable result being implemented, what remains outside the
+change, and the authorized delivery target. If the user is still comparing
+options, asking what should be built, or approving only a general direction,
+remain read-only. A new independent result or product decision requires fresh
+confirmation before implementation continues.
+
 Before implementation or shipping, classify the work explicitly:
 
 - Product-wide: intended for Jarvis users generally. Product defaults, copy,
