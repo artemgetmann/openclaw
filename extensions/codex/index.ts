@@ -892,6 +892,16 @@ async function startAsyncRelay(params: {
           throw new Error(`Codex relay ${delegationId} disappeared before failure handback`);
         }
         await params.callbackRoutes.finishTurn(callbackRoute.routeId, started.turnId);
+        if (
+          !(error instanceof CodexTurnTerminalError) &&
+          record.lifecycle === "accepted" &&
+          record.recoveryPolicy === "local-safe"
+        ) {
+          // A transport/listener disconnect is not terminal proof. Leave the
+          // explicitly eligible relay accepted so the next Gateway can inspect
+          // its exact persisted turn and recover only if Codex says interrupted.
+          return;
+        }
         await claimAndDispatchCodexDecisionNeededToJarvis({
           api: params.api,
           registry,

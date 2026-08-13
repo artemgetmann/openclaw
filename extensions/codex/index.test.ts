@@ -1132,6 +1132,25 @@ describe("Codex natural-language delegation", () => {
       lifecycle: "accepted",
       recoveryPolicy: "local-safe",
     });
+
+    for (const handler of appServer.handlers) {
+      handler({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-natural",
+          turnId: "turn-natural",
+          turn: { status: "transport-disconnected" },
+        },
+      });
+    }
+    await vi.waitFor(async () => {
+      await expect(registry.get(delegationId!)).resolves.toMatchObject({
+        lifecycle: "accepted",
+        recoveryPolicy: "local-safe",
+        overdueProgressSuppressedAtMs: expect.any(Number),
+      });
+    });
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("keeps one callback route across plugin restart and same-thread resume", async () => {
