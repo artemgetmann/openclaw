@@ -63,9 +63,32 @@ export async function reconcileCodexRelays(
   const now = (options.now ?? Date.now)();
   const maxAgeMs = options.maxAgeMs ?? CODEX_RELAY_MAX_RECONCILE_AGE_MS;
   const recordsById = new Map(snapshot.records.map((record) => [record.delegationId, record]));
+  const recoveryChildrenOwnedByParent = new Set<string>();
+
+  // A child that never crossed the durable acceptance boundary is evidence of
+  // the parent's one ambiguous recovery attempt, not a second delegation to
+  // report. Keep the parent as the sole handback owner across later startups.
+  for (const parent of snapshot.records) {
+    if (!parent.recoveryDelegationId || parent.lifecycle === "recovered") {
+      continue;
+    }
+    const child = recordsById.get(parent.recoveryDelegationId);
+    if (
+      child?.lifecycle === "starting" &&
+      child.recoveryOfDelegationId === parent.delegationId &&
+      child.threadId === parent.threadId &&
+      child.sessionKey === parent.sessionKey
+    ) {
+      recoveryChildrenOwnedByParent.add(child.delegationId);
+    }
+  }
 
   for (const record of snapshot.records) {
     try {
+      if (recoveryChildrenOwnedByParent.has(record.delegationId)) {
+        result.skipped += 1;
+        continue;
+      }
       if (record.lifecycle === "recovery-started" && record.recoveryDelegationId) {
         const child = recordsById.get(record.recoveryDelegationId);
         if (

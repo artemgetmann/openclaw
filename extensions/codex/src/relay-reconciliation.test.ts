@@ -259,6 +259,44 @@ describe("reconcileCodexRelays", () => {
     );
   });
 
+  it("coalesces a pre-acceptance recovery child into the parent's one decision", async () => {
+    const { registry } = await acceptedRegistry(1_000, { recoveryPolicy: "local-safe" });
+    await registry.markTerminal("delegation-1", "interrupted");
+    await registry.claimRecovery("delegation-1", "recovery-1");
+    await registry.createStarting({
+      delegationId: "recovery-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      threadId: "thread-1",
+      deliveryKey: "codex-relay:recovery-1",
+      recoveryOfDelegationId: "delegation-1",
+      recoveryPolicy: undefined,
+    });
+    const decision = vi.fn(async () => "completed" as const);
+    const options = {
+      registry,
+      inspectTurn: vi.fn(),
+      dispatchTerminal: vi.fn(),
+      dispatchDecisionNeeded: decision,
+      startRecovery: vi.fn(),
+      now: () => 2_000,
+    };
+
+    await expect(reconcileCodexRelays(options)).resolves.toMatchObject({
+      decisionNeeded: 1,
+      skipped: 1,
+    });
+    await expect(reconcileCodexRelays(options)).resolves.toMatchObject({
+      decisionNeeded: 0,
+      skipped: 2,
+    });
+    expect(decision).toHaveBeenCalledTimes(1);
+    expect(decision).toHaveBeenCalledWith(
+      expect.objectContaining({ delegationId: "delegation-1" }),
+      expect.stringContaining("acceptance of the new native turn is ambiguous"),
+    );
+  });
+
   it("repairs a parent when its recovery child was durably accepted before a crash", async () => {
     const { registry } = await acceptedRegistry(1_000, { recoveryPolicy: "local-safe" });
     await registry.markTerminal("delegation-1", "interrupted");
