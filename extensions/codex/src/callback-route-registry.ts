@@ -67,6 +67,7 @@ type StoredRoute = {
   lastFinishedTurnId?: string;
   lastFinishedRelayId?: string;
   recoverySourceRelayId?: string;
+  awaitingBind?: boolean;
   completedAtMs?: number;
   retiredAtMs?: number;
 };
@@ -130,6 +131,15 @@ export class CodexCallbackRouteRegistry {
             `Codex callback thread ${threadId} is already bound to another Jarvis session`,
           );
         }
+        if (!activeForThread.activeTurnId && !activeForThread.activeRelayId) {
+          // Acquisition is the durable start of a new relay epoch. Preserve
+          // prior callback receipts, but supersede their closed-turn identity
+          // so acceptance-before-bind can be recognized after restart.
+          activeForThread.lastFinishedTurnId = undefined;
+          activeForThread.lastFinishedRelayId = undefined;
+          activeForThread.awaitingBind = true;
+          activeForThread.updatedAtMs = timestamp;
+        }
         return publicGrant(activeForThread);
       }
 
@@ -146,6 +156,7 @@ export class CodexCallbackRouteRegistry {
         ...(input.agentId ? { agentId: requireStoredString(input.agentId, "agentId") } : {}),
         nextSequence: 1,
         callbacks: [],
+        awaitingBind: true,
         createdAtMs: timestamp,
         updatedAtMs: timestamp,
       };
@@ -212,6 +223,7 @@ export class CodexCallbackRouteRegistry {
       }
       route.activeRelayId = requireStoredString(turn.relayId, "relayId");
       route.activeTurnId = requireStoredString(turn.turnId, "turnId");
+      route.awaitingBind = false;
       route.updatedAtMs = this.now();
     });
   }
@@ -232,6 +244,7 @@ export class CodexCallbackRouteRegistry {
       // it only while no newer turn is active on this route.
       route.lastFinishedTurnId = route.activeTurnId;
       route.lastFinishedRelayId = route.activeRelayId;
+      route.awaitingBind = false;
       route.activeTurnId = undefined;
       route.activeRelayId = undefined;
       route.updatedAtMs = this.now();
@@ -269,7 +282,7 @@ export class CodexCallbackRouteRegistry {
         active?.lastFinishedRelayId === undefined &&
         active?.lastFinishedTurnId === undefined &&
         active?.recoverySourceRelayId === undefined &&
-        active?.callbacks.length === 0;
+        (active?.awaitingBind === true || active?.callbacks.length === 0);
       if (
         !active ||
         active.sessionKey !== input.sessionKey ||
@@ -297,6 +310,7 @@ export class CodexCallbackRouteRegistry {
         // Distinguish this unbound replacement from the original pre-bind
         // crash window so the same parent claim cannot rotate it twice.
         recoverySourceRelayId: input.relayId,
+        awaitingBind: true,
         createdAtMs: timestamp,
         updatedAtMs: timestamp,
       };
@@ -592,6 +606,7 @@ function validateRoute(value: unknown): StoredRoute {
           ),
         }
       : {}),
+    ...(typeof value.awaitingBind === "boolean" ? { awaitingBind: value.awaitingBind } : {}),
     ...(typeof value.completedAtMs === "number"
       ? { completedAtMs: requireTimestamp(value.completedAtMs, "completedAtMs") }
       : {}),

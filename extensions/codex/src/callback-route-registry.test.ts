@@ -78,6 +78,36 @@ describe("CodexCallbackRouteRegistry", () => {
     expect(recovery.capability).not.toBe(prior.capability);
   });
 
+  it("rotates a reused route accepted before binding after an older relay finished", async () => {
+    const { filePath, registry } = await createRegistry();
+    const prior = await registry.acquire({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    });
+    await registry.bindTurn(prior.routeId, { relayId: "relay-a", turnId: "turn-a" });
+    await registry.finishTurn(prior.routeId, "turn-a");
+
+    // A later relay reuses the route, then crashes after its registry accepts
+    // turn B but before callback bindTurn persists B's identity.
+    await registry.acquire({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    });
+    const restarted = new CodexCallbackRouteRegistry(filePath);
+    const recovery = await restarted.replaceInterruptedTurn({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      relayId: "relay-b",
+      turnId: "turn-b",
+    });
+
+    expect(recovery.routeId).not.toBe(prior.routeId);
+    expect(recovery.capability).not.toBe(prior.capability);
+  });
+
   it("reuses one durable route for the same Jarvis session and native thread", async () => {
     const { filePath, registry } = await createRegistry();
     const created = await registry.acquire({
