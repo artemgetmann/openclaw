@@ -461,8 +461,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         typingCallbacks.onIdle?.();
       },
       onIdle: async () => {
+        // Dispatch idleness finalizes the streaming card, while the run-aware
+        // typing controller retains presence until the turn itself completes.
         await closeStreaming();
-        typingCallbacks.onIdle?.();
       },
       onCleanup: () => {
         typingCallbacks.onCleanup?.();

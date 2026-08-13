@@ -14,9 +14,10 @@ import {
   resetRecentQueuedMessageIdDedupe,
   scheduleFollowupDrain,
 } from "./queue.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyDispatcher, createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
 import { parseSlackDirectives, hasSlackDirectives } from "./slack-directives.js";
+import type { TypingController } from "./typing.js";
 
 describe("normalizeInboundTextNewlines", () => {
   it("normalizes real newlines and preserves literal backslash-n sequences", () => {
@@ -1776,6 +1777,59 @@ describe("createReplyDispatcher", () => {
     await dispatcher.waitForIdle();
     dispatcher.markComplete();
     await Promise.resolve();
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stop channel typing when an interim delivery queue becomes idle", async () => {
+    const onIdle = vi.fn();
+    const typingController = {
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    };
+    const result = createReplyDispatcherWithTyping({
+      deliver: async () => await Promise.resolve(),
+      typingCallbacks: {
+        onReplyStart: async () => await Promise.resolve(),
+        onIdle,
+      },
+    });
+    result.replyOptions.onTypingController?.(typingController as unknown as TypingController);
+
+    result.dispatcher.sendBlockReply({ text: "Interim voice narration" });
+    result.dispatcher.markComplete();
+    await result.dispatcher.waitForIdle();
+
+    expect(typingController.markDispatchIdle).toHaveBeenCalledTimes(1);
+    expect(onIdle).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit non-typing idle finalizers when a typing controller is installed", () => {
+    const onIdle = vi.fn();
+    const typingController = {
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    };
+    const result = createReplyDispatcherWithTyping({
+      deliver: async () => await Promise.resolve(),
+      onIdle,
+    });
+    result.replyOptions.onTypingController?.(typingController as unknown as TypingController);
+
+    result.markDispatchIdle();
+
+    expect(typingController.markDispatchIdle).toHaveBeenCalledTimes(1);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps direct dispatcher idle cleanup when no typing controller is installed", () => {
+    const onIdle = vi.fn();
+    const result = createReplyDispatcherWithTyping({
+      deliver: async () => await Promise.resolve(),
+      onIdle,
+    });
+
+    result.markDispatchIdle();
+
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 

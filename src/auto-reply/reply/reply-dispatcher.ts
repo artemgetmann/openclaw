@@ -239,15 +239,30 @@ export function createReplyDispatcherWithTyping(
 ): ReplyDispatcherWithTypingResult {
   const { typingCallbacks, onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
   const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
-  const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
+  const signalDispatchIdle = () => {
+    if (typingController) {
+      // Queue idleness is not a terminal boundary. An interim narration or
+      // voice payload can drain while the agent continues through tools and
+      // waits. Let the run-aware controller combine dispatch-idle with
+      // markRunComplete(); its cleanup hook then stops the channel keepalive
+      // exactly once at the honest terminal boundary.
+      typingController.markDispatchIdle();
+    }
+    // Explicit dispatcher-idle hooks can finalize resources unrelated to
+    // typing (for example, a streaming card). They must still run when the
+    // delivery queue drains. Only the typing callback fallback is deferred to
+    // the run-aware controller's terminal cleanup.
+    if (onIdle) {
+      onIdle();
+    } else if (!typingController) {
+      typingCallbacks?.onIdle?.();
+    }
+  };
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
-    onIdle: () => {
-      typingController?.markDispatchIdle();
-      resolvedOnIdle?.();
-    },
+    onIdle: signalDispatchIdle,
   });
 
   return {
@@ -259,10 +274,7 @@ export function createReplyDispatcherWithTyping(
         typingController = typing;
       },
     },
-    markDispatchIdle: () => {
-      typingController?.markDispatchIdle();
-      resolvedOnIdle?.();
-    },
+    markDispatchIdle: signalDispatchIdle,
     markRunComplete: () => {
       typingController?.markRunComplete();
     },

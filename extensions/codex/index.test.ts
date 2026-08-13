@@ -551,7 +551,19 @@ describe("Codex natural-language delegation", () => {
     const requestHeartbeatNow = vi.fn();
     const run = vi.fn(async () => ({ runId: "jarvis-relay-run" }));
     const waitForRun = vi.fn(async () => ({ status: "ok" as const }));
+    // An unresolved Telegram request must not delay the already-started Codex receipt.
+    const startWorkingPresence = vi.fn(() => new Promise<void>(() => undefined));
+    const stopWorkingPresence = vi.fn();
     const state = await createRelayState();
+    const sessionStorePath = path.join(state.resolveStateDir(), "sessions.json");
+    await updateSessionStore(sessionStorePath, (store) => {
+      store["agent:main:telegram:direct:owner"] = {
+        sessionId: "owner-session",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "telegram:owner",
+      };
+    });
     let factory: OpenClawPluginToolFactory | undefined;
 
     registerCodex(
@@ -559,7 +571,7 @@ describe("Codex natural-language delegation", () => {
         id: "codex",
         name: "Codex",
         source: "test",
-        config: {},
+        config: { session: { store: sessionStorePath } },
         pluginConfig: { command: "fake-codex", defaultWorkspaceDir: "/repo/openclaw" },
         runtime: {
           state,
@@ -567,6 +579,14 @@ describe("Codex natural-language delegation", () => {
           system: {
             enqueueSystemEvent,
             requestHeartbeatNow,
+          },
+          channel: {
+            telegram: {
+              workingPresence: {
+                start: startWorkingPresence,
+                stop: stopWorkingPresence,
+              },
+            },
           },
         } as never,
         registerTool(next) {
@@ -614,6 +634,11 @@ describe("Codex natural-language delegation", () => {
       },
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(startWorkingPresence).toHaveBeenCalledWith({
+      ownerId: expect.stringMatching(/^codex:/),
+      to: "telegram:owner",
+    });
+    expect(stopWorkingPresence).not.toHaveBeenCalled();
 
     const delegatedTurn = appServer.requests.find((request) => request.method === "turn/start");
     const delegatedPrompt = (
@@ -673,10 +698,13 @@ describe("Codex natural-language delegation", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
     await vi.waitFor(() => {
+      // The delivered Jarvis turn starts before its terminal wait is registered.
+      // Assert the complete async handback boundary instead of racing that continuation.
       expect(waitForRun).toHaveBeenCalledWith({
         runId: "jarvis-relay-run",
         timeoutMs: 5 * 60 * 1000,
       });
+      expect(stopWorkingPresence).toHaveBeenCalledWith(expect.stringMatching(/^codex:/));
     });
   });
 

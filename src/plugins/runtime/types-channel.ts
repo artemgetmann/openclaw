@@ -165,6 +165,14 @@ export type PluginRuntimeChannel = {
         stop: () => void;
       }>;
     };
+    workingPresence: {
+      start: (
+        params: import("./runtime-telegram-working-presence.js").TelegramWorkingPresenceStart,
+      ) => Promise<void>;
+      refresh: (ownerId: string) => Promise<void>;
+      stop: (ownerId: string) => void;
+      stopAll: () => void;
+    };
     conversationActions: {
       editMessage: typeof import("../../../extensions/telegram/src/send.js").editMessageTelegram;
       editReplyMarkup: typeof import("../../../extensions/telegram/src/send.js").editMessageReplyMarkupTelegram;
