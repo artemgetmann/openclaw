@@ -41,7 +41,11 @@ mentions/bookmarks, followed by preview plus explicit approval for posts and
 replies. Do not start with DMs, autonomous actions, raw MCP exposure, or
 Birdclaw-style archive memory.
 
-## Next personal-proof step
+## Personal read-cost boundary
 
-The personal proof is complete. Keep agent-driven access read-only and
-10-result bounded until the explicit productization trigger above.
+The personal proof is complete. Keep agent-driven access read-only and route
+reads through the executable guard owned by `skills/xurl`. The default task
+limit is 10 returned resources. A larger read requires fresh confirmation for
+the exact result count and displayed maximum estimated cost. Never split a task
+into repeated calls to evade the task limit. Raw reads, streaming, and automatic
+pagination remain blocked; auto-recharge remains off.

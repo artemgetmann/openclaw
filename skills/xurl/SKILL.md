@@ -34,6 +34,31 @@ metadata:
 
 ---
 
+## Agent read-cost guardrail
+
+For every agent-driven read, invoke `scripts/xurl-read-safe.sh` from this skill directory instead of invoking `xurl` directly. This rule applies to Codex, OpenClaw, and Jarvis.
+
+- Default to no more than 10 returned resources per task. The guard adds `-n 10` when a collection command omits a count.
+- Before requesting more than 10, tell the user the exact requested maximum and maximum estimated cost, then get fresh confirmation in the current conversation. Only after confirmation, pass the same count with `--approved-max`.
+- The estimator uses conservative standard X pay-per-use rates verified on 2026-08-13. Recheck official pricing before an approved larger read if those rates may have changed.
+- Never infer approval from an earlier task, a general request for analysis, or an existing credit balance.
+- Never split a task into repeated 10-result calls to evade the task limit.
+- The guard refuses more than 100 results, raw API reads, streaming, mutating commands, and verbose output. This prevents automatic pagination and accidental credential disclosure.
+- Keep auto-recharge off. Credit purchases and billing changes require separate explicit approval.
+
+Examples:
+
+```bash
+# Default bounded read: maximum estimated Post cost is $0.05.
+scripts/xurl-read-safe.sh -- search "golang" -n 10
+
+# First tell the user: "25 posts can cost up to $0.125. Do you approve this read?"
+# Run only after the user confirms that exact maximum in the current conversation.
+scripts/xurl-read-safe.sh --approved-max 25 -- search "golang" -n 25
+```
+
+---
+
 ## Installation
 
 ### Homebrew (macOS)
@@ -114,30 +139,30 @@ Tokens are persisted to `~/.xurl` in YAML format. Each app has its own isolated 
 | Reply                     | `xurl reply POST_ID "Nice post!"`                     |
 | Quote                     | `xurl quote POST_ID "My take"`                        |
 | Delete a post             | `xurl delete POST_ID`                                 |
-| Read a post               | `xurl read POST_ID`                                   |
-| Search posts              | `xurl search "QUERY" -n 10`                           |
-| Who am I                  | `xurl whoami`                                         |
-| Look up a user            | `xurl user @handle`                                   |
-| Home timeline             | `xurl timeline -n 20`                                 |
-| Mentions                  | `xurl mentions -n 10`                                 |
+| Read a post               | `scripts/xurl-read-safe.sh -- read POST_ID`           |
+| Search posts              | `scripts/xurl-read-safe.sh -- search "QUERY" -n 10`   |
+| Who am I                  | `scripts/xurl-read-safe.sh -- whoami`                 |
+| Look up a user            | `scripts/xurl-read-safe.sh -- user @handle`           |
+| Home timeline             | `scripts/xurl-read-safe.sh -- timeline -n 10`         |
+| Mentions                  | `scripts/xurl-read-safe.sh -- mentions -n 10`         |
 | Like                      | `xurl like POST_ID`                                   |
 | Unlike                    | `xurl unlike POST_ID`                                 |
 | Repost                    | `xurl repost POST_ID`                                 |
 | Undo repost               | `xurl unrepost POST_ID`                               |
 | Bookmark                  | `xurl bookmark POST_ID`                               |
 | Remove bookmark           | `xurl unbookmark POST_ID`                             |
-| List bookmarks            | `xurl bookmarks -n 10`                                |
-| List likes                | `xurl likes -n 10`                                    |
+| List bookmarks            | `scripts/xurl-read-safe.sh -- bookmarks -n 10`        |
+| List likes                | `scripts/xurl-read-safe.sh -- likes -n 10`            |
 | Follow                    | `xurl follow @handle`                                 |
 | Unfollow                  | `xurl unfollow @handle`                               |
-| List following            | `xurl following -n 20`                                |
-| List followers            | `xurl followers -n 20`                                |
+| List following            | `scripts/xurl-read-safe.sh -- following -n 10`        |
+| List followers            | `scripts/xurl-read-safe.sh -- followers -n 10`        |
 | Block                     | `xurl block @handle`                                  |
 | Unblock                   | `xurl unblock @handle`                                |
 | Mute                      | `xurl mute @handle`                                   |
 | Unmute                    | `xurl unmute @handle`                                 |
 | Send DM                   | `xurl dm @handle "message"`                           |
-| List DMs                  | `xurl dms -n 10`                                      |
+| List DMs                  | `scripts/xurl-read-safe.sh -- dms -n 10`              |
 | Upload media              | `xurl media upload path/to/file.mp4`                  |
 | Media status              | `xurl media status MEDIA_ID`                          |
 | **App Management**        |                                                       |
@@ -189,36 +214,36 @@ xurl delete 1234567890
 
 ```bash
 # Read a single post (returns author, text, metrics, entities)
-xurl read 1234567890
-xurl read https://x.com/user/status/1234567890
+scripts/xurl-read-safe.sh -- read 1234567890
+scripts/xurl-read-safe.sh -- read https://x.com/user/status/1234567890
 
 # Search recent posts (default 10 results)
-xurl search "golang"
-xurl search "from:elonmusk" -n 20
-xurl search "#buildinpublic lang:en" -n 15
+scripts/xurl-read-safe.sh -- search "golang"
+scripts/xurl-read-safe.sh -- search "from:elonmusk" -n 10
+scripts/xurl-read-safe.sh -- search "#buildinpublic lang:en" -n 10
 ```
 
 ### User Info
 
 ```bash
 # Your own profile
-xurl whoami
+scripts/xurl-read-safe.sh -- whoami
 
 # Look up any user
-xurl user elonmusk
-xurl user @XDevelopers
+scripts/xurl-read-safe.sh -- user elonmusk
+scripts/xurl-read-safe.sh -- user @XDevelopers
 ```
 
 ### Timelines & Mentions
 
 ```bash
 # Home timeline (reverse chronological)
-xurl timeline
-xurl timeline -n 25
+scripts/xurl-read-safe.sh -- timeline
+scripts/xurl-read-safe.sh -- timeline -n 10
 
 # Your mentions
-xurl mentions
-xurl mentions -n 20
+scripts/xurl-read-safe.sh -- mentions
+scripts/xurl-read-safe.sh -- mentions -n 10
 ```
 
 ### Engagement
@@ -237,8 +262,8 @@ xurl bookmark 1234567890
 xurl unbookmark 1234567890
 
 # List your bookmarks / likes
-xurl bookmarks -n 20
-xurl likes -n 20
+scripts/xurl-read-safe.sh -- bookmarks -n 10
+scripts/xurl-read-safe.sh -- likes -n 10
 ```
 
 ### Social Graph
@@ -249,12 +274,12 @@ xurl follow @XDevelopers
 xurl unfollow @XDevelopers
 
 # List who you follow / your followers
-xurl following -n 50
-xurl followers -n 50
+scripts/xurl-read-safe.sh -- following -n 10
+scripts/xurl-read-safe.sh -- followers -n 10
 
 # List another user's following/followers
-xurl following --of elonmusk -n 20
-xurl followers --of elonmusk -n 20
+scripts/xurl-read-safe.sh -- following --of elonmusk -n 10
+scripts/xurl-read-safe.sh -- followers --of elonmusk -n 10
 
 # Block / unblock
 xurl block @spammer
@@ -272,8 +297,8 @@ xurl unmute @annoying
 xurl dm @someuser "Hey, saw your post!"
 
 # List recent DM events
-xurl dms
-xurl dms -n 25
+scripts/xurl-read-safe.sh -- dms
+scripts/xurl-read-safe.sh -- dms -n 10
 ```
 
 ### Media Upload
@@ -313,7 +338,7 @@ These flags work on every command:
 
 ## Raw API Access
 
-The shortcut commands cover the most common operations. For anything else, use xurl's raw curl‑style mode — it works with **any** X API v2 endpoint:
+Do not use raw API mode for agent-driven reads. The cost guard refuses raw paths because their resource count and pagination behavior cannot be bounded reliably. The syntax below is reference material for manual, user-operated API work only:
 
 ```bash
 # GET request (default)
@@ -338,6 +363,8 @@ xurl https://api.x.com/2/users/me
 ---
 
 ## Streaming
+
+Do not start a stream from an agent session. Streaming has an open-ended resource cost and the read guard refuses it.
 
 Streaming endpoints are auto‑detected. Known streaming endpoints include:
 
@@ -396,7 +423,7 @@ xurl post "Check out this photo!" --media-id MEDIA_ID
 
 ```bash
 # 1. Read the post to understand context
-xurl read https://x.com/user/status/1234567890
+scripts/xurl-read-safe.sh -- read https://x.com/user/status/1234567890
 # 2. Reply
 xurl reply 1234567890 "Here are my thoughts..."
 ```
@@ -405,7 +432,7 @@ xurl reply 1234567890 "Here are my thoughts..."
 
 ```bash
 # 1. Search for relevant posts
-xurl search "topic of interest" -n 10
+scripts/xurl-read-safe.sh -- search "topic of interest" -n 10
 # 2. Like an interesting one
 xurl like POST_ID_FROM_RESULTS
 # 3. Reply to it
@@ -416,11 +443,11 @@ xurl reply POST_ID_FROM_RESULTS "Great point!"
 
 ```bash
 # See who you are
-xurl whoami
+scripts/xurl-read-safe.sh -- whoami
 # Check your mentions
-xurl mentions -n 20
+scripts/xurl-read-safe.sh -- mentions -n 10
 # Check your timeline
-xurl timeline -n 20
+scripts/xurl-read-safe.sh -- timeline -n 10
 ```
 
 ### Set up multiple apps
