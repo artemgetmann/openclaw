@@ -71,6 +71,24 @@ describe("single-owner workflow contract", () => {
     expect(prScript).toContain("CHANGELOG.md|docs/channels/*");
   });
 
+  it("persists one explicit main-Jarvis delivery policy without weakening drift stops", () => {
+    const agents = read("AGENTS.md");
+    const workflow = read("docs/agent-guides/workflow.md");
+    const runtime = read("docs/agent-guides/runtime-ops.md");
+    const template = read(".github/pull_request_template.md");
+    const ship = read("scripts/ship-jarvis-hotfix.sh");
+
+    for (const text of [agents, workflow, runtime, template, ship]) {
+      expect(text).toContain("exact-pr");
+      expect(text).toContain("current-green-main");
+    }
+    expect(runtime).toContain("explicitly recorded at task start");
+    expect(template).toContain("Task-start delivery authority");
+    expect(ship).toContain("delivery_authority_policy=");
+    expect(ship).toContain("touches security/release-class paths");
+    expect(ship).toContain("run_pr_required --pr");
+  });
+
   it("removes the obsolete lifecycle and universal-wait entrypoints", () => {
     for (const relativePath of [
       "scripts/pr-lifecycle",

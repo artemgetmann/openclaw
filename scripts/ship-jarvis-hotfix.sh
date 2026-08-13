@@ -107,6 +107,7 @@ GATEWAY_READY_POLL_SECONDS="${OPENCLAW_SHIP_GATEWAY_READY_POLL_SECONDS:-2}"
 CI_TIMEOUT_SECONDS="${OPENCLAW_SHIP_CI_TIMEOUT_SECONDS:-1800}"
 
 PR_NUMBER=""
+MAIN_POLICY=""
 DRY_RUN=0
 STATUS_STDOUT_FILE=""
 STATUS_STDERR_FILE=""
@@ -158,12 +159,17 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage: scripts/ship-jarvis-hotfix.sh --pr <number> [--dry-run]
+Usage: scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy <exact-pr|current-green-main> [--dry-run]
 
 Ship an already-merged main-targeted PR to this Mac's default Jarvis as an
 explicit app-support break-glass hotfix. The wrapper builds and launches only
 dist/Jarvis.app; it never replaces /Applications/Jarvis.app and never claims a
 public release or managed-bundle steady state.
+
+The main policy must match the delivery authority recorded when the task began:
+  exact-pr            Ship only when current main is the requested PR merge.
+  current-green-main  Ship later routine merged PRs after their protected-path,
+                      exact merge identity, and required-check proof passes.
 EOF
 }
 
@@ -172,6 +178,10 @@ parse_args() {
     case "$1" in
       --pr)
         PR_NUMBER="${2:-}"
+        shift 2
+        ;;
+      --main-policy)
+        MAIN_POLICY="${2:-}"
         shift 2
         ;;
       --dry-run)
@@ -189,6 +199,10 @@ parse_args() {
   done
 
   [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] || die "--pr must be a positive PR number"
+  case "${MAIN_POLICY}" in
+    exact-pr | current-green-main) ;;
+    *) die "--main-policy must be exact-pr or current-green-main and match task-start authority" ;;
+  esac
 }
 
 require_command() {
@@ -472,6 +486,23 @@ require_requested_pr_merge() {
   run_pr_required --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
 }
 
+assert_main_policy_target() {
+  local merge_sha="$1"
+  local head_sha="$2"
+
+  case "${MAIN_POLICY}" in
+    exact-pr)
+      commit_matches "${merge_sha}" "${head_sha}" || \
+        die "exact-pr authority refuses current main ${head_sha}; requested PR merged at ${merge_sha}"
+      ;;
+    current-green-main)
+      # Descendancy, complete first-parent history, PR identity, required CI,
+      # and protected paths are proved by dry_run_reviewed_remote_main below.
+      ;;
+    *) die "delivery authority policy is missing or invalid before remote-main proof" ;;
+  esac
+}
+
 dry_run_reviewed_remote_main() {
   local merge_sha="$1"
   local repo=""
@@ -489,6 +520,11 @@ dry_run_reviewed_remote_main() {
   head_sha="$(${GH_BIN} api "repos/${repo}/commits/main" --jq '.sha')"
   valid_commit "${head_sha}" || die "remote main HEAD is missing or invalid in dry-run"
   require_requested_pr_merge "${merge_sha}"
+  assert_main_policy_target "${merge_sha}" "${head_sha}"
+  if [[ "${MAIN_POLICY}" == "exact-pr" ]]; then
+    printf '%s\n' "${head_sha}"
+    return 0
+  fi
   commit_matches "${merge_sha}" "${head_sha}" && {
     printf '%s\n' "${head_sha}"
     return 0
@@ -1073,6 +1109,7 @@ prove_break_glass_runtime() {
 
 main() {
   parse_args "$@"
+  log "delivery_authority_policy=${MAIN_POLICY} requested_pr=${PR_NUMBER}"
   assert_source_checkout_safe
   load_release_helpers
   trap transaction_exit_guard EXIT
