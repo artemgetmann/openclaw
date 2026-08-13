@@ -20,20 +20,45 @@ Skills are loaded from these places:
 1. **Bundled skills**: shipped with the install (npm package or OpenClaw.app)
 2. **Extra skill roots**: directories from `skills.load.extraDirs`
 3. **Managed/local skills**: `$OPENCLAW_STATE_DIR/skills` (defaults to `~/.openclaw/skills`; app-owned runtimes use `~/Library/Application Support/OpenClaw/.openclaw/skills`)
-4. **Project agent skills**: `<workspace>/.agents/skills`
-5. **Workspace skills**: `<workspace>/skills`
+4. **Product-managed skills**: `$OPENCLAW_STATE_DIR/product-skills`
+5. **Project agent skills**: `<workspace>/.agents/skills`
+6. **Workspace skills**: `<workspace>/skills`
 
 If a skill name conflicts, precedence is:
 
-`<workspace>/skills` (highest) → `<workspace>/.agents/skills` → `$OPENCLAW_STATE_DIR/skills` → bundled skills → `skills.load.extraDirs` (lowest)
+`<workspace>/skills` (highest) → `<workspace>/.agents/skills` → `$OPENCLAW_STATE_DIR/product-skills` → `$OPENCLAW_STATE_DIR/skills` → bundled skills → `skills.load.extraDirs` (lowest)
 
-For personal cross-agent skills, use `~/.agents/skills` as the canonical
-filesystem root. During skills onboarding, OpenClaw creates that directory and
-symlinks the active OpenClaw managed root to it when the managed root is missing
-or empty. For the legacy CLI runtime that means `~/.openclaw/skills`; for the
-app-owned runtime that means
+For personal cross-agent skills, use `~/.agents/skills` as the single canonical
+filesystem root. Skills onboarding and packaged Jarvis startup reconcile the
+active managed root with that directory. Missing or empty roots are linked
+directly. A non-empty legacy managed root is inventoried by content hash; unique
+skills are staged and verified before cutover, identical duplicates are
+deduplicated, and same-name conflicts or unknown content keep the legacy loader
+active with a recovery receipt. Packaged startup also inventories the exact
+app-owned default `<state>/workspace/skills` path used by older Jarvis installs.
+Empty roots link to the canonical body; non-empty workspace roots remain active
+as a documented scoped compatibility path so workspace precedence cannot hide
+an incomplete managed-root migration. Custom workspaces are never reclassified.
+For the legacy CLI runtime the managed root is
+`~/.openclaw/skills`; for the app-owned runtime it is
 `~/Library/Application Support/OpenClaw/.openclaw/skills` or the equivalent
 Jarvis state root when the packaged consumer app owns the runtime.
+
+Change visibility without copying the body:
+
+```bash
+openclaw skills runtime status <skill>
+openclaw skills runtime set <skill> shared|codex|jarvis
+openclaw skills runtime with codex <skill> -- exec '<prompt>'
+```
+
+The temporary `with codex` form uses a child-process config override and does
+not modify persistent catalogs. If automatic upgrade migration keeps a legacy
+root active, resolve the named conflicts and run `openclaw skills runtime
+reconcile`. Restore a completed cutover only with its exact receipt via
+`openclaw skills runtime rollback <receipt-path>`. Rollback restores the legacy
+root and quarantines migration-introduced canonical copies beside the receipt;
+it never deletes those bodies.
 
 Bundled skills remain package-owned product truth. Do not edit them in place to
 make personal customizations. If Codex, Claude Code, Jarvis, and OpenClaw should
@@ -46,6 +71,8 @@ official skills. Run `openclaw skills sync-shared` to refresh that mirror
 manually. Packaged Jarvis startup and skills onboarding run the same sync
 automatically. Clean mirrored skills are updated from the bundled copy; local
 edits are treated as overrides and are skipped instead of overwritten.
+Marker-backed bundled mirrors remain package-owned and are rejected by the
+personal visibility commands.
 
 When sync reports a local override, choose an owner instead of leaving drift
 ambiguous:
@@ -56,20 +83,21 @@ ambiguous:
   `skills/<skill-name>` so the bundled product skill becomes the source of
   truth, then run `openclaw skills sync-shared` again.
 
-Run `scripts/migrate-personal-skills-to-agents-root.sh` to copy existing skills
-from Codex, Claude Code, and OpenClaw roots into `~/.agents/skills` and set up
-those managed-root symlinks when safe. That keeps OpenClaw, Codex, Claude Code,
-and other agents on the same skill directory without adding a second
-OpenClaw-only discovery path. Workspace symlinks that resolve outside the
-workspace root are blocked by design.
+The standalone `scripts/migrate-personal-skills-to-agents-root.sh` remains an
+operator tool for importing additional Codex or Claude roots. Packaged Jarvis
+startup owns upgrade adoption for its active managed root; the standalone
+script is not required for normal app updates. Workspace skills remain scoped
+to their workspace and are not automatically reclassified as personal. A
+personal visibility command refuses a same-name product, project, or workspace
+skill because Jarvis would load that higher-precedence body instead.
 
 ## Per-agent vs shared skills
 
 In **multi-agent** setups, each agent has its own workspace. That means:
 
 - **Per-agent skills** live in `<workspace>/skills` for that agent only.
-- **Shared personal skills** live in `~/.agents/skills`; symlink the active
-  OpenClaw managed root to that directory to expose them to OpenClaw.
+- **Shared personal skills** live in `~/.agents/skills`; use `openclaw skills
+runtime` to manage runtime visibility and reconciliation.
 - **Managed/local overrides** can live in `$OPENCLAW_STATE_DIR/skills` if you
   are not using the shared symlink.
 - **Shared folders** can also be added via `skills.load.extraDirs` (lowest

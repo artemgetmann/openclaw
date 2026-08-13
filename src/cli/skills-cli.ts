@@ -1,7 +1,18 @@
+import os from "node:os";
+import path from "node:path";
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  getPersonalSkillVisibilityStatus,
+  runWithTemporaryCodexSkill,
+  setPersonalSkillVisibility,
+  type PersonalSkillVisibility,
+} from "../agents/skills/personal-skill-runtime.js";
 import { syncBundledSkillsToSharedPersonalRoot } from "../agents/skills/shared-personal-mirror.js";
-import { loadConfig } from "../config/config.js";
+import { rollbackSharedPersonalSkillsManagedRoot } from "../commands/onboard-shared-skills-rollback.js";
+import { ensureSharedPersonalSkillsManagedRoot } from "../commands/onboard-shared-skills-root.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -82,6 +93,23 @@ function collectForceSkillName(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
 
+function personalRuntimePaths(config?: ReturnType<typeof loadConfig>) {
+  const homeDir = process.env.HOME?.trim() || os.homedir();
+  const codexHome = process.env.CODEX_HOME?.trim() || path.join(homeDir, ".codex");
+  return {
+    homeDir,
+    stateDir: resolveStateDir(process.env, () => homeDir),
+    codexConfigPath: path.join(codexHome, "config.toml"),
+    workspaceDir: config
+      ? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config))
+      : undefined,
+  };
+}
+
+function isPersonalSkillVisibility(value: string): value is PersonalSkillVisibility {
+  return value === "shared" || value === "codex" || value === "jarvis";
+}
+
 /**
  * Register the skills CLI commands
  */
@@ -142,6 +170,130 @@ export function registerSkillsCli(program: Command) {
         );
       } catch (err) {
         defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  const personalRuntime = skills
+    .command("runtime")
+    .description("Manage personal skill visibility across Codex and Jarvis");
+
+  personalRuntime
+    .command("status")
+    .description("Show whether one canonical personal skill is shared, Codex-only, or Jarvis-only")
+    .argument("<name>", "Canonical personal skill name")
+    .option("--json", "Output as JSON", false)
+    .action(async (name: string, opts: { json?: boolean }) => {
+      try {
+        const config = loadConfig();
+        const result = getPersonalSkillVisibilityStatus({
+          name,
+          config,
+          ...personalRuntimePaths(config),
+        });
+        defaultRuntime.log(
+          opts.json
+            ? JSON.stringify(result, null, 2)
+            : `${result.name}: ${result.visibility} (canonical: ${result.skillFile})`,
+        );
+      } catch (err) {
+        defaultRuntime.error(`Personal skill visibility failed: ${String(err)}`);
+        defaultRuntime.exit(1);
+      }
+    });
+
+  personalRuntime
+    .command("set")
+    .description("Set one canonical personal skill to shared, Codex-only, or Jarvis-only")
+    .argument("<name>", "Canonical personal skill name")
+    .argument("<visibility>", "shared, codex, or jarvis")
+    .option("--json", "Output as JSON", false)
+    .action(async (name: string, visibility: string, opts: { json?: boolean }) => {
+      try {
+        if (!isPersonalSkillVisibility(visibility)) {
+          throw new Error(`invalid visibility: ${visibility}`);
+        }
+        const config = loadConfig();
+        const result = await setPersonalSkillVisibility(name, visibility, {
+          config,
+          writeJarvisConfig: writeConfigFile,
+          ...personalRuntimePaths(config),
+        });
+        defaultRuntime.log(
+          opts.json ? JSON.stringify(result, null, 2) : `${result.name}: ${result.visibility}`,
+        );
+      } catch (err) {
+        defaultRuntime.error(`Personal skill visibility failed: ${String(err)}`);
+        defaultRuntime.exit(1);
+      }
+    });
+
+  personalRuntime
+    .command("reconcile")
+    .description("Adopt the canonical personal skill root and write a recovery receipt")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts: { json?: boolean }) => {
+      try {
+        const result = ensureSharedPersonalSkillsManagedRoot(personalRuntimePaths());
+        defaultRuntime.log(
+          opts.json
+            ? JSON.stringify(result, null, 2)
+            : [
+                `Personal skills root: ${result.status}`,
+                result.message,
+                result.receiptPath ? `Receipt: ${result.receiptPath}` : undefined,
+              ]
+                .filter((line): line is string => Boolean(line))
+                .join("\n"),
+        );
+      } catch (err) {
+        defaultRuntime.error(`Personal skill reconciliation failed: ${String(err)}`);
+        defaultRuntime.exit(1);
+      }
+    });
+
+  personalRuntime
+    .command("rollback")
+    .description("Restore a legacy managed root from one exact migration receipt")
+    .argument("<receipt>", "Migration receipt path")
+    .option("--json", "Output as JSON", false)
+    .action(async (receipt: string, opts: { json?: boolean }) => {
+      try {
+        const result = rollbackSharedPersonalSkillsManagedRoot(receipt, personalRuntimePaths());
+        defaultRuntime.log(
+          opts.json
+            ? JSON.stringify(result, null, 2)
+            : `${result.status}: ${result.message ?? "legacy managed root restored"}`,
+        );
+      } catch (err) {
+        defaultRuntime.error(`Personal skill rollback failed: ${String(err)}`);
+        defaultRuntime.exit(1);
+      }
+    });
+
+  personalRuntime
+    .command("with")
+    .description("Temporarily expose one personal skill to a child runtime")
+    .argument("<runtime>", "Currently only codex")
+    .argument("<name>", "Canonical personal skill name")
+    .argument("[args...]", "Arguments passed to the child runtime")
+    .allowUnknownOption(true)
+    .action(async (runtime: string, name: string, args: string[]) => {
+      try {
+        if (runtime !== "codex") {
+          throw new Error(`unsupported temporary runtime: ${runtime}`);
+        }
+        const config = loadConfig();
+        const exitCode = runWithTemporaryCodexSkill({
+          name,
+          args,
+          ...personalRuntimePaths(config),
+        });
+        if (exitCode !== 0) {
+          defaultRuntime.exit(exitCode);
+        }
+      } catch (err) {
+        defaultRuntime.error(`Temporary personal skill injection failed: ${String(err)}`);
         defaultRuntime.exit(1);
       }
     });
