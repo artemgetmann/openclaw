@@ -441,6 +441,22 @@ describe("OpenComputerUseRuntime", () => {
     expect(resolveOpenComputerUseSocketIdentity("open-computer-use")).toBeUndefined();
   });
 
+  it("makes PATH and symlink aliases converge on the app-agent socket", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
+    const packagedCommand = await createPackagedOpenComputerUse(packageRoot);
+    await fs.chmod(packagedCommand, 0o755);
+    const binDirectory = path.join(packageRoot, "bin");
+    const alias = path.join(binDirectory, "open-computer-use");
+    await fs.mkdir(binDirectory);
+    await fs.symlink(packagedCommand, alias);
+
+    const expected = "socket:bundle:com.ifuryst.opencomputeruse";
+    expect(resolveOpenComputerUseSocketIdentity(alias)).toBe(expected);
+    expect(resolveOpenComputerUseSocketIdentity("open-computer-use", { PATH: binDirectory })).toBe(
+      expected,
+    );
+  });
+
   it("uses an explicit OCU command before discovery", () => {
     expect(
       resolveOpenComputerUseCommand("/tmp/custom-ocu", {

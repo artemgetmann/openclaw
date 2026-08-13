@@ -159,8 +159,36 @@ function inferOpenComputerUseAppIdentity(command: string): OpenComputerUseAppIde
   return { recognized: false, command };
 }
 
-function openComputerUseBundleIdentifier(command: string): string | undefined {
-  const normalizedCommand = command.replaceAll("\\", "/");
+function resolveOpenComputerUseExecutable(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const candidates = command.includes(path.sep)
+    ? [command]
+    : (env.PATH ?? "")
+        .split(path.delimiter)
+        .filter(Boolean)
+        .map((directory) => path.join(directory, command));
+  for (const candidate of candidates) {
+    try {
+      fsSync.accessSync(candidate, fsSync.constants.X_OK);
+      // A PATH entry or explicit symlink may sit outside the app bundle while
+      // targeting its executable. Resolve it before reading bundle metadata so
+      // every supported alias converges on the app-agent socket identity.
+      return fsSync.realpathSync(candidate);
+    } catch {
+      // Continue through PATH. An unresolved custom command remains identity-
+      // neutral and falls back to the canonical command lock namespace.
+    }
+  }
+  return command;
+}
+
+function openComputerUseBundleIdentifier(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const normalizedCommand = resolveOpenComputerUseExecutable(command, env).replaceAll("\\", "/");
   // Jarvis embeds OCU beneath an outer Jarvis.app path. The executable's TCC
   // identity belongs to the innermost containing app, not the first app bundle
   // present in the absolute path.
@@ -201,8 +229,11 @@ function openComputerUseBundleIdentifier(command: string): string | undefined {
   }
 }
 
-export function resolveOpenComputerUseSocketIdentity(command: string): string | undefined {
-  const bundleIdentifier = openComputerUseBundleIdentifier(command);
+export function resolveOpenComputerUseSocketIdentity(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const bundleIdentifier = openComputerUseBundleIdentifier(command, env);
   if (!bundleIdentifier) {
     return undefined;
   }

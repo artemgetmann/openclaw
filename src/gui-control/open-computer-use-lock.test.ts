@@ -119,6 +119,57 @@ describe("withOpenComputerUseLock", () => {
     }
   });
 
+  it("preserves invocation order when the first command resolves slowly", async () => {
+    const directory = await temporaryDirectory();
+    const command = path.join(directory, "OpenComputerUse");
+    await trackedLockTarget(command);
+    const realpath = vi.spyOn(fs, "realpath");
+    const originalRealpath = realpath.getMockImplementation();
+    let releaseResolution!: () => void;
+    const resolutionCanFinish = new Promise<void>((resolve) => {
+      releaseResolution = resolve;
+    });
+    let firstLookup = true;
+    realpath.mockImplementation(async (...args) => {
+      if (firstLookup) {
+        firstLookup = false;
+        await resolutionCanFinish;
+      }
+      if (originalRealpath) {
+        return await originalRealpath(...args);
+      }
+      return await vi
+        .importActual<typeof import("node:fs/promises")>("node:fs/promises")
+        .then((actual) => actual.realpath(...args));
+    });
+    const events: string[] = [];
+
+    try {
+      const first = withOpenComputerUseLock({
+        command,
+        timeoutMs: 1_000,
+        run: async () => {
+          events.push("first");
+        },
+      });
+      const second = withOpenComputerUseLock({
+        command,
+        timeoutMs: 1_000,
+        run: async () => {
+          events.push("second");
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(events).toEqual([]);
+      releaseResolution();
+      await Promise.all([first, second]);
+      expect(events).toEqual(["first", "second"]);
+    } finally {
+      realpath.mockRestore();
+    }
+  });
+
   it("serializes separate executable copies that share one app-agent socket identity", async () => {
     const directory = await temporaryDirectory();
     const firstCommand = path.join(directory, "copy-a", "OpenComputerUse");

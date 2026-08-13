@@ -63,6 +63,32 @@ type ProcessIdentityCacheEntry = {
 };
 
 const processIdentityCache = new Map<number, ProcessIdentityCacheEntry>();
+const inProcessTails = new Map<string, Promise<void>>();
+
+async function acquireInProcessTurn(identity: string): Promise<() => void> {
+  // Cross-process contenders cannot publish until command canonicalization has
+  // finished. Serialize calls from this process before that asynchronous work,
+  // so a slow realpath lookup cannot let a later dependent GUI action overtake
+  // an earlier one. The filesystem protocol remains responsible for callers in
+  // other processes, whose pre-publication invocation order is unobservable.
+  const predecessor = inProcessTails.get(identity) ?? Promise.resolve();
+  let release!: () => void;
+  const ownTurn = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = predecessor.then(() => ownTurn);
+  inProcessTails.set(identity, tail);
+  await predecessor;
+
+  return () => {
+    release();
+    // A later caller may already have chained itself to this tail. Only the
+    // newest caller removes the map entry, preserving that published chain.
+    if (inProcessTails.get(identity) === tail) {
+      inProcessTails.delete(identity);
+    }
+  };
+}
 
 async function canonicalCommand(command: string): Promise<string> {
   // App bundles are normally invoked by absolute executable path. realpath
@@ -286,6 +312,7 @@ async function acquireCrossProcessLock(input: {
   explicitLockTimeoutMs?: number;
   identity: string;
   lockTarget: string;
+  onPublished?: () => void;
   orderKey: string;
   startedAtMs: number;
 }): Promise<{ release: () => Promise<void> }> {
@@ -362,6 +389,9 @@ async function acquireCrossProcessLock(input: {
     await fs.writeFile(candidatePath, JSON.stringify(payload), { flag: "wx", mode: 0o600 });
     await fs.link(candidatePath, ownerPath);
     await fs.rm(candidatePath);
+    // Once this immutable token path is visible, the next same-process caller
+    // may canonicalize and publish. Its later monotonic key cannot overtake us.
+    input.onPublished?.();
     // Let already-racing contenders publish before ordering the initial queue.
     // A genuinely later contender will instead observe this contender's
     // `acquired` phase and can never outrank the incumbent.
@@ -569,28 +599,42 @@ export async function withOpenComputerUseLock<T>(input: {
   socketIdentity?: string;
   timeoutMs: number;
 }): Promise<T> {
-  // Capture caller order before canonicalCommand() yields. Otherwise filesystem
-  // resolution latency can let a later invocation publish ahead of an earlier
-  // one, reordering dependent GUI actions within this process.
-  const orderKey = process.hrtime.bigint().toString().padStart(20, "0");
-  const startedAtMs = Date.now();
-  const command = await canonicalCommand(input.command);
-  const identity = input.socketIdentity?.trim() || command;
-  const lockTarget = await resolveOpenComputerUseLockTarget(command, identity);
-  // Queue wait and OCU execution are separately bounded. A caller that waits
-  // behind one maximum-duration owner still receives its full command budget.
-  const lock = await acquireCrossProcessLock({
-    command,
-    executionTimeoutMs: input.timeoutMs,
-    explicitLockTimeoutMs: input.lockTimeoutMs,
-    identity,
-    lockTarget,
-    orderKey,
-    startedAtMs,
-  });
+  const localIdentity = input.socketIdentity?.trim() || input.command;
+  const releaseInProcessTurn = await acquireInProcessTurn(localIdentity);
+  let published = false;
+  const releasePublicationTurn = () => {
+    if (published) {
+      return;
+    }
+    published = true;
+    releaseInProcessTurn();
+  };
   try {
-    return await input.run(input.timeoutMs);
+    const orderKey = process.hrtime.bigint().toString().padStart(20, "0");
+    const startedAtMs = Date.now();
+    const command = await canonicalCommand(input.command);
+    const identity = input.socketIdentity?.trim() || command;
+    const lockTarget = await resolveOpenComputerUseLockTarget(command, identity);
+    // Queue wait and OCU execution are separately bounded. A caller that waits
+    // behind one maximum-duration owner still receives its full command budget.
+    const lock = await acquireCrossProcessLock({
+      command,
+      executionTimeoutMs: input.timeoutMs,
+      explicitLockTimeoutMs: input.lockTimeoutMs,
+      identity,
+      lockTarget,
+      onPublished: releasePublicationTurn,
+      orderKey,
+      startedAtMs,
+    });
+    try {
+      return await input.run(input.timeoutMs);
+    } finally {
+      await lock.release();
+    }
   } finally {
-    await lock.release();
+    // Setup can fail before publication. Release only our local turn so the
+    // next caller can attempt its own independently bounded acquisition.
+    releasePublicationTurn();
   }
 }
