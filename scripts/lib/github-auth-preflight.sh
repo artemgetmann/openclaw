@@ -22,11 +22,23 @@ openclaw_github_preflight() {
   case "${transport}" in
     host-gh) ;;
     connector)
-      # Shell cannot authenticate or invoke the Codex GitHub connector. The
-      # caller must select that transport before any mutation and let the
-      # connector prove its own authenticated read capability.
-      echo "GITHUB_PREFLIGHT status=indeterminate transport=connector reason=connector-proof-required"
-      return 75
+      # Connector calls happen at the native agent boundary, then this one
+      # verifier validates their secret-free, capability-scoped evidence. Both
+      # preflight and workflow commands therefore consume the same policy source.
+      local helper_root=""
+      helper_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+      if [[ -z "${OPENCLAW_GITHUB_CONNECTOR_EVIDENCE:-}" ||
+        -z "${OPENCLAW_GITHUB_REPOSITORY:-}" ||
+        -z "${OPENCLAW_GITHUB_PR:-}" ]]; then
+        echo "GITHUB_PREFLIGHT status=blocked transport=connector reason=evidence-context-missing next=collect_connector_candidate_evidence" >&2
+        return 75
+      fi
+      if ! node "${helper_root}/scripts/github-connector-transport.mjs" verify \
+        "${OPENCLAW_GITHUB_CONNECTOR_EVIDENCE}" >/dev/null; then
+        return 75
+      fi
+      echo "GITHUB_PREFLIGHT status=ready context=${context} transport=connector capability=read-candidate"
+      return 0
       ;;
     *)
       echo "GITHUB_PREFLIGHT status=invalid reason=unknown-transport" >&2
