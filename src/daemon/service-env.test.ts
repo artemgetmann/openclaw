@@ -410,6 +410,23 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_LOG_DIR).toBe(identity.logDir);
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.jarvis.gateway");
     expect(env.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH).toBe(identity.configPath);
+    expect(env.NODE_OPTIONS).toMatch(/^--max-old-space-size=\d+$/u);
+  });
+
+  it("replaces ambient NODE_OPTIONS with the managed heap-only policy", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "consumer",
+        NODE_OPTIONS: "--require=/tmp/ambient-preload.js --inspect",
+      },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.NODE_OPTIONS).toMatch(/^--max-old-space-size=\d+$/u);
+    expect(env.NODE_OPTIONS).not.toContain("require");
+    expect(env.NODE_OPTIONS).not.toContain("inspect");
   });
 
   it("persists explicit canonical config and main repo into default shared gateway env", () => {

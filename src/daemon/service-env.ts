@@ -33,6 +33,7 @@ import {
   resolveWhatsAppMonitorSystemdServiceName,
   resolveWhatsAppMonitorWindowsTaskName,
 } from "./constants.js";
+import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 
 export type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
@@ -345,6 +346,10 @@ export function buildServiceEnvironment(params: {
   const serviceBuild = firstNonEmpty(env.OPENCLAW_SERVICE_BUILD);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    // Managed gateways need more than Node's default old-space limit under
+    // sustained multi-channel load. Persist only the adaptive heap flag so an
+    // ambient NODE_OPTIONS value cannot inject preload or debug behavior.
+    NODE_OPTIONS: resolveGatewayHeapNodeOptions(),
     OPENCLAW_CONSUMER_INSTANCE_ID: env.OPENCLAW_CONSUMER_INSTANCE_ID,
     OPENCLAW_HOME: env.OPENCLAW_HOME,
     OPENCLAW_LOG_DIR: env.OPENCLAW_LOG_DIR,
