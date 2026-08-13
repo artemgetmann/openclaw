@@ -23,6 +23,91 @@ const progress = {
 };
 
 describe("CodexCallbackRouteRegistry", () => {
+  it("rotates an exact interrupted turn after listener cleanup to a fresh identity", async () => {
+    const { filePath, registry } = await createRegistry();
+    const prior = await registry.acquire({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    });
+    await registry.bindTurn(prior.routeId, { relayId: "relay-1", turnId: "turn-1" });
+    await registry.finishTurn(prior.routeId, "turn-1");
+
+    // Reopen from disk to prove the closed identity survives a process restart.
+    const restarted = new CodexCallbackRouteRegistry(filePath);
+    const recovery = await restarted.replaceInterruptedTurn({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      relayId: "relay-1",
+      turnId: "turn-1",
+    });
+
+    expect(recovery).toMatchObject({ threadId: "thread-1", nextSequence: 1 });
+    expect(recovery.routeId).not.toBe(prior.routeId);
+    expect(recovery.capability).not.toBe(prior.capability);
+    await expect(
+      restarted.replaceInterruptedTurn({
+        threadId: "thread-1",
+        sessionKey: "agent:main:telegram:direct:owner",
+        agentId: "main",
+        relayId: "relay-1",
+        turnId: "turn-1",
+      }),
+    ).rejects.toThrow("does not match recovery claim");
+  });
+
+  it("rotates a route when restart happened after relay acceptance but before binding", async () => {
+    const { filePath, registry } = await createRegistry();
+    const prior = await registry.acquire({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    });
+
+    const restarted = new CodexCallbackRouteRegistry(filePath);
+    const recovery = await restarted.replaceInterruptedTurn({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      relayId: "relay-durably-accepted",
+      turnId: "turn-durably-accepted",
+    });
+
+    expect(recovery.routeId).not.toBe(prior.routeId);
+    expect(recovery.capability).not.toBe(prior.capability);
+  });
+
+  it("rotates a reused route accepted before binding after an older relay finished", async () => {
+    const { filePath, registry } = await createRegistry();
+    const prior = await registry.acquire({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    });
+    await registry.bindTurn(prior.routeId, { relayId: "relay-a", turnId: "turn-a" });
+    await registry.finishTurn(prior.routeId, "turn-a");
+
+    // A later relay reuses the route, then crashes after its registry accepts
+    // turn B but before callback bindTurn persists B's identity.
+    await registry.acquire({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    });
+    const restarted = new CodexCallbackRouteRegistry(filePath);
+    const recovery = await restarted.replaceInterruptedTurn({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      relayId: "relay-b",
+      turnId: "turn-b",
+    });
+
+    expect(recovery.routeId).not.toBe(prior.routeId);
+    expect(recovery.capability).not.toBe(prior.capability);
+  });
+
   it("reuses one durable route for the same Jarvis session and native thread", async () => {
     const { filePath, registry } = await createRegistry();
     const created = await registry.acquire({

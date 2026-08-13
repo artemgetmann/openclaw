@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   CODEX_RELAY_MAX_RECONCILE_AGE_MS,
   type CodexDelegationRegistry,
@@ -9,6 +10,7 @@ import type { CodexPersistedTurnInspection } from "./thread-service.js";
 export type CodexRelayReconciliationResult = {
   inspected: number;
   delivered: number;
+  recovered: number;
   decisionNeeded: number;
   skipped: number;
   malformed: number;
@@ -28,6 +30,7 @@ type ReconciliationOptions = {
     record: CodexRelayRecord,
     reason: string,
   ) => Promise<CodexRelayDispatchOutcome>;
+  startRecovery?: (record: CodexRelayRecord, recoveryDelegationId: string) => Promise<void>;
   onMalformedEntry?: (issue: CodexRelayRegistryIssue) => void;
   onRecordError?: (record: CodexRelayRecord, error: unknown) => void;
   now?: () => number;
@@ -37,11 +40,9 @@ type ReconciliationOptions = {
 /**
  * Reconcile accepted relays from durable identity only.
  *
- * This function never resumes a thread, subscribes to a turn, or starts work.
- * A persisted status that is anything except an exact completed turn with a
- * final agent message is irreversibly classified for one at-most-once
- * decision-needed dispatch. A preclaimed decision is never inspected or sent
- * again after restart, even when its delivery remains ambiguous.
+ * Exact interrupted turns recover only when the launch record contains explicit
+ * local-safe authority. The recovery claim is persisted before turn/start, so
+ * ambiguous acceptance can never trigger a second turn.
  */
 export async function reconcileCodexRelays(
   options: ReconciliationOptions,
@@ -53,6 +54,7 @@ export async function reconcileCodexRelays(
   const result: CodexRelayReconciliationResult = {
     inspected: 0,
     delivered: 0,
+    recovered: 0,
     decisionNeeded: 0,
     skipped: 0,
     malformed: snapshot.issues.length,
@@ -60,9 +62,48 @@ export async function reconcileCodexRelays(
   };
   const now = (options.now ?? Date.now)();
   const maxAgeMs = options.maxAgeMs ?? CODEX_RELAY_MAX_RECONCILE_AGE_MS;
+  const recordsById = new Map(snapshot.records.map((record) => [record.delegationId, record]));
+  const recoveryChildrenOwnedByParent = new Set<string>();
+
+  // A child that never crossed the durable acceptance boundary is evidence of
+  // the parent's one ambiguous recovery attempt, not a second delegation to
+  // report. Keep the parent as the sole handback owner across later startups.
+  for (const parent of snapshot.records) {
+    if (!parent.recoveryDelegationId || parent.lifecycle === "recovered") {
+      continue;
+    }
+    const child = recordsById.get(parent.recoveryDelegationId);
+    if (
+      child?.lifecycle === "starting" &&
+      child.recoveryOfDelegationId === parent.delegationId &&
+      child.threadId === parent.threadId &&
+      child.sessionKey === parent.sessionKey
+    ) {
+      recoveryChildrenOwnedByParent.add(child.delegationId);
+    }
+  }
 
   for (const record of snapshot.records) {
     try {
+      if (recoveryChildrenOwnedByParent.has(record.delegationId)) {
+        result.skipped += 1;
+        continue;
+      }
+      if (record.lifecycle === "recovery-started" && record.recoveryDelegationId) {
+        const child = recordsById.get(record.recoveryDelegationId);
+        if (
+          child?.recoveryOfDelegationId === record.delegationId &&
+          child.threadId === record.threadId &&
+          child.sessionKey === record.sessionKey &&
+          child.lifecycle !== "starting"
+        ) {
+          // The replacement turn crossed its own durable acceptance boundary.
+          // Repair the parent before either record is reconciled so a crash
+          // between child acceptance and parent finalization cannot emit a
+          // contradictory ambiguity handback.
+          Object.assign(record, await options.registry.markRecovered(record.delegationId));
+        }
+      }
       await reconcileRecord({ options, result, record, now, maxAgeMs });
     } catch (error) {
       // Every dispatch is preceded by its durable terminal/decision claim.
@@ -88,8 +129,23 @@ async function reconcileRecord(params: {
   maxAgeMs: number;
 }): Promise<void> {
   const { options, result, record, now, maxAgeMs } = params;
-  if (record.lifecycle === "delivered" || record.lifecycle === "decision-needed") {
+  if (
+    record.lifecycle === "delivered" ||
+    record.lifecycle === "decision-needed" ||
+    record.lifecycle === "recovered"
+  ) {
     result.skipped += 1;
+    return;
+  }
+  if (record.lifecycle === "recovery-started") {
+    recordDecisionOutcome(
+      result,
+      await deliverDecision(
+        options,
+        record,
+        "Restart recovery was durably claimed, but acceptance of the new native turn is ambiguous. It was not attempted again.",
+      ),
+    );
     return;
   }
   if (record.lifecycle === "delivery-started" && record.deliveryKind === "decision") {
@@ -188,6 +244,22 @@ async function reconcileRecord(params: {
   }
 
   await markObservedTerminal(options.registry, record, inspection);
+  if (
+    inspection.kind === "interrupted" &&
+    record.recoveryPolicy === "local-safe" &&
+    options.startRecovery
+  ) {
+    const recoveryDelegationId = randomUUID();
+    const claimed = await options.registry.claimRecovery(record.delegationId, recoveryDelegationId);
+    if (!claimed) {
+      result.skipped += 1;
+      return;
+    }
+    await options.startRecovery(claimed, recoveryDelegationId);
+    await options.registry.markRecovered(record.delegationId);
+    result.recovered += 1;
+    return;
+  }
   recordDecisionOutcome(
     result,
     await deliverDecision(options, record, inspectionDecision(inspection)),

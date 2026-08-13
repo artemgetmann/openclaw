@@ -30,6 +30,7 @@ import {
 import {
   CodexDelegationRegistry,
   type CodexRelayJarvisRunPurpose,
+  type CodexRelayRecoveryPolicy,
   type CodexRelayRecord,
 } from "./src/delegation-registry.js";
 import {
@@ -74,6 +75,7 @@ type ToolParams = {
   include_turns?: boolean;
   limit?: number;
   idempotency_key?: string;
+  restart_recovery?: CodexRelayRecoveryPolicy;
 };
 
 const APPROVAL_NAMESPACE = "codexpilot";
@@ -124,6 +126,7 @@ const ToolSchema = {
     include_turns: { type: "boolean" },
     limit: { type: "integer", minimum: 1, maximum: 100 },
     idempotency_key: { type: "string" },
+    restart_recovery: { type: "string", enum: ["local-safe"] },
   },
   required: ["action"],
   additionalProperties: false,
@@ -351,6 +354,33 @@ export default function register(api: OpenClawPluginApi) {
               reason,
             });
           },
+          startRecovery: async (record, recoveryDelegationId) => {
+            if (!record.turnId) {
+              throw new Error(`Codex relay ${record.delegationId} has no interrupted turn id`);
+            }
+            const callbackRoute = await getCallbackRoutes().replaceInterruptedTurn({
+              threadId: record.threadId,
+              sessionKey: record.sessionKey,
+              ...(record.agentId ? { agentId: record.agentId } : {}),
+              relayId: record.delegationId,
+              turnId: record.turnId,
+            });
+            await startAsyncRelay({
+              service,
+              callbackRoutes: getCallbackRoutes(),
+              getRegistry,
+              api,
+              ctx: {
+                sessionKey: record.sessionKey,
+                ...(record.agentId ? { agentId: record.agentId } : {}),
+              },
+              threadId: record.threadId,
+              text: buildRestartRecoveryTask(record),
+              delegationId: recoveryDelegationId,
+              recoveryOfDelegationId: record.delegationId,
+              callbackRoute,
+            });
+          },
           onMalformedEntry: (issue) => {
             api.logger.error(
               `Codex relay registry entry ${issue.index} is malformed and was not reconciled: ${issue.reason}`,
@@ -365,12 +395,13 @@ export default function register(api: OpenClawPluginApi) {
         if (
           result.inspected ||
           result.delivered ||
+          result.recovered ||
           result.decisionNeeded ||
           result.malformed ||
           result.failed
         ) {
           api.logger.info(
-            `Codex relay reconciliation: inspected=${result.inspected} delivered=${result.delivered} decision-needed=${result.decisionNeeded} malformed=${result.malformed} failed=${result.failed}`,
+            `Codex relay reconciliation: inspected=${result.inspected} delivered=${result.delivered} recovered=${result.recovered} decision-needed=${result.decisionNeeded} malformed=${result.malformed} failed=${result.failed}`,
           );
         }
       } catch (error) {
@@ -454,6 +485,17 @@ function createCodexTool(
         const active =
           sessionKey && (await getCallbackRoutes().findActiveTurn({ threadId, sessionKey }));
         if (active) {
+          if (raw.restart_recovery) {
+            // The authority grant must survive before steering crosses into
+            // the native App Server. A later ambiguous steer cannot otherwise
+            // leave Jarvis claiming recovery was enabled when it was not.
+            await getRegistry().authorizeRecovery({
+              delegationId: active.relayId,
+              threadId: active.threadId,
+              turnId: active.turnId,
+              policy: raw.restart_recovery,
+            });
+          }
           const steered = await service.steer(active.threadId, active.turnId, text);
           result = {
             mode: "native-codex-async-steer",
@@ -472,6 +514,7 @@ function createCodexTool(
             threadId,
             text,
             execution: raw.workspace_dir,
+            recoveryPolicy: raw.restart_recovery,
           });
         }
       } else if (action === "delegate") {
@@ -502,6 +545,7 @@ function createCodexTool(
           threadId,
           text: requiredPayload(raw.text, "text"),
           execution: prepared?.execution,
+          recoveryPolicy: raw.restart_recovery,
         });
       } else if (action === "resume") {
         result = await service.resume(required(raw.thread_id, "thread_id"));
@@ -684,22 +728,34 @@ async function startAsyncRelay(params: {
   threadId: string;
   text: string;
   execution?: PreparedCodexWorkspace | string;
+  recoveryPolicy?: CodexRelayRecoveryPolicy;
+  delegationId?: string;
+  recoveryOfDelegationId?: string;
+  callbackRoute?: {
+    routeId: string;
+    capability: string;
+    nextSequence: number;
+  };
 }) {
   const sessionKey = requireAsyncSession(params.ctx);
 
-  const delegationId = randomUUID();
+  const delegationId = params.delegationId ?? randomUUID();
   const registry = params.getRegistry();
-  const callbackRoute = await params.callbackRoutes.acquire({
-    threadId: params.threadId,
-    sessionKey,
-    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
-  });
+  const callbackRoute =
+    params.callbackRoute ??
+    (await params.callbackRoutes.acquire({
+      threadId: params.threadId,
+      sessionKey,
+      ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+    }));
   await registry.createStarting({
     delegationId,
     sessionKey,
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
     threadId: params.threadId,
     deliveryKey: `codex-relay:${delegationId}`,
+    recoveryPolicy: params.recoveryPolicy,
+    recoveryOfDelegationId: params.recoveryOfDelegationId,
   });
   const workerPrompt = buildAsyncWorkerPrompt({
     delegationId,
@@ -836,6 +892,16 @@ async function startAsyncRelay(params: {
           throw new Error(`Codex relay ${delegationId} disappeared before failure handback`);
         }
         await params.callbackRoutes.finishTurn(callbackRoute.routeId, started.turnId);
+        if (
+          !(error instanceof CodexTurnTerminalError) &&
+          record.lifecycle === "accepted" &&
+          record.recoveryPolicy === "local-safe"
+        ) {
+          // A transport/listener disconnect is not terminal proof. Leave the
+          // explicitly eligible relay accepted so the next Gateway can inspect
+          // its exact persisted turn and recover only if Codex says interrupted.
+          return;
+        }
         await claimAndDispatchCodexDecisionNeededToJarvis({
           api: params.api,
           registry,
@@ -1345,6 +1411,17 @@ async function dispatchJarvisEvent(params: {
   return "completed";
 }
 
+function buildRestartRecoveryTask(record: CodexRelayRecord): string {
+  return [
+    `Restart recovery for interrupted delegation ${record.delegationId}.`,
+    `The prior native turn ${record.turnId ?? "unknown"} in this same thread is durably interrupted.`,
+    "Inspect the existing conversation, workspace files, git status and commits, relevant tests, PR state, and any durable external receipts before acting.",
+    "Continue only unfinished, safely repeatable local analysis or implementation already authorized by the owner.",
+    "Do not repeat or initiate messages, purchases, deploys, releases, credential changes, destructive actions, protected runtime changes, or any action whose acceptance or delivery is uncertain.",
+    "If inspection cannot prove the remaining work is local, unfinished, and safe to repeat, report STATUS: decision-needed and stop.",
+  ].join("\n");
+}
+
 function buildAsyncWorkerPrompt(params: {
   delegationId: string;
   threadId: string;
@@ -1735,6 +1812,7 @@ const CODEX_DELEGATION_GUIDANCE = [
   "- For a new task, omit `thread_id`; for a named or previously identified native thread, pass that exact `thread_id`.",
   "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. Omit `task_mode` for an ordinary launch: it defaults to a full implementation worker in an isolated worktree with workspace-write, network access, and on-request Auto-Review.",
   "- Set `task_mode: analysis` only when the owner explicitly asks for read-only or analysis mode. Pass `project_dir` when known. Explicit owner choices override the full-worker default.",
+  "- Set `restart_recovery: local-safe` only when durable owner authority limits the delegation to safely repeatable local analysis or implementation. Omit it for external sends, purchases, deploys/releases, credentials, destructive/protected runtime actions, or uncertain delivery; omitted and legacy work fails closed after interruption.",
   "- Use `workspace_mode: direct` only when the owner explicitly requests the saved project directly. It is limited to clean named branches and protected checkouts fail closed.",
   "- The async launcher wraps that task in a return contract containing a durable `openclaw codex-callback` route. It lets the same native thread send natural progress, blocker, decision-needed, or completion messages even after the launch turn ends; the terminal listener remains fallback.",
   "- Do not ask Codex to call `send_message_to_thread` or Telegram back to Jarvis. A Jarvis session is not a Codex thread address; the durable callback route and launcher-owned listener are the return transports.",

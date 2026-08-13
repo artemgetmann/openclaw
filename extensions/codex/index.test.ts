@@ -14,6 +14,7 @@ import {
 import { CODEX_THREAD_UNARCHIVE_RESUME_ACTION } from "../../src/monitor/types.js";
 import type { AnyAgentTool, OpenClawPluginToolFactory } from "../../src/plugins/types.js";
 import { createTestPluginApi } from "../test-utils/plugin-api.js";
+import { CodexCallbackRouteRegistry } from "./src/callback-route-registry.js";
 import { CodexDelegationRegistry } from "./src/delegation-registry.js";
 
 type TestGatewayHandler = (options: {
@@ -1103,6 +1104,7 @@ describe("Codex natural-language delegation", () => {
         action: "message_async",
         thread_id: "thread-natural",
         text: "Keep the API narrow and continue.",
+        restart_recovery: "local-safe",
       }),
     ).resolves.toMatchObject({
       details: {
@@ -1121,6 +1123,34 @@ describe("Codex natural-language delegation", () => {
         input: [{ type: "text", text: "Keep the API narrow and continue.", text_elements: [] }],
       },
     });
+    const registry = new CodexDelegationRegistry(
+      path.join(state.resolveStateDir(), "codex", "async-relays.json"),
+    );
+    await expect(registry.get(delegationId!)).resolves.toMatchObject({
+      threadId: "thread-natural",
+      turnId: "turn-natural",
+      lifecycle: "accepted",
+      recoveryPolicy: "local-safe",
+    });
+
+    for (const handler of appServer.handlers) {
+      handler({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-natural",
+          turnId: "turn-natural",
+          turn: { status: "transport-disconnected" },
+        },
+      });
+    }
+    await vi.waitFor(async () => {
+      await expect(registry.get(delegationId!)).resolves.toMatchObject({
+        lifecycle: "accepted",
+        recoveryPolicy: "local-safe",
+        overdueProgressSuppressedAtMs: expect.any(Number),
+      });
+    });
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("keeps one callback route across plugin restart and same-thread resume", async () => {
@@ -1408,6 +1438,116 @@ describe("Codex natural-language delegation", () => {
     await expect(registry.get("delegation-restart")).resolves.toMatchObject({
       lifecycle: "delivered",
     });
+  });
+
+  it("starts one inspect-first recovery turn in the same thread with fresh relay identity", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.serverRequestHandlers = new Set();
+    appServer.autoComplete = false;
+    const state = await createRelayState();
+    const stateDir = state.resolveStateDir();
+    const registry = new CodexDelegationRegistry(
+      path.join(stateDir, "codex", "async-relays.json"),
+      Date.now,
+    );
+    await registry.createStarting({
+      delegationId: "delegation-interrupted",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      threadId: "thread-natural",
+      deliveryKey: "codex-relay:delegation-interrupted",
+      recoveryPolicy: "local-safe",
+    });
+    await registry.markAccepted("delegation-interrupted", "turn-interrupted");
+    const routes = new CodexCallbackRouteRegistry(
+      path.join(stateDir, "codex", "callback-routes.json"),
+    );
+    const priorRoute = await routes.acquire({
+      threadId: "thread-natural",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    });
+    await routes.bindTurn(priorRoute.routeId, {
+      relayId: "delegation-interrupted",
+      turnId: "turn-interrupted",
+    });
+    appServer.threadReadResponse = {
+      thread: {
+        id: "thread-natural",
+        turns: [{ id: "turn-interrupted", status: "interrupted", items: [] }],
+      },
+    };
+    let startService: (() => Promise<void>) | undefined;
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { command: "fake-codex" },
+        runtime: {
+          state,
+          subagent: { run: vi.fn(), waitForRun: vi.fn() },
+          system: { enqueueSystemEvent: vi.fn(() => true), requestHeartbeatNow: vi.fn() },
+        } as never,
+        registerService(service) {
+          startService = async () => await service.start({} as never);
+        },
+      }),
+    );
+
+    await startService?.();
+
+    const starts = appServer.requests.filter((request) => request.method === "turn/start");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.params).toMatchObject({ threadId: "thread-natural" });
+    const prompt = (starts[0]?.params as { input?: Array<{ text?: string }> }).input?.[0]?.text;
+    expect(prompt).toContain("Inspect the existing conversation, workspace files, git status");
+    expect(prompt).toContain("Do not repeat or initiate messages, purchases, deploys, releases");
+    const freshRoute = readCallbackRoute(prompt);
+    expect(freshRoute.routeId).not.toBe(priorRoute.routeId);
+    const snapshot = await registry.snapshot();
+    expect(snapshot.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          delegationId: "delegation-interrupted",
+          lifecycle: "recovered",
+          recoveryDelegationId: expect.any(String),
+        }),
+        expect.objectContaining({
+          lifecycle: "accepted",
+          recoveryOfDelegationId: "delegation-interrupted",
+          turnId: "turn-natural",
+        }),
+      ]),
+    );
+    expect(
+      snapshot.records.find((record) => record.recoveryOfDelegationId === "delegation-interrupted")
+        ?.recoveryPolicy,
+    ).toBeUndefined();
+
+    // A recovery relay is deliberately not recovery-eligible. If that new
+    // turn is itself interrupted, the next startup asks for a decision and
+    // never creates an unbounded chain of replacement turns.
+    appServer.threadReadResponse = {
+      thread: {
+        id: "thread-natural",
+        turns: [{ id: "turn-natural", status: "interrupted", items: [] }],
+      },
+    };
+    await startService?.();
+    expect(appServer.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    const afterRecoveryRestart = await registry.snapshot();
+    expect(afterRecoveryRestart.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          recoveryOfDelegationId: "delegation-interrupted",
+          lifecycle: "delivery-started",
+          deliveryKind: "decision",
+        }),
+      ]),
+    );
   });
 
   it("keeps terminal fallback for resumed threads without sending unsupported dynamic tools", async () => {

@@ -15,6 +15,8 @@ export type CodexRelayLifecycle =
   | "starting"
   | "accepted"
   | "terminal"
+  | "recovery-started"
+  | "recovered"
   | "delivery-started"
   | "delivered"
   | "decision-needed";
@@ -22,6 +24,7 @@ export type CodexRelayLifecycle =
 export type CodexRelayTerminalStatus = "completed" | "failed" | "interrupted";
 export type CodexRelayDeliveryKind = "terminal" | "callback" | "decision";
 export type CodexRelayJarvisRunPurpose = "terminal" | "callback" | "decision";
+export type CodexRelayRecoveryPolicy = "local-safe";
 
 export type CodexRelayRecord = {
   delegationId: string;
@@ -47,6 +50,11 @@ export type CodexRelayRecord = {
   overdueProgressSuppressedAtMs?: number;
   deliveredAtMs?: number;
   decisionNeededAtMs?: number;
+  recoveryPolicy?: CodexRelayRecoveryPolicy;
+  recoveryDelegationId?: string;
+  recoveryStartedAtMs?: number;
+  recoveredAtMs?: number;
+  recoveryOfDelegationId?: string;
 };
 
 export type CodexRelayRegistryIssue = {
@@ -67,7 +75,8 @@ type RegistryDocument = {
 type CreateStartingRelay = Pick<
   CodexRelayRecord,
   "delegationId" | "sessionKey" | "agentId" | "threadId" | "deliveryKey"
->;
+> &
+  Pick<CodexRelayRecord, "recoveryPolicy" | "recoveryOfDelegationId">;
 
 /**
  * Small durable registry for Jarvis-owned native Codex relays.
@@ -98,6 +107,15 @@ export class CodexDelegationRegistry {
         threadId: requireStoredString(input.threadId, "threadId"),
         lifecycle: "starting",
         deliveryKey: requireStoredString(input.deliveryKey, "deliveryKey"),
+        ...(input.recoveryPolicy ? { recoveryPolicy: input.recoveryPolicy } : {}),
+        ...(input.recoveryOfDelegationId
+          ? {
+              recoveryOfDelegationId: requireStoredString(
+                input.recoveryOfDelegationId,
+                "recoveryOfDelegationId",
+              ),
+            }
+          : {}),
         createdAtMs: timestamp,
         updatedAtMs: timestamp,
       };
@@ -116,6 +134,31 @@ export class CodexDelegationRegistry {
         turnId: requireStoredString(turnId, "turnId"),
         lifecycle: "accepted",
         acceptedAtMs: timestamp,
+        updatedAtMs: timestamp,
+      };
+    });
+  }
+
+  /** Persist an explicit recovery grant before steering the exact accepted turn. */
+  async authorizeRecovery(input: {
+    delegationId: string;
+    threadId: string;
+    turnId: string;
+    policy: CodexRelayRecoveryPolicy;
+  }): Promise<CodexRelayRecord> {
+    return await this.update(input.delegationId, (record, timestamp) => {
+      if (
+        record.lifecycle !== "accepted" ||
+        record.threadId !== input.threadId ||
+        record.turnId !== input.turnId
+      ) {
+        throw new Error(
+          `Codex relay ${record.delegationId} exact accepted identity does not match recovery grant`,
+        );
+      }
+      return {
+        ...record,
+        recoveryPolicy: input.policy,
         updatedAtMs: timestamp,
       };
     });
@@ -143,6 +186,51 @@ export class CodexDelegationRegistry {
         lifecycle: record.lifecycle === "delivery-started" ? "delivery-started" : "terminal",
         terminalStatus,
         terminalAtMs: record.terminalAtMs ?? timestamp,
+        updatedAtMs: timestamp,
+      };
+    });
+  }
+
+  /** Claim the sole restart recovery before crossing into native turn/start. */
+  async claimRecovery(
+    delegationId: string,
+    recoveryDelegationId: string,
+  ): Promise<CodexRelayRecord | undefined> {
+    return await this.mutate((records) => {
+      const index = findRecordIndex(records, delegationId);
+      const record = records[index];
+      if (record.lifecycle === "recovery-started" || record.lifecycle === "recovered") {
+        return undefined;
+      }
+      if (
+        record.lifecycle !== "terminal" ||
+        record.terminalStatus !== "interrupted" ||
+        record.recoveryPolicy !== "local-safe"
+      ) {
+        throw invalidTransition(record, "recovery-started");
+      }
+      const timestamp = this.now();
+      const claimed: CodexRelayRecord = {
+        ...record,
+        lifecycle: "recovery-started",
+        recoveryDelegationId: requireStoredString(recoveryDelegationId, "recoveryDelegationId"),
+        recoveryStartedAtMs: timestamp,
+        updatedAtMs: timestamp,
+      };
+      records[index] = claimed;
+      return claimed;
+    });
+  }
+
+  async markRecovered(delegationId: string): Promise<CodexRelayRecord> {
+    return await this.update(delegationId, (record, timestamp) => {
+      if (record.lifecycle !== "recovery-started" || !record.recoveryDelegationId) {
+        throw invalidTransition(record, "recovered");
+      }
+      return {
+        ...record,
+        lifecycle: "recovered",
+        recoveredAtMs: timestamp,
         updatedAtMs: timestamp,
       };
     });
@@ -532,6 +620,14 @@ function validateRecord(value: unknown): CodexRelayRecord | string {
   if (value.turnId !== undefined && !isStoredString(value.turnId)) {
     return "turnId is invalid";
   }
+  if (value.recoveryPolicy !== undefined && value.recoveryPolicy !== "local-safe") {
+    return "recoveryPolicy is invalid";
+  }
+  for (const field of ["recoveryDelegationId", "recoveryOfDelegationId"] as const) {
+    if (value[field] !== undefined && !isStoredString(value[field])) {
+      return `${field} is invalid`;
+    }
+  }
   const requiredTimestamps = ["createdAtMs", "updatedAtMs"] as const;
   for (const field of requiredTimestamps) {
     if (!isTimestamp(value[field])) {
@@ -549,6 +645,8 @@ function validateRecord(value: unknown): CodexRelayRecord | string {
     "overdueProgressSuppressedAtMs",
     "deliveredAtMs",
     "decisionNeededAtMs",
+    "recoveryStartedAtMs",
+    "recoveredAtMs",
   ] as const;
   for (const field of optionalTimestamps) {
     if (value[field] !== undefined && !isTimestamp(value[field])) {
@@ -577,7 +675,9 @@ function validateRecord(value: unknown): CodexRelayRecord | string {
     return "overdue progress delivery is missing its claim";
   }
   if (
-    (["accepted", "terminal", "delivered"].includes(value.lifecycle) ||
+    (["accepted", "terminal", "recovery-started", "recovered", "delivered"].includes(
+      value.lifecycle,
+    ) ||
       (value.lifecycle === "delivery-started" && value.deliveryKind !== "decision")) &&
     !isStoredString(value.turnId)
   ) {
@@ -585,6 +685,12 @@ function validateRecord(value: unknown): CodexRelayRecord | string {
   }
   if (value.lifecycle === "terminal" && !isTerminalStatus(value.terminalStatus)) {
     return "terminal lifecycle is missing terminalStatus";
+  }
+  if (
+    (value.lifecycle === "recovery-started" || value.lifecycle === "recovered") &&
+    (!isStoredString(value.recoveryDelegationId) || value.terminalStatus !== "interrupted")
+  ) {
+    return "recovery lifecycle is missing interrupted recovery identity";
   }
   if (
     ["delivery-started", "delivered"].includes(value.lifecycle) &&
@@ -644,6 +750,8 @@ function isLifecycle(value: unknown): value is CodexRelayLifecycle {
     value === "starting" ||
     value === "accepted" ||
     value === "terminal" ||
+    value === "recovery-started" ||
+    value === "recovered" ||
     value === "delivery-started" ||
     value === "delivered" ||
     value === "decision-needed"

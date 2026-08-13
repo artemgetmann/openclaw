@@ -64,7 +64,12 @@ type StoredRoute = {
   updatedAtMs: number;
   activeTurnId?: string;
   activeRelayId?: string;
+  lastFinishedTurnId?: string;
+  lastFinishedRelayId?: string;
+  recoverySourceRelayId?: string;
+  awaitingBind?: boolean;
   completedAtMs?: number;
+  retiredAtMs?: number;
 };
 
 type RegistryDocument = {
@@ -112,7 +117,10 @@ export class CodexCallbackRouteRegistry {
       const threadId = requireStoredString(input.threadId, "threadId");
       const sessionKey = requireStoredString(input.sessionKey, "sessionKey");
       const activeForThread = document.routes.find(
-        (route) => route.threadId === threadId && route.completedAtMs === undefined,
+        (route) =>
+          route.threadId === threadId &&
+          route.completedAtMs === undefined &&
+          route.retiredAtMs === undefined,
       );
       if (activeForThread) {
         if (
@@ -122,6 +130,15 @@ export class CodexCallbackRouteRegistry {
           throw new Error(
             `Codex callback thread ${threadId} is already bound to another Jarvis session`,
           );
+        }
+        if (!activeForThread.activeTurnId && !activeForThread.activeRelayId) {
+          // Acquisition is the durable start of a new relay epoch. Preserve
+          // prior callback receipts, but supersede their closed-turn identity
+          // so acceptance-before-bind can be recognized after restart.
+          activeForThread.lastFinishedTurnId = undefined;
+          activeForThread.lastFinishedRelayId = undefined;
+          activeForThread.awaitingBind = true;
+          activeForThread.updatedAtMs = timestamp;
         }
         return publicGrant(activeForThread);
       }
@@ -139,6 +156,7 @@ export class CodexCallbackRouteRegistry {
         ...(input.agentId ? { agentId: requireStoredString(input.agentId, "agentId") } : {}),
         nextSequence: 1,
         callbacks: [],
+        awaitingBind: true,
         createdAtMs: timestamp,
         updatedAtMs: timestamp,
       };
@@ -163,6 +181,7 @@ export class CodexCallbackRouteRegistry {
         entry.threadId === input.threadId &&
         entry.sessionKey === input.sessionKey &&
         entry.completedAtMs === undefined &&
+        entry.retiredAtMs === undefined &&
         entry.activeTurnId &&
         entry.activeRelayId,
     );
@@ -204,6 +223,7 @@ export class CodexCallbackRouteRegistry {
       }
       route.activeRelayId = requireStoredString(turn.relayId, "relayId");
       route.activeTurnId = requireStoredString(turn.turnId, "turnId");
+      route.awaitingBind = false;
       route.updatedAtMs = this.now();
     });
   }
@@ -219,9 +239,83 @@ export class CodexCallbackRouteRegistry {
       if (route.activeTurnId !== turnId) {
         return;
       }
+      // Preserve the exact closed identity for the restart window between
+      // listener cleanup and its durable handback claim. Recovery may consume
+      // it only while no newer turn is active on this route.
+      route.lastFinishedTurnId = route.activeTurnId;
+      route.lastFinishedRelayId = route.activeRelayId;
+      route.awaitingBind = false;
       route.activeTurnId = undefined;
       route.activeRelayId = undefined;
       route.updatedAtMs = this.now();
+    });
+  }
+
+  /** Close the exact interrupted route and mint a fresh recovery capability atomically. */
+  async replaceInterruptedTurn(input: {
+    threadId: string;
+    sessionKey: string;
+    agentId?: string;
+    relayId: string;
+    turnId: string;
+  }): Promise<CodexCallbackRouteGrant> {
+    return await this.mutate((document) => {
+      const active = document.routes.find(
+        (route) =>
+          route.threadId === input.threadId &&
+          route.completedAtMs === undefined &&
+          route.retiredAtMs === undefined,
+      );
+      const activeIdentityMatches =
+        active?.activeRelayId === input.relayId && active.activeTurnId === input.turnId;
+      const finishedIdentityMatches =
+        active?.activeRelayId === undefined &&
+        active?.activeTurnId === undefined &&
+        active?.lastFinishedRelayId === input.relayId &&
+        active.lastFinishedTurnId === input.turnId;
+      const unboundIdentityAvailable =
+        // The relay registry already proved the exact accepted turn. An empty
+        // route is the complementary crash receipt: startup stopped between
+        // relay acceptance and bindTurn, before any callback could be claimed.
+        active?.activeRelayId === undefined &&
+        active?.activeTurnId === undefined &&
+        active?.lastFinishedRelayId === undefined &&
+        active?.lastFinishedTurnId === undefined &&
+        active?.recoverySourceRelayId === undefined &&
+        (active?.awaitingBind === true || active?.callbacks.length === 0);
+      if (
+        !active ||
+        active.sessionKey !== input.sessionKey ||
+        active.agentId !== input.agentId ||
+        (!activeIdentityMatches && !finishedIdentityMatches && !unboundIdentityAvailable)
+      ) {
+        throw new Error("Codex interrupted callback route identity does not match recovery claim");
+      }
+      const timestamp = this.now();
+      active.retiredAtMs = timestamp;
+      active.activeRelayId = undefined;
+      active.activeTurnId = undefined;
+      active.updatedAtMs = timestamp;
+      // Reserve capacity for the replacement after retiring the old route.
+      // This also prevents repeated recoveries from growing the durable file.
+      pruneCompletedRoutes(document, timestamp);
+      const route: StoredRoute = {
+        routeId: randomUUID(),
+        capability: randomBytes(32).toString("base64url"),
+        threadId: active.threadId,
+        sessionKey: active.sessionKey,
+        ...(active.agentId ? { agentId: active.agentId } : {}),
+        nextSequence: 1,
+        callbacks: [],
+        // Distinguish this unbound replacement from the original pre-bind
+        // crash window so the same parent claim cannot rotate it twice.
+        recoverySourceRelayId: input.relayId,
+        awaitingBind: true,
+        createdAtMs: timestamp,
+        updatedAtMs: timestamp,
+      };
+      document.routes.push(route);
+      return publicGrant(route);
     });
   }
 
@@ -263,7 +357,7 @@ export class CodexCallbackRouteRegistry {
           `Codex callback ${pending.callbackId} delivery is ambiguous; only its exact retry is allowed`,
         );
       }
-      if (route.completedAtMs !== undefined) {
+      if (route.completedAtMs !== undefined || route.retiredAtMs !== undefined) {
         throw new Error(`Codex callback route ${route.routeId} already delivered completion`);
       }
       if (callback.sequence !== route.nextSequence) {
@@ -384,14 +478,19 @@ export class CodexCallbackRouteRegistry {
 }
 
 function pruneCompletedRoutes(document: RegistryDocument, now: number): void {
-  const active = document.routes.filter((route) => route.completedAtMs === undefined);
+  const active = document.routes.filter(
+    (route) => route.completedAtMs === undefined && route.retiredAtMs === undefined,
+  );
   const recentCompleted = document.routes
-    .filter(
-      (route): route is StoredRoute & { completedAtMs: number } =>
-        route.completedAtMs !== undefined &&
-        now - route.completedAtMs <= COMPLETED_ROUTE_RETENTION_MS,
-    )
-    .sort((left, right) => right.completedAtMs - left.completedAtMs);
+    .filter((route) => {
+      const closedAt = route.completedAtMs ?? route.retiredAtMs;
+      return closedAt !== undefined && now - closedAt <= COMPLETED_ROUTE_RETENTION_MS;
+    })
+    .sort(
+      (left, right) =>
+        (right.completedAtMs ?? right.retiredAtMs ?? 0) -
+        (left.completedAtMs ?? left.retiredAtMs ?? 0),
+    );
   const availableCompletedSlots = Math.max(0, MAX_ROUTES - active.length - 1);
   document.routes = [...active, ...recentCompleted.slice(0, availableCompletedSlots)];
 }
@@ -488,8 +587,31 @@ function validateRoute(value: unknown): StoredRoute {
     ...(typeof value.activeRelayId === "string"
       ? { activeRelayId: requireStoredString(value.activeRelayId, "activeRelayId") }
       : {}),
+    ...(typeof value.lastFinishedTurnId === "string"
+      ? { lastFinishedTurnId: requireStoredString(value.lastFinishedTurnId, "lastFinishedTurnId") }
+      : {}),
+    ...(typeof value.lastFinishedRelayId === "string"
+      ? {
+          lastFinishedRelayId: requireStoredString(
+            value.lastFinishedRelayId,
+            "lastFinishedRelayId",
+          ),
+        }
+      : {}),
+    ...(typeof value.recoverySourceRelayId === "string"
+      ? {
+          recoverySourceRelayId: requireStoredString(
+            value.recoverySourceRelayId,
+            "recoverySourceRelayId",
+          ),
+        }
+      : {}),
+    ...(typeof value.awaitingBind === "boolean" ? { awaitingBind: value.awaitingBind } : {}),
     ...(typeof value.completedAtMs === "number"
       ? { completedAtMs: requireTimestamp(value.completedAtMs, "completedAtMs") }
+      : {}),
+    ...(typeof value.retiredAtMs === "number"
+      ? { retiredAtMs: requireTimestamp(value.retiredAtMs, "retiredAtMs") }
       : {}),
   };
   if (route.callbacks.length > MAX_CALLBACKS_PER_ROUTE) {
@@ -557,6 +679,9 @@ function validateRouteConsistency(route: StoredRoute): void {
   if (Boolean(route.activeTurnId) !== Boolean(route.activeRelayId)) {
     throw new Error("Codex callback route active turn identity is incomplete");
   }
+  if (Boolean(route.lastFinishedTurnId) !== Boolean(route.lastFinishedRelayId)) {
+    throw new Error("Codex callback route finished turn identity is incomplete");
+  }
   for (const [index, callback] of route.callbacks.entries()) {
     if (callback.sequence !== index + 1) {
       throw new Error("Codex callback route sequence history is inconsistent");
@@ -587,7 +712,13 @@ function validateRouteConsistency(route: StoredRoute): void {
   if ((route.completedAtMs !== undefined) !== completedCallback) {
     throw new Error("Codex callback route completion state is inconsistent");
   }
-  if (route.completedAtMs !== undefined && (route.activeTurnId || route.activeRelayId)) {
+  if (route.completedAtMs !== undefined && route.retiredAtMs !== undefined) {
+    throw new Error("Codex callback route cannot be completed and retired");
+  }
+  if (
+    (route.completedAtMs !== undefined || route.retiredAtMs !== undefined) &&
+    (route.activeTurnId || route.activeRelayId)
+  ) {
     throw new Error("Codex callback route is both complete and active");
   }
 }
