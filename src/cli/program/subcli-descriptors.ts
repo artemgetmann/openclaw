@@ -134,6 +134,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "artifacts",
+    description: "Create and verify document artifacts",
+    hasSubcommands: true,
+  },
+  {
     name: "telegram",
     description: "Telegram live workflow tooling for doctor/runtime/smoke operations",
     hasSubcommands: true,

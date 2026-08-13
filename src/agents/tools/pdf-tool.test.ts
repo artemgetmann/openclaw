@@ -458,19 +458,45 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("rejects pages parameter for native PDF providers", async () => {
+  it("uses extraction fallback when pages are requested with native PDF providers", async () => {
     await withTempAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
+
+      const nativeProviders = await import("./pdf-native-providers.js");
+      const nativeSpy = vi.spyOn(nativeProviders, "anthropicAnalyzePdf");
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      const extractSpy = vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted pages 1 and 2",
+        images: [],
+      });
+
+      const piAi = await import("@mariozechner/pi-ai");
+      vi.mocked(piAi.complete).mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
       const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
       const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
 
-      await expect(
-        tool.execute("t1", {
-          prompt: "summarize",
-          pdf: "/tmp/doc.pdf",
-          pages: "1-2",
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+        pages: "1-2",
+      });
+
+      expect(nativeSpy).not.toHaveBeenCalled();
+      expect(extractSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageNumbers: [1, 2],
         }),
-      ).rejects.toThrow("pages is not supported with native PDF providers");
+      );
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "fallback summary" }],
+        details: { native: false, model: ANTHROPIC_PDF_MODEL },
+      });
     });
   });
 

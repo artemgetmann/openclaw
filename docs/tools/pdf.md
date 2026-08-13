@@ -122,7 +122,7 @@ Path fields:
 - Missing PDF input: throws `pdf required: provide a path or URL to a PDF document`
 - Too many PDFs: returns structured error in `details.error = "too_many_pdfs"`
 - Unsupported reference scheme: returns `details.error = "unsupported_pdf_reference"`
-- Native mode with `pages`: throws clear `pages is not supported with native PDF providers` error
+- Native-capable model with `pages`: uses extraction fallback so page filtering works
 
 ## Examples
 
