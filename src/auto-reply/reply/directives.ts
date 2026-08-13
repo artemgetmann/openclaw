@@ -116,7 +116,11 @@ export function extractVerboseDirective(body?: string): {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  const extracted = extractLevelDirective(body, ["verbose", "v"], normalizeVerboseLevel);
+  const extracted = extractLevelDirective(
+    body,
+    ["visibility", "verbose", "v"],
+    normalizeVerboseLevel,
+  );
   return {
     cleaned: extracted.cleaned,
     verboseLevel: extracted.level,

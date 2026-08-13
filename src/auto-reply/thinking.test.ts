@@ -16,6 +16,7 @@ import {
   listThinkingLevels,
   normalizeReasoningLevel,
   normalizeThinkLevel,
+  normalizeVerboseLevel,
   resolveThinkingDefaultForModel,
 } from "./thinking.js";
 
@@ -26,6 +27,14 @@ beforeEach(() => {
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
   providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
+});
+
+describe("normalizeVerboseLevel", () => {
+  it("preserves full as a distinct stored level", () => {
+    expect(normalizeVerboseLevel("full")).toBe("full");
+    expect(normalizeVerboseLevel("on")).toBe("on");
+    expect(normalizeVerboseLevel("off")).toBe("off");
+  });
 });
 
 describe("normalizeThinkLevel", () => {

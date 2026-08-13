@@ -2106,18 +2106,18 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
+    const visibilityHandler = commandSpy.mock.calls.find((call) => call[0] === "visibility")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!verboseHandler) {
-      throw new Error("verbose command handler missing");
+    if (!visibilityHandler) {
+      throw new Error("visibility command handler missing");
     }
 
-    await verboseHandler({
+    await visibilityHandler({
       message: {
         chat: { id: 12345, type: "private" },
         from: { id: 12345, username: "testuser" },
-        text: "/verbose on",
+        text: "/visibility on",
         date: 1736380800,
         message_id: 42,
       },

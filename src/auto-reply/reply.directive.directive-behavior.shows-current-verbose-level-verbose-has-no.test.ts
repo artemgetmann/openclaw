@@ -141,8 +141,8 @@ describe("directive behavior", () => {
       const verboseText = await runCommand(home, "/verbose", {
         defaults: { verboseDefault: "on" },
       });
-      expect(verboseText).toContain("Current verbose level: on");
-      expect(verboseText).toContain("Options: on, off.");
+      expect(verboseText).toContain("Current visibility: on");
+      expect(verboseText).toContain("Options: off, on, full.");
 
       const reasoningText = await runCommand(home, "/reasoning");
       expect(reasoningText).toContain("Current reasoning level: off");
@@ -300,7 +300,7 @@ describe("directive behavior", () => {
         {
           body: "/elevated off\n/verbose on",
           config: makeAllowlistedElevatedConfig(home),
-          expectedSnippets: ["Elevated mode disabled.", "Verbose logging enabled."],
+          expectedSnippets: ["Elevated mode disabled.", "Visibility is on."],
         },
       ]) {
         const res = await getReplyFromConfig(

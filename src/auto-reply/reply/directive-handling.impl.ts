@@ -174,11 +174,11 @@ export async function handleDirectiveOnly(
     if (!directives.rawVerboseLevel) {
       const level = normalizeVerboseLevel(currentVerboseLevel) ?? "off";
       return {
-        text: withOptions(`Current verbose level: ${level}.`, "on, off"),
+        text: withOptions(`Current visibility: ${level}.`, "off, on, full"),
       };
     }
     return {
-      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on.`,
+      text: `Unrecognized visibility level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`,
     };
   }
   if (directives.hasFastDirective && directives.fastMode === undefined) {
@@ -483,8 +483,10 @@ export async function handleDirectiveOnly(
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     parts.push(
       directives.verboseLevel === "off"
-        ? formatDirectiveAck("Verbose logging disabled.")
-        : formatDirectiveAck("Verbose logging enabled."),
+        ? formatDirectiveAck("Visibility is off. I’ll keep work details hidden.")
+        : directives.verboseLevel === "full"
+          ? formatDirectiveAck("Visibility is full. I’ll show actions and bounded results.")
+          : formatDirectiveAck("Visibility is on. I’ll show important actions."),
     );
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {

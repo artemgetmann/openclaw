@@ -422,7 +422,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       }),
     );
 
-    expect(result?.text).toContain("Verbose logging disabled.");
+    expect(result?.text).toContain("Visibility is off.");
     expect(sessionStore[threadSessionKey]?.verboseLevel).toBe("off");
     expect(sessionStore[parentSessionKey]?.verboseLevel).toBe("off");
   });
