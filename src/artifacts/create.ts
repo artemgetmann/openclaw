@@ -1,0 +1,315 @@
+import fs from "node:fs/promises";
+import { Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow } from "docx";
+import ExcelJS from "exceljs";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+
+type JsonRecord = Record<string, unknown>;
+
+type PptxSlide = {
+  addText: (text: unknown, options: JsonRecord) => void;
+  addTable: (rows: string[][], options: JsonRecord) => void;
+};
+
+type PptxPresentation = {
+  layout: string;
+  author: string;
+  subject: string;
+  title: string;
+  addSlide: () => PptxSlide;
+  writeFile: (options: { fileName: string }) => Promise<string>;
+};
+
+type PptxConstructor = new () => PptxPresentation;
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
+}
+
+function asList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : value == null ? [] : [value];
+}
+
+function asText(value: unknown): string {
+  if (value == null) {
+    return "";
+  }
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+    ? String(value)
+    : JSON.stringify(value);
+}
+
+function sectionsFor(spec: JsonRecord): JsonRecord[] {
+  const sections = asList(spec.sections).map(asRecord);
+  if (sections.length > 0) {
+    return sections;
+  }
+  return [{ paragraphs: asList(spec.paragraphs), bullets: asList(spec.bullets) }];
+}
+
+function tableRows(tableValue: unknown): string[][] {
+  const table = asRecord(tableValue);
+  const columns = asList(table.columns).map(asText);
+  const rows = asList(table.rows).map((row) => asList(row).map(asText));
+  return columns.length > 0 ? [columns, ...rows] : rows;
+}
+
+function wrapText(text: string, maxChars: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    if (line && `${line} ${word}`.length > maxChars) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line || lines.length === 0) {
+    lines.push(line);
+  }
+  return lines;
+}
+
+export async function createPdf(specValue: unknown, outputPath: string): Promise<void> {
+  const spec = asRecord(specValue);
+  const pdf = await PDFDocument.create();
+  const regular = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const pageSize: [number, number] = [612, 792];
+  const margin = 50;
+  let page = pdf.addPage(pageSize);
+  let y = page.getHeight() - margin;
+
+  // Keep pagination deterministic and local. The creator supports the same
+  // small structured contract as the other formats; rich layout stays out of
+  // this product feature until it has a separate user need and proof boundary.
+  const writeLines = (text: string, size = 11, isBold = false, indent = 0) => {
+    const maxChars = Math.max(
+      12,
+      Math.floor((page.getWidth() - margin * 2 - indent) / (size * 0.55)),
+    );
+    for (const line of wrapText(text, maxChars)) {
+      if (y < margin + size) {
+        page = pdf.addPage(pageSize);
+        y = page.getHeight() - margin;
+      }
+      page.drawText(line, {
+        x: margin + indent,
+        y,
+        size,
+        font: isBold ? bold : regular,
+        color: rgb(0.1, 0.1, 0.12),
+      });
+      y -= size * 1.35;
+    }
+  };
+
+  const title = asText(spec.title).trim();
+  if (title) {
+    writeLines(title, 22, true);
+    y -= 8;
+  }
+  const subtitle = asText(spec.subtitle).trim();
+  if (subtitle) {
+    writeLines(subtitle, 12);
+    y -= 8;
+  }
+  for (const section of sectionsFor(spec)) {
+    const heading = asText(section.heading).trim();
+    if (heading) {
+      y -= 4;
+      writeLines(heading, 15, true);
+    }
+    for (const paragraph of asList(section.paragraphs)) {
+      writeLines(asText(paragraph), 11);
+      y -= 5;
+    }
+    for (const bullet of asList(section.bullets)) {
+      writeLines(`• ${asText(bullet)}`, 11, false, 12);
+    }
+    const callout = asText(section.callout).trim();
+    if (callout) {
+      y -= 4;
+      writeLines(callout, 11, true, 10);
+      y -= 4;
+    }
+    for (const row of tableRows(section.table)) {
+      writeLines(row.join("  |  "), 9);
+    }
+    y -= 8;
+  }
+  if (
+    !title &&
+    !subtitle &&
+    sectionsFor(spec).every((section) => Object.keys(section).length === 0)
+  ) {
+    writeLines("Untitled", 22, true);
+  }
+
+  await fs.writeFile(outputPath, await pdf.save());
+}
+
+export async function createDocx(specValue: unknown, outputPath: string): Promise<void> {
+  const spec = asRecord(specValue);
+  const children: Array<Paragraph | Table> = [];
+  const title = asText(spec.title).trim();
+  if (title) {
+    children.push(new Paragraph({ text: title, heading: HeadingLevel.TITLE }));
+  }
+  const subtitle = asText(spec.subtitle).trim();
+  if (subtitle) {
+    children.push(new Paragraph({ text: subtitle, style: "Subtitle" }));
+  }
+  for (const section of sectionsFor(spec)) {
+    const heading = asText(section.heading).trim();
+    if (heading) {
+      children.push(new Paragraph({ text: heading, heading: HeadingLevel.HEADING_1 }));
+    }
+    for (const paragraph of asList(section.paragraphs)) {
+      children.push(new Paragraph(asText(paragraph)));
+    }
+    for (const bullet of asList(section.bullets)) {
+      children.push(new Paragraph({ text: asText(bullet), bullet: { level: 0 } }));
+    }
+    const rows = tableRows(section.table);
+    if (rows.length > 0) {
+      children.push(
+        new Table({
+          rows: rows.map(
+            (row) =>
+              new TableRow({
+                children: row.map((cell) => new TableCell({ children: [new Paragraph(cell)] })),
+              }),
+          ),
+        }),
+      );
+    }
+  }
+  if (children.length === 0) {
+    children.push(new Paragraph({ text: "Untitled", heading: HeadingLevel.TITLE }));
+  }
+  const document = new Document({ sections: [{ children }] });
+  await fs.writeFile(outputPath, await Packer.toBuffer(document));
+}
+
+export async function createXlsx(specValue: unknown, outputPath: string): Promise<void> {
+  const spec = asRecord(specValue);
+  const workbook = new ExcelJS.Workbook();
+  const sheets = asList(spec.sheets);
+  const sheetSpecs =
+    sheets.length > 0 ? sheets : [{ name: spec.title || "Sheet1", rows: spec.rows || [] }];
+  for (const [index, value] of sheetSpecs.entries()) {
+    const sheetSpec = asRecord(value);
+    const worksheet = workbook.addWorksheet(asText(sheetSpec.name).trim() || `Sheet${index + 1}`);
+    for (const row of asList(sheetSpec.rows)) {
+      worksheet.addRow(Array.isArray(row) ? row : [row]);
+    }
+    const freeze = asText(sheetSpec.freeze).trim();
+    if (freeze) {
+      const match = /^([A-Z]+)(\d+)$/i.exec(freeze);
+      if (match) {
+        worksheet.views = [
+          { state: "frozen", xSplit: columnNumber(match[1]) - 1, ySplit: Number(match[2]) - 1 },
+        ];
+      }
+    }
+    for (const [column, width] of Object.entries(asRecord(sheetSpec.widths))) {
+      const parsedWidth = Number(width);
+      if (Number.isFinite(parsedWidth) && parsedWidth > 0) {
+        worksheet.getColumn(column).width = parsedWidth;
+      }
+    }
+  }
+  await workbook.xlsx.writeFile(outputPath);
+}
+
+function columnNumber(label: string): number {
+  return label
+    .toUpperCase()
+    .split("")
+    .reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
+}
+
+export async function createPptx(specValue: unknown, outputPath: string): Promise<void> {
+  const spec = asRecord(specValue);
+  // PptxGenJS's NodeNext declaration exposes its default class as a namespace
+  // even though the ESM runtime exports the constructor. Confine that package
+  // interop mismatch to this typed boundary.
+  const PptxGenJS = (await import("pptxgenjs")).default as unknown as PptxConstructor;
+  const presentation = new PptxGenJS();
+  let slideCount = 0;
+  presentation.layout = "LAYOUT_WIDE";
+  presentation.author = "Jarvis";
+  presentation.subject = asText(spec.title);
+  presentation.title = asText(spec.title) || "Untitled";
+
+  const title = asText(spec.title).trim();
+  const subtitle = asText(spec.subtitle).trim();
+  if (title || subtitle) {
+    const slide = presentation.addSlide();
+    slideCount += 1;
+    slide.addText(title || "Untitled", {
+      x: 0.8,
+      y: 2.2,
+      w: 11.7,
+      h: 0.7,
+      fontSize: 28,
+      bold: true,
+      align: "center",
+    });
+    if (subtitle) {
+      slide.addText(subtitle, { x: 0.9, y: 3.1, w: 11.5, h: 0.45, fontSize: 18, align: "center" });
+    }
+  }
+
+  const slides = asList(spec.slides).length > 0 ? asList(spec.slides) : asList(spec.sections);
+  for (const value of slides) {
+    const slideSpec = asRecord(value);
+    const slide = presentation.addSlide();
+    slideCount += 1;
+    slide.addText(asText(slideSpec.title || slideSpec.heading).trim() || "Slide", {
+      x: 0.65,
+      y: 0.4,
+      w: 12,
+      h: 0.55,
+      fontSize: 24,
+      bold: true,
+    });
+    const paragraph = asText(slideSpec.paragraph).trim();
+    if (paragraph) {
+      slide.addText(paragraph, { x: 0.9, y: 1.4, w: 11.5, h: 1.1, fontSize: 18, breakLine: false });
+    }
+    const bullets = asList(slideSpec.bullets).map(asText).filter(Boolean);
+    if (bullets.length > 0) {
+      slide.addText(
+        bullets.map((text) => ({ text, options: { bullet: { indent: 18 } } })),
+        { x: 0.9, y: 1.55, w: 11.6, h: 4.45, fontSize: 20, breakLine: true },
+      );
+    }
+    const rows = tableRows(slideSpec.table);
+    if (rows.length > 0) {
+      slide.addTable(rows, {
+        x: 0.8,
+        y: 1.55,
+        w: 11.75,
+        h: 4.7,
+        fontSize: 14,
+        border: { color: "CBD5E1", pt: 1 },
+      });
+    }
+  }
+  if (slideCount === 0) {
+    const slide = presentation.addSlide();
+    slide.addText("Untitled", {
+      x: 0.8,
+      y: 2.7,
+      w: 11.7,
+      h: 0.7,
+      fontSize: 28,
+      bold: true,
+      align: "center",
+    });
+  }
+  await presentation.writeFile({ fileName: outputPath });
+}

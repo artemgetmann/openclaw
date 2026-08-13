@@ -159,6 +159,15 @@ assert_required_telegram_user_tooling() {
   done
 }
 
+assert_document_creation_runtime() {
+  local runtime_root="$1"
+
+  if ! "$OPENCLAW_NODE_BIN" "$ROOT_DIR/scripts/verify-document-creation-runtime.mjs" "$runtime_root"; then
+    echo "ERROR: packaged Jarvis cannot provide PDF, DOCX, XLSX, and PPTX creation." >&2
+    exit 1
+  fi
+}
+
 load_consumer_default_bundled_skills() {
   local skills_config_path="$ROOT_DIR/src/commands/onboard-non-interactive/local/skills-config.ts"
   local skills_output=""
@@ -436,6 +445,8 @@ assert_required_templates \
 assert_required_telegram_user_tooling \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/scripts/telegram-e2e" \
   "bundled runtime Telegram user tooling"
+assert_document_creation_runtime \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw"
 assert_required_bundled_skills \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"

@@ -1,56 +1,28 @@
 ---
 name: documents
 description: Create, edit, export, and verify Word/DOCX or Google Docs-targeted document artifacts. Use for readable briefs, call sheets, memos, checklists, scripts, and any request involving .docx or Word-style output.
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "📝",
-        "displayName": "Documents",
-        "install":
-          [
-            {
-              "id": "libreoffice-brew",
-              "kind": "brew",
-              "formula": "libreoffice",
-              "bins": ["soffice"],
-              "label": "Install LibreOffice (brew)",
-            },
-            {
-              "id": "poppler-brew",
-              "kind": "brew",
-              "formula": "poppler",
-              "bins": ["pdftoppm", "pdfinfo"],
-              "label": "Install Poppler (brew)",
-            },
-          ],
-      },
-  }
+metadata: { "openclaw": { "emoji": "📝", "displayName": "Documents" } }
 ---
 
 # Documents
 
-Use this skill for DOCX/Word-style artifacts and document-to-PDF export.
+Use this skill for DOCX/Word-style artifacts.
 
 ## Default route
 
 1. Draft the content as a clear structured document: title, sections, paragraphs, bullets, tables, and notes.
 2. Save that content as JSON and run `openclaw artifacts create-docx spec.json --out output.docx`.
 3. Use real Word styles, real lists, and explicit table widths. Do not fake bullets, numbering, or table layout with plain text.
-4. Export DOCX to PDF with `openclaw artifacts docx-to-pdf input.docx --out output.pdf` when the user wants a PDF copy.
-5. Render the exported PDF with `openclaw artifacts render-pdf output.pdf --out-dir rendered` and inspect the page PNGs before delivery.
+4. Open or inspect the resulting DOCX when the available environment has an Office-compatible viewer. Do not make document creation depend on that optional viewer.
 
 ## Stop rules
 
-- If `soffice` or the document library is missing, report the missing dependency instead of cycling through LaTeX, browser print, Typst, CUPS, and other unrelated fallbacks.
-- Do not send a maybe-good document. Render and inspect it, or say visual QA could not be completed.
-- Keep support files private unless the user asks for them. Deliver the final `.docx`, `.pdf`, or both.
+- If creation fails, report the exact bundled-library error instead of installing or searching for host tools.
+- Do not claim visual QA when no Office-compatible viewer is available.
+- Keep support files private unless the user asks for them. Deliver the final `.docx`.
 
-## LibreOffice export
+## Creation
 
 ```bash
 openclaw artifacts create-docx spec.json --out output.docx
-openclaw artifacts docx-to-pdf input.docx --out output.pdf
-openclaw artifacts render-pdf output.pdf --out-dir rendered
-soffice --headless --convert-to pdf --outdir output input.docx
 ```

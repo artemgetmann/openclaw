@@ -81,73 +81,38 @@ describe("artifact commands", () => {
     );
   });
 
-  it("runs ReportLab PDF creation through the artifact Python", async () => {
+  it("creates PDF with the bundled Node dependency", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-test-"));
     const input = path.join(dir, "brief.json");
     const out = path.join(dir, "brief.pdf");
     await fs.writeFile(input, JSON.stringify({ title: "Brief", sections: [] }));
 
-    const runner: ArtifactCommandRunner = vi.fn(async (_argv: string[], options) => {
-      const payload = JSON.parse(String(options.input));
-      await fs.writeFile(payload.outputPath, "pdf");
-      return okSpawnResult();
-    });
-
-    const result = await createPdfCommand(
-      input,
-      { out },
-      { runtime: fakeRuntime({ python: "/bin/python3" }), runner },
-    );
-
-    expect(runner).toHaveBeenCalledWith(
-      ["/bin/python3", "-c", expect.stringContaining("from reportlab")],
-      expect.objectContaining({
-        timeoutMs: 120_000,
-        input: expect.stringContaining('"title":"Brief"'),
-      }),
-    );
+    const result = await createPdfCommand(input, { out });
     expect(result.path).toBe(out);
-    await expect(fs.readFile(out, "utf8")).resolves.toBe("pdf");
+    expect((await fs.readFile(out)).subarray(0, 5).toString()).toBe("%PDF-");
   });
 
   it.each([
-    ["DOCX", "docx", createDocxCommand, "from docx import Document"],
-    ["XLSX", "xlsx", createXlsxCommand, "from openpyxl import Workbook"],
+    ["DOCX", "docx", createDocxCommand],
+    ["XLSX", "xlsx", createXlsxCommand],
   ] as const)(
-    "creates editable %s through the artifact Python",
-    async (_label, ext, command, marker) => {
+    "creates editable %s with bundled Node dependencies",
+    async (_label, ext, command) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-create-${ext}-test-`));
       const input = path.join(dir, "spec.json");
       const out = path.join(dir, `output.${ext}`);
       await fs.writeFile(input, JSON.stringify({ title: "Artifact", rows: [["A", 1]] }));
-      const runner: ArtifactCommandRunner = vi.fn(async (_argv: string[], options) => {
-        const payload = JSON.parse(String(options.input));
-        await fs.writeFile(payload.outputPath, ext);
-        return okSpawnResult();
-      });
-      const result = await command(
-        input,
-        { out },
-        { runtime: fakeRuntime({ python: "/bin/python3" }), runner },
-      );
-      expect(runner).toHaveBeenCalledWith(
-        ["/bin/python3", "-c", expect.stringContaining(marker)],
-        expect.objectContaining({ input: expect.stringContaining('"title":"Artifact"') }),
-      );
+      const result = await command(input, { out });
       expect(result.path).toBe(out);
+      expect((await fs.readFile(out)).subarray(0, 2).toString()).toBe("PK");
     },
   );
 
-  it("rejects invalid PDF spec JSON before running Python", async () => {
+  it("rejects invalid PDF spec JSON before creating output", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-json-test-"));
     const input = path.join(dir, "brief.json");
     await fs.writeFile(input, "{ nope");
-    const runner: ArtifactCommandRunner = vi.fn();
-
-    await expect(
-      createPdfCommand(input, {}, { runtime: fakeRuntime({ python: "/bin/python3" }), runner }),
-    ).rejects.toThrow(/valid JSON/i);
-    expect(runner).not.toHaveBeenCalled();
+    await expect(createPdfCommand(input)).rejects.toThrow(/valid JSON/i);
   });
 
   it("runs LibreOffice DOCX-to-PDF conversion and moves to explicit output", async () => {
@@ -216,33 +181,15 @@ describe("artifact commands", () => {
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("converted");
   });
 
-  it("creates editable PPTX through the artifact Python", async () => {
+  it("creates editable PPTX with the bundled Node dependency", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pptx-test-"));
     const input = path.join(dir, "deck.json");
     const out = path.join(dir, "deck.pptx");
     await fs.writeFile(input, JSON.stringify({ title: "Deck", slides: [{ title: "One" }] }));
 
-    const runner: ArtifactCommandRunner = vi.fn(async (_argv: string[], options) => {
-      const payload = JSON.parse(String(options.input));
-      await fs.writeFile(payload.outputPath, "pptx");
-      return okSpawnResult();
-    });
-
-    const result = await createPptxCommand(
-      input,
-      { out },
-      { runtime: fakeRuntime({ python: "/bin/python3" }), runner },
-    );
-
-    expect(runner).toHaveBeenCalledWith(
-      ["/bin/python3", "-c", expect.stringContaining("from pptx import Presentation")],
-      expect.objectContaining({
-        timeoutMs: 120_000,
-        input: expect.stringContaining('"title":"Deck"'),
-      }),
-    );
+    const result = await createPptxCommand(input, { out });
     expect(result.path).toBe(out);
-    await expect(fs.readFile(out, "utf8")).resolves.toBe("pptx");
+    expect((await fs.readFile(out)).subarray(0, 2).toString()).toBe("PK");
   });
 
   it("runs LibreOffice PPTX-to-PDF conversion", async () => {
