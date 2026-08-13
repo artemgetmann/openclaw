@@ -1,7 +1,9 @@
 import {
   artifactRuntimeStatusCommand,
+  createDocxCommand,
   createPdfCommand,
   createPptxCommand,
+  createXlsxCommand,
   docxToPdfCommand,
   htmlToPdfCommand,
   pptxToPdfCommand,
@@ -36,6 +38,32 @@ export async function artifactsCreatePdfCommand(
     return;
   }
   runtime.log(`PDF: ${result.path}`);
+}
+
+export async function artifactsCreateDocxCommand(
+  input: string,
+  opts: { out?: string; json?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const result = await createDocxCommand(input, opts);
+  if (opts.json) {
+    writeJson(runtime, result);
+    return;
+  }
+  runtime.log(`DOCX: ${result.path}`);
+}
+
+export async function artifactsCreateXlsxCommand(
+  input: string,
+  opts: { out?: string; json?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const result = await createXlsxCommand(input, opts);
+  if (opts.json) {
+    writeJson(runtime, result);
+    return;
+  }
+  runtime.log(`XLSX: ${result.path}`);
 }
 
 export async function artifactsDocxToPdfCommand(

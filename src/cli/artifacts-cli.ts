@@ -21,6 +21,14 @@ export function registerArtifactsCli(program: Command) {
         `\nExamples:\n${formatHelpExamples([
           ["openclaw artifacts status --json", "Show resolved artifact runtime dependencies."],
           [
+            "openclaw artifacts create-docx brief.json --out brief.docx",
+            "Create an editable Word document from a structured JSON spec.",
+          ],
+          [
+            "openclaw artifacts create-xlsx workbook.json --out workbook.xlsx",
+            "Create an editable Excel workbook from a structured JSON spec.",
+          ],
+          [
             "openclaw artifacts create-pdf brief.json --out brief.pdf",
             "Create a simple structured PDF without browser or LaTeX conversion.",
           ],
@@ -48,6 +56,32 @@ export function registerArtifactsCli(program: Command) {
     )
     .action(() => {
       artifacts.help({ error: true });
+    });
+
+  artifacts
+    .command("create-docx")
+    .description("Create an editable DOCX document from a JSON spec")
+    .argument("<input>", "JSON spec with title, sections, paragraphs, bullets, and tables")
+    .option("--out <path>", "Output DOCX path")
+    .option("--json", "Output JSON", false)
+    .action(async (input: string, opts) => {
+      await runArtifactsCommand(async () => {
+        const { artifactsCreateDocxCommand } = await import("../commands/artifacts.js");
+        await artifactsCreateDocxCommand(input, opts, defaultRuntime);
+      });
+    });
+
+  artifacts
+    .command("create-xlsx")
+    .description("Create an editable XLSX workbook from a JSON spec")
+    .argument("<input>", "JSON spec with sheets, rows, widths, and frozen panes")
+    .option("--out <path>", "Output XLSX path")
+    .option("--json", "Output JSON", false)
+    .action(async (input: string, opts) => {
+      await runArtifactsCommand(async () => {
+        const { artifactsCreateXlsxCommand } = await import("../commands/artifacts.js");
+        await artifactsCreateXlsxCommand(input, opts, defaultRuntime);
+      });
     });
 
   artifacts

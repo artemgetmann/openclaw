@@ -35,7 +35,7 @@ Use this skill for DOCX/Word-style artifacts and document-to-PDF export.
 ## Default route
 
 1. Draft the content as a clear structured document: title, sections, paragraphs, bullets, tables, and notes.
-2. Generate `.docx` with a real document library such as `python-docx` when the runtime provides it, or a bundled artifact runtime.
+2. Save that content as JSON and run `openclaw artifacts create-docx spec.json --out output.docx`.
 3. Use real Word styles, real lists, and explicit table widths. Do not fake bullets, numbering, or table layout with plain text.
 4. Export DOCX to PDF with `openclaw artifacts docx-to-pdf input.docx --out output.pdf` when the user wants a PDF copy.
 5. Render the exported PDF with `openclaw artifacts render-pdf output.pdf --out-dir rendered` and inspect the page PNGs before delivery.
@@ -49,6 +49,7 @@ Use this skill for DOCX/Word-style artifacts and document-to-PDF export.
 ## LibreOffice export
 
 ```bash
+openclaw artifacts create-docx spec.json --out output.docx
 openclaw artifacts docx-to-pdf input.docx --out output.pdf
 openclaw artifacts render-pdf output.pdf --out-dir rendered
 soffice --headless --convert-to pdf --outdir output input.docx

@@ -173,6 +173,80 @@ if not story:
 doc.build(story)
 `;
 
+// DOCX creation uses the same structured content shape as simple PDFs. Keeping
+// that contract shared lets an agent choose editable Word or final PDF output
+// without rewriting the content model.
+const PYTHON_DOCX_CREATE_SCRIPT = String.raw`
+import json
+import sys
+from docx import Document
+
+def as_list(value):
+    return value if isinstance(value, list) else ([] if value is None else [value])
+
+payload = json.load(sys.stdin)
+spec = payload.get("spec") or {}
+document = Document()
+if spec.get("title"):
+    document.add_heading(str(spec["title"]), 0)
+if spec.get("subtitle"):
+    document.add_paragraph(str(spec["subtitle"]), style="Subtitle")
+sections = as_list(spec.get("sections")) or [{"paragraphs": as_list(spec.get("paragraphs")), "bullets": as_list(spec.get("bullets"))}]
+for raw_section in sections:
+    section = raw_section if isinstance(raw_section, dict) else {"paragraphs": [raw_section]}
+    if section.get("heading"):
+        document.add_heading(str(section["heading"]), level=1)
+    for paragraph in as_list(section.get("paragraphs")):
+        document.add_paragraph(str(paragraph))
+    for bullet in as_list(section.get("bullets")):
+        document.add_paragraph(str(bullet), style="List Bullet")
+    table_spec = section.get("table")
+    if isinstance(table_spec, dict):
+        columns = as_list(table_spec.get("columns"))
+        rows = as_list(table_spec.get("rows"))
+        width = max([len(columns)] + [len(row) if isinstance(row, list) else 1 for row in rows], default=0)
+        if width:
+            table = document.add_table(rows=len(rows) + (1 if columns else 0), cols=width)
+            table.style = "Table Grid"
+            offset = 0
+            if columns:
+                for index, value in enumerate(columns):
+                    table.cell(0, index).text = str(value)
+                offset = 1
+            for row_index, raw_row in enumerate(rows, start=offset):
+                row = raw_row if isinstance(raw_row, list) else [raw_row]
+                for column_index, value in enumerate(row):
+                    table.cell(row_index, column_index).text = str(value)
+document.save(payload["outputPath"])
+`;
+
+// XLSX specs preserve values and formulas as typed workbook cells. This is a
+// deliberately small authoring surface: sheets, rows, widths, and frozen panes.
+const PYTHON_XLSX_CREATE_SCRIPT = String.raw`
+import json
+import sys
+from openpyxl import Workbook
+
+payload = json.load(sys.stdin)
+spec = payload.get("spec") or {}
+workbook = Workbook()
+workbook.remove(workbook.active)
+sheets = spec.get("sheets") if isinstance(spec.get("sheets"), list) else []
+if not sheets:
+    sheets = [{"name": spec.get("title") or "Sheet1", "rows": spec.get("rows") or []}]
+for index, sheet_spec in enumerate(sheets):
+    sheet = workbook.create_sheet(str(sheet_spec.get("name") or f"Sheet{index + 1}"))
+    for row in sheet_spec.get("rows") or []:
+        sheet.append(row if isinstance(row, list) else [row])
+    if sheet_spec.get("freeze"):
+        sheet.freeze_panes = str(sheet_spec["freeze"])
+    widths = sheet_spec.get("widths") or {}
+    if isinstance(widths, dict):
+        for column, width in widths.items():
+            sheet.column_dimensions[str(column)].width = float(width)
+workbook.save(payload["outputPath"])
+`;
+
 // Native deck creation stays in Python because the bundled artifact runtime
 // already carries python-pptx. The TypeScript side owns validation, paths, and
 // dependency resolution; the Python side owns Office file authoring.
@@ -370,6 +444,68 @@ export async function createPdfCommand(
   return { ok: true, path: outputPath, details: { source: inputPath, engine: "reportlab" } };
 }
 
+async function createStructuredArtifactCommand(
+  input: string,
+  opts: { out?: string; timeoutMs?: number },
+  deps: ArtifactCommandDeps | undefined,
+  extension: "docx" | "xlsx",
+  script: string,
+  engine: string,
+): Promise<ArtifactFileResult> {
+  const { runtime, runner } = getRuntimeAndRunner(deps);
+  const python = requireArtifactExecutable(runtime, "python");
+  const inputPath = path.resolve(input);
+  const outputPath = resolveArtifactOutputPath(inputPath, opts.out, extension);
+  await fs.access(inputPath);
+  let spec: unknown;
+  try {
+    spec = JSON.parse(await fs.readFile(inputPath, "utf8"));
+  } catch (err) {
+    throw new Error(
+      `${extension.toUpperCase()} spec must be valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+  await ensureParentDir(outputPath);
+  const result = await runner([python, "-c", script], {
+    timeoutMs: opts.timeoutMs ?? 120_000,
+    input: JSON.stringify({ spec, outputPath }),
+  });
+  assertSuccessfulCommand(result);
+  await fs.access(outputPath);
+  return { ok: true, path: outputPath, details: { source: inputPath, engine } };
+}
+
+export async function createDocxCommand(
+  input: string,
+  opts: { out?: string; timeoutMs?: number } = {},
+  deps?: ArtifactCommandDeps,
+) {
+  return await createStructuredArtifactCommand(
+    input,
+    opts,
+    deps,
+    "docx",
+    PYTHON_DOCX_CREATE_SCRIPT,
+    "python-docx",
+  );
+}
+
+export async function createXlsxCommand(
+  input: string,
+  opts: { out?: string; timeoutMs?: number } = {},
+  deps?: ArtifactCommandDeps,
+) {
+  return await createStructuredArtifactCommand(
+    input,
+    opts,
+    deps,
+    "xlsx",
+    PYTHON_XLSX_CREATE_SCRIPT,
+    "openpyxl",
+  );
+}
+
 async function officeToPdfCommand(
   input: string,
   opts: { out?: string; outDir?: string; timeoutMs?: number } = {},
@@ -381,6 +517,10 @@ async function officeToPdfCommand(
   const outputPath = resolveArtifactOutputPath(inputPath, opts.out, "pdf");
   const outDir = path.resolve(opts.outDir?.trim() || path.dirname(outputPath));
   const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-artifacts-lo-"));
+  // LibreOffice always chooses the input basename. Convert in an isolated
+  // directory so an explicit output such as brief-docx.pdf cannot overwrite a
+  // pre-existing brief.pdf before we move the generated file into place.
+  const conversionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-artifacts-output-"));
 
   await fs.access(inputPath);
   await fs.mkdir(outDir, { recursive: true });
@@ -393,18 +533,16 @@ async function officeToPdfCommand(
       "--convert-to",
       "pdf",
       "--outdir",
-      outDir,
+      conversionDir,
       inputPath,
     ],
     { timeoutMs: opts.timeoutMs ?? 120_000 },
   );
   assertSuccessfulCommand(result);
 
-  const generatedPath = path.join(outDir, `${path.parse(inputPath).name}.pdf`);
-  if (path.resolve(generatedPath) !== outputPath) {
-    await ensureParentDir(outputPath);
-    await fs.rename(generatedPath, outputPath);
-  }
+  const generatedPath = path.join(conversionDir, `${path.parse(inputPath).name}.pdf`);
+  await ensureParentDir(outputPath);
+  await fs.rename(generatedPath, outputPath);
 
   return { ok: true, path: outputPath, details: { outDir, source: inputPath } };
 }

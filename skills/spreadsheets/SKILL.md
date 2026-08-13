@@ -28,7 +28,7 @@ Use this skill for spreadsheet creation, editing, analysis, and delivery.
 ## Default route
 
 1. Preserve spreadsheet semantics: numbers are numbers, dates are dates, formulas are formulas.
-2. Use a workbook library when the runtime provides it, or a bundled artifact runtime for `.xlsx` creation and edits.
+2. Save sheets and typed rows as JSON, then run `openclaw artifacts create-xlsx spec.json --out output.xlsx`.
 3. Put assumptions and raw data in clear input areas. Keep derived outputs formula-driven when the sheet is meant to be editable.
 4. Check formulas for bad references, circular references, and off-by-one ranges.
 5. Export/render important sheets before delivery when visual layout matters; use `openclaw artifacts render-pdf workbook.pdf --out-dir rendered` after any PDF export.

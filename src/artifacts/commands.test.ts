@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec.js";
 import {
   createPdfCommand,
+  createDocxCommand,
   createPptxCommand,
+  createXlsxCommand,
   docxToPdfCommand,
   htmlToPdfCommand,
   pptxToPdfCommand,
@@ -108,6 +110,34 @@ describe("artifact commands", () => {
     await expect(fs.readFile(out, "utf8")).resolves.toBe("pdf");
   });
 
+  it.each([
+    ["DOCX", "docx", createDocxCommand, "from docx import Document"],
+    ["XLSX", "xlsx", createXlsxCommand, "from openpyxl import Workbook"],
+  ] as const)(
+    "creates editable %s through the artifact Python",
+    async (_label, ext, command, marker) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-create-${ext}-test-`));
+      const input = path.join(dir, "spec.json");
+      const out = path.join(dir, `output.${ext}`);
+      await fs.writeFile(input, JSON.stringify({ title: "Artifact", rows: [["A", 1]] }));
+      const runner: ArtifactCommandRunner = vi.fn(async (_argv: string[], options) => {
+        const payload = JSON.parse(String(options.input));
+        await fs.writeFile(payload.outputPath, ext);
+        return okSpawnResult();
+      });
+      const result = await command(
+        input,
+        { out },
+        { runtime: fakeRuntime({ python: "/bin/python3" }), runner },
+      );
+      expect(runner).toHaveBeenCalledWith(
+        ["/bin/python3", "-c", expect.stringContaining(marker)],
+        expect.objectContaining({ input: expect.stringContaining('"title":"Artifact"') }),
+      );
+      expect(result.path).toBe(out);
+    },
+  );
+
   it("rejects invalid PDF spec JSON before running Python", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-json-test-"));
     const input = path.join(dir, "brief.json");
@@ -144,6 +174,27 @@ describe("artifact commands", () => {
     );
     expect(result.path).toBe(out);
     await expect(fs.readFile(out, "utf8")).resolves.toBe("pdf");
+  });
+
+  it("does not overwrite a sibling PDF while converting Office output", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-docx-collision-test-"));
+    const input = path.join(dir, "brief.docx");
+    const sibling = path.join(dir, "brief.pdf");
+    const out = path.join(dir, "brief-docx.pdf");
+    await fs.writeFile(input, "docx");
+    await fs.writeFile(sibling, "original");
+    const runner: ArtifactCommandRunner = vi.fn(async (argv: string[]) => {
+      const conversionDir = String(argv[argv.indexOf("--outdir") + 1]);
+      await fs.writeFile(path.join(conversionDir, "brief.pdf"), "converted");
+      return okSpawnResult();
+    });
+    await docxToPdfCommand(
+      input,
+      { out },
+      { runtime: fakeRuntime({ soffice: "/bin/soffice" }), runner },
+    );
+    await expect(fs.readFile(sibling, "utf8")).resolves.toBe("original");
+    await expect(fs.readFile(out, "utf8")).resolves.toBe("converted");
   });
 
   it("creates editable PPTX through the artifact Python", async () => {
