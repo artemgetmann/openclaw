@@ -485,6 +485,17 @@ function createCodexTool(
         const active =
           sessionKey && (await getCallbackRoutes().findActiveTurn({ threadId, sessionKey }));
         if (active) {
+          if (raw.restart_recovery) {
+            // The authority grant must survive before steering crosses into
+            // the native App Server. A later ambiguous steer cannot otherwise
+            // leave Jarvis claiming recovery was enabled when it was not.
+            await getRegistry().authorizeRecovery({
+              delegationId: active.relayId,
+              threadId: active.threadId,
+              turnId: active.turnId,
+              policy: raw.restart_recovery,
+            });
+          }
           const steered = await service.steer(active.threadId, active.turnId, text);
           result = {
             mode: "native-codex-async-steer",

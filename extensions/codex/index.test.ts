@@ -1104,6 +1104,7 @@ describe("Codex natural-language delegation", () => {
         action: "message_async",
         thread_id: "thread-natural",
         text: "Keep the API narrow and continue.",
+        restart_recovery: "local-safe",
       }),
     ).resolves.toMatchObject({
       details: {
@@ -1121,6 +1122,15 @@ describe("Codex natural-language delegation", () => {
         expectedTurnId: "turn-natural",
         input: [{ type: "text", text: "Keep the API narrow and continue.", text_elements: [] }],
       },
+    });
+    const registry = new CodexDelegationRegistry(
+      path.join(state.resolveStateDir(), "codex", "async-relays.json"),
+    );
+    await expect(registry.get(delegationId!)).resolves.toMatchObject({
+      threadId: "thread-natural",
+      turnId: "turn-natural",
+      lifecycle: "accepted",
+      recoveryPolicy: "local-safe",
     });
   });
 

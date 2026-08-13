@@ -139,6 +139,31 @@ export class CodexDelegationRegistry {
     });
   }
 
+  /** Persist an explicit recovery grant before steering the exact accepted turn. */
+  async authorizeRecovery(input: {
+    delegationId: string;
+    threadId: string;
+    turnId: string;
+    policy: CodexRelayRecoveryPolicy;
+  }): Promise<CodexRelayRecord> {
+    return await this.update(input.delegationId, (record, timestamp) => {
+      if (
+        record.lifecycle !== "accepted" ||
+        record.threadId !== input.threadId ||
+        record.turnId !== input.turnId
+      ) {
+        throw new Error(
+          `Codex relay ${record.delegationId} exact accepted identity does not match recovery grant`,
+        );
+      }
+      return {
+        ...record,
+        recoveryPolicy: input.policy,
+        updatedAtMs: timestamp,
+      };
+    });
+  }
+
   async markTerminal(
     delegationId: string,
     terminalStatus: CodexRelayTerminalStatus,
