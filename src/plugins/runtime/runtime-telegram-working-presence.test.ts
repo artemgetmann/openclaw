@@ -61,6 +61,26 @@ describe("telegram working presence", () => {
     expect(lease.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("does not refresh a duplicate owner after pending creation is stopped", async () => {
+    const lease = { refresh: vi.fn(async () => undefined), stop: vi.fn() };
+    let resolveLease!: (value: typeof lease) => void;
+    const startTyping = vi.fn(
+      async () => await new Promise<typeof lease>((resolve) => (resolveLease = resolve)),
+    );
+    const manager = createTelegramWorkingPresenceManager({ startTyping });
+    const route = { to: "-1001", messageThreadId: 42 };
+
+    const first = manager.start({ ownerId: "worker", ...route });
+    const duplicate = manager.start({ ownerId: "worker", ...route });
+    manager.stop("worker");
+    resolveLease(lease);
+    await Promise.all([first, duplicate]);
+
+    expect(startTyping).toHaveBeenCalledTimes(1);
+    expect(lease.refresh).not.toHaveBeenCalled();
+    expect(lease.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves a shared pending lease when the first owner stops", async () => {
     const lease = { refresh: vi.fn(async () => undefined), stop: vi.fn() };
     let resolveLease!: (value: typeof lease) => void;

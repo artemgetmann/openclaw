@@ -64,7 +64,14 @@ export function createTelegramWorkingPresenceManager(params: {
       const key = routeKey(routeInput);
       const existingOwnerRoute = owners.get(ownerId);
       if (existingOwnerRoute === key) {
-        await (await routes.get(key))?.lease.refresh();
+        // A duplicate start can join while the provider lease is still being
+        // created. Recheck ownership after that await so terminal cleanup wins
+        // and cannot be followed by a stale typing pulse.
+        const startGeneration = generation;
+        const route = await routes.get(key);
+        if (generation === startGeneration && owners.get(ownerId) === key) {
+          await route?.lease.refresh();
+        }
         return;
       }
       stop(ownerId);
