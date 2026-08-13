@@ -627,16 +627,19 @@ function buildChatCommands(): ChatCommandDefinition[] {
     }),
     defineChatCommand({
       key: "verbose",
-      nativeName: "verbose",
-      description: "Toggle verbose mode.",
-      textAlias: "/verbose",
+      nativeName: "visibility",
+      description: "Choose how much work detail to show.",
+      // Keep the established internal key and aliases so stored verboseLevel
+      // state and typed legacy commands remain compatible. Only the public
+      // command name changes to the consumer-facing visibility vocabulary.
+      textAliases: ["/visibility", "/verbose", "/v"],
       category: "options",
       args: [
         {
           name: "mode",
-          description: "on or off",
+          description: "off, on, or full",
           type: "string",
-          choices: ["on", "off"],
+          choices: ["off", "on", "full"],
         },
       ],
       argsMenu: "auto",
@@ -817,7 +820,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
 
   registerAlias(commands, "whoami", "/id");
   registerAlias(commands, "think", "/thinking", "/t");
-  registerAlias(commands, "verbose", "/v");
   registerAlias(commands, "reasoning", "/reason");
   registerAlias(commands, "elevated", "/elev");
   registerAlias(commands, "steer", "/tell");

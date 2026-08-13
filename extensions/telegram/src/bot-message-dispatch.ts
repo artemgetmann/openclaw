@@ -23,6 +23,7 @@ import {
   markDurableFollowupTelegramPendingUseNow,
 } from "../../../src/auto-reply/reply/queue/durable-store.js";
 import { buildFinalTtsCaptionPreview } from "../../../src/auto-reply/reply/tts-caption-preview.js";
+import { normalizeVerboseLevel, type VerboseLevel } from "../../../src/auto-reply/thinking.js";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../src/channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../src/channels/logging.js";
@@ -105,17 +106,71 @@ const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
 const DRAFT_DM_MESSAGE_PREVIEW_THROTTLE_MS = 250;
 const PROGRESS_FINAL_CLEANUP_TIMEOUT_MS = 2_000;
 const SILENT_TOOL_PROGRESS_DELAY_MS = 3_000;
-const GENERIC_SILENT_TOOL_PROGRESS = "Still working on it.";
+const MAX_FULL_TOOL_COMPLETION_EVENTS = 4;
+const MAX_FULL_TOOL_COMPLETION_LINES = 8;
+const MAX_FULL_TOOL_COMPLETION_CHARS = 600;
 
-function resolveSilentToolProgressText(toolName?: string): string {
-  // Tool names are provider-controlled identifiers and may contain commands,
-  // arguments, or plugin internals. Only exact, reviewed identifiers may reach
-  // consumer copy; every unknown value deliberately collapses to generic text.
+function resolveSafeToolStartProgressText(toolName?: string): string {
   const normalized = toolName?.trim().toLowerCase();
+  // Tool names are provider-controlled and can accidentally contain arguments,
+  // paths, or plugin internals. Reject anything outside the identifier grammar,
+  // then expose only reviewed categories rather than echoing the identifier.
+  if (!normalized || !/^[a-z0-9_.:/-]{1,80}$/.test(normalized)) {
+    return "Still working on it.";
+  }
   if (normalized === "codex" || normalized === "codex_threads") {
     return "Waiting for Codex…";
   }
-  return GENERIC_SILENT_TOOL_PROGRESS;
+  if (normalized === "exec" || normalized === "bash" || normalized.includes("shell")) {
+    return "Using Terminal…";
+  }
+  if (normalized.startsWith("browser") || normalized.includes("chrome")) {
+    return "Using Browser…";
+  }
+  if (normalized.includes("web_search")) {
+    return "Searching the web…";
+  }
+  if (normalized.includes("web_fetch")) {
+    return "Reading a web page…";
+  }
+  if (normalized.includes("gmail") || normalized.includes("email")) {
+    return "Checking email…";
+  }
+  if (normalized.includes("calendar")) {
+    return "Checking the calendar…";
+  }
+  if (normalized.includes("memory")) {
+    return "Checking memory…";
+  }
+  if (normalized.includes("message") || normalized.includes("telegram")) {
+    return "Handling messages…";
+  }
+  if (
+    normalized === "read" ||
+    normalized === "write" ||
+    normalized === "edit" ||
+    normalized === "apply_patch"
+  ) {
+    return "Working with files…";
+  }
+  if (normalized === "update_plan") {
+    return "Updating the plan…";
+  }
+  return "Still working on it.";
+}
+
+function resolveBoundedFullToolCompletionText(text?: string): string | undefined {
+  const trimmed = text?.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim();
+  if (!trimmed || trimmed.startsWith("🔧")) {
+    // Providers can reuse the result callback for a pre-execution summary.
+    // A start summary is not completion output and often includes raw args.
+    return undefined;
+  }
+  const boundedLines = trimmed.split(/\r?\n/).slice(0, MAX_FULL_TOOL_COMPLETION_LINES).join("\n");
+  if (boundedLines.length <= MAX_FULL_TOOL_COMPLETION_CHARS) {
+    return boundedLines;
+  }
+  return `${boundedLines.slice(0, MAX_FULL_TOOL_COMPLETION_CHARS - 3).trimEnd()}...`;
 }
 
 // Continuation-style agent runs can re-enter Telegram delivery between tool
@@ -485,6 +540,34 @@ function resolveTelegramReasoningLevel(params: {
   return "off";
 }
 
+function resolveTelegramVisibilityLevel(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  agentId: string;
+  isGroup: boolean;
+}): VerboseLevel {
+  const { cfg, sessionKey, agentId, isGroup } = params;
+  if (sessionKey) {
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId });
+      const store = loadSessionStore(storePath, { skipCache: true });
+      const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const explicitLevel = normalizeVerboseLevel(entry?.verboseLevel);
+      if (explicitLevel) {
+        return explicitLevel;
+      }
+    } catch {
+      // A missing or unreadable session must never increase visible detail.
+    }
+  }
+  if (isGroup) {
+    // Group participants can differ from the owner who selected global defaults.
+    // Require an explicit group/topic session opt-in before exposing work detail.
+    return "off";
+  }
+  return normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault) ?? "off";
+}
+
 function logTelegramDurableSendClassification(params: {
   reason: TelegramDurableSendReason;
   callsite: string;
@@ -636,6 +719,13 @@ export const dispatchTelegramMessage = async ({
     sessionKey: ctxPayload.SessionKey,
     agentId: route.agentId,
   });
+  const readVisibilityLevel = () =>
+    resolveTelegramVisibilityLevel({
+      cfg,
+      sessionKey: ctxPayload.SessionKey,
+      agentId: route.agentId,
+      isGroup,
+    });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const previewStreamingEnabled = streamMode !== "off";
@@ -930,6 +1020,7 @@ export const dispatchTelegramMessage = async ({
   let processingDraftLaneEvent = false;
   let progressController: TelegramProgressController | undefined;
   const workLogToolNames: string[] = [];
+  let fullToolCompletionEvents = 0;
   let silentToolProgressTimer: ReturnType<typeof setTimeout> | undefined;
   let silentToolProgressGeneration = 0;
   let silentToolFallbackRendered = false;
@@ -938,7 +1029,6 @@ export const dispatchTelegramMessage = async ({
   const cancelSilentToolProgressFallback = () => {
     // Incrementing the generation also invalidates a callback that already left
     // the timer queue but has not yet entered the serialized draft-lane queue.
-    // clearTimeout alone cannot close that race at final/teardown boundaries.
     silentToolProgressGeneration += 1;
     if (silentToolProgressTimer) {
       clearTimeout(silentToolProgressTimer);
@@ -1175,9 +1265,10 @@ export const dispatchTelegramMessage = async ({
   const noteWorkLogToolName = (name: string | undefined) => {
     const normalized = name?.trim();
     if (!normalized || workLogToolNames.includes(normalized)) {
-      return;
+      return false;
     }
     workLogToolNames.push(normalized);
+    return true;
   };
   const clearProgressController = async (
     callsite: string,
@@ -1732,9 +1823,8 @@ export const dispatchTelegramMessage = async ({
       return false;
     }
     if (options.silentToolFallback !== true) {
-      // Any real provider-authored commentary wins over the delayed fallback.
-      // Cancel before awaiting lane work so a due timer cannot race a known
-      // explicit update and briefly expose both messages.
+      // Any provider-authored commentary wins over the delayed generic receipt.
+      // Cancel before awaiting lane work so both cannot flash in succession.
       noteExplicitProgress();
     }
     // Assistant partial callbacks are queued to preserve stream order. A later
@@ -1788,11 +1878,9 @@ export const dispatchTelegramMessage = async ({
     }
     return true;
   };
-  if (interruptedProactiveCompaction === "running") {
-    await updateAnswerProgressFromBlock("Pausing conversation cleanup for your message…");
-  }
   const scheduleSilentToolProgressFallback = (toolName?: string) => {
     if (
+      readVisibilityLevel() === "off" ||
       sawExplicitProgress ||
       answerLane.hasStreamedMessage ||
       finalPhaseStarted ||
@@ -1802,15 +1890,15 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     const generation = ++silentToolProgressGeneration;
-    const progressText = resolveSilentToolProgressText(toolName);
+    const progressText = resolveSafeToolStartProgressText(toolName);
     silentToolProgressTimer = setTimeout(() => {
       silentToolProgressTimer = undefined;
-      // Timer callbacks never mutate Telegram state directly. Join the same
-      // serialized lane as provider callbacks, then re-check cancellation:
-      // final/tool-result events can arrive after timeout but before this task.
+      // Timer callbacks join the same serialized lane as provider callbacks,
+      // then re-check both lifecycle cancellation and the current session mode.
       void enqueueDraftLaneEvent(async () => {
         if (
           generation !== silentToolProgressGeneration ||
+          readVisibilityLevel() === "off" ||
           sawExplicitProgress ||
           answerLane.hasStreamedMessage ||
           finalPhaseStarted ||
@@ -1825,6 +1913,9 @@ export const dispatchTelegramMessage = async ({
       });
     }, SILENT_TOOL_PROGRESS_DELAY_MS);
   };
+  if (interruptedProactiveCompaction === "running") {
+    await updateAnswerProgressFromBlock("Pausing conversation cleanup for your message…");
+  }
   const renderTextWithToolProgress = (text: string) => {
     return normalizeAdjacentProgressBoundaries(text);
   };
@@ -2242,6 +2333,19 @@ export const dispatchTelegramMessage = async ({
     // trusted tool results. Deliver them directly so Telegram does not have to
     // infer media from assistant prose after the model paraphrases the tool.
     if (!hasUserFacingToolEnvelope(sanitizedPayload)) {
+      if (
+        readVisibilityLevel() === "full" &&
+        fullToolCompletionEvents < MAX_FULL_TOOL_COMPLETION_EVENTS
+      ) {
+        // Full mode is intentionally bounded per turn as well as per payload.
+        // This keeps the evolving Work Log useful without turning raw tool
+        // output into an unbounded second transcript.
+        const completionText = resolveBoundedFullToolCompletionText(payload.text);
+        if (completionText) {
+          fullToolCompletionEvents += 1;
+          await updateAnswerProgressFromBlock(completionText);
+        }
+      }
       return;
     }
     await sendPayload(sanitizedPayload, {
@@ -2710,10 +2814,8 @@ export const dispatchTelegramMessage = async ({
               payload.audioAsVoice === true &&
               isFinalTtsSupplementPayload(payload);
             if (deliveryKind === "final") {
-              // Cancel synchronously, before draining queued partial work. A
-              // timeout callback may already be queued behind that work; its
-              // generation check then folds away instead of flashing progress
-              // immediately before the final answer.
+              // Cancel before draining queued partial work so a due fallback
+              // cannot flash immediately before the durable final answer.
               noteFinalPhaseStarted();
               terminalDeliveryAttempted = true;
               // Assistant callbacks are fire-and-forget; ensure queued boundary
@@ -3100,10 +3202,6 @@ export const dispatchTelegramMessage = async ({
           releaseBusySequentialKey = undefined;
         },
         onToolResult: (payload) => {
-          // Verbose providers reuse this callback for a hidden tool-start
-          // summary before execution begins. It is therefore not a reliable
-          // completion boundary. Keep the timer alive; a quick tool's final,
-          // failure, or dispatch teardown still cancels it before three seconds.
           return enqueueDraftLaneEvent(async () => {
             await flushAmbiguousAnswerBlockAsProgress("before-tool-result");
             await sendToolPayload(payload);
@@ -3168,22 +3266,22 @@ export const dispatchTelegramMessage = async ({
               })
           : undefined,
         onToolStart: async (payload) => {
-          noteWorkLogToolName(payload.name);
+          const firstStartForTool = noteWorkLogToolName(payload.name);
           await flushAmbiguousAnswerBlockAsProgress("before-tool-start");
-          // Partial callbacks share the draft lane but can arrive immediately
-          // before this tool event. Drain them before deciding the turn is
-          // silent: a rendered answer acknowledgment already tells the user
-          // that work started and must not gain a second generic receipt.
-          // Incomplete DM text can be buffered without reaching Telegram; that
-          // remains silent and is folded into the fallback Work log at timeout.
+          // Join the shared draft-lane queue before writing progress so a tool
+          // boundary cannot overtake the assistant acknowledgment immediately
+          // before it. Duplicate start/update events stay one Work Log entry.
           await waitForDraftLaneIdle();
+          if (firstStartForTool && silentToolFallbackRendered && readVisibilityLevel() !== "off") {
+            // Once the first delayed receipt is visible, later distinct tools
+            // can evolve that same Work Log without another debounce window.
+            await updateAnswerProgressFromBlock(resolveSafeToolStartProgressText(payload.name));
+          } else if (firstStartForTool) {
+            scheduleSilentToolProgressFallback(payload.name);
+          }
           if (getActiveProgressController() && activeProgressKind !== "plan") {
             routeToolStatusPartialsToProgress = true;
           }
-          // Providers can emit both start and update events for one tool. Keep
-          // the original deadline instead of resetting it or allocating a
-          // second fallback/Work log.
-          scheduleSilentToolProgressFallback(payload.name);
           if (!statusReactionController) {
             return;
           }
@@ -3356,9 +3454,9 @@ export const dispatchTelegramMessage = async ({
     dispatchError = err;
     runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
-    // Timers are dispatch-local and must never survive cancellation, restart
-    // recovery, or a silent/no-final return. A retained progress controller can
-    // safely span continuation dispatches; its old timer cannot.
+    // Dispatch-local timers never survive cancellation, restart recovery, or
+    // a silent/no-final return. The retained Work Log controller may survive;
+    // its old timer may not.
     cancelSilentToolProgressFallback();
     releaseBusySequentialKey?.();
     releaseBusySequentialKey = undefined;

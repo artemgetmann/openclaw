@@ -180,7 +180,7 @@ describe("directive behavior", () => {
         {},
         makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
       );
-      expect(replyText(enabledRes)).toMatch(/^⚙️ Verbose logging enabled\./);
+      expect(replyText(enabledRes)).toMatch(/^⚙️ Visibility is on\./);
 
       const disabledRes = await getReplyFromConfig(
         { Body: "/verbose off", From: "+1222", To: "+1222", CommandAuthorized: true },
@@ -195,7 +195,7 @@ describe("directive behavior", () => {
       );
 
       const text = replyText(disabledRes);
-      expect(text).toMatch(/Verbose logging disabled\./);
+      expect(text).toMatch(/Visibility is off\./);
       const store = loadSessionStore(storePath);
       const entry = Object.values(store)[0];
       expect(entry?.verboseLevel).toBe("off");

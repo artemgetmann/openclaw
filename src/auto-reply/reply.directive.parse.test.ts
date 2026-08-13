@@ -37,6 +37,13 @@ describe("directive parsing", () => {
     expect(res.verboseLevel).toBe("on");
   });
 
+  it("parses canonical visibility and preserves the full level", () => {
+    const res = extractVerboseDirective("/visibility full");
+    expect(res.hasDirective).toBe(true);
+    expect(res.verboseLevel).toBe("full");
+    expect(res.cleaned).toBe("");
+  });
+
   it("matches reasoning directive", () => {
     const res = extractReasoningDirective("/reasoning on please");
     expect(res.hasDirective).toBe(true);

@@ -188,10 +188,14 @@ describe("registerTelegramNativeCommands", () => {
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
     expect(registeredCommands.some((entry) => entry.command === "export-session")).toBe(false);
+    expect(registeredCommands.some((entry) => entry.command === "visibility")).toBe(true);
+    expect(registeredCommands.some((entry) => entry.command === "verbose")).toBe(false);
 
     const registeredHandlers = command.mock.calls.map(([name]) => name);
     expect(registeredHandlers).toContain("export_session");
     expect(registeredHandlers).not.toContain("export-session");
+    expect(registeredHandlers).toContain("visibility");
+    expect(registeredHandlers).not.toContain("verbose");
   });
 
   it("registers only Telegram-safe command names across native, custom, and plugin sources", async () => {

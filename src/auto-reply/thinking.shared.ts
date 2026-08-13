@@ -112,7 +112,10 @@ export function resolveThinkingDefaultForModel(params: {
 
 type OnOffFullLevel = "off" | "on" | "full";
 
-function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefined {
+function normalizeOnOffFullLevel(
+  raw?: string | null,
+  options: { preserveFull?: boolean } = {},
+): OnOffFullLevel | undefined {
   if (!raw) {
     return undefined;
   }
@@ -121,7 +124,7 @@ function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefine
     return "off";
   }
   if (["full", "all", "everything"].includes(key)) {
-    return "on";
+    return options.preserveFull ? "full" : "on";
   }
   if (["on", "minimal", "true", "yes", "1"].includes(key)) {
     return "on";
@@ -130,7 +133,9 @@ function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefine
 }
 
 export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
-  return normalizeOnOffFullLevel(raw);
+  // Visibility needs three distinct stored states. Notice-level callers keep
+  // their historical binary normalization through the shared helper below.
+  return normalizeOnOffFullLevel(raw, { preserveFull: true });
 }
 
 export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {

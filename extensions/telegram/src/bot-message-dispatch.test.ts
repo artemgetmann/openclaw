@@ -14,7 +14,11 @@ import {
 } from "./draft-stream.test-helpers.js";
 import { __testing as queueButtonTesting } from "./queue-buttons.js";
 import { clearSentMessageCache, getSentMessageMetadata } from "./sent-message-cache.js";
-import { __testing as workLogTesting } from "./work-log.js";
+import {
+  __testing as workLogTesting,
+  getTelegramWorkLog,
+  renderTelegramWorkLog,
+} from "./work-log.js";
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
@@ -98,6 +102,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     queueButtonTesting.resetAutoSteers();
   });
 
@@ -728,6 +733,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     async ({ ctxPayload }) => {
       vi.useFakeTimers();
       try {
+        loadSessionStore.mockReturnValue({
+          [String(ctxPayload.SessionKey)]: { verboseLevel: "on" },
+        });
         const progressStream = createDraftStream(9050);
         createTelegramDraftStream.mockReturnValue(progressStream);
         let signalToolStarted: (() => void) | undefined;
@@ -895,6 +903,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   it("keeps delayed progress armed across a hidden verbose tool-start summary", async () => {
     vi.useFakeTimers();
     try {
+      loadSessionStore.mockReturnValue({
+        "verbose-start-summary-keeps-fallback": { verboseLevel: "on" },
+      });
       const progressStream = createDraftStream(9053);
       createTelegramDraftStream.mockReturnValue(progressStream);
       let signalToolStarted: (() => void) | undefined;
@@ -995,6 +1006,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   it("shows delayed progress when an incomplete assistant fragment stayed buffered", async () => {
     vi.useFakeTimers();
     try {
+      loadSessionStore.mockReturnValue({
+        "buffered-partial-keeps-fallback": { verboseLevel: "on" },
+      });
       const progressStream = createDraftStream(9055);
       createTelegramDraftStream.mockReturnValue(progressStream);
       let signalToolStarted: (() => void) | undefined;
@@ -1047,6 +1061,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   it("uses generic delayed copy without exposing unknown tool identifiers or raw traces", async () => {
     vi.useFakeTimers();
     try {
+      loadSessionStore.mockReturnValue({
+        "unknown-tool-generic-fallback": { verboseLevel: "on" },
+      });
       const progressStream = createDraftStream(9052);
       createTelegramDraftStream.mockReturnValue(progressStream);
       let signalToolStarted: (() => void) | undefined;
@@ -2552,6 +2569,143 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
     expect(deliveredTexts).not.toContain("🔧 exec: ls");
     expect(deliveredTexts).toContain("telegram_voice_sanitize_ok");
+  });
+
+  it("keeps tool activity hidden when visibility is off", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { verboseLevel: "off" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onToolResult?.({ text: "private completion output" });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({ replies: [expect.objectContaining({ text: "Done." })] }),
+    );
+  });
+
+  it("shows sanitized tool starts in the evolving Work Log when visibility is on", async () => {
+    vi.useFakeTimers();
+    loadSessionStore.mockReturnValue({
+      s1: { verboseLevel: "on" },
+    });
+    const progressStream = createDraftStream(9201);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onToolStart?.({
+          name: "private_plugin.run --token=secret /Users/private",
+          phase: "start",
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        await replyOptions?.onToolResult?.({ text: "raw /Users/private completion output" });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(progressStream.update).toHaveBeenCalledWith("Using Terminal…");
+    const workLog = getTelegramWorkLog("1");
+    const expanded = workLog ? renderTelegramWorkLog(workLog, true) : null;
+    expect(expanded?.text).toContain("Using Terminal…");
+    expect(expanded?.text).not.toContain("private_plugin");
+    expect(expanded?.text).not.toContain("/Users/private");
+    expect(expanded?.text).not.toContain("secret");
+    vi.useRealTimers();
+  });
+
+  it("adds only bounded completion output when visibility is full", async () => {
+    vi.useFakeTimers();
+    loadSessionStore.mockReturnValue({
+      s1: { verboseLevel: "full" },
+    });
+    const progressStream = createDraftStream(9202);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    const completion = `result-start ${"x".repeat(900)} result-tail`;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await vi.advanceTimersByTimeAsync(3_000);
+        await replyOptions?.onToolResult?.({ text: "🔧 exec: cat /Users/private/file" });
+        await replyOptions?.onToolResult?.({ text: completion });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    const workLog = getTelegramWorkLog("1");
+    const expanded = workLog ? renderTelegramWorkLog(workLog, true) : null;
+    expect(expanded?.text).toContain("Using Terminal…");
+    expect(expanded?.text).toContain("result-start");
+    expect(expanded?.text).not.toContain("result-tail");
+    expect(expanded?.text).not.toContain("🔧 exec");
+    vi.useRealTimers();
+  });
+
+  it("fails closed in groups unless that session explicitly enables visibility", async () => {
+    vi.useFakeTimers();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await vi.advanceTimersByTimeAsync(3_000);
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    const groupContext = createContext({
+      ctxPayload: { SessionKey: "group-s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      isGroup: true,
+      threadSpec: { id: 777, scope: "forum" },
+    });
+
+    loadSessionStore.mockReturnValue({});
+    await dispatchWithContext({
+      context: groupContext,
+      cfg: { agents: { defaults: { verboseDefault: "full" } } },
+      streamMode: "partial",
+    });
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+
+    createTelegramDraftStream.mockClear();
+    deliverReplies.mockClear();
+    loadSessionStore.mockReturnValue({ "group-s1": { verboseLevel: "on" } });
+    const progressStream = createDraftStream(9203);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    await dispatchWithContext({ context: groupContext, streamMode: "partial" });
+    expect(progressStream.update).toHaveBeenCalledWith("Using Terminal…");
+    vi.useRealTimers();
   });
 
   it("suppresses trace captions but still delivers media-bearing tool payloads", async () => {

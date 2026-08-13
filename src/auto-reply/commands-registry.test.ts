@@ -210,6 +210,22 @@ describe("commands registry", () => {
     expect(modeArg?.choices).toEqual(["status", "on", "off"]);
   });
 
+  it("registers visibility as the canonical command with legacy text aliases", () => {
+    const visibility = listChatCommands().find((command) => command.key === "verbose");
+    expect(visibility).toMatchObject({
+      nativeName: "visibility",
+      textAliases: ["/visibility", "/verbose", "/v"],
+      category: "options",
+    });
+    expect(visibility?.args?.find((arg) => arg.name === "mode")?.choices).toEqual([
+      "off",
+      "on",
+      "full",
+    ]);
+    expect(listNativeCommandSpecs().some((command) => command.name === "visibility")).toBe(true);
+    expect(listNativeCommandSpecs().some((command) => command.name === "verbose")).toBe(false);
+  });
+
   it("registers one native personal setup command with text aliases", () => {
     const begin = listChatCommands().find((command) => command.key === "begin");
     expect(begin).toMatchObject({
