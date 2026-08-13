@@ -259,6 +259,43 @@ describe("reconcileCodexRelays", () => {
     );
   });
 
+  it("repairs a parent when its recovery child was durably accepted before a crash", async () => {
+    const { registry } = await acceptedRegistry(1_000, { recoveryPolicy: "local-safe" });
+    await registry.markTerminal("delegation-1", "interrupted");
+    await registry.claimRecovery("delegation-1", "recovery-1");
+    await registry.createStarting({
+      delegationId: "recovery-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      threadId: "thread-1",
+      deliveryKey: "codex-relay:recovery-1",
+      recoveryOfDelegationId: "delegation-1",
+      recoveryPolicy: undefined,
+    });
+    await registry.markAccepted("recovery-1", "turn-2");
+    const decision = vi.fn(async () => "completed" as const);
+
+    await expect(
+      reconcileCodexRelays({
+        registry,
+        inspectTurn: async (_threadId, turnId) =>
+          turnId === "turn-2"
+            ? { kind: "nonterminal" as const, threadId: "thread-1", turnId, status: "inProgress" }
+            : { kind: "interrupted" as const, threadId: "thread-1", turnId },
+        dispatchTerminal: vi.fn(),
+        dispatchDecisionNeeded: decision,
+        startRecovery: vi.fn(),
+        now: () => 2_000,
+      }),
+    ).resolves.toMatchObject({ skipped: 1, decisionNeeded: 1 });
+    expect(decision).toHaveBeenCalledTimes(1);
+    expect(decision).not.toHaveBeenCalledWith(
+      expect.objectContaining({ delegationId: "delegation-1" }),
+      expect.anything(),
+    );
+    await expect(registry.get("delegation-1")).resolves.toMatchObject({ lifecycle: "recovered" });
+  });
+
   it("turns crash-after-delivery-start into an ambiguity report instead of replay", async () => {
     const { registry } = await acceptedRegistry();
     await registry.markTerminal("delegation-1", "completed");

@@ -62,9 +62,25 @@ export async function reconcileCodexRelays(
   };
   const now = (options.now ?? Date.now)();
   const maxAgeMs = options.maxAgeMs ?? CODEX_RELAY_MAX_RECONCILE_AGE_MS;
+  const recordsById = new Map(snapshot.records.map((record) => [record.delegationId, record]));
 
   for (const record of snapshot.records) {
     try {
+      if (record.lifecycle === "recovery-started" && record.recoveryDelegationId) {
+        const child = recordsById.get(record.recoveryDelegationId);
+        if (
+          child?.recoveryOfDelegationId === record.delegationId &&
+          child.threadId === record.threadId &&
+          child.sessionKey === record.sessionKey &&
+          child.lifecycle !== "starting"
+        ) {
+          // The replacement turn crossed its own durable acceptance boundary.
+          // Repair the parent before either record is reconciled so a crash
+          // between child acceptance and parent finalization cannot emit a
+          // contradictory ambiguity handback.
+          Object.assign(record, await options.registry.markRecovered(record.delegationId));
+        }
+      }
       await reconcileRecord({ options, result, record, now, maxAgeMs });
     } catch (error) {
       // Every dispatch is preceded by its durable terminal/decision claim.
