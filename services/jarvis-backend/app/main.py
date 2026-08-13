@@ -532,7 +532,7 @@ async def telegram_managed_status(
     store = get_license_store(settings)
     session = _telegram_managed_setup_session(store, setup_id)
     if session.status == "pending":
-        await _refresh_telegram_managed_setup_session(session, settings)
+        await _refresh_telegram_managed_setup_session(session, settings, store)
         store.save_telegram_managed_setup_session(session=session)
         telegram_managed_setup_sessions[setup_id] = session
 
@@ -675,6 +675,7 @@ def _prune_expired_telegram_managed_sessions(store: LicenseStore) -> None:
 async def _refresh_telegram_managed_setup_session(
     session: TelegramManagedSetupSession,
     settings: Settings,
+    store: LicenseStore,
 ) -> None:
     """
     Poll for the matching managed_bot update, then fetch and restrict the child.
@@ -696,9 +697,47 @@ async def _refresh_telegram_managed_setup_session(
             detail="telegram getUpdates returned an invalid result",
         )
 
-    managed_bot = _matching_managed_bot_update(session, updates)
-    if managed_bot is None:
-        return
+    # Telegram exposes one update queue for the manager bot, not one queue per
+    # setup. A status request for setup B can therefore receive setup A's bot.
+    # Route every valid event to its durable setup before advancing B's offset;
+    # otherwise B confirms and permanently discards A's creation event.
+    for update in _telegram_managed_update_events(updates):
+        managed_bot = update["managed_bot"]
+        if managed_bot is None:
+            # Telegram may return already-queued update types despite the
+            # allowed_updates filter. Confirm those inert events so they cannot
+            # pin every later status poll behind the same full page.
+            session.last_update_id = update["update_id"]
+            store.save_telegram_managed_setup_session(session=session)
+            continue
+        target_session = session
+        if managed_bot["username"].lower() != session.suggested_bot_username.lower():
+            target_session = store.get_pending_telegram_managed_setup_session_by_username(
+                suggested_bot_username=managed_bot["username"]
+            )
+        if target_session is None:
+            session.last_update_id = managed_bot["update_id"]
+            store.save_telegram_managed_setup_session(session=session)
+            continue
+        await _connect_telegram_managed_setup_session(
+            target_session,
+            managed_bot,
+            settings,
+        )
+        store.save_telegram_managed_setup_session(session=target_session)
+        telegram_managed_setup_sessions[target_session.setup_id] = target_session
+        # Confirm this manager-wide event only after its owning setup is
+        # durable. A later event in the same batch may still fail and retry.
+        session.last_update_id = managed_bot["update_id"]
+        store.save_telegram_managed_setup_session(session=session)
+
+
+async def _connect_telegram_managed_setup_session(
+    session: TelegramManagedSetupSession,
+    managed_bot: dict[str, Any],
+    settings: Settings,
+) -> None:
+    """Fetch, verify, and restrict one managed child bot for its matched setup."""
 
     child_token_payload = await _telegram_bot_api_call(
         method="getManagedBotToken",
@@ -753,32 +792,29 @@ def _telegram_managed_get_updates_payload(session: TelegramManagedSetupSession) 
     return payload
 
 
-def _matching_managed_bot_update(
-    session: TelegramManagedSetupSession,
+def _telegram_managed_update_events(
     updates: list[Any],
-) -> dict[str, Any] | None:
-    """Find the update for this suggested username and advance this session's offset."""
+) -> list[dict[str, Any]]:
+    """Retain every usable offset while parsing optional managed-bot payloads."""
 
-    expected_username = session.suggested_bot_username.lower()
+    events: list[dict[str, Any]] = []
     for update in updates:
         if not isinstance(update, dict):
             continue
         update_id = update.get("update_id")
-        if isinstance(update_id, int) and not isinstance(update_id, bool):
-            session.last_update_id = update_id
+        if not isinstance(update_id, int) or isinstance(update_id, bool):
+            continue
+        managed_bot: dict[str, Any] | None = None
         managed_bot_update = update.get("managed_bot")
-        if not isinstance(managed_bot_update, dict):
-            continue
-        bot = managed_bot_update.get("bot")
-        if not isinstance(bot, dict):
-            continue
-        bot_id = _telegram_int_field(bot, "id")
-        username = _telegram_string_field(bot, "username")
-        if bot_id is None or username is None:
-            continue
-        if username.lower() == expected_username:
-            return {"id": bot_id, "username": username}
-    return None
+        if isinstance(managed_bot_update, dict):
+            bot = managed_bot_update.get("bot")
+            if isinstance(bot, dict):
+                bot_id = _telegram_int_field(bot, "id")
+                username = _telegram_string_field(bot, "username")
+                if bot_id is not None and username is not None:
+                    managed_bot = {"id": bot_id, "username": username, "update_id": update_id}
+        events.append({"update_id": update_id, "managed_bot": managed_bot})
+    return events
 
 
 async def _telegram_bot_api_call(
@@ -2145,6 +2181,13 @@ class LicenseStore(Protocol):
     ) -> TelegramManagedSetupSession | None:
         """Load one Telegram setup session by public setup id."""
 
+    def get_pending_telegram_managed_setup_session_by_username(
+        self,
+        *,
+        suggested_bot_username: str,
+    ) -> TelegramManagedSetupSession | None:
+        """Load the pending setup that owns a manager-wide Telegram update."""
+
     def delete_telegram_managed_setup_session(self, *, setup_id: str) -> None:
         """Delete one Telegram setup session after expiry or cleanup."""
 
@@ -2413,6 +2456,29 @@ class SQLiteLicenseStore:
             row = connection.execute(
                 "SELECT * FROM telegram_managed_setup_sessions WHERE setup_id = ?",
                 (setup_id,),
+            ).fetchone()
+
+        return _telegram_managed_session_from_row(row) if row else None
+
+    def get_pending_telegram_managed_setup_session_by_username(
+        self,
+        *,
+        suggested_bot_username: str,
+    ) -> TelegramManagedSetupSession | None:
+        """Resolve a shared manager update to its pending SQLite setup."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                """
+                SELECT * FROM telegram_managed_setup_sessions
+                WHERE status = 'pending'
+                  AND suggested_bot_username = ? COLLATE NOCASE
+                  AND expires_at > ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (suggested_bot_username, _format_dt(_utcnow())),
             ).fetchone()
 
         return _telegram_managed_session_from_row(row) if row else None
@@ -2758,6 +2824,31 @@ class PostgresLicenseStore:
                 cursor.execute(
                     "SELECT * FROM telegram_managed_setup_sessions WHERE setup_id = %s",
                     (setup_id,),
+                )
+                row = cursor.fetchone()
+
+        return _telegram_managed_session_from_row(row) if row else None
+
+    def get_pending_telegram_managed_setup_session_by_username(
+        self,
+        *,
+        suggested_bot_username: str,
+    ) -> TelegramManagedSetupSession | None:
+        """Resolve a shared manager update to its pending Postgres setup."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT * FROM telegram_managed_setup_sessions
+                    WHERE status = 'pending'
+                      AND LOWER(suggested_bot_username) = LOWER(%s)
+                      AND expires_at > %s
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (suggested_bot_username, _utcnow()),
                 )
                 row = cursor.fetchone()
 

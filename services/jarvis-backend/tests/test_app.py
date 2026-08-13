@@ -579,6 +579,249 @@ def test_telegram_managed_status_connects_child_bot_and_returns_token(monkeypatc
     assert len([url for url in requests_seen if url.endswith("/getUpdates")]) == 1
 
 
+def test_telegram_managed_status_routes_later_update_after_wrong_order_check(monkeypatch):
+    """A different setup must not consume a bot created after an early status check."""
+
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    get_updates_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal get_updates_calls
+        if str(request.url).endswith("/getUpdates"):
+            get_updates_calls += 1
+            payload = json.loads(request.content)
+            if get_updates_calls == 1:
+                # The user checked setup A before approving its bot in Telegram.
+                assert "offset" not in payload
+                return httpx.Response(200, json={"ok": True, "result": []})
+            if get_updates_calls == 2:
+                # Setup B polls the manager's shared queue after A's bot exists.
+                assert "offset" not in payload
+                return httpx.Response(
+                    200,
+                    json={
+                        "ok": True,
+                        "result": [
+                            {
+                                "update_id": 103,
+                                "managed_bot": {
+                                    "bot": {
+                                        "id": 777000,
+                                        "is_bot": True,
+                                        "username": "first_jarvis_bot",
+                                    }
+                                },
+                            }
+                        ],
+                    },
+                )
+            # B's next offset confirmed A's event globally, so Telegram no
+            # longer returns it when A checks again.
+            if payload.get("offset") == 104:
+                return httpx.Response(200, json={"ok": True, "result": []})
+            return httpx.Response(200, json={"ok": True, "result": []})
+        if str(request.url).endswith("/getManagedBotToken"):
+            assert json.loads(request.content) == {"user_id": 777000}
+            return httpx.Response(200, json={"ok": True, "result": "777000:test-child-token"})
+        if str(request.url).endswith("/getMe"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "id": 777000,
+                        "is_bot": True,
+                        "username": "first_jarvis_bot",
+                    },
+                },
+            )
+        if str(request.url).endswith("/setManagedBotAccessSettings"):
+            return httpx.Response(200, json={"ok": True, "result": True})
+        raise AssertionError(f"unexpected Telegram request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    first = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "first_jarvis_bot"},
+    ).json()
+    second = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "second_jarvis_bot"},
+    ).json()
+
+    early = client.get(f"/v1/telegram/managed/status/{first['setupId']}")
+    other = client.get(f"/v1/telegram/managed/status/{second['setupId']}")
+    client.get(f"/v1/telegram/managed/status/{second['setupId']}")
+    recovered = client.get(f"/v1/telegram/managed/status/{first['setupId']}")
+
+    assert early.json()["status"] == "pending"
+    assert other.json()["status"] == "pending"
+    assert recovered.json()["status"] == "connected"
+    assert recovered.json()["botUsername"] == "first_jarvis_bot"
+    assert recovered.json()["managedChildBotToken"] == "777000:test-child-token"
+
+
+def test_telegram_managed_status_retries_later_batch_update_after_partial_failure(monkeypatch):
+    """A failed later bot must remain after an earlier batch event is durable."""
+
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    second_token_attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal second_token_attempts
+        if str(request.url).endswith("/getUpdates"):
+            payload = json.loads(request.content)
+            if "offset" not in payload:
+                return httpx.Response(
+                    200,
+                    json={
+                        "ok": True,
+                        "result": [
+                            {
+                                "update_id": 201,
+                                "managed_bot": {
+                                    "bot": {"id": 7001, "username": "first_batch_bot"}
+                                },
+                            },
+                            {
+                                "update_id": 202,
+                                "managed_bot": {
+                                    "bot": {"id": 7002, "username": "second_batch_bot"}
+                                },
+                            },
+                        ],
+                    },
+                )
+            assert payload["offset"] == 202
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 202,
+                            "managed_bot": {
+                                "bot": {"id": 7002, "username": "second_batch_bot"}
+                            },
+                        }
+                    ],
+                },
+            )
+        if str(request.url).endswith("/getManagedBotToken"):
+            bot_id = json.loads(request.content)["user_id"]
+            if bot_id == 7002:
+                second_token_attempts += 1
+                if second_token_attempts == 1:
+                    return httpx.Response(502, json={"ok": False, "description": "temporary"})
+            return httpx.Response(200, json={"ok": True, "result": f"{bot_id}:test-token"})
+        if str(request.url).endswith("/getMe"):
+            bot_id = 7001 if "bot7001:" in str(request.url) else 7002
+            username = "first_batch_bot" if bot_id == 7001 else "second_batch_bot"
+            return httpx.Response(
+                200,
+                json={"ok": True, "result": {"id": bot_id, "username": username}},
+            )
+        if str(request.url).endswith("/setManagedBotAccessSettings"):
+            return httpx.Response(200, json={"ok": True, "result": True})
+        raise AssertionError(f"unexpected Telegram request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    first = client.post(
+        "/v1/telegram/managed/start", json={"suggestedBotUsername": "first_batch_bot"}
+    ).json()
+    second = client.post(
+        "/v1/telegram/managed/start", json={"suggestedBotUsername": "second_batch_bot"}
+    ).json()
+    poller = client.post(
+        "/v1/telegram/managed/start", json={"suggestedBotUsername": "poller_batch_bot"}
+    ).json()
+
+    failed = client.get(f"/v1/telegram/managed/status/{poller['setupId']}")
+    retried = client.get(f"/v1/telegram/managed/status/{poller['setupId']}")
+    first_status = client.get(f"/v1/telegram/managed/status/{first['setupId']}")
+    second_status = client.get(f"/v1/telegram/managed/status/{second['setupId']}")
+
+    assert failed.status_code == 502
+    assert retried.status_code == 200
+    assert first_status.json()["status"] == "connected"
+    assert second_status.json()["status"] == "connected"
+    assert second_token_attempts == 2
+
+
+def test_telegram_managed_status_advances_past_full_page_of_old_update_types(monkeypatch):
+    """Old queued messages must not hide a later managed-bot event forever."""
+
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).endswith("/getUpdates"):
+            payload = json.loads(request.content)
+            if "offset" not in payload:
+                return httpx.Response(
+                    200,
+                    json={
+                        "ok": True,
+                        "result": [
+                            {"update_id": update_id, "message": {"text": "old"}}
+                            for update_id in range(1, 21)
+                        ],
+                    },
+                )
+            assert payload["offset"] == 21
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 21,
+                            "managed_bot": {
+                                "bot": {"id": 7021, "username": "after_old_updates_bot"}
+                            },
+                        }
+                    ],
+                },
+            )
+        if str(request.url).endswith("/getManagedBotToken"):
+            return httpx.Response(200, json={"ok": True, "result": "7021:test-token"})
+        if str(request.url).endswith("/getMe"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"id": 7021, "username": "after_old_updates_bot"},
+                },
+            )
+        if str(request.url).endswith("/setManagedBotAccessSettings"):
+            return httpx.Response(200, json={"ok": True, "result": True})
+        raise AssertionError(f"unexpected Telegram request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "after_old_updates_bot"},
+    ).json()
+
+    first = client.get(f"/v1/telegram/managed/status/{started['setupId']}")
+    second = client.get(f"/v1/telegram/managed/status/{started['setupId']}")
+
+    assert first.json()["status"] == "pending"
+    assert second.json()["status"] == "connected"
+    assert second.json()["botUsername"] == "after_old_updates_bot"
+
+
 def test_telegram_managed_connected_session_survives_memory_clear(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
