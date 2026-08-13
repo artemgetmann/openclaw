@@ -23,16 +23,19 @@ const progress = {
 };
 
 describe("CodexCallbackRouteRegistry", () => {
-  it("rotates an exact interrupted turn to a fresh callback identity", async () => {
-    const { registry } = await createRegistry();
+  it("rotates an exact interrupted turn after listener cleanup to a fresh identity", async () => {
+    const { filePath, registry } = await createRegistry();
     const prior = await registry.acquire({
       threadId: "thread-1",
       sessionKey: "agent:main:telegram:direct:owner",
       agentId: "main",
     });
     await registry.bindTurn(prior.routeId, { relayId: "relay-1", turnId: "turn-1" });
+    await registry.finishTurn(prior.routeId, "turn-1");
 
-    const recovery = await registry.replaceInterruptedTurn({
+    // Reopen from disk to prove the closed identity survives a process restart.
+    const restarted = new CodexCallbackRouteRegistry(filePath);
+    const recovery = await restarted.replaceInterruptedTurn({
       threadId: "thread-1",
       sessionKey: "agent:main:telegram:direct:owner",
       agentId: "main",
@@ -44,7 +47,7 @@ describe("CodexCallbackRouteRegistry", () => {
     expect(recovery.routeId).not.toBe(prior.routeId);
     expect(recovery.capability).not.toBe(prior.capability);
     await expect(
-      registry.replaceInterruptedTurn({
+      restarted.replaceInterruptedTurn({
         threadId: "thread-1",
         sessionKey: "agent:main:telegram:direct:owner",
         agentId: "main",

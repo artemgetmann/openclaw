@@ -64,6 +64,8 @@ type StoredRoute = {
   updatedAtMs: number;
   activeTurnId?: string;
   activeRelayId?: string;
+  lastFinishedTurnId?: string;
+  lastFinishedRelayId?: string;
   completedAtMs?: number;
   retiredAtMs?: number;
 };
@@ -224,6 +226,11 @@ export class CodexCallbackRouteRegistry {
       if (route.activeTurnId !== turnId) {
         return;
       }
+      // Preserve the exact closed identity for the restart window between
+      // listener cleanup and its durable handback claim. Recovery may consume
+      // it only while no newer turn is active on this route.
+      route.lastFinishedTurnId = route.activeTurnId;
+      route.lastFinishedRelayId = route.activeRelayId;
       route.activeTurnId = undefined;
       route.activeRelayId = undefined;
       route.updatedAtMs = this.now();
@@ -245,12 +252,18 @@ export class CodexCallbackRouteRegistry {
           route.completedAtMs === undefined &&
           route.retiredAtMs === undefined,
       );
+      const activeIdentityMatches =
+        active?.activeRelayId === input.relayId && active.activeTurnId === input.turnId;
+      const finishedIdentityMatches =
+        active?.activeRelayId === undefined &&
+        active?.activeTurnId === undefined &&
+        active?.lastFinishedRelayId === input.relayId &&
+        active.lastFinishedTurnId === input.turnId;
       if (
         !active ||
         active.sessionKey !== input.sessionKey ||
         active.agentId !== input.agentId ||
-        active.activeRelayId !== input.relayId ||
-        active.activeTurnId !== input.turnId
+        (!activeIdentityMatches && !finishedIdentityMatches)
       ) {
         throw new Error("Codex interrupted callback route identity does not match recovery claim");
       }
@@ -546,6 +559,17 @@ function validateRoute(value: unknown): StoredRoute {
     ...(typeof value.activeRelayId === "string"
       ? { activeRelayId: requireStoredString(value.activeRelayId, "activeRelayId") }
       : {}),
+    ...(typeof value.lastFinishedTurnId === "string"
+      ? { lastFinishedTurnId: requireStoredString(value.lastFinishedTurnId, "lastFinishedTurnId") }
+      : {}),
+    ...(typeof value.lastFinishedRelayId === "string"
+      ? {
+          lastFinishedRelayId: requireStoredString(
+            value.lastFinishedRelayId,
+            "lastFinishedRelayId",
+          ),
+        }
+      : {}),
     ...(typeof value.completedAtMs === "number"
       ? { completedAtMs: requireTimestamp(value.completedAtMs, "completedAtMs") }
       : {}),
@@ -617,6 +641,9 @@ function validateCallback(value: unknown): StoredCallback {
 function validateRouteConsistency(route: StoredRoute): void {
   if (Boolean(route.activeTurnId) !== Boolean(route.activeRelayId)) {
     throw new Error("Codex callback route active turn identity is incomplete");
+  }
+  if (Boolean(route.lastFinishedTurnId) !== Boolean(route.lastFinishedRelayId)) {
+    throw new Error("Codex callback route finished turn identity is incomplete");
   }
   for (const [index, callback] of route.callbacks.entries()) {
     if (callback.sequence !== index + 1) {
