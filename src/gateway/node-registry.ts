@@ -35,7 +35,15 @@ export type NodeInvokeResult = {
   ok: boolean;
   payload?: unknown;
   payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
+  error?: {
+    code?: string;
+    message?: string;
+    permission?: {
+      permission: string;
+      state: string;
+      nextAction: string;
+    };
+  } | null;
 };
 
 export class NodeRegistry {

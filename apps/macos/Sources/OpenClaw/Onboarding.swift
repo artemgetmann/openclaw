@@ -18,11 +18,10 @@ enum RemoteOnboardingProbeState: Equatable {
 
 enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
     case chrome
-    case permissions
-    case aiAccess
-    case accountActivation
-    case telegram
-    case telegramGroup
+    case aiAccess = 2
+    case accountActivation = 3
+    case telegram = 4
+    case telegramGroup = 5
 
     var id: Int { self.rawValue }
 
@@ -30,8 +29,6 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         switch self {
         case .chrome:
             return BrowserSetupCopy.title
-        case .permissions:
-            return "Allow Mac Access"
         case .aiAccess:
             return "AI Model"
         case .accountActivation:
@@ -47,8 +44,6 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         switch self {
         case .chrome:
             return BrowserSetupCopy.subtitle
-        case .permissions:
-            return "\(AppFlavor.current.appName) needs access to control apps and read the screen when a task requires it."
         case .aiAccess:
             return "\(AppFlavor.current.appName) needs one working AI model before it can run tasks."
         case .accountActivation:
@@ -64,8 +59,6 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         switch self {
         case .chrome:
             return "globe"
-        case .permissions:
-            return "lock.shield"
         case .aiAccess:
             return "sparkles"
         case .accountActivation:
@@ -231,9 +224,6 @@ struct OnboardingView: View {
                 return self.consumerSetupStep == .telegramGroup ? "Finish" : "Next"
             }
             if self.pageCount == 1, self.activePageIndex == 0 {
-                if self.isCorePermissionsBlocking {
-                    return "Grant core permissions"
-                }
                 if self.canFinishConsumerInlineSetup {
                     return "Finish"
                 }
@@ -292,22 +282,9 @@ struct OnboardingView: View {
             !self.accountActivation.isActivated
     }
 
-    var areCorePermissionsGranted: Bool {
-        ConsumerPermissionCatalog.coreCapabilities.allSatisfy { capability in
-            self.permissionMonitor.status[capability] == true
-        }
-    }
-
-    var isCorePermissionsBlocking: Bool {
-        self.isConsumerSetupShellActive &&
-            self.consumerSetupStep == .permissions &&
-            !self.areCorePermissionsGranted
-    }
-
     var canFinishConsumerInlineSetup: Bool {
         self.isConsumerSetupShellActive &&
             self.browserSetup.isComplete &&
-            self.areCorePermissionsGranted &&
             self.modelSetup.isComplete &&
             self.accountActivation.isActivated &&
             self.channelsStore.consumerTelegramReadyForFirstTask()
@@ -325,16 +302,11 @@ struct OnboardingView: View {
         switch self.consumerSetupStep {
         case .chrome:
             return self.browserSetup.isComplete
-        case .permissions:
-            return self.browserSetup.isComplete &&
-                self.areCorePermissionsGranted
         case .aiAccess:
             return self.browserSetup.isComplete &&
-                self.areCorePermissionsGranted &&
                 self.modelSetup.isComplete
         case .accountActivation:
             return self.browserSetup.isComplete &&
-                self.areCorePermissionsGranted &&
                 self.modelSetup.isComplete &&
                 self.accountActivation.isActivated
         case .telegram:
@@ -353,7 +325,6 @@ struct OnboardingView: View {
             !self.isBrowserSetupBlocking &&
             !self.isModelSetupBlocking &&
             !self.isAccountActivationBlocking &&
-            !self.isCorePermissionsBlocking &&
             !self.isTelegramSetupBlocking
     }
 

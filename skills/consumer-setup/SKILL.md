@@ -50,6 +50,27 @@ When setup is missing, use this shape:
 Do not tell a consumer user to go run terminal commands on their own unless they
 explicitly ask for the CLI path.
 
+## Mac Permissions
+
+Mac permissions are requested when the user first invokes the feature, not as
+an installation or onboarding gate. When a tool returns structured permission
+details, translate only those details into friendly wording:
+
+- Name the exact permission blocking the task and give the reported next
+  action. Never reduce this to "access failed."
+- For Location, Camera, and Microphone, report `requested`, `granted`, or
+  `denied` only when the tool reports that state.
+- For Accessibility and Screen Recording, distinguish a request from approval.
+  If the permission is still missing, direct the user to the exact System
+  Settings list and say when Jarvis must be reopened.
+- For Desktop, Documents, and Downloads, do not claim that a prompt is visibly
+  onscreen unless the tool confirms it. When the state is uncertain, ask the
+  user to check the Mac for a prompt.
+- After approval, retry or continue the original task when the tool indicates
+  that it can proceed. Do not make the user repeat their request unnecessarily.
+- Never infer permission state from generic error prose or guess beyond the
+  structured state and next action.
+
 ## Skill-Specific Guidance
 
 ### Himalaya

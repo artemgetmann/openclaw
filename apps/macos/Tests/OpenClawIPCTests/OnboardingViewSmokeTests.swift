@@ -47,14 +47,13 @@ struct OnboardingViewSmokeTests {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             #expect(ConsumerSetupStep.allCases == [
                 .chrome,
-                .permissions,
                 .aiAccess,
                 .accountActivation,
                 .telegram,
                 .telegramGroup,
             ])
-            #expect(ConsumerSetupStep.chrome.next == .permissions)
-            #expect(ConsumerSetupStep.permissions.previous == .chrome)
+            #expect(ConsumerSetupStep.chrome.next == .aiAccess)
+            #expect(ConsumerSetupStep.aiAccess.previous == .chrome)
             #expect(ConsumerSetupStep.aiAccess.next == .accountActivation)
             #expect(ConsumerSetupStep.accountActivation.previous == .aiAccess)
             #expect(ConsumerSetupStep.telegram.next == .telegramGroup)
@@ -137,7 +136,7 @@ struct OnboardingViewSmokeTests {
 
     @Test func `debug step override opens consumer setup at requested ui smoke page`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
-            for (rawStep, expectedStep) in [("permissions", ConsumerSetupStep.permissions), ("telegram", .telegram)] {
+            for (rawStep, expectedStep) in [("aiAccess", ConsumerSetupStep.aiAccess), ("telegram", .telegram)] {
                 let state = AppState(preview: true)
                 state.connectionMode = .local
                 let view = OnboardingView(

@@ -81,7 +81,15 @@ struct MacNodeRuntimeTests {
                 return (path: url.path, hasAudio: false)
             }
 
+            func ensureScreenRecordingPermission() async -> Bool {
+                true
+            }
+
             func locationAuthorizationStatus() -> CLAuthorizationStatus {
+                .authorizedAlways
+            }
+
+            func requestLocationAuthorization() async -> CLAuthorizationStatus {
                 .authorizedAlways
             }
 
@@ -119,6 +127,130 @@ struct MacNodeRuntimeTests {
         let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
         #expect(payload.format == "mp4")
         #expect(!payload.base64.isEmpty)
+    }
+
+    @Test func `location first use requests permission and continues the original task`() async throws {
+        @MainActor
+        final class FakeLocationServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            var requestedAuthorization = false
+            var requestedLocation = false
+
+            func checkForAppUpdate() -> OpenClawAppUpdateStatus {
+                OpenClawAppUpdateStatus(available: false, readyToInstall: false)
+            }
+
+            func appUpdateStatus() -> OpenClawAppUpdateStatus {
+                OpenClawAppUpdateStatus(available: false, readyToInstall: false)
+            }
+
+            func installAppUpdate(expectedVersion _: String, expectedBuild _: String) throws {}
+
+            func recordScreen(
+                screenIndex _: Int?, appName _: String?, bundleId _: String?, windowId _: UInt32?,
+                durationMs _: Int?, fps _: Double?, includeAudio _: Bool?, outPath _: String?) async throws
+                -> (path: String, hasAudio: Bool)
+            {
+                throw CocoaError(.featureUnsupported)
+            }
+
+            func ensureScreenRecordingPermission() async -> Bool {
+                false
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus {
+                .notDetermined
+            }
+
+            func requestLocationAuthorization() async -> CLAuthorizationStatus {
+                self.requestedAuthorization = true
+                return .authorizedAlways
+            }
+
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
+                .fullAccuracy
+            }
+
+            func currentLocation(
+                desiredAccuracy _: OpenClawLocationAccuracy,
+                maxAgeMs _: Int?,
+                timeoutMs _: Int?) async throws -> CLLocation
+            {
+                self.requestedLocation = true
+                return CLLocation(latitude: 1.25, longitude: 2.5)
+            }
+        }
+
+        let services = await MainActor.run { FakeLocationServices() }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        await TestIsolation.withUserDefaultsValues([locationModeKey: "whileUsing"]) {
+            let response = await runtime.handleInvoke(
+                BridgeInvokeRequest(id: "location-first-use", command: OpenClawLocationCommand.get.rawValue))
+
+            #expect(response.ok)
+            await MainActor.run {
+                #expect(services.requestedAuthorization)
+                #expect(services.requestedLocation)
+            }
+        }
+    }
+
+    @Test func `denied location returns exact structured recovery truth`() async {
+        @MainActor
+        final class FakeDeniedLocationServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            func checkForAppUpdate() -> OpenClawAppUpdateStatus {
+                OpenClawAppUpdateStatus(available: false, readyToInstall: false)
+            }
+            func appUpdateStatus() -> OpenClawAppUpdateStatus {
+                self.checkForAppUpdate()
+            }
+
+            func installAppUpdate(expectedVersion _: String, expectedBuild _: String) throws {}
+
+            func recordScreen(
+                screenIndex _: Int?, appName _: String?, bundleId _: String?, windowId _: UInt32?,
+                durationMs _: Int?, fps _: Double?, includeAudio _: Bool?, outPath _: String?) async throws
+                -> (path: String, hasAudio: Bool)
+            {
+                throw CocoaError(.featureUnsupported)
+            }
+
+            func ensureScreenRecordingPermission() async -> Bool {
+                false
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus {
+                .denied
+            }
+
+            func requestLocationAuthorization() async -> CLAuthorizationStatus {
+                .denied
+            }
+
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
+                .reducedAccuracy
+            }
+
+            func currentLocation(
+                desiredAccuracy _: OpenClawLocationAccuracy,
+                maxAgeMs _: Int?, timeoutMs _: Int?) async throws -> CLLocation
+            {
+                throw CocoaError(.featureUnsupported)
+            }
+        }
+
+        let services = await MainActor.run { FakeDeniedLocationServices() }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        await TestIsolation.withUserDefaultsValues([locationModeKey: "whileUsing"]) {
+            let response = await runtime.handleInvoke(
+                BridgeInvokeRequest(id: "location-denied", command: OpenClawLocationCommand.get.rawValue))
+
+            #expect(response.ok == false)
+            #expect(response.error?.permission == OpenClawNodePermissionError(
+                permission: .location,
+                state: .denied,
+                nextAction: .openSystemSettings))
+            #expect(response.error?.message.contains("Location Services") == true)
+        }
     }
 
     @Test func `app update commands pin installation to the approved release`() async throws {
@@ -160,7 +292,15 @@ struct MacNodeRuntimeTests {
                 throw CocoaError(.featureUnsupported)
             }
 
+            func ensureScreenRecordingPermission() async -> Bool {
+                false
+            }
+
             func locationAuthorizationStatus() -> CLAuthorizationStatus {
+                .denied
+            }
+
+            func requestLocationAuthorization() async -> CLAuthorizationStatus {
                 .denied
             }
 

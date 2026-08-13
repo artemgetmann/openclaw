@@ -57,14 +57,13 @@ struct ConsumerSetupResumeTests {
                 modelSetup: ConsumerModelSetupModel(
                     probeReadiness: { Self.readyReadinessPayload() }),
                 accountActivation: Self.activatedAccountModel(),
-                channelsStore: channels,
-                corePermissionsGranted: true)
+                channelsStore: channels)
 
             #expect(decision == .blocked(.missingConfig))
         }
     }
 
-    @Test func `incomplete permissions block before browser readiness probe`() async {
+    @Test func `setup resume completes without a permission gate`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let defaults = Self.makeDefaults()
             let profile = Self.profile()
@@ -85,10 +84,9 @@ struct ConsumerSetupResumeTests {
                 modelSetup: ConsumerModelSetupModel(
                     probeReadiness: { Self.readyReadinessPayload() }),
                 accountActivation: Self.activatedAccountModel(),
-                channelsStore: ChannelsStore(isPreview: true),
-                corePermissionsGranted: false)
+                channelsStore: ChannelsStore(isPreview: true))
 
-            #expect(decision == .blocked(.permissions))
+            #expect(decision == .complete)
             #expect(!browserProbeCalled)
         }
     }
@@ -134,8 +132,7 @@ struct ConsumerSetupResumeTests {
                     },
                     listModels: { Self.curatedModelsPayload() }),
                 accountActivation: Self.activatedAccountModel(),
-                channelsStore: channels,
-                corePermissionsGranted: true)
+                channelsStore: channels)
 
             #expect(decision == .complete)
             #expect(channels.consumerTelegramFirstTaskVerified)
@@ -192,8 +189,7 @@ struct ConsumerSetupResumeTests {
                     },
                     listModels: { Self.curatedModelsPayload() }),
                 accountActivation: Self.activatedAccountModel(),
-                channelsStore: channels,
-                corePermissionsGranted: true)
+                channelsStore: channels)
 
             #expect(decision == .blocked(.telegram))
             #expect(browserSetup.phase == .ready(profile))
@@ -201,7 +197,7 @@ struct ConsumerSetupResumeTests {
         }
     }
 
-    @Test func `broken model blocks only after healthy browser and permissions`() async {
+    @Test func `broken model blocks only after healthy browser`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             Self.clearTelegramVerificationMarker()
             let defaults = Self.makeDefaults()
@@ -231,14 +227,13 @@ struct ConsumerSetupResumeTests {
                 modelSetup: ConsumerModelSetupModel(
                     probeReadiness: { Self.readinessFailedPayload() }),
                 accountActivation: Self.activatedAccountModel(),
-                channelsStore: channels,
-                corePermissionsGranted: true)
+                channelsStore: channels)
 
             #expect(decision == .blocked(.model))
         }
     }
 
-    @Test func `broken telegram blocks after browser model and permissions pass`() async {
+    @Test func `broken telegram blocks after browser and model pass`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             Self.clearTelegramVerificationMarker()
             let defaults = Self.makeDefaults()
@@ -272,8 +267,7 @@ struct ConsumerSetupResumeTests {
                     },
                     listModels: { Self.curatedModelsPayload() }),
                 accountActivation: Self.activatedAccountModel(),
-                channelsStore: channels,
-                corePermissionsGranted: true)
+                channelsStore: channels)
 
             #expect(decision == .blocked(.telegram))
         }

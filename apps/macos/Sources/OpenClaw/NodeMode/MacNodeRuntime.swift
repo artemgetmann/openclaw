@@ -291,7 +291,12 @@ actor MacNodeRuntime {
         let desired = params.desiredAccuracy ??
             (Self.locationPreciseEnabled() ? .precise : .balanced)
         let services = await self.mainActorServices()
-        let status = await services.locationAuthorizationStatus()
+        var status = await services.locationAuthorizationStatus()
+        if status == .notDetermined {
+            // Location is requested only for a location task. If the user
+            // approves the native prompt, continue the original invocation.
+            status = await services.requestLocationAuthorization()
+        }
         let hasPermission = switch mode {
         case .always:
             status == .authorizedAlways
@@ -301,12 +306,24 @@ actor MacNodeRuntime {
             false
         }
         if !hasPermission {
+            let permissionState: OpenClawNodePermissionState = switch status {
+            case .denied, .restricted:
+                .denied
+            case .notDetermined:
+                .requested
+            default:
+                .unknown
+            }
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
                 error: OpenClawNodeError(
                     code: .unavailable,
-                    message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
+                    message: "Location permission is required. Open System Settings > Privacy & Security > Location Services and allow Jarvis.",
+                    permission: OpenClawNodePermissionError(
+                        permission: .location,
+                        state: permissionState,
+                        nextAction: .openSystemSettings)))
         }
         do {
             let location = try await services.currentLocation(
@@ -365,6 +382,15 @@ actor MacNodeRuntime {
             windowId = nil
         }
         let services = await self.mainActorServices()
+        let screenRecordingGranted = await services.ensureScreenRecordingPermission()
+        guard screenRecordingGranted else {
+            return Self.permissionRequiredResponse(
+                req,
+                permission: .screenRecording,
+                state: .requestedStillMissing,
+                nextAction: .openSystemSettingsAndReopen,
+                message: "Screen Recording permission is still missing. Turn on Jarvis in System Settings > Privacy & Security > Screen & System Audio Recording, then reopen Jarvis.")
+        }
         let res = try await services.recordScreen(
             screenIndex: params.screenIndex,
             appName: params.appName,
@@ -889,8 +915,8 @@ extension MacNodeRuntime {
         displayCommand: String) async -> BridgeInvokeResponse?
     {
         guard needsScreenRecording == true else { return nil }
-        let authorized = await PermissionManager
-            .status([.screenRecording])[.screenRecording] ?? false
+        let services = await self.mainActorServices()
+        let authorized = await services.ensureScreenRecordingPermission()
         if authorized {
             return nil
         }
@@ -902,10 +928,12 @@ extension MacNodeRuntime {
                 host: "node",
                 command: displayCommand,
                 reason: "permission:screenRecording"))
-        return Self.errorResponse(
+        return Self.permissionRequiredResponse(
             req,
-            code: .unavailable,
-            message: "PERMISSION_MISSING: screenRecording")
+            permission: .screenRecording,
+            state: .requestedStillMissing,
+            nextAction: .openSystemSettingsAndReopen,
+            message: "Screen Recording permission is still missing. Turn on Jarvis in System Settings > Privacy & Security > Screen & System Audio Recording, then reopen Jarvis.")
     }
 
     private func executeSystemRun(
@@ -1011,6 +1039,25 @@ extension MacNodeRuntime {
             id: req.id,
             ok: false,
             error: OpenClawNodeError(code: code, message: message))
+    }
+
+    private static func permissionRequiredResponse(
+        _ req: BridgeInvokeRequest,
+        permission: OpenClawNodePermission,
+        state: OpenClawNodePermissionState,
+        nextAction: OpenClawNodePermissionNextAction,
+        message: String) -> BridgeInvokeResponse
+    {
+        BridgeInvokeResponse(
+            id: req.id,
+            ok: false,
+            error: OpenClawNodeError(
+                code: .unavailable,
+                message: message,
+                permission: OpenClawNodePermissionError(
+                    permission: permission,
+                    state: state,
+                    nextAction: nextAction)))
     }
 
     private static func encodeCanvasSnapshot(
