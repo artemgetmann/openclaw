@@ -63,6 +63,17 @@ Stop only when the intended behavior is genuinely ambiguous, a different live
 owner is editing the same source, required authority is missing, or safe proof
 cannot be produced. Do not ask the user to schedule routine merge order.
 
+When task authority includes main-Jarvis delivery, record one source target at
+task start and carry it unchanged into the PR contract and release command:
+
+- `exact-pr`: deploy only the requested PR merge commit;
+- `current-green-main`: deploy current `main` after every later first-parent PR
+  proves an exact normal merge, green required checks, and no protected drift.
+
+Moving main is never inferred late. Security/release-class paths, non-green or
+unmerged work, and mutation classes absent from the original authority still
+stop even under `current-green-main`.
+
 ## Two-clone model
 
 `~/Programming_Projects/openclaw` is the sacred home clone on `main`. It is the

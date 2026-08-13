@@ -44,6 +44,7 @@ Describe the problem and fix in 2–5 bullets:
 - GitHub mutation transport: (`host-gh` or authenticated connector + expected head; exactly one)
 - Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
 - Proof still required after merge: (`None — source-only` or exact package/deploy/provider/backend/runtime/GUI/real-user work)
+- Task-start delivery authority: (`source-only`, `exact-pr`, or `current-green-main`; list authorized mutation classes)
 
 ## Jarvis Delivery Boundary
 

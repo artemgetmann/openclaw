@@ -123,6 +123,38 @@ if (assert_pr_can_ship '{"baseRefName":"main","state":"OPEN"}') >/dev/null 2>&1;
 fi
 pass "production target and prior-source-merge boundaries fail closed"
 
+PR_NUMBER=""
+MAIN_POLICY=""
+DRY_RUN=0
+parse_args --pr 42 --main-policy exact-pr --dry-run
+[[ "${PR_NUMBER}" == "42" && "${MAIN_POLICY}" == "exact-pr" && "${DRY_RUN}" == "1" ]] || \
+  fail "exact-pr authority was not persisted by argument parsing"
+PR_NUMBER=""
+MAIN_POLICY=""
+DRY_RUN=0
+parse_args --pr 42 --main-policy current-green-main
+[[ "${MAIN_POLICY}" == "current-green-main" ]] || \
+  fail "moving green-main authority was not persisted by argument parsing"
+if (PR_NUMBER=""; MAIN_POLICY=""; DRY_RUN=0; parse_args --pr 42) >/dev/null 2>&1; then
+  fail "missing task-start delivery authority unexpectedly passed"
+fi
+pass "exact and moving-main policies are explicit persisted release arguments"
+
+MAIN_POLICY=exact-pr
+assert_main_policy_target \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+if (assert_main_policy_target \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) >/dev/null 2>&1; then
+  fail "exact-pr authority accepted advanced main"
+fi
+MAIN_POLICY=current-green-main
+assert_main_policy_target \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+pass "exact-pr rejects drift while current-green-main reaches fenced drift proof"
+
 export JARVIS_RELEASE_DISK_PROBE_COMMAND="${PROBE_SCRIPT}"
 export JARVIS_RELEASE_DISK_REQUIRED_KIB=100
 export PACKAGE_MARKER

@@ -192,9 +192,15 @@ repo-native break-glass wrapper. Do not reconstruct these stages by hand:
 
 ```bash
 cd /Users/user/Programming_Projects/openclaw
-scripts/ship-jarvis-hotfix.sh --pr <number> --dry-run
-scripts/ship-jarvis-hotfix.sh --pr <number>
+scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy exact-pr --dry-run
+scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy exact-pr
 ```
+
+Replace `exact-pr` with `current-green-main` only when that moving target was
+explicitly recorded at task start. The wrapper requires one of the two values;
+it never infers broader authority from “ship” at deployment time. Persist the
+selection in the task plan and PR contract so the guarded invocation is a
+release receipt of the same authority, not a late policy decision.
 
 The PR must already be merged through the canonical builder → tester → fenced
 release lifecycle. The wrapper never readies or merges an OPEN PR; this keeps
