@@ -57,6 +57,27 @@ describe("CodexCallbackRouteRegistry", () => {
     ).rejects.toThrow("does not match recovery claim");
   });
 
+  it("rotates a route when restart happened after relay acceptance but before binding", async () => {
+    const { filePath, registry } = await createRegistry();
+    const prior = await registry.acquire({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    });
+
+    const restarted = new CodexCallbackRouteRegistry(filePath);
+    const recovery = await restarted.replaceInterruptedTurn({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      relayId: "relay-durably-accepted",
+      turnId: "turn-durably-accepted",
+    });
+
+    expect(recovery.routeId).not.toBe(prior.routeId);
+    expect(recovery.capability).not.toBe(prior.capability);
+  });
+
   it("reuses one durable route for the same Jarvis session and native thread", async () => {
     const { filePath, registry } = await createRegistry();
     const created = await registry.acquire({

@@ -66,6 +66,7 @@ type StoredRoute = {
   activeRelayId?: string;
   lastFinishedTurnId?: string;
   lastFinishedRelayId?: string;
+  recoverySourceRelayId?: string;
   completedAtMs?: number;
   retiredAtMs?: number;
 };
@@ -259,11 +260,21 @@ export class CodexCallbackRouteRegistry {
         active?.activeTurnId === undefined &&
         active?.lastFinishedRelayId === input.relayId &&
         active.lastFinishedTurnId === input.turnId;
+      const unboundIdentityAvailable =
+        // The relay registry already proved the exact accepted turn. An empty
+        // route is the complementary crash receipt: startup stopped between
+        // relay acceptance and bindTurn, before any callback could be claimed.
+        active?.activeRelayId === undefined &&
+        active?.activeTurnId === undefined &&
+        active?.lastFinishedRelayId === undefined &&
+        active?.lastFinishedTurnId === undefined &&
+        active?.recoverySourceRelayId === undefined &&
+        active?.callbacks.length === 0;
       if (
         !active ||
         active.sessionKey !== input.sessionKey ||
         active.agentId !== input.agentId ||
-        (!activeIdentityMatches && !finishedIdentityMatches)
+        (!activeIdentityMatches && !finishedIdentityMatches && !unboundIdentityAvailable)
       ) {
         throw new Error("Codex interrupted callback route identity does not match recovery claim");
       }
@@ -283,6 +294,9 @@ export class CodexCallbackRouteRegistry {
         ...(active.agentId ? { agentId: active.agentId } : {}),
         nextSequence: 1,
         callbacks: [],
+        // Distinguish this unbound replacement from the original pre-bind
+        // crash window so the same parent claim cannot rotate it twice.
+        recoverySourceRelayId: input.relayId,
         createdAtMs: timestamp,
         updatedAtMs: timestamp,
       };
@@ -567,6 +581,14 @@ function validateRoute(value: unknown): StoredRoute {
           lastFinishedRelayId: requireStoredString(
             value.lastFinishedRelayId,
             "lastFinishedRelayId",
+          ),
+        }
+      : {}),
+    ...(typeof value.recoverySourceRelayId === "string"
+      ? {
+          recoverySourceRelayId: requireStoredString(
+            value.recoverySourceRelayId,
+            "recoverySourceRelayId",
           ),
         }
       : {}),
