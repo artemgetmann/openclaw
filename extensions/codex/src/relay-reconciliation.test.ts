@@ -9,7 +9,7 @@ import {
 } from "./delegation-registry.js";
 import { reconcileCodexRelays } from "./relay-reconciliation.js";
 
-async function acceptedRegistry(now = 1_000) {
+async function acceptedRegistry(now = 1_000, options: { recoveryPolicy?: "local-safe" } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "codex-relay-reconcile-"));
   const filePath = path.join(directory, "async-relays.json");
   const registry = new CodexDelegationRegistry(filePath, () => now);
@@ -19,6 +19,7 @@ async function acceptedRegistry(now = 1_000) {
     agentId: "main",
     threadId: "thread-1",
     deliveryKey: "codex-relay:delegation-1",
+    recoveryPolicy: options.recoveryPolicy,
   });
   await registry.markAccepted("delegation-1", "turn-1");
   return { filePath, registry };
@@ -188,6 +189,73 @@ describe("reconcileCodexRelays", () => {
     expect(dispatchDecisionNeeded).toHaveBeenCalledWith(
       expect.anything(),
       expect.stringContaining(phrase),
+    );
+  });
+
+  it("recovers one eligible interrupted turn exactly once with fresh relay identity", async () => {
+    const { registry } = await acceptedRegistry(1_000, { recoveryPolicy: "local-safe" });
+    const startRecovery = vi.fn(async () => undefined);
+    const options = {
+      registry,
+      inspectTurn: async () => ({
+        kind: "interrupted" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
+      dispatchTerminal: vi.fn(),
+      dispatchDecisionNeeded: vi.fn(),
+      startRecovery,
+      now: () => 2_000,
+    };
+
+    await expect(reconcileCodexRelays(options)).resolves.toMatchObject({ recovered: 1 });
+    await expect(reconcileCodexRelays(options)).resolves.toMatchObject({
+      recovered: 0,
+      skipped: 1,
+    });
+    expect(startRecovery).toHaveBeenCalledTimes(1);
+    expect(startRecovery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delegationId: "delegation-1",
+        lifecycle: "recovery-started",
+        recoveryPolicy: "local-safe",
+      }),
+      expect.not.stringMatching(/^delegation-1$/),
+    );
+    await expect(registry.get("delegation-1")).resolves.toMatchObject({
+      lifecycle: "recovered",
+      terminalStatus: "interrupted",
+      recoveryDelegationId: expect.any(String),
+    });
+  });
+
+  it("never starts a second recovery after restart during recovery acceptance", async () => {
+    const { registry } = await acceptedRegistry(1_000, { recoveryPolicy: "local-safe" });
+    const startRecovery = vi.fn(async () => {
+      throw new Error("turn acceptance ambiguous");
+    });
+    const decision = vi.fn(async () => "completed" as const);
+    const options = {
+      registry,
+      inspectTurn: async () => ({
+        kind: "interrupted" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
+      dispatchTerminal: vi.fn(),
+      dispatchDecisionNeeded: decision,
+      startRecovery,
+      now: () => 2_000,
+    };
+
+    await expect(reconcileCodexRelays(options)).resolves.toMatchObject({ failed: 1 });
+    await expect(reconcileCodexRelays(options)).resolves.toMatchObject({ decisionNeeded: 1 });
+    await expect(reconcileCodexRelays(options)).resolves.toMatchObject({ skipped: 1 });
+    expect(startRecovery).toHaveBeenCalledTimes(1);
+    expect(decision).toHaveBeenCalledTimes(1);
+    expect(decision).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining("acceptance of the new native turn is ambiguous"),
     );
   });
 

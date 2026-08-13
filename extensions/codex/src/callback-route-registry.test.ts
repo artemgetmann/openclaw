@@ -23,6 +23,37 @@ const progress = {
 };
 
 describe("CodexCallbackRouteRegistry", () => {
+  it("rotates an exact interrupted turn to a fresh callback identity", async () => {
+    const { registry } = await createRegistry();
+    const prior = await registry.acquire({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    });
+    await registry.bindTurn(prior.routeId, { relayId: "relay-1", turnId: "turn-1" });
+
+    const recovery = await registry.replaceInterruptedTurn({
+      threadId: "thread-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+      relayId: "relay-1",
+      turnId: "turn-1",
+    });
+
+    expect(recovery).toMatchObject({ threadId: "thread-1", nextSequence: 1 });
+    expect(recovery.routeId).not.toBe(prior.routeId);
+    expect(recovery.capability).not.toBe(prior.capability);
+    await expect(
+      registry.replaceInterruptedTurn({
+        threadId: "thread-1",
+        sessionKey: "agent:main:telegram:direct:owner",
+        agentId: "main",
+        relayId: "relay-1",
+        turnId: "turn-1",
+      }),
+    ).rejects.toThrow("does not match recovery claim");
+  });
+
   it("reuses one durable route for the same Jarvis session and native thread", async () => {
     const { filePath, registry } = await createRegistry();
     const created = await registry.acquire({

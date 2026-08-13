@@ -65,6 +65,7 @@ type StoredRoute = {
   activeTurnId?: string;
   activeRelayId?: string;
   completedAtMs?: number;
+  retiredAtMs?: number;
 };
 
 type RegistryDocument = {
@@ -112,7 +113,10 @@ export class CodexCallbackRouteRegistry {
       const threadId = requireStoredString(input.threadId, "threadId");
       const sessionKey = requireStoredString(input.sessionKey, "sessionKey");
       const activeForThread = document.routes.find(
-        (route) => route.threadId === threadId && route.completedAtMs === undefined,
+        (route) =>
+          route.threadId === threadId &&
+          route.completedAtMs === undefined &&
+          route.retiredAtMs === undefined,
       );
       if (activeForThread) {
         if (
@@ -163,6 +167,7 @@ export class CodexCallbackRouteRegistry {
         entry.threadId === input.threadId &&
         entry.sessionKey === input.sessionKey &&
         entry.completedAtMs === undefined &&
+        entry.retiredAtMs === undefined &&
         entry.activeTurnId &&
         entry.activeRelayId,
     );
@@ -225,6 +230,54 @@ export class CodexCallbackRouteRegistry {
     });
   }
 
+  /** Close the exact interrupted route and mint a fresh recovery capability atomically. */
+  async replaceInterruptedTurn(input: {
+    threadId: string;
+    sessionKey: string;
+    agentId?: string;
+    relayId: string;
+    turnId: string;
+  }): Promise<CodexCallbackRouteGrant> {
+    return await this.mutate((document) => {
+      const active = document.routes.find(
+        (route) =>
+          route.threadId === input.threadId &&
+          route.completedAtMs === undefined &&
+          route.retiredAtMs === undefined,
+      );
+      if (
+        !active ||
+        active.sessionKey !== input.sessionKey ||
+        active.agentId !== input.agentId ||
+        active.activeRelayId !== input.relayId ||
+        active.activeTurnId !== input.turnId
+      ) {
+        throw new Error("Codex interrupted callback route identity does not match recovery claim");
+      }
+      const timestamp = this.now();
+      active.retiredAtMs = timestamp;
+      active.activeRelayId = undefined;
+      active.activeTurnId = undefined;
+      active.updatedAtMs = timestamp;
+      // Reserve capacity for the replacement after retiring the old route.
+      // This also prevents repeated recoveries from growing the durable file.
+      pruneCompletedRoutes(document, timestamp);
+      const route: StoredRoute = {
+        routeId: randomUUID(),
+        capability: randomBytes(32).toString("base64url"),
+        threadId: active.threadId,
+        sessionKey: active.sessionKey,
+        ...(active.agentId ? { agentId: active.agentId } : {}),
+        nextSequence: 1,
+        callbacks: [],
+        createdAtMs: timestamp,
+        updatedAtMs: timestamp,
+      };
+      document.routes.push(route);
+      return publicGrant(route);
+    });
+  }
+
   /**
    * Claim delivery before crossing into Jarvis. A crash after this write is
    * intentionally ambiguous and can never become a duplicate dispatch.
@@ -263,7 +316,7 @@ export class CodexCallbackRouteRegistry {
           `Codex callback ${pending.callbackId} delivery is ambiguous; only its exact retry is allowed`,
         );
       }
-      if (route.completedAtMs !== undefined) {
+      if (route.completedAtMs !== undefined || route.retiredAtMs !== undefined) {
         throw new Error(`Codex callback route ${route.routeId} already delivered completion`);
       }
       if (callback.sequence !== route.nextSequence) {
@@ -384,14 +437,19 @@ export class CodexCallbackRouteRegistry {
 }
 
 function pruneCompletedRoutes(document: RegistryDocument, now: number): void {
-  const active = document.routes.filter((route) => route.completedAtMs === undefined);
+  const active = document.routes.filter(
+    (route) => route.completedAtMs === undefined && route.retiredAtMs === undefined,
+  );
   const recentCompleted = document.routes
-    .filter(
-      (route): route is StoredRoute & { completedAtMs: number } =>
-        route.completedAtMs !== undefined &&
-        now - route.completedAtMs <= COMPLETED_ROUTE_RETENTION_MS,
-    )
-    .sort((left, right) => right.completedAtMs - left.completedAtMs);
+    .filter((route) => {
+      const closedAt = route.completedAtMs ?? route.retiredAtMs;
+      return closedAt !== undefined && now - closedAt <= COMPLETED_ROUTE_RETENTION_MS;
+    })
+    .sort(
+      (left, right) =>
+        (right.completedAtMs ?? right.retiredAtMs ?? 0) -
+        (left.completedAtMs ?? left.retiredAtMs ?? 0),
+    );
   const availableCompletedSlots = Math.max(0, MAX_ROUTES - active.length - 1);
   document.routes = [...active, ...recentCompleted.slice(0, availableCompletedSlots)];
 }
@@ -491,6 +549,9 @@ function validateRoute(value: unknown): StoredRoute {
     ...(typeof value.completedAtMs === "number"
       ? { completedAtMs: requireTimestamp(value.completedAtMs, "completedAtMs") }
       : {}),
+    ...(typeof value.retiredAtMs === "number"
+      ? { retiredAtMs: requireTimestamp(value.retiredAtMs, "retiredAtMs") }
+      : {}),
   };
   if (route.callbacks.length > MAX_CALLBACKS_PER_ROUTE) {
     throw new Error("Codex callback route exceeds its callback limit");
@@ -587,7 +648,13 @@ function validateRouteConsistency(route: StoredRoute): void {
   if ((route.completedAtMs !== undefined) !== completedCallback) {
     throw new Error("Codex callback route completion state is inconsistent");
   }
-  if (route.completedAtMs !== undefined && (route.activeTurnId || route.activeRelayId)) {
+  if (route.completedAtMs !== undefined && route.retiredAtMs !== undefined) {
+    throw new Error("Codex callback route cannot be completed and retired");
+  }
+  if (
+    (route.completedAtMs !== undefined || route.retiredAtMs !== undefined) &&
+    (route.activeTurnId || route.activeRelayId)
+  ) {
     throw new Error("Codex callback route is both complete and active");
   }
 }
