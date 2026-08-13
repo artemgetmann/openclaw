@@ -9,6 +9,9 @@ import { fetchBrowserJson } from "./client-fetch.js";
 // Interaction-driven routes often wait on navigation, DOM stabilization, or page
 // scripts. A 20s cap is too aggressive for travel and commerce flows.
 const BROWSER_INTERACTION_TIMEOUT_MS = 45_000;
+// An action can be the first request that attaches to an existing Chrome
+// session, whose supported readiness window is longer than the action default.
+const BROWSER_EXISTING_SESSION_ATTACH_TIMEOUT_MS = 60_000;
 // The action timeout belongs to the browser operation itself. Keep a small,
 // explicit allowance for request delivery and response serialization without
 // turning a short caller deadline into the old 45s minimum transport wait.
@@ -323,12 +326,12 @@ export async function browserAct(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
-    // Keep the transport deadline just above the server-side action timeout.
-    // A requested 10s action must not silently become a 45s transport wait.
+    // Existing-session readiness completes before the action runs, so the
+    // outer request must outlive both valid nested waits plus transport work.
     timeoutMs:
-      timeoutMs === undefined
-        ? BROWSER_INTERACTION_TIMEOUT_MS
-        : timeoutMs + BROWSER_ACTION_TRANSPORT_SLACK_MS,
+      BROWSER_EXISTING_SESSION_ATTACH_TIMEOUT_MS +
+      (timeoutMs ?? BROWSER_INTERACTION_TIMEOUT_MS) +
+      BROWSER_ACTION_TRANSPORT_SLACK_MS,
   });
 }
 

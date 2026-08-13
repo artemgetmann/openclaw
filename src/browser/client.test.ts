@@ -156,10 +156,10 @@ describe("browser client", () => {
     });
     expect(calls[1]?.init?.timeoutMs).toBe(55_000);
     expect(calls[2]?.init?.timeoutMs).toBe(50_000);
-    expect(calls[3]?.init?.timeoutMs).toBe(75_000);
+    expect(calls[3]?.init?.timeoutMs).toBe(135_000);
   });
 
-  it("adds bounded transport slack to short browser action timeouts", async () => {
+  it("keeps short browser action deadlines above the attach-ready budget", async () => {
     const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
 
     vi.stubGlobal(
@@ -180,7 +180,7 @@ describe("browser client", () => {
       timeoutMs: 10_000,
     });
 
-    expect(calls[0]?.init?.timeoutMs).toBe(20_000);
+    expect(calls[0]?.init?.timeoutMs).toBe(80_000);
   });
 
   it("uses the attach-ready timeout budget for browser discovery calls", async () => {

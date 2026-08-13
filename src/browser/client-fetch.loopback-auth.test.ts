@@ -36,6 +36,7 @@ vi.mock("./routes/dispatcher.js", () => ({
   })),
 }));
 
+import { browserAct } from "./client-actions.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 
 function stubJsonFetchOk() {
@@ -206,6 +207,40 @@ describe("fetchBrowserJson loopback auth", () => {
       rejectDispatch?.(new Error("late Chrome MCP rejection"));
       await Promise.resolve();
       await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a browser action alive for the existing-session readiness budget", async () => {
+    vi.useFakeTimers();
+    try {
+      // Existing-session profiles are allowed 60 seconds to attach before a
+      // default 45-second action runs. Model the full valid route sequence so
+      // the public client contract, rather than internal constants, decides it.
+      mocks.dispatch.mockImplementationOnce(
+        () =>
+          new Promise<BrowserDispatchResponse>((resolve) => {
+            setTimeout(() => resolve(okDispatchResponse()), 105_000);
+          }),
+      );
+
+      const request = browserAct(undefined, {
+        kind: "click",
+        ref: "button-1",
+      });
+      // Observe rejection immediately so the fake clock can cross the current
+      // 45-second deadline without producing an unrelated unhandled rejection.
+      const outcome = request.then(
+        (value) => ({ status: "resolved" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+
+      await vi.advanceTimersByTimeAsync(105_000);
+      await expect(outcome).resolves.toMatchObject({
+        status: "resolved",
+        value: { ok: true },
+      });
     } finally {
       vi.useRealTimers();
     }
