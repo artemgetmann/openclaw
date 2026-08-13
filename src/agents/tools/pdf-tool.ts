@@ -207,13 +207,10 @@ async function runPdfPrompt(params: {
         authStorage,
       });
 
-      if (providerSupportsNativePdf(provider)) {
-        if (params.pageNumbers && params.pageNumbers.length > 0) {
-          throw new Error(
-            `pages is not supported with native PDF providers (${provider}/${modelId}). Remove pages, or use a non-native model for page filtering.`,
-          );
-        }
-
+      // Native provider PDF upload cannot apply page filters. When the caller asks
+      // for pages, go straight to extraction fallback for that model instead of
+      // failing and forcing the agent to discover a workaround.
+      if (providerSupportsNativePdf(provider) && !params.pageNumbers?.length) {
         const pdfs = params.pdfBuffers.map((p) => ({
           base64: p.base64,
           filename: p.filename,

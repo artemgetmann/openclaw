@@ -312,6 +312,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "artifacts",
+    description: "Create and verify document artifacts",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../artifacts-cli.js");
+      mod.registerArtifactsCli(program);
+    },
+  },
+  {
     name: "telegram",
     description: "Telegram live workflow tooling for doctor/runtime/smoke operations",
     hasSubcommands: true,
