@@ -1493,6 +1493,32 @@ describe("Codex natural-language delegation", () => {
         }),
       ]),
     );
+    expect(
+      snapshot.records.find((record) => record.recoveryOfDelegationId === "delegation-interrupted")
+        ?.recoveryPolicy,
+    ).toBeUndefined();
+
+    // A recovery relay is deliberately not recovery-eligible. If that new
+    // turn is itself interrupted, the next startup asks for a decision and
+    // never creates an unbounded chain of replacement turns.
+    appServer.threadReadResponse = {
+      thread: {
+        id: "thread-natural",
+        turns: [{ id: "turn-natural", status: "interrupted", items: [] }],
+      },
+    };
+    await startService?.();
+    expect(appServer.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    const afterRecoveryRestart = await registry.snapshot();
+    expect(afterRecoveryRestart.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          recoveryOfDelegationId: "delegation-interrupted",
+          lifecycle: "delivery-started",
+          deliveryKind: "decision",
+        }),
+      ]),
+    );
   });
 
   it("keeps terminal fallback for resumed threads without sending unsupported dynamic tools", async () => {

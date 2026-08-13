@@ -376,7 +376,6 @@ export default function register(api: OpenClawPluginApi) {
               },
               threadId: record.threadId,
               text: buildRestartRecoveryTask(record),
-              recoveryPolicy: "local-safe",
               delegationId: recoveryDelegationId,
               recoveryOfDelegationId: record.delegationId,
               callbackRoute,
