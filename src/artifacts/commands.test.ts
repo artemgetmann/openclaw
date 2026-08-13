@@ -197,6 +197,25 @@ describe("artifact commands", () => {
     await expect(fs.readFile(out, "utf8")).resolves.toBe("converted");
   });
 
+  it("places Office output in the requested output directory", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-office-out-dir-test-"));
+    const input = path.join(dir, "brief.docx");
+    const outDir = path.join(dir, "exports");
+    await fs.writeFile(input, "docx");
+    const runner: ArtifactCommandRunner = vi.fn(async (argv: string[]) => {
+      const conversionDir = String(argv[argv.indexOf("--outdir") + 1]);
+      await fs.writeFile(path.join(conversionDir, "brief.pdf"), "converted");
+      return okSpawnResult();
+    });
+    const result = await docxToPdfCommand(
+      input,
+      { outDir },
+      { runtime: fakeRuntime({ soffice: "/bin/soffice" }), runner },
+    );
+    expect(result.path).toBe(path.join(outDir, "brief.pdf"));
+    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("converted");
+  });
+
   it("creates editable PPTX through the artifact Python", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pptx-test-"));
     const input = path.join(dir, "deck.json");

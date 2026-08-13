@@ -514,8 +514,11 @@ async function officeToPdfCommand(
   const { runtime, runner } = getRuntimeAndRunner(deps);
   const soffice = requireArtifactExecutable(runtime, "soffice");
   const inputPath = path.resolve(input);
-  const outputPath = resolveArtifactOutputPath(inputPath, opts.out, "pdf");
-  const outDir = path.resolve(opts.outDir?.trim() || path.dirname(outputPath));
+  const requestedOutDir = opts.outDir?.trim() ? path.resolve(opts.outDir.trim()) : undefined;
+  const outputPath = opts.out?.trim()
+    ? path.resolve(opts.out.trim())
+    : path.join(requestedOutDir ?? path.dirname(inputPath), `${path.parse(inputPath).name}.pdf`);
+  const outDir = path.dirname(outputPath);
   const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-artifacts-lo-"));
   // LibreOffice always chooses the input basename. Convert in an isolated
   // directory so an explicit output such as brief-docx.pdf cannot overwrite a
@@ -525,24 +528,31 @@ async function officeToPdfCommand(
   await fs.access(inputPath);
   await fs.mkdir(outDir, { recursive: true });
 
-  const result = await runner(
-    [
-      soffice,
-      "--headless",
-      `-env:UserInstallation=${pathToLibreOfficeFileUrl(profileDir)}`,
-      "--convert-to",
-      "pdf",
-      "--outdir",
-      conversionDir,
-      inputPath,
-    ],
-    { timeoutMs: opts.timeoutMs ?? 120_000 },
-  );
-  assertSuccessfulCommand(result);
+  try {
+    const result = await runner(
+      [
+        soffice,
+        "--headless",
+        `-env:UserInstallation=${pathToLibreOfficeFileUrl(profileDir)}`,
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        conversionDir,
+        inputPath,
+      ],
+      { timeoutMs: opts.timeoutMs ?? 120_000 },
+    );
+    assertSuccessfulCommand(result);
 
-  const generatedPath = path.join(conversionDir, `${path.parse(inputPath).name}.pdf`);
-  await ensureParentDir(outputPath);
-  await fs.rename(generatedPath, outputPath);
+    const generatedPath = path.join(conversionDir, `${path.parse(inputPath).name}.pdf`);
+    await ensureParentDir(outputPath);
+    await fs.rename(generatedPath, outputPath);
+  } finally {
+    await Promise.all([
+      fs.rm(profileDir, { recursive: true, force: true }),
+      fs.rm(conversionDir, { recursive: true, force: true }),
+    ]);
+  }
 
   return { ok: true, path: outputPath, details: { outDir, source: inputPath } };
 }
