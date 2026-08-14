@@ -8,7 +8,7 @@ metadata:
       {
         "emoji": "🎮",
         "displayName": "Google Workspace",
-        "dependencies": ["message-drafting"],
+        "dependencies": ["message-drafting", "consumer-setup"],
         "requires": { "bins": ["gog"] },
         "install":
           [
@@ -61,6 +61,14 @@ Setup routing
   forced consent, browser handoff, consent-checkbox verification, callback and
   Keychain handling, post-auth surface verification, and automatic resumption of
   the original task. Do not duplicate or improvise that recovery flow here.
+- On macOS, treat one `No auth for <service> <account>` result as potentially
+  transient Keychain state. For a read-only command, run one
+  `gog auth list --json` health recheck. If the same account still lists the
+  required service, retry the exact read-only command once and continue the
+  original task when it succeeds. Never retry a send, write, or other mutation.
+  If the account/service is absent or the one retry fails, immediately use the
+  injected `consumer-setup` recovery flow instead of merely telling the user to
+  reconnect.
 - In consumer lanes, run the current runtime's `gog` as a direct lane-local
   exec call. Normal permissions allow direct `gog ...` commands; do not wrap
   them in shell chains, pipes, redirection, or `nodes/system.run`, and do not
