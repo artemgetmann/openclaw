@@ -20,12 +20,21 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function requiredChecks(number) {
+function requiredChecks(repository, number) {
   // `gh pr checks` exits non-zero for a legitimate failing/pending check set.
   // JSON stdout is authoritative; absence of parseable JSON is a transport failure.
   const result = spawnSync(
     "gh",
-    ["pr", "checks", String(number), "--required", "--json", "name,bucket,state,workflow"],
+    [
+      "pr",
+      "checks",
+      String(number),
+      "--repo",
+      repository,
+      "--required",
+      "--json",
+      "name,bucket,state,workflow",
+    ],
     {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -61,7 +70,8 @@ function fetchPullRequests(repository, trackedNumbers) {
     .slice(0, 20)
     .map((pr) => ({
       ...pr,
-      requiredChecks: pr.state === "OPEN" && pr.isDraft !== true ? requiredChecks(pr.number) : [],
+      requiredChecks:
+        pr.state === "OPEN" && pr.isDraft !== true ? requiredChecks(repository, pr.number) : [],
     }));
   const openNumbers = new Set(open.map((pr) => Number(pr.number)));
   const merged = trackedNumbers

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -43,6 +44,14 @@ describe("PR freshness monitor", () => {
     const cases = [
       [{ ...base, requiredChecks: [{ bucket: "fail" }] }, "required-ci-failed"],
       [{ ...base, requiredChecks: [{ bucket: "pending" }] }, "ci-pending"],
+      [
+        {
+          ...base,
+          mergeStateStatus: "BLOCKED",
+          requiredChecks: [{ bucket: "pending" }],
+        },
+        "ci-pending",
+      ],
       [{ ...base, mergeStateStatus: "BEHIND" }, "base-drift"],
       [{ ...base, mergeStateStatus: "BLOCKED" }, "merge-blocked"],
       [{ ...base, state: "MERGED" }, "merged"],
@@ -143,4 +152,3 @@ describe("PR freshness monitor", () => {
     }
   });
 });
-import { spawnSync } from "node:child_process";

@@ -43,11 +43,11 @@ export function classifyPullRequest(pr) {
   if (pr.mergeStateStatus === "BEHIND" || pr.mergeStateStatus === "DIRTY") {
     return "base-drift";
   }
-  if (pr.mergeStateStatus === "BLOCKED") {
-    return "merge-blocked";
-  }
   if (checks.some((check) => check.bucket === "pending")) {
     return "ci-pending";
+  }
+  if (pr.mergeStateStatus === "BLOCKED") {
+    return "merge-blocked";
   }
   if (["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(pr.mergeStateStatus)) {
     return "merge-ready";
