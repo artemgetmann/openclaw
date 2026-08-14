@@ -44,57 +44,85 @@ for (const packageName of requiredPackages) {
   }
 }
 
-let creatorReady = false;
-let creatorComponent = path.join(runtimeDist, "artifacts-<hash>.js");
+const requiredCreatorExports = [
+  "artifactsCreatePdfCommand",
+  "artifactsCreateDocxCommand",
+  "artifactsCreateXlsxCommand",
+  "artifactsCreatePptxCommand",
+];
+const creatorComponents = new Set();
+const creatorRouteFailures = [];
 try {
   // The build gives lazy CLI chunks content hashes. Read the packaged CLI route
-  // to locate the exact compiled creator it will load instead of accepting a
-  // stale source file or guessing a hash.
+  // to locate every compiled creator it can load. Validating only the first
+  // loadable chunk could let another packaged CLI route point at a missing or
+  // stale creator.
   const cliChunks = fs
     .readdirSync(runtimeDist)
-    .filter((name) => /^artifacts-cli-.*\.js$/u.test(name));
+    .filter((name) => /^artifacts-cli-.*\.js$/u.test(name))
+    .toSorted();
+  if (cliChunks.length === 0) {
+    creatorRouteFailures.push("no compiled artifacts CLI route found");
+  }
   for (const cliChunk of cliChunks) {
     const cliSource = fs.readFileSync(path.join(runtimeDist, cliChunk), "utf8");
-    const creatorImport = cliSource.match(/import\("(\.\/artifacts-(?!cli-)[^"]+\.js)"\)/u)?.[1];
-    if (!creatorImport) {
+    const creatorImports = new Set(
+      Array.from(
+        cliSource.matchAll(/import\((["'])(\.\/artifacts-(?!cli-)[^"']+\.js)\1\)/gu),
+        (match) => match[2],
+      ),
+    );
+    if (creatorImports.size === 0) {
+      creatorRouteFailures.push(`${cliChunk}: no document creator import found`);
       continue;
     }
-    const resolvedCreator = fs.realpathSync(path.resolve(runtimeDist, creatorImport));
-    const relative = path.relative(runtimeRealPath, resolvedCreator);
-    if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      continue;
-    }
-    const creator = await import(pathToFileURL(resolvedCreator).href);
-    const requiredExports = [
-      "artifactsCreatePdfCommand",
-      "artifactsCreateDocxCommand",
-      "artifactsCreateXlsxCommand",
-      "artifactsCreatePptxCommand",
-    ];
-    if (requiredExports.every((name) => typeof creator[name] === "function")) {
-      creatorComponent = resolvedCreator;
-      creatorReady = true;
-      break;
+    for (const creatorImport of creatorImports) {
+      try {
+        const resolvedCreator = fs.realpathSync(path.resolve(runtimeDist, creatorImport));
+        const relative = path.relative(runtimeRealPath, resolvedCreator);
+        if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+          creatorRouteFailures.push(`${cliChunk}: creator resolves outside runtime`);
+          continue;
+        }
+        const creator = await import(pathToFileURL(resolvedCreator).href);
+        const missingExports = requiredCreatorExports.filter(
+          (name) => typeof creator[name] !== "function",
+        );
+        if (missingExports.length > 0) {
+          creatorRouteFailures.push(
+            `${cliChunk}: ${creatorImport} lacks ${missingExports.join(", ")}`,
+          );
+          continue;
+        }
+        creatorComponents.add(resolvedCreator);
+      } catch {
+        creatorRouteFailures.push(`${cliChunk}: missing or unloadable ${creatorImport}`);
+      }
     }
   }
 } catch {
-  creatorReady = false;
+  creatorRouteFailures.push("compiled artifacts CLI routes are missing or unreadable");
 }
 
-if (missingPackages.length > 0 || !creatorReady) {
+if (missingPackages.length > 0 || creatorRouteFailures.length > 0) {
   console.error("ERROR: bundled Jarvis document creation runtime is incomplete.");
   if (missingPackages.length > 0) {
     console.error(
       `Missing required package${missingPackages.length === 1 ? "" : "s"}: ${missingPackages.join(", ")}`,
     );
   }
-  if (!creatorReady) {
-    console.error(`Missing or unloadable compiled creator: ${creatorComponent}`);
+  for (const failure of creatorRouteFailures) {
+    console.error(`Invalid compiled creator route: ${failure}`);
   }
   console.error(`Runtime root: ${runtimeRoot}`);
   process.exit(1);
 }
 
 console.log(
-  `Document creation runtime complete: ${requiredPackages.join(", ")}; ${path.relative(runtimeRoot, creatorComponent)}`,
+  `Document creation runtime complete: ${requiredPackages.join(", ")}; ${Array.from(
+    creatorComponents,
+    (component) => path.relative(runtimeRoot, component),
+  )
+    .toSorted()
+    .join(", ")}`,
 );

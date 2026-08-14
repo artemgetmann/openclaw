@@ -385,6 +385,36 @@ describe("artifact commands", () => {
     expect(slide).toContain("Keep me");
   });
 
+  it("keeps a 20-row PPTX table inside its frame with visible text", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pptx-table-test-"));
+    const input = path.join(dir, "deck.json");
+    const out = path.join(dir, "deck.pptx");
+    await fs.writeFile(
+      input,
+      JSON.stringify({
+        slides: [
+          {
+            title: "Rows",
+            table: { rows: Array.from({ length: 20 }, (_, index) => [`Row ${index + 1}`]) },
+          },
+        ],
+      }),
+    );
+
+    await createPptxCommand(input, { out });
+    const archive = await JSZip.loadAsync(await fs.readFile(out));
+    const slide = await archive.file("ppt/slides/slide1.xml")?.async("string");
+    const rowHeights = Array.from(slide?.matchAll(/<a:tr h="(\d+)">/g) ?? [], (match) =>
+      Number(match[1]),
+    );
+    expect(rowHeights).toHaveLength(20);
+    expect(rowHeights.reduce((total, height) => total + height, 0)).toBeLessThanOrEqual(4_191_000);
+    expect(slide).toContain("Row 20");
+    expect(slide).toMatch(
+      /<a:rPr[^>]*><a:solidFill><a:srgbClr val="1F2937"\/><\/a:solidFill><\/a:rPr>/,
+    );
+  });
+
   it("runs LibreOffice PPTX-to-PDF conversion", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pptx-pdf-test-"));
     const input = path.join(dir, "deck.pptx");
