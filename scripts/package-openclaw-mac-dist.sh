@@ -25,12 +25,15 @@ source "$ROOT_DIR/scripts/lib/shared-resource-lock.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-assets.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 INSTANCE_EXPLICIT=0
 PUBLISH_RELEASE_ASSETS=0
 GITHUB_RELEASE_TAG=""
 PACKAGE_PHASE="full"
+RELEASE_CLASS="fresh-installer"
+RELEASE_CLASS_REASON="legacy-direct-package"
 RELEASE_RUN_ROOT=""
 OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
 OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="${OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE:-0}"
@@ -95,7 +98,7 @@ Options:
                       Required with --publish-release-assets. Must match the
                       repo's latest release because Sparkle checks the public
                       releases/latest/download appcast feed.
-  --phase <full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only|trusted-ring-fast>
+  --phase <sparkle-update|full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only|trusted-ring-fast>
                       full is the default one-shot lane. post-app-build resumes
                       from an existing dist/Jarvis.app and runs the release tail.
                       local-proof builds and verifies dist/Jarvis.app, writes
@@ -191,7 +194,7 @@ release_staging_preflight_path() {
 
 package_phase_creates_heavy_local_artifacts() {
   case "$1" in
-    full|local-proof|post-app-build|build-app-only|submit-app-notarization|submit-dmg-notarization|create-local-release-assets-only|trusted-ring-fast)
+    sparkle-update|full|local-proof|post-app-build|build-app-only|submit-app-notarization|submit-dmg-notarization|create-local-release-assets-only|trusted-ring-fast)
       return 0
       ;;
     poll-app-notarization|poll-dmg-notarization|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only)
@@ -562,13 +565,18 @@ publish_release_assets() {
   done
   require_local_appcast_targets_current_tag
 
+  # Validate every permanent URL before uploading anything. Otherwise the first
+  # new asset could land before a later conflicting asset stops the release.
+  local dmg_action zip_action
+  dmg_action="$(openclaw_jarvis_release_require_immutable_asset_compatible "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$DMG")"
+  zip_action="$(openclaw_jarvis_release_require_immutable_asset_compatible "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP")"
   github_release_upload_preflight
   openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub full release upload"
 
   echo "🚀 Uploading Jarvis release assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
   jarvis_release_retry \
     "gh release upload Jarvis assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG" \
-    jarvis_release_upload_full_assets_attempt
+    jarvis_release_upload_full_assets_attempt "$dmg_action" "$zip_action"
 
   verify_public_release_assets
 }
@@ -627,6 +635,8 @@ publish_sparkle_release_assets() {
   done
   require_local_appcast_targets_current_tag
 
+  local zip_action
+  zip_action="$(openclaw_jarvis_release_require_immutable_asset_compatible "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP")"
   github_release_upload_preflight
   openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub Sparkle release upload"
 
@@ -636,7 +646,7 @@ publish_sparkle_release_assets() {
   echo "🚀 Uploading Jarvis Sparkle update assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
   jarvis_release_retry \
     "gh release upload Jarvis Sparkle assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG" \
-    jarvis_release_upload_sparkle_assets_attempt
+    jarvis_release_upload_sparkle_assets_attempt "$zip_action"
 
   verify_sparkle_public_release_assets
 }
@@ -646,21 +656,25 @@ publish_sparkle_release_assets() {
 # errexit while it captures command output, so the explicit return preserves the
 # guard: a replaced/expired intent must never fall through to `gh`.
 jarvis_release_upload_full_assets_attempt() {
+  local dmg_action="$1"
+  local zip_action="$2"
   openclaw_require_jarvis_release_intent \
     "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub full release upload attempt" \
     || return $?
-  gh release upload "$GITHUB_RELEASE_TAG" "$DMG" "$ZIP" "$appcast" \
-    --repo "$GITHUB_RELEASE_REPO" \
-    --clobber
+  [[ "$dmg_action" != "upload" ]] || gh release upload "$GITHUB_RELEASE_TAG" "$DMG" --repo "$GITHUB_RELEASE_REPO"
+  [[ "$zip_action" != "upload" ]] || gh release upload "$GITHUB_RELEASE_TAG" "$ZIP" --repo "$GITHUB_RELEASE_REPO"
+  # The appcast is the mutable go-live pointer and must remain the final upload.
+  gh release upload "$GITHUB_RELEASE_TAG" "$appcast" --repo "$GITHUB_RELEASE_REPO" --clobber
 }
 
 jarvis_release_upload_sparkle_assets_attempt() {
+  local zip_action="$1"
   openclaw_require_jarvis_release_intent \
     "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub Sparkle release upload attempt" \
     || return $?
-  gh release upload "$GITHUB_RELEASE_TAG" "$ZIP" "$appcast" \
-    --repo "$GITHUB_RELEASE_REPO" \
-    --clobber
+  [[ "$zip_action" != "upload" ]] || gh release upload "$GITHUB_RELEASE_TAG" "$ZIP" --repo "$GITHUB_RELEASE_REPO"
+  # Sparkle reads this feed as the go-live switch, so it always uploads last.
+  gh release upload "$GITHUB_RELEASE_TAG" "$appcast" --repo "$GITHUB_RELEASE_REPO" --clobber
 }
 
 sign_dmg_if_possible() {
@@ -866,6 +880,8 @@ write_release_manifest() {
   {
     printf 'JARVIS_RELEASE_MANIFEST_VERSION=%q\n' "1"
     printf 'JARVIS_PACKAGE_PHASE=%q\n' "$PACKAGE_PHASE"
+    printf 'JARVIS_RELEASE_CLASS=%q\n' "$RELEASE_CLASS"
+    printf 'JARVIS_RELEASE_CLASS_REASON=%q\n' "$RELEASE_CLASS_REASON"
     printf 'JARVIS_APP_PATH=%q\n' "$APP_PATH"
     printf 'JARVIS_DMG_PATH=%q\n' "$DMG"
     printf 'JARVIS_ZIP_PATH=%q\n' "$ZIP"
@@ -1407,6 +1423,16 @@ while [[ $# -gt 0 ]]; do
       PACKAGE_PHASE="$2"
       shift 2
       ;;
+    --release-class)
+      [[ $# -ge 2 ]] || { echo "ERROR: --release-class requires a value" >&2; exit 1; }
+      RELEASE_CLASS="$2"
+      shift 2
+      ;;
+    --release-class-reason)
+      [[ $# -ge 2 ]] || { echo "ERROR: --release-class-reason requires a value" >&2; exit 1; }
+      RELEASE_CLASS_REASON="$2"
+      shift 2
+      ;;
     --resume-after-app-build)
       PACKAGE_PHASE="post-app-build"
       shift
@@ -1445,7 +1471,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PACKAGE_PHASE" in
-  full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only|trusted-ring-fast)
+  sparkle-update|full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only|trusted-ring-fast)
     ;;
   *)
     echo "ERROR: unknown --phase value: $PACKAGE_PHASE" >&2
@@ -1570,13 +1596,13 @@ case "$PACKAGE_PHASE" in
 esac
 
 case "$PACKAGE_PHASE" in
-  full|local-proof|build-app-only|post-app-build|trusted-ring-fast|submit-app-notarization|poll-app-notarization|create-local-release-assets-only)
+  sparkle-update|full|local-proof|build-app-only|post-app-build|trusted-ring-fast|submit-app-notarization|poll-app-notarization|create-local-release-assets-only)
     consumer_sparkle_release_gate
     ;;
 esac
 
 case "$PACKAGE_PHASE" in
-  full|post-app-build|local-proof)
+  sparkle-update|full|post-app-build|local-proof)
     require_release_publish_prereqs
     if [[ "$NOTARIZE" == "1" ]]; then
       require_sparkle_private_key_file
@@ -1616,7 +1642,7 @@ esac
 require_resume_checkpoints_for_phase
 
 case "$PACKAGE_PHASE" in
-  full|local-proof|build-app-only|trusted-ring-fast)
+  sparkle-update|full|local-proof|build-app-only|trusted-ring-fast)
     openclaw_require_macos_prewarm_proof "$ROOT_DIR"
     require_clean_git_for_release_build
     ;;
@@ -1638,7 +1664,7 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   VERIFY_ARGS+=(--instance "$NORMALIZED_INSTANCE_ID")
 fi
 
-if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "local-proof" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
+if [[ "$PACKAGE_PHASE" == "sparkle-update" || "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "local-proof" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
   # Stale release artifacts under dist/ can get copied into the bundled runtime
   # before the fresh app is assembled. Remove only mac release outputs here; JS
   # build outputs under dist/ are still needed by the packaged CLI/runtime.
@@ -1691,7 +1717,7 @@ case "$PACKAGE_PHASE" in
   submit-app-notarization)
     NOTARY_ZIP="$(release_run_root)/${APP_NAME}-${VERSION}.notary.zip"
     ;;
-  full|post-app-build)
+  sparkle-update|full|post-app-build)
     if [[ "$NOTARIZE" == "1" ]]; then
       NOTARY_ZIP="$(release_run_root)/${APP_NAME}-${VERSION}.notary.zip"
     fi
@@ -1701,7 +1727,7 @@ DSYM_ZIP="$ROOT_DIR/dist/${PRODUCT}-${VERSION}.dSYM.zip"
 SIGNING_AUTHORITY="$(bundle_signing_authority "$APP_PATH")"
 write_app_build_receipt
 case "$PACKAGE_PHASE" in
-  full|build-app-only)
+  sparkle-update|full|build-app-only)
     openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$APP_PATH" app app-signed
     ;;
   local-proof)
@@ -1801,7 +1827,7 @@ case "$PACKAGE_PHASE" in
 esac
 
 case "$PACKAGE_PHASE" in
-  full|local-proof|post-app-build|trusted-ring-fast)
+  sparkle-update|full|local-proof|post-app-build|trusted-ring-fast)
     # Remove stale final artifacts only when this run is about to recreate them.
     # Narrow resume phases must preserve the artifacts they are explicitly
     # resuming from.
@@ -1936,10 +1962,12 @@ if [[ "$NOTARIZE" == "1" ]]; then
   write_app_checkpoint_from_receipt app-notarized
 fi
 
-openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG creation"
-create_signed_dmg
+if [[ "$RELEASE_CLASS" == "fresh-installer" ]]; then
+  openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG creation"
+  create_signed_dmg
+fi
 
-if [[ "$NOTARIZE" == "1" ]]; then
+if [[ "$RELEASE_CLASS" == "fresh-installer" && "$NOTARIZE" == "1" ]]; then
   openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG notarization"
   phase_status=0
   set +e
@@ -2035,11 +2063,19 @@ handoff_started_ms="$(release_phase_now_ms)"
 copy_handoff_artifacts
 release_phase_log_elapsed "$handoff_started_ms" "Handoff artifact copy"
 if [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
-  require_notarized_manifest_before_publish
+  if [[ "$RELEASE_CLASS" == "fresh-installer" ]]; then
+    require_notarized_manifest_before_publish
+  else
+    require_sparkle_manifest_before_publish
+  fi
 fi
 openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "public release publication"
 publish_started_ms="$(release_phase_now_ms)"
-publish_release_assets
+if [[ "$RELEASE_CLASS" == "fresh-installer" ]]; then
+  publish_release_assets
+else
+  publish_sparkle_release_assets
+fi
 release_phase_log_elapsed "$publish_started_ms" "Release asset publish/verify"
 write_release_manifest
 
@@ -2060,9 +2096,15 @@ if [[ "$NOTARIZE" == "1" ]]; then
 else
   echo "  notarization=skipped (set SKIP_NOTARIZE=0 with Developer ID + notary auth to submit/staple)"
 fi
-if [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
+if [[ "$PUBLISH_RELEASE_ASSETS" == "1" && "$RELEASE_CLASS" == "fresh-installer" ]]; then
   echo "release_sendable=true"
   echo "sparkle_update_live=true"
+elif [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
+  echo "release_sendable=false"
+  echo "sparkle_update_live=true"
+  echo "fresh_install_sendable=false"
+  echo "dmg_update_live=false"
+  echo "reason=Sparkle update is live; this release class intentionally did not create or publish a DMG"
 elif [[ "$NOTARIZE" == "1" ]]; then
   echo "release_sendable=false"
   echo "reason=Sparkle assets were generated locally but not uploaded/verified"

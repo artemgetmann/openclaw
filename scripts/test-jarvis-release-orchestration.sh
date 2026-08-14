@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-assets.sh"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -1180,8 +1181,77 @@ printf "%s\n" "{\"tagName\":\"v-bound-current\"}"'
   pass "bound forced recovery requires fresh authorization before changing phase or tag action"
 }
 
+test_release_class_defaults_and_fresh_installer_gate() {
+  local state_root="$TMP_DIR/release-class-state"
+  local out="$TMP_DIR/release-class.out"
+  local err="$TMP_DIR/release-class.err"
+  local status
+  mkdir -p "$state_root/dist"
+
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$state_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$out"
+  grep -q '^  selected_phase=sparkle-update$' "$out" \
+    || fail "routine release did not default to the Sparkle-only package phase"
+  grep -q '^  release_class=sparkle-update$' "$out" \
+    || fail "routine release did not report its release class"
+  ! grep -q -- '--phase submit-dmg-notarization' "$out" \
+    || fail "routine release selected DMG work"
+
+  set +e
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$state_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run --release-class fresh-installer >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "fresh-installer succeeded without a classification reason"
+  grep -q 'fresh-installer requires --release-class-reason' "$err" \
+    || fail "fresh-installer failure did not explain the required receipt"
+
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$state_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run --release-class fresh-installer \
+      --release-class-reason recovery >"$out"
+  grep -q '^  selected_phase=full$' "$out" \
+    || fail "classified fresh installer did not select the full package phase"
+  grep -q '^  release_class_reason=recovery$' "$out" \
+    || fail "fresh installer did not report its classification reason"
+  pass "release classes default to Sparkle and gate fresh installers"
+}
+
+test_tagged_asset_immutability() {
+  local fake_bin="$TMP_DIR/immutable-fake-bin"
+  local artifact="$TMP_DIR/Jarvis.zip"
+  local digest out err status
+  mkdir -p "$fake_bin"
+  printf 'immutable fixture\n' >"$artifact"
+  digest="sha256:$(/usr/bin/shasum -a 256 "$artifact" | /usr/bin/awk '{ print $1 }')"
+  write_release_control_stub "$fake_bin/gh" '#!/usr/bin/env bash
+printf "%s\n" "${REMOTE_DIGEST:-}"'
+
+  out="$(PATH="$fake_bin:$PATH" REMOTE_DIGEST="" \
+    openclaw_jarvis_release_require_immutable_asset_compatible repo v1 "$artifact")"
+  [[ "$out" == "upload" ]] || fail "missing tagged asset was not classified for first upload"
+
+  out="$(PATH="$fake_bin:$PATH" REMOTE_DIGEST="$digest" \
+    openclaw_jarvis_release_require_immutable_asset_compatible repo v1 "$artifact")"
+  [[ "$out" == "identical" ]] || fail "identical tagged asset was not classified as an idempotent retry"
+
+  set +e
+  PATH="$fake_bin:$PATH" REMOTE_DIGEST="sha256:deadbeef" \
+    openclaw_jarvis_release_require_immutable_asset_compatible repo v1 "$artifact" \
+      >"$TMP_DIR/immutable.out" 2>"$TMP_DIR/immutable.err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "different bytes were allowed to replace a tagged asset"
+  grep -q 'Create a new release tag' "$TMP_DIR/immutable.err" \
+    || fail "immutable conflict did not give the safe recovery action"
+  pass "tagged ZIP and DMG bytes are immutable"
+}
+
 setup_checkpoint_stubs
 setup_release_intent
+test_release_class_defaults_and_fresh_installer_gate
+test_tagged_asset_immutability
 test_phase_selection
 test_retry_classification
 test_wrapper_dry_run

@@ -349,7 +349,7 @@ openclaw_macos_release_phase_requires_version_gate() {
   local phase="$1"
 
   case "$phase" in
-    full|local-proof|post-app-build|build-app-only|trusted-ring-fast|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|publish-sparkle-assets-only)
+    sparkle-update|full|local-proof|post-app-build|build-app-only|trusted-ring-fast|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|publish-sparkle-assets-only)
       return 0
       ;;
     verify-public-assets-only|verify-sparkle-assets-only)
