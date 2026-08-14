@@ -57,6 +57,21 @@ setup_release_intent() {
   export TEST_RELEASE_INTENT_ID
 }
 
+setup_release_worktree_fixture() {
+  local branch
+
+  branch="$(git -C "$ROOT_DIR" branch --show-current)"
+  TEST_RELEASE_NAME="${branch#codex/}"
+  TEST_RELEASE_HOME="$TMP_DIR/release-home"
+  mkdir -p "$TEST_RELEASE_HOME/.worktrees"
+
+  # The production guard requires the canonical <home>/.worktrees/<name>
+  # shape. Point that temporary shape at this checkout so live wrapper tests
+  # verify the real guard without depending on the test runner's worktree path.
+  ln -s "$ROOT_DIR" "$TEST_RELEASE_HOME/.worktrees/$TEST_RELEASE_NAME"
+  export TEST_RELEASE_HOME TEST_RELEASE_NAME
+}
+
 seed_wrapper_checkpoints() {
   local root="$1"
   local app_state="$2"
@@ -393,8 +408,8 @@ test_wrapper_dry_run() {
   local release_home release_name
   local status
 
-  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
-  release_name="$(basename "$ROOT_DIR")"
+  release_home="$TEST_RELEASE_HOME"
+  release_name="$TEST_RELEASE_NAME"
 
   mkdir -p "$root/dist/Jarvis.app"
   write_receipt "$(jarvis_release_app_notary_receipt_path "$root")" "app-submission"
@@ -443,6 +458,8 @@ test_wrapper_dry_run() {
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
       --dry-run \
       --parallel-safe-local-assets \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$p2_asset_out"
   if ! grep -q 'selected_phase=create-local-release-assets-only' "$p2_asset_out"; then
     cat "$p2_asset_out" >&2
@@ -470,6 +487,8 @@ test_wrapper_dry_run() {
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
       --dry-run \
       --parallel-safe-local-assets \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$p2_poll_out"
   if ! grep -q 'selected_phase=poll-dmg-notarization' "$p2_poll_out"; then
     cat "$p2_poll_out" >&2
@@ -485,13 +504,15 @@ test_wrapper_dry_run() {
     "$pending_dmg_root/dist/Jarvis.dmg.notary.env.pending" \
     "$pending_dmg_root/dist/Jarvis.dmg.notary.env"
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$pending_dmg_root" \
-    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$pending_dmg_out"
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run \
+      --release-class fresh-installer --release-class-reason manual-refresh >"$pending_dmg_out"
   grep -q 'selected_phase=poll-dmg-notarization' "$pending_dmg_out" \
     || fail "In Progress receipt selected DMG resubmission instead of same-ID polling"
   pass "wrapper keeps In Progress DMG submission on the poll path"
   seed_wrapper_checkpoints "$accepted_dmg_root" notarized accepted
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$accepted_dmg_root" \
-    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$accepted_dmg_out"
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run \
+      --release-class fresh-installer --release-class-reason manual-refresh >"$accepted_dmg_out"
   grep -q 'selected_phase=poll-dmg-notarization' "$accepted_dmg_out" \
     || fail "accepted DMG proof rebuilt or resubmitted instead of retrying staple verification"
   pass "accepted DMG proof retries polling without rebuild or resubmit"
@@ -529,7 +550,7 @@ test_wrapper_dry_run() {
       --release-intent "$TEST_RELEASE_INTENT_ID" \
       --urgent-sparkle \
       >"$urgent_ready_live_out"
-  if ! grep -Fq "next_publish_command=bash scripts/jarvis-public-release.sh --release-intent $TEST_RELEASE_INTENT_ID --urgent-sparkle --publish-release-assets --latest-release-tag" "$urgent_ready_live_out"; then
+  if ! grep -Fq "next_publish_command=bash scripts/jarvis-public-release.sh --release-intent $TEST_RELEASE_INTENT_ID --release-class sparkle-update --publish-release-assets --latest-release-tag" "$urgent_ready_live_out"; then
     cat "$urgent_ready_live_out" >&2
     fail "wrapper urgent sparkle ready output did not preserve the active release intent"
   fi
@@ -542,7 +563,8 @@ test_wrapper_dry_run() {
 
   set +e
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$asset_root" \
-    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$asset_out" 2>"$asset_err"
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run \
+      --release-class fresh-installer --release-class-reason manual-refresh >"$asset_out" 2>"$asset_err"
   status=$?
   set -e
   if [[ "$status" -ne 0 ]]; then
@@ -556,7 +578,8 @@ test_wrapper_dry_run() {
   pass "wrapper local assets dry run reports required tag"
 
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$asset_root" \
-    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run --github-release-tag v-test >"$asset_out"
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run --github-release-tag v-test \
+      --release-class fresh-installer --release-class-reason manual-refresh >"$asset_out"
   if ! grep -q 'selected_phase=create-local-release-assets-only' "$asset_out"; then
     cat "$asset_out" >&2
     fail "wrapper tagged local asset dry run selected wrong phase"
@@ -577,6 +600,8 @@ test_wrapper_dry_run() {
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$asset_root" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
       --release-intent "$TEST_RELEASE_INTENT_ID" \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$asset_ready_out"
   if ! grep -Fq "next_publish_command=bash scripts/jarvis-public-release.sh --release-intent $TEST_RELEASE_INTENT_ID --publish-release-assets --latest-release-tag" "$asset_ready_out"; then
     cat "$asset_ready_out" >&2
@@ -592,7 +617,8 @@ test_wrapper_dry_run() {
   seed_wrapper_checkpoints "$verify_root" notarized notarized 1
 
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$verify_root" \
-    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run --verify-public-assets >"$verify_out"
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run --verify-public-assets \
+      --release-class fresh-installer --release-class-reason manual-refresh >"$verify_out"
   if ! grep -q 'selected_phase=verify-public-assets-only' "$verify_out"; then
     cat "$verify_out" >&2
     fail "wrapper verify dry run selected wrong phase"
@@ -613,6 +639,8 @@ test_wrapper_dry_run() {
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
       --verify-public-assets \
       --release-intent "$TEST_RELEASE_INTENT_ID" \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$verify_out" 2>"$verify_err"
   status=$?
   set -e
@@ -648,6 +676,8 @@ test_wrapper_dry_run() {
       --dry-run \
       --publish-release-assets \
       --github-release-tag v-current \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$stale_publish_out"
   if ! grep -q 'selected_phase=create-local-release-assets-only' "$stale_publish_out"; then
     cat "$stale_publish_out" >&2
@@ -698,6 +728,8 @@ test_wrapper_dry_run() {
       --dry-run \
       --publish-release-assets \
       --latest-release-tag \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$latest_publish_out"
   if ! grep -q 'selected_phase=publish-assets-only' "$latest_publish_out"; then
     cat "$latest_publish_out" >&2
@@ -726,6 +758,8 @@ test_wrapper_dry_run() {
       --dry-run \
       --verify-public-assets \
       --latest-release-tag \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$latest_verify_out"
   if ! grep -q 'selected_phase=verify-public-assets-only' "$latest_verify_out"; then
     cat "$latest_verify_out" >&2
@@ -746,6 +780,8 @@ test_wrapper_dry_run() {
       --dry-run \
       --verify-public-assets \
       --latest-release-tag \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$latest_retry_out"
   if ! grep -q 'resolved_github_release_tag=v-retry' "$latest_retry_out"; then
     cat "$latest_retry_out" >&2
@@ -880,8 +916,8 @@ test_package_sparkle_publish_gate_does_not_require_dmg() {
   local release_name
   local status
 
-  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
-  release_name="$(basename "$ROOT_DIR")"
+  release_home="$TEST_RELEASE_HOME"
+  release_name="$TEST_RELEASE_NAME"
 
   mkdir -p "$app_path"
   {
@@ -930,8 +966,8 @@ test_package_sparkle_publish_only_ignores_skip_notarize() {
   local release_name
   local status
 
-  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
-  release_name="$(basename "$ROOT_DIR")"
+  release_home="$TEST_RELEASE_HOME"
+  release_name="$TEST_RELEASE_NAME"
 
   mkdir -p "$app_path" "$fake_bin"
   {
@@ -988,8 +1024,8 @@ test_forced_invalid_checkpoint_recovers_automatically() {
   local combined="$TMP_DIR/forced-invalid-checkpoint.combined"
   local release_home release_name status
 
-  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
-  release_name="$(basename "$ROOT_DIR")"
+  release_home="$TEST_RELEASE_HOME"
+  release_name="$TEST_RELEASE_NAME"
   set +e
   APP_NAME="JarvisMissingCheckpoint-$$" \
   SPARKLE_FEED_URL="https://github.com/artemgetmann/openclaw/releases/latest/download/jarvis-appcast.xml" \
@@ -1020,8 +1056,8 @@ test_bound_ready_advice_requires_fresh_authorization() {
   local out="$TMP_DIR/bound-ready.out"
   local release_home release_name
 
-  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
-  release_name="$(basename "$ROOT_DIR")"
+  release_home="$TEST_RELEASE_HOME"
+  release_name="$TEST_RELEASE_NAME"
   seed_wrapper_checkpoints "$ready_root" notarized notarized 1
   seed_wrapper_checkpoints "$sparkle_root" notarized none 1
 
@@ -1077,8 +1113,8 @@ test_bound_package_failure_recovers_through_wrapper() {
   local disk_probe="$TMP_DIR/bound-package-disk-probe"
   local release_home release_name status
 
-  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
-  release_name="$(basename "$ROOT_DIR")"
+  release_home="$TEST_RELEASE_HOME"
+  release_name="$TEST_RELEASE_NAME"
   write_release_control_stub "$disk_probe" '#!/usr/bin/env bash
 printf "bound-package-fs\t/Volumes/bound-package\t0\t%s\n" "$1"'
 
@@ -1133,8 +1169,8 @@ test_bound_forced_recovery_requires_fresh_authorization() {
   local fake_bin="$TMP_DIR/bound-forced-bin"
   local release_home release_name status
 
-  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
-  release_name="$(basename "$ROOT_DIR")"
+  release_home="$TEST_RELEASE_HOME"
+  release_name="$TEST_RELEASE_NAME"
   mkdir -p "$fake_bin"
   write_release_control_stub "$fake_bin/gh" '#!/usr/bin/env bash
 printf "%s\n" "{\"tagName\":\"v-bound-current\"}"'
@@ -1250,6 +1286,7 @@ printf "%s\n" "${REMOTE_DIGEST:-}"'
 
 setup_checkpoint_stubs
 setup_release_intent
+setup_release_worktree_fixture
 test_release_class_defaults_and_fresh_installer_gate
 test_tagged_asset_immutability
 test_phase_selection
