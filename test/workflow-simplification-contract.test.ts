@@ -84,8 +84,10 @@ describe("single-owner workflow contract", () => {
     }
     expect(runtime).toContain("explicitly recorded at task start");
     expect(template).toContain("Task-start delivery authority");
+    expect(template).toContain("reviewed-routine");
     expect(ship).toContain("delivery_authority_policy=");
-    expect(ship).toContain("touches security/release-class paths");
+    expect(ship).toContain("--reviewed-routine-protected-pr");
+    expect(ship).toContain("--approved-protected-pr");
     expect(ship).toContain("run_pr_required --pr");
   });
 
