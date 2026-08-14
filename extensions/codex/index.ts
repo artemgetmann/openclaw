@@ -28,6 +28,7 @@ import {
   type CodexDurableCallbackInput,
 } from "./src/callback-route-registry.js";
 import {
+  CODEX_RELAY_MAX_TASK_PAYLOAD_CHARS,
   CodexDelegationRegistry,
   type CodexRelayJarvisRunPurpose,
   type CodexRelayRecoveryPolicy,
@@ -485,15 +486,20 @@ function createCodexTool(
         const active =
           sessionKey && (await getCallbackRoutes().findActiveTurn({ threadId, sessionKey }));
         if (active) {
-          if (raw.restart_recovery) {
+          const registry = getRegistry();
+          const activeRecord = await registry.get(active.relayId);
+          const recoveryPolicy = raw.restart_recovery ?? activeRecord?.recoveryPolicy;
+          if (recoveryPolicy) {
             // The authority grant must survive before steering crosses into
-            // the native App Server. A later ambiguous steer cannot otherwise
-            // leave Jarvis claiming recovery was enabled when it was not.
-            await getRegistry().authorizeRecovery({
+            // the native App Server. Persist every later owner steer too, so a
+            // recovery turn continues the final authorized task rather than
+            // the task as it existed before the coordinator's guidance.
+            await registry.authorizeRecovery({
               delegationId: active.relayId,
               threadId: active.threadId,
               turnId: active.turnId,
-              policy: raw.restart_recovery,
+              policy: recoveryPolicy,
+              guidance: text,
             });
           }
           const steered = await service.steer(active.threadId, active.turnId, text);
@@ -738,6 +744,11 @@ async function startAsyncRelay(params: {
   };
 }) {
   const sessionKey = requireAsyncSession(params.ctx);
+  if (params.recoveryPolicy && params.text.length > CODEX_RELAY_MAX_TASK_PAYLOAD_CHARS) {
+    throw new Error(
+      `restart recovery task exceeds the ${CODEX_RELAY_MAX_TASK_PAYLOAD_CHARS}-character durable payload limit`,
+    );
+  }
 
   const delegationId = params.delegationId ?? randomUUID();
   const registry = params.getRegistry();
@@ -755,6 +766,12 @@ async function startAsyncRelay(params: {
     threadId: params.threadId,
     deliveryKey: `codex-relay:${delegationId}`,
     recoveryPolicy: params.recoveryPolicy,
+    // App Server can lose the interrupted turn's input during a gateway crash.
+    // Keep the exact owner payload while the relay is active so a later
+    // explicit local-safe grant never has to reconstruct intent from context.
+    ...(params.text.length <= CODEX_RELAY_MAX_TASK_PAYLOAD_CHARS
+      ? { taskPayload: params.text }
+      : {}),
     recoveryOfDelegationId: params.recoveryOfDelegationId,
   });
   const workerPrompt = buildAsyncWorkerPrompt({
@@ -1412,10 +1429,26 @@ async function dispatchJarvisEvent(params: {
 }
 
 function buildRestartRecoveryTask(record: CodexRelayRecord): string {
+  if (!record.taskPayload) {
+    throw new Error(
+      `Codex relay ${record.delegationId} cannot recover without its exact durable task payload`,
+    );
+  }
+  const boundaryPrefix = `INTERRUPTED_TASK_${record.delegationId}`;
+  let boundary = boundaryPrefix;
+  let collision = 0;
+  while (record.taskPayload.includes(boundary)) {
+    collision += 1;
+    boundary = `${boundaryPrefix}_${collision}`;
+  }
   return [
     `Restart recovery for interrupted delegation ${record.delegationId}.`,
     `The prior native turn ${record.turnId ?? "unknown"} in this same thread is durably interrupted.`,
-    "Inspect the existing conversation, workspace files, git status and commits, relevant tests, PR state, and any durable external receipts before acting.",
+    "The exact interrupted task is reproduced below from Jarvis-owned durable state. Treat it as the only task to continue; do not infer a different objective from repository files, memory, older conversation, or unrelated receipts.",
+    `-----BEGIN ${boundary}-----`,
+    record.taskPayload,
+    `-----END ${boundary}-----`,
+    "Inspect this task's prior messages, workspace files, git status and commits, relevant tests, PR state, and durable external receipts before acting.",
     "Continue only unfinished, safely repeatable local analysis or implementation already authorized by the owner.",
     "Do not repeat or initiate messages, purchases, deploys, releases, credential changes, destructive actions, protected runtime changes, or any action whose acceptance or delivery is uncertain.",
     "If inspection cannot prove the remaining work is local, unfinished, and safe to repeat, report STATUS: decision-needed and stop.",

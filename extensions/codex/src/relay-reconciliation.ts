@@ -247,6 +247,7 @@ async function reconcileRecord(params: {
   if (
     inspection.kind === "interrupted" &&
     record.recoveryPolicy === "local-safe" &&
+    record.taskPayload &&
     options.startRecovery
   ) {
     const recoveryDelegationId = randomUUID();

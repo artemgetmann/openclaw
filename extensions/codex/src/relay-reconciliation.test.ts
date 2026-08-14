@@ -20,6 +20,7 @@ async function acceptedRegistry(now = 1_000, options: { recoveryPolicy?: "local-
     threadId: "thread-1",
     deliveryKey: "codex-relay:delegation-1",
     recoveryPolicy: options.recoveryPolicy,
+    ...(options.recoveryPolicy ? { taskPayload: "Complete the exact bounded local task." } : {}),
   });
   await registry.markAccepted("delegation-1", "turn-1");
   return { filePath, registry };
@@ -227,6 +228,54 @@ describe("reconcileCodexRelays", () => {
       terminalStatus: "interrupted",
       recoveryDelegationId: expect.any(String),
     });
+  });
+
+  it("fails closed for a legacy recovery grant without the exact durable task", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "codex-relay-reconcile-legacy-"));
+    const filePath = path.join(directory, "async-relays.json");
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        records: [
+          {
+            delegationId: "delegation-legacy",
+            sessionKey: "agent:main:telegram:direct:owner",
+            threadId: "thread-legacy",
+            turnId: "turn-legacy",
+            lifecycle: "accepted",
+            deliveryKey: "codex-relay:delegation-legacy",
+            recoveryPolicy: "local-safe",
+            createdAtMs: 1_000,
+            updatedAtMs: 1_000,
+            acceptedAtMs: 1_000,
+          },
+        ],
+      }),
+    );
+    const registry = new CodexDelegationRegistry(filePath, () => 1_000);
+    const decision = vi.fn(async () => "completed" as const);
+    const startRecovery = vi.fn(async () => undefined);
+
+    await expect(
+      reconcileCodexRelays({
+        registry,
+        inspectTurn: async () => ({
+          kind: "interrupted" as const,
+          threadId: "thread-legacy",
+          turnId: "turn-legacy",
+        }),
+        dispatchTerminal: vi.fn(),
+        dispatchDecisionNeeded: decision,
+        startRecovery,
+        now: () => 1_000,
+      }),
+    ).resolves.toMatchObject({ recovered: 0, decisionNeeded: 1 });
+    expect(startRecovery).not.toHaveBeenCalled();
+    expect(decision).toHaveBeenCalledWith(
+      expect.objectContaining({ delegationId: "delegation-legacy" }),
+      expect.stringContaining("not resumed or replayed"),
+    );
   });
 
   it("never starts a second recovery after restart during recovery acceptance", async () => {

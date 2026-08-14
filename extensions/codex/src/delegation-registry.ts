@@ -8,6 +8,7 @@ const FILE_MODE = 0o600;
 const DIRECTORY_MODE = 0o700;
 const MAX_REGISTRY_BYTES = 1024 * 1024;
 const MAX_REGISTRY_RECORDS = 1_000;
+export const CODEX_RELAY_MAX_TASK_PAYLOAD_CHARS = 32_768;
 
 export const CODEX_RELAY_MAX_RECONCILE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -51,6 +52,8 @@ export type CodexRelayRecord = {
   deliveredAtMs?: number;
   decisionNeededAtMs?: number;
   recoveryPolicy?: CodexRelayRecoveryPolicy;
+  /** Exact owner task needed only while an accepted turn can still be interrupted. */
+  taskPayload?: string;
   recoveryDelegationId?: string;
   recoveryStartedAtMs?: number;
   recoveredAtMs?: number;
@@ -76,15 +79,16 @@ type CreateStartingRelay = Pick<
   CodexRelayRecord,
   "delegationId" | "sessionKey" | "agentId" | "threadId" | "deliveryKey"
 > &
-  Pick<CodexRelayRecord, "recoveryPolicy" | "recoveryOfDelegationId">;
+  Pick<CodexRelayRecord, "recoveryPolicy" | "recoveryOfDelegationId" | "taskPayload">;
 
 /**
  * Small durable registry for Jarvis-owned native Codex relays.
  *
- * The file is intentionally extension-local and contains routing identity, not
- * task prompts or credentials. Mutations are serialized within the Gateway and
- * replaced atomically with owner-only permissions so a restart sees either the
- * complete previous document or the complete next document.
+ * The file is intentionally extension-local and contains routing identity plus
+ * the exact active task payload needed for explicitly authorized recovery. It
+ * never stores callback capabilities or credentials, and terminal transitions
+ * erase the payload. Mutations are serialized within the Gateway and replaced
+ * atomically with owner-only permissions so a restart sees one complete state.
  */
 export class CodexDelegationRegistry {
   private mutationTail: Promise<void> = Promise.resolve();
@@ -108,6 +112,7 @@ export class CodexDelegationRegistry {
         lifecycle: "starting",
         deliveryKey: requireStoredString(input.deliveryKey, "deliveryKey"),
         ...(input.recoveryPolicy ? { recoveryPolicy: input.recoveryPolicy } : {}),
+        ...(input.taskPayload ? { taskPayload: requireTaskPayload(input.taskPayload) } : {}),
         ...(input.recoveryOfDelegationId
           ? {
               recoveryOfDelegationId: requireStoredString(
@@ -119,6 +124,9 @@ export class CodexDelegationRegistry {
         createdAtMs: timestamp,
         updatedAtMs: timestamp,
       };
+      if (record.recoveryPolicy && !record.taskPayload) {
+        throw new Error("restart recovery requires the exact durable task payload");
+      }
       records.push(record);
       return record;
     });
@@ -145,6 +153,7 @@ export class CodexDelegationRegistry {
     threadId: string;
     turnId: string;
     policy: CodexRelayRecoveryPolicy;
+    guidance: string;
   }): Promise<CodexRelayRecord> {
     return await this.update(input.delegationId, (record, timestamp) => {
       if (
@@ -159,6 +168,7 @@ export class CodexDelegationRegistry {
       return {
         ...record,
         recoveryPolicy: input.policy,
+        taskPayload: appendTaskGuidance(record.taskPayload, input.guidance),
         updatedAtMs: timestamp,
       };
     });
@@ -185,6 +195,7 @@ export class CodexDelegationRegistry {
         ...record,
         lifecycle: record.lifecycle === "delivery-started" ? "delivery-started" : "terminal",
         terminalStatus,
+        ...(terminalStatus === "interrupted" ? {} : { taskPayload: undefined }),
         terminalAtMs: record.terminalAtMs ?? timestamp,
         updatedAtMs: timestamp,
       };
@@ -230,6 +241,7 @@ export class CodexDelegationRegistry {
       return {
         ...record,
         lifecycle: "recovered",
+        taskPayload: undefined,
         recoveredAtMs: timestamp,
         updatedAtMs: timestamp,
       };
@@ -324,6 +336,7 @@ export class CodexDelegationRegistry {
         ...record,
         lifecycle: "delivery-started",
         deliveryKind: "decision",
+        taskPayload: undefined,
         deliveryStartedAtMs: timestamp,
         // Prior run/heartbeat fields remain diagnostic only. deliveryKind is
         // the durable authority: once it is decision, no evidence field can
@@ -343,6 +356,7 @@ export class CodexDelegationRegistry {
       return {
         ...record,
         lifecycle: "delivered",
+        taskPayload: undefined,
         deliveredAtMs: timestamp,
         updatedAtMs: timestamp,
       };
@@ -467,6 +481,7 @@ export class CodexDelegationRegistry {
       return {
         ...record,
         lifecycle: "decision-needed",
+        taskPayload: undefined,
         decisionNeededAtMs: timestamp,
         updatedAtMs: timestamp,
       };
@@ -574,11 +589,17 @@ export class CodexDelegationRegistry {
   }
 
   private async writeDocument(document: RegistryDocument): Promise<void> {
+    const payload = `${JSON.stringify(document, null, 2)}\n`;
+    // The reader rejects oversized registries to bound startup memory and
+    // corruption exposure. Enforce the same invariant before atomic replace so
+    // a valid registry can never write itself into an unreadable state.
+    if (Buffer.byteLength(payload, "utf8") > MAX_REGISTRY_BYTES) {
+      throw new Error(`Codex relay registry exceeds ${MAX_REGISTRY_BYTES} bytes`);
+    }
     const directory = path.dirname(this.filePath);
     await mkdir(directory, { recursive: true, mode: DIRECTORY_MODE });
     await chmod(directory, DIRECTORY_MODE);
     const temporaryPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
-    const payload = `${JSON.stringify(document, null, 2)}\n`;
     try {
       await writeFile(temporaryPath, payload, {
         encoding: "utf8",
@@ -622,6 +643,9 @@ function validateRecord(value: unknown): CodexRelayRecord | string {
   }
   if (value.recoveryPolicy !== undefined && value.recoveryPolicy !== "local-safe") {
     return "recoveryPolicy is invalid";
+  }
+  if (value.taskPayload !== undefined && !isTaskPayload(value.taskPayload)) {
+    return "taskPayload is invalid";
   }
   for (const field of ["recoveryDelegationId", "recoveryOfDelegationId"] as const) {
     if (value[field] !== undefined && !isStoredString(value[field])) {
@@ -739,6 +763,32 @@ function requireStoredString(value: string, field: string): string {
 
 function isStoredString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096;
+}
+
+function requireTaskPayload(value: string): string {
+  if (!isTaskPayload(value)) {
+    throw new Error(
+      `taskPayload is required and must be at most ${CODEX_RELAY_MAX_TASK_PAYLOAD_CHARS} characters`,
+    );
+  }
+  return value;
+}
+
+function isTaskPayload(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= CODEX_RELAY_MAX_TASK_PAYLOAD_CHARS
+  );
+}
+
+function appendTaskGuidance(taskPayload: string | undefined, guidance: string): string {
+  if (!taskPayload) {
+    throw new Error("restart recovery cannot be granted without the original task payload");
+  }
+  return requireTaskPayload(
+    `${taskPayload}\n\nAdditional owner guidance received before interruption:\n${guidance}`,
+  );
 }
 
 function isTimestamp(value: unknown): value is number {
