@@ -108,6 +108,7 @@ CI_TIMEOUT_SECONDS="${OPENCLAW_SHIP_CI_TIMEOUT_SECONDS:-1800}"
 
 PR_NUMBER=""
 MAIN_POLICY=""
+APPROVED_PROTECTED_PRS=()
 DRY_RUN=0
 STATUS_STDOUT_FILE=""
 STATUS_STDERR_FILE=""
@@ -159,7 +160,7 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage: scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy <exact-pr|current-green-main> [--dry-run]
+Usage: scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy <exact-pr|current-green-main> [--approved-protected-pr <number>]... [--dry-run]
 
 Ship an already-merged main-targeted PR to this Mac's default Jarvis as an
 explicit app-support break-glass hotfix. The wrapper builds and launches only
@@ -170,6 +171,11 @@ The main policy must match the delivery authority recorded when the task began:
   exact-pr            Ship only when current main is the requested PR merge.
   current-green-main  Ship later routine merged PRs after their protected-path,
                       exact merge identity, and required-check proof passes.
+
+When current-green-main discovers protected drift, keep --pr anchored to the
+original task. After explicit approval for the exact protected PR delta, repeat
+--approved-protected-pr for each approved merged PR. Unused or newly missing
+protected-PR receipts fail closed; this is never blanket future authority.
 EOF
 }
 
@@ -182,6 +188,20 @@ parse_args() {
         ;;
       --main-policy)
         MAIN_POLICY="${2:-}"
+        shift 2
+        ;;
+      --approved-protected-pr)
+        local approved_pr="${2:-}"
+        [[ "${approved_pr}" =~ ^[1-9][0-9]*$ ]] || \
+          die "--approved-protected-pr must be a positive PR number"
+        local existing_pr=""
+        if (( ${#APPROVED_PROTECTED_PRS[@]} > 0 )); then
+          for existing_pr in "${APPROVED_PROTECTED_PRS[@]}"; do
+            [[ "${existing_pr}" != "${approved_pr}" ]] || \
+              die "duplicate --approved-protected-pr ${approved_pr}"
+          done
+        fi
+        APPROVED_PROTECTED_PRS+=("${approved_pr}")
         shift 2
         ;;
       --dry-run)
@@ -203,6 +223,9 @@ parse_args() {
     exact-pr | current-green-main) ;;
     *) die "--main-policy must be exact-pr or current-green-main and match task-start authority" ;;
   esac
+  if [[ "${MAIN_POLICY}" != "current-green-main" && "${#APPROVED_PROTECTED_PRS[@]}" -gt 0 ]]; then
+    die "--approved-protected-pr is valid only with task-start current-green-main authority"
+  fi
 }
 
 require_command() {
@@ -440,6 +463,16 @@ moving_main_path_requires_new_approval() {
 
 pr_paths_are_routine() {
   local pr="$1"
+  local protected_paths=""
+
+  # Keep this compatibility predicate for focused callers, but let the richer
+  # classifier below distinguish routine paths from indeterminate GitHub data.
+  protected_paths="$(pr_protected_paths "${pr}")" || return 1
+  [[ -z "${protected_paths}" ]]
+}
+
+pr_protected_paths() {
+  local pr="$1"
   local json=""
   local target_path=""
   json="$("${GH_BIN}" pr view "${pr}" --json files)"
@@ -447,9 +480,45 @@ pr_paths_are_routine() {
   [[ "$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.files | length')" -gt 0 ]] || return 1
   while IFS= read -r target_path; do
     [[ -n "${target_path}" ]] || continue
-    moving_main_path_requires_new_approval "${target_path}" && return 1
+    if moving_main_path_requires_new_approval "${target_path}"; then
+      printf '%s\n' "${target_path}"
+    fi
   done < <(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.files[].path')
-  return 0
+}
+
+protected_pr_receipt_is_listed() {
+  local pr="$1"
+  local approved_pr=""
+  if (( ${#APPROVED_PROTECTED_PRS[@]} > 0 )); then
+    for approved_pr in "${APPROVED_PROTECTED_PRS[@]}"; do
+      [[ "${approved_pr}" != "${pr}" ]] || return 0
+    done
+  fi
+  return 1
+}
+
+assert_protected_receipts_consumed() {
+  local seen_prs="$1"
+  local approved_pr=""
+  local seen_pr=""
+  local found=0
+
+  # Reject receipts that are not part of the exact current delta. Otherwise an
+  # operator could pre-approve an unrelated protected PR and accidentally turn
+  # it into permission for some future main state.
+  if (( ${#APPROVED_PROTECTED_PRS[@]} > 0 )); then
+    for approved_pr in "${APPROVED_PROTECTED_PRS[@]}"; do
+      found=0
+      while IFS= read -r seen_pr; do
+        if [[ "${seen_pr}" == "${approved_pr}" ]]; then
+          found=1
+          break
+        fi
+      done <<<"${seen_prs}"
+      (( found == 1 )) || \
+        die "approved protected PR #${approved_pr} is not in the current intervening protected drift; refusing unused future authority"
+    done
+  fi
 }
 
 first_parent_main_commits() {
@@ -483,7 +552,8 @@ require_requested_pr_merge() {
   local merge_sha="$1"
   pr_proves_normal_merge "${PR_NUMBER}" "${merge_sha}" || \
     die "requested PR #${PR_NUMBER} is not a normal merged main PR at ${merge_sha}"
-  run_pr_required --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
+  run_pr_required --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2 || \
+    die "requested PR #${PR_NUMBER} required checks are not green"
 }
 
 assert_main_policy_target() {
@@ -514,6 +584,9 @@ dry_run_reviewed_remote_main() {
   local pr=""
   local json=""
   local mainline_commits=""
+  local protected_paths=""
+  local protected_paths_inline=""
+  local seen_approved_protected_prs=""
 
   repo="$(${GH_BIN} repo view --json nameWithOwner --jq '.nameWithOwner')"
   [[ -n "${repo}" ]] || die "could not resolve GitHub repository for dry-run main proof"
@@ -526,6 +599,7 @@ dry_run_reviewed_remote_main() {
     return 0
   fi
   commit_matches "${merge_sha}" "${head_sha}" && {
+    assert_protected_receipts_consumed ""
     printf '%s\n' "${head_sha}"
     return 0
   }
@@ -546,10 +620,23 @@ dry_run_reviewed_remote_main() {
     pr="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.number // empty')"
     pr_proves_normal_merge "${pr}" "${commit_sha}" || \
       die "dry-run main commit ${commit_sha} PR #${pr:-unknown} is not a normal merged main PR"
-    pr_paths_are_routine "${pr}" || \
-      die "dry-run main commit ${commit_sha} PR #${pr:-unknown} touches security/release-class paths"
-    run_pr_required --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2
+    if ! protected_paths="$(pr_protected_paths "${pr}")"; then
+      die "dry-run main commit ${commit_sha} PR #${pr:-unknown} paths are indeterminate"
+    fi
+    if [[ -n "${protected_paths}" ]]; then
+      protected_paths_inline="${protected_paths//$'\n'/,}"
+      protected_pr_receipt_is_listed "${pr}" || \
+        die "protected drift requires new authority: main commit ${commit_sha} PR #${pr} paths=${protected_paths_inline}; after explicit approval rerun with --approved-protected-pr ${pr}"
+      seen_approved_protected_prs+="${pr}"$'\n'
+      log "approved_protected_drift=PR#${pr}@${commit_sha} paths=${protected_paths_inline}" >&2
+    fi
+    # Do not rely on Bash errexit here. A caller can evaluate this classifier
+    # in a conditional, which suppresses inherited `set -e` behavior. Required
+    # CI remains an explicit fail-closed authority check in every call context.
+    run_pr_required --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2 || \
+      die "dry-run main commit ${commit_sha} PR #${pr} required checks are not green"
   done <<<"${mainline_commits}"
+  assert_protected_receipts_consumed "${seen_approved_protected_prs}"
   printf '%s\n' "${head_sha}"
 }
 
@@ -1111,7 +1198,7 @@ prove_break_glass_runtime() {
 
 main() {
   parse_args "$@"
-  log "delivery_authority_policy=${MAIN_POLICY} requested_pr=${PR_NUMBER}"
+  log "delivery_authority_policy=${MAIN_POLICY} requested_pr=${PR_NUMBER} approved_protected_prs=${APPROVED_PROTECTED_PRS[*]:-none}"
   assert_source_checkout_safe
   load_release_helpers
   trap transaction_exit_guard EXIT

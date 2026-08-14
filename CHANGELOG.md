@@ -130,6 +130,7 @@ Docs: https://docs.openclaw.ai
 - Nodes/pending actions: re-check queued foreground actions against the current node command policy before returning them to the node. (#46815) Thanks @zpbrent and @vincentkoc.
 - Node/startup: remove leftover debug `console.log("node host PATH: ...")` that printed the resolved PATH on every `openclaw node run` invocation. (#46411)
 - CLI/completion: reduce recursive completion-script string churn and fix nested PowerShell command-path matching so generated nested completions resolve on PowerShell too. (#45537) Thanks @yiShanXin and @vincentkoc.
+- Jarvis/hotfix delivery: preserve the original requested PR while carrying exact later-approved security/release drift through routine main movement and temporary resource contention, without re-requesting the same authority or weakening protected-path and required-CI gates.
 
 ## 2026.3.13
 

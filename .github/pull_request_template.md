@@ -46,6 +46,7 @@ Describe the problem and fix in 2–5 bullets:
 - Dependencies / merge order / overlapping PRs: (`None — standalone` or exact refs + order)
 - Proof still required after merge: (`None — source-only` or exact package/deploy/provider/backend/runtime/GUI/real-user work)
 - Task-start delivery authority: (`source-only`, `exact-pr`, or `current-green-main`; list authorized mutation classes)
+- Protected-drift authority receipts: (`None`, or exact later-approved PR numbers + merge commits + protected paths; never replace the original task PR)
 
 ## Jarvis Delivery Boundary
 

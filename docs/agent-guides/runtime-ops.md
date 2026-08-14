@@ -183,7 +183,8 @@ Treat authorization and temporary availability as different states:
 - A named-resource refusal or pending external check is temporary availability.
   Continue unrelated work and retry the protected entrypoint only after its
   bounded wait or a fresh availability check; do not turn it into a new
-  approval request or contact another chat to release it.
+  approval request or contact another chat to release it. Preserve the exact
+  original PR, main policy, and any approved protected-PR receipt on the retry.
 
 ### Canonical main-Jarvis hotfix wrapper
 
@@ -201,6 +202,24 @@ explicitly recorded at task start. The wrapper requires one of the two values;
 it never infers broader authority from “ship” at deployment time. Persist the
 selection in the task plan and PR contract so the guarded invocation is a
 release receipt of the same authority, not a late policy decision.
+
+If `current-green-main` stops on a security/release-class PR, do not change
+`--pr` to that intervening PR. Report the wrapper's exact PR, merge commit, and
+protected paths. After the user explicitly approves that exact delta, retain
+the original task anchor and add one receipt per approved protected PR:
+
+```bash
+scripts/ship-jarvis-hotfix.sh \
+  --pr <original-task-pr> \
+  --main-policy current-green-main \
+  --approved-protected-pr <approved-protected-pr> \
+  --dry-run
+```
+
+Reuse the same arguments after ordinary main movement or temporary lock status
+`75`; those events do not expire authority. The wrapper rejects unused
+protected receipts and any newly discovered protected PR, so the option cannot
+become blanket approval for future sensitive changes.
 
 The PR must already be merged through the canonical builder → tester → fenced
 release lifecycle. The wrapper never readies or merges an OPEN PR; this keeps
