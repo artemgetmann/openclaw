@@ -473,8 +473,6 @@ while [[ $# -gt 0 ]]; do
     --release-class)
       [[ $# -ge 2 ]] || { echo "ERROR: --release-class requires a value." >&2; exit 1; }
       RELEASE_CLASS="$2"
-      [[ "$RELEASE_CLASS" != "sparkle-update" ]] || RELEASE_CLASS_REASON="routine-existing-user-update"
-      [[ "$RELEASE_CLASS" != "fresh-installer" ]] || RELEASE_CLASS_REASON=""
       shift 2
       ;;
     --release-class-reason)
@@ -557,6 +555,23 @@ case "$FORCED_PHASE" in
     exit 1
     ;;
 esac
+
+# A release class is a durable statement about external effects, not a label.
+# Reject forced phases that contradict it before authorization or state access.
+case "$RELEASE_CLASS:$FORCED_PHASE" in
+  sparkle-update:submit-dmg-notarization|sparkle-update:poll-dmg-notarization|sparkle-update:publish-assets-only|sparkle-update:verify-public-assets-only)
+    echo "ERROR: --release-class sparkle-update cannot execute DMG/full-public phase $FORCED_PHASE." >&2
+    exit 1
+    ;;
+  fresh-installer:sparkle-update|fresh-installer:publish-sparkle-assets-only|fresh-installer:verify-sparkle-assets-only)
+    echo "ERROR: --release-class fresh-installer cannot execute Sparkle-only phase $FORCED_PHASE." >&2
+    exit 1
+    ;;
+esac
+if [[ "$RELEASE_CLASS" == "sparkle-update" && "$PARALLEL_SAFE_LOCAL_ASSETS" == "1" ]]; then
+  echo "ERROR: --parallel-safe-local-assets is a fresh-installer DMG overlap mode." >&2
+  exit 1
+fi
 
 case "$FORCED_PHASE" in
   publish-assets-only|publish-sparkle-assets-only)

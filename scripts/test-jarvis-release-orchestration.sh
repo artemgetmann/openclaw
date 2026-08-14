@@ -1187,6 +1187,8 @@ printf "%s\n" "{\"tagName\":\"v-bound-current\"}"'
       --verify-public-assets \
       --latest-release-tag \
       --phase verify-public-assets-only \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$authorize_out"
 
   set +e
@@ -1202,6 +1204,8 @@ printf "%s\n" "{\"tagName\":\"v-bound-current\"}"'
       --verify-public-assets \
       --latest-release-tag \
       --phase verify-public-assets-only \
+      --release-class fresh-installer \
+      --release-class-reason manual-refresh \
       >"$out" 2>"$err"
   status=$?
   set -e
@@ -1251,13 +1255,31 @@ test_release_class_defaults_and_fresh_installer_gate() {
     || fail "classified fresh installer did not select the full package phase"
   grep -q '^  release_class_reason=recovery$' "$out" \
     || fail "fresh installer did not report its classification reason"
+
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$state_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run --release-class-reason recovery \
+      --release-class fresh-installer >"$out"
+  grep -q '^  release_class_reason=recovery$' "$out" \
+    || fail "release-class option order changed the recorded reason"
+
+  set +e
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$state_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run --release-class sparkle-update \
+      --phase submit-dmg-notarization >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "Sparkle class accepted a forced DMG phase"
+  grep -q 'sparkle-update cannot execute DMG/full-public phase' "$err" \
+    || fail "Sparkle/DMG contradiction did not fail with the class boundary"
   pass "release classes default to Sparkle and gate fresh installers"
 }
 
 test_tagged_asset_immutability() {
   local fake_bin="$TMP_DIR/immutable-fake-bin"
   local artifact="$TMP_DIR/Jarvis.zip"
-  local digest out err status upload_log
+  local digest out err status upload_log good_curl bad_curl
   mkdir -p "$fake_bin"
   printf 'immutable fixture\n' >"$artifact"
   digest="sha256:$(/usr/bin/shasum -a 256 "$artifact" | /usr/bin/awk '{ print $1 }')"
@@ -1295,6 +1317,24 @@ printf "%s\n" "${REMOTE_DIGEST:-}"'
     openclaw_jarvis_release_upload_immutable_asset_if_needed repo v1 "$artifact" >/dev/null
   [[ "$(wc -l <"$upload_log" | tr -d ' ')" == "1" ]] \
     || fail "identical immutable retry attempted another upload"
+
+  good_curl="$fake_bin/curl-good"
+  bad_curl="$fake_bin/curl-bad"
+  write_release_control_stub "$good_curl" '#!/usr/bin/env bash
+printf "immutable fixture\n"'
+  write_release_control_stub "$bad_curl" '#!/usr/bin/env bash
+printf "different public bytes\n"'
+  OPENCLAW_JARVIS_RELEASE_CURL_BIN="$good_curl" \
+    openclaw_jarvis_release_verify_public_asset_bytes repo v1 "$artifact" >/dev/null
+  set +e
+  OPENCLAW_JARVIS_RELEASE_CURL_BIN="$bad_curl" \
+    openclaw_jarvis_release_verify_public_asset_bytes repo v1 "$artifact" \
+      >"$TMP_DIR/public-bytes.out" 2>"$TMP_DIR/public-bytes.err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "different public bytes passed immutable verification"
+  grep -q 'public immutable asset bytes differ' "$TMP_DIR/public-bytes.err" \
+    || fail "public byte mismatch did not explain the immutable failure"
   pass "tagged ZIP and DMG bytes are immutable"
 }
 

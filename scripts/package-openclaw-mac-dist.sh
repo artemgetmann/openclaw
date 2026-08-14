@@ -34,6 +34,7 @@ GITHUB_RELEASE_TAG=""
 PACKAGE_PHASE="full"
 RELEASE_CLASS="fresh-installer"
 RELEASE_CLASS_REASON="legacy-direct-package"
+RELEASE_CLASS_EXPLICIT=0
 RELEASE_RUN_ROOT=""
 OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
 OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="${OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE:-0}"
@@ -214,18 +215,31 @@ require_release_disk_preflight() {
   local package_temp_path="${TMPDIR:-/tmp}"
 
   post_write_floor_kib="${JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB:-$(jarvis_release_disk_post_write_floor_kib)}"
-  expected_write_reserve_kib="${JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB:-$(jarvis_release_disk_full_release_reserve_kib)}"
+  if [[ "$RELEASE_CLASS" == "sparkle-update" ]]; then
+    expected_write_reserve_kib="${JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB:-$(jarvis_release_disk_warm_package_reserve_kib)}"
+  else
+    expected_write_reserve_kib="${JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB:-$(jarvis_release_disk_full_release_reserve_kib)}"
+  fi
   staging_path="$(release_staging_preflight_path)"
 
   # Preserve the helper's complete multi-target report on stdout. Operators
   # need each target, filesystem, free-space, shortfall, and final status line.
-  JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION=require_release_disk_cleanup_authorization \
-    jarvis_release_disk_ensure_operation_capacity "$ROOT_DIR" \
-    full-signed-notarized-release "$post_write_floor_kib" "$expected_write_reserve_kib" \
-    release-output "$ROOT_DIR/dist" \
-    release-staging "$staging_path" \
-    package-temp "$package_temp_path" \
-    dmg-temp /tmp
+  if [[ "$RELEASE_CLASS" == "sparkle-update" ]]; then
+    JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION=require_release_disk_cleanup_authorization \
+      jarvis_release_disk_ensure_operation_capacity "$ROOT_DIR" \
+      sparkle-signed-notarized-release "$post_write_floor_kib" "$expected_write_reserve_kib" \
+      release-output "$ROOT_DIR/dist" \
+      release-staging "$staging_path" \
+      package-temp "$package_temp_path"
+  else
+    JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION=require_release_disk_cleanup_authorization \
+      jarvis_release_disk_ensure_operation_capacity "$ROOT_DIR" \
+      full-signed-notarized-release "$post_write_floor_kib" "$expected_write_reserve_kib" \
+      release-output "$ROOT_DIR/dist" \
+      release-staging "$staging_path" \
+      package-temp "$package_temp_path" \
+      dmg-temp /tmp
+  fi
 }
 
 require_release_disk_cleanup_authorization() {
@@ -659,6 +673,8 @@ jarvis_release_upload_full_assets_attempt() {
     || return $?
   openclaw_jarvis_release_upload_immutable_asset_if_needed "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$DMG" || return $?
   openclaw_jarvis_release_upload_immutable_asset_if_needed "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
+  openclaw_jarvis_release_verify_public_asset_bytes "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$DMG" || return $?
+  openclaw_jarvis_release_verify_public_asset_bytes "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
   # The appcast is the mutable go-live pointer and must remain the final upload.
   gh release upload "$GITHUB_RELEASE_TAG" "$appcast" --repo "$GITHUB_RELEASE_REPO" --clobber
 }
@@ -668,6 +684,7 @@ jarvis_release_upload_sparkle_assets_attempt() {
     "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub Sparkle release upload attempt" \
     || return $?
   openclaw_jarvis_release_upload_immutable_asset_if_needed "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
+  openclaw_jarvis_release_verify_public_asset_bytes "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
   # Sparkle reads this feed as the go-live switch, so it always uploads last.
   gh release upload "$GITHUB_RELEASE_TAG" "$appcast" --repo "$GITHUB_RELEASE_REPO" --clobber
 }
@@ -727,8 +744,12 @@ copy_handoff_artifacts() {
   mkdir -p "$handoff_dir"
 
   local copied=()
+  local artifacts=("$ZIP" "$DSYM_ZIP")
   local artifact
-  for artifact in "$DMG" "$ZIP" "$DSYM_ZIP"; do
+  if [[ "$RELEASE_CLASS" == "fresh-installer" ]]; then
+    artifacts=("$DMG" "${artifacts[@]}")
+  fi
+  for artifact in "${artifacts[@]}"; do
     if [[ -f "$artifact" ]]; then
       rm -f "$handoff_dir/$(basename "$artifact")"
       cp -f "$artifact" "$handoff_dir/"
@@ -844,6 +865,8 @@ write_release_manifest() {
   local dmg_notary_id=""
   local app_notary_status=""
   local dmg_notary_status=""
+  local dmg_sha256=""
+  local dmg_size_bytes=""
 
   if [[ -d "$APP_PATH" ]]; then
     build="$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "unknown")"
@@ -856,9 +879,19 @@ write_release_manifest() {
   app_notary_receipt="$(app_notary_receipt_path)"
   dmg_notary_receipt="$(dmg_notary_receipt_path)"
   app_notary_id="$(notary_receipt_submission_id "$app_notary_receipt")"
-  dmg_notary_id="$(notary_receipt_submission_id "$dmg_notary_receipt")"
   app_notary_status="$(notary_receipt_status "$app_notary_receipt")"
-  dmg_notary_status="$(notary_receipt_status "$dmg_notary_receipt")"
+  if [[ "$RELEASE_CLASS" == "fresh-installer" ]]; then
+    dmg_notary_id="$(notary_receipt_submission_id "$dmg_notary_receipt")"
+    dmg_notary_status="$(notary_receipt_status "$dmg_notary_receipt")"
+    dmg_sha256="$(artifact_sha256 "$DMG")"
+    dmg_size_bytes="$(artifact_size_bytes "$DMG")"
+  else
+    # Sparkle updates retain installer truth without touching the installer.
+    dmg_notary_id="$(manifest_value "JARVIS_DMG_NOTARY_SUBMISSION_ID")"
+    dmg_notary_status="$(manifest_value "JARVIS_DMG_NOTARY_STATUS")"
+    dmg_sha256="$(manifest_value "JARVIS_DMG_SHA256")"
+    dmg_size_bytes="$(manifest_value "JARVIS_DMG_SIZE_BYTES")"
+  fi
   # Resume phases treat the manifest as durable operator metadata. If a later
   # local-assets or publish-only run lacks the original receipt files, preserve
   # the last recorded notary status instead of clobbering it with blanks.
@@ -866,7 +899,7 @@ write_release_manifest() {
     app_notary_id="$(manifest_value "JARVIS_APP_NOTARY_SUBMISSION_ID")"
     app_notary_status="$(manifest_value "JARVIS_APP_NOTARY_STATUS")"
   fi
-  if [[ ! -f "$dmg_notary_receipt" ]]; then
+  if [[ "$RELEASE_CLASS" == "fresh-installer" && ! -f "$dmg_notary_receipt" ]]; then
     dmg_notary_id="$(manifest_value "JARVIS_DMG_NOTARY_SUBMISSION_ID")"
     dmg_notary_status="$(manifest_value "JARVIS_DMG_NOTARY_STATUS")"
   fi
@@ -893,8 +926,8 @@ write_release_manifest() {
     printf 'JARVIS_DMG_PUBLIC_URL=%q\n' "$JARVIS_DMG_PUBLIC_URL"
     printf 'JARVIS_ZIP_PUBLIC_URL=%q\n' "$(jarvis_appcast_zip_public_url)"
     printf 'JARVIS_APPCAST_PUBLIC_URL=%q\n' "$JARVIS_APPCAST_PUBLIC_URL"
-    printf 'JARVIS_DMG_SHA256=%q\n' "$(artifact_sha256 "$DMG")"
-    printf 'JARVIS_DMG_SIZE_BYTES=%q\n' "$(artifact_size_bytes "$DMG")"
+    printf 'JARVIS_DMG_SHA256=%q\n' "$dmg_sha256"
+    printf 'JARVIS_DMG_SIZE_BYTES=%q\n' "$dmg_size_bytes"
     printf 'JARVIS_ZIP_SHA256=%q\n' "$(artifact_sha256 "$ZIP")"
     printf 'JARVIS_ZIP_SIZE_BYTES=%q\n' "$(artifact_size_bytes "$ZIP")"
     printf 'JARVIS_APPCAST_SHA256=%q\n' "$(artifact_sha256 "$appcast")"
@@ -1302,6 +1335,11 @@ report_local_release_assets_next_phase() {
   local dmg_receipt
   local next_phase="submit-dmg-notarization"
 
+  if [[ "$RELEASE_CLASS" == "sparkle-update" ]]; then
+    printf 'next_phase=publish-sparkle-assets-only\n'
+    return 0
+  fi
+
   dmg_receipt="$(dmg_notary_receipt_path)"
   if openclaw_jarvis_release_checkpoint_validate \
     "$ROOT_DIR" "$DMG" dmg dmg-notarized "$dmg_receipt" "$APP_PATH"; then
@@ -1421,6 +1459,7 @@ while [[ $# -gt 0 ]]; do
     --release-class)
       [[ $# -ge 2 ]] || { echo "ERROR: --release-class requires a value" >&2; exit 1; }
       RELEASE_CLASS="$2"
+      RELEASE_CLASS_EXPLICIT=1
       shift 2
       ;;
     --release-class-reason)
@@ -1464,6 +1503,44 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Preserve direct narrow-phase compatibility while making wrapper-delegated
+# release classes explicit and receiptable.
+if [[ "$RELEASE_CLASS_EXPLICIT" != "1" ]]; then
+  case "$PACKAGE_PHASE" in
+    sparkle-update|publish-sparkle-assets-only|verify-sparkle-assets-only)
+      RELEASE_CLASS="sparkle-update"
+      RELEASE_CLASS_REASON="routine-existing-user-update"
+      ;;
+  esac
+fi
+
+case "$RELEASE_CLASS" in
+  sparkle-update)
+    [[ "$RELEASE_CLASS_REASON" == "routine-existing-user-update" ]] || {
+      echo "ERROR: sparkle-update uses release reason routine-existing-user-update." >&2
+      exit 1
+    }
+    ;;
+  fresh-installer)
+    case "$RELEASE_CLASS_REASON" in
+      legacy-direct-package|first-release|recovery|security|compatibility|installer-age|manual-refresh) ;;
+      *) echo "ERROR: fresh-installer requires a recorded release-class reason." >&2; exit 1 ;;
+    esac
+    ;;
+  *) echo "ERROR: --release-class must be sparkle-update or fresh-installer." >&2; exit 1 ;;
+esac
+
+case "$RELEASE_CLASS:$PACKAGE_PHASE" in
+  sparkle-update:submit-dmg-notarization|sparkle-update:poll-dmg-notarization|sparkle-update:publish-assets-only|sparkle-update:verify-public-assets-only)
+    echo "ERROR: sparkle-update cannot execute DMG/full-public phase $PACKAGE_PHASE." >&2
+    exit 1
+    ;;
+  fresh-installer:sparkle-update|fresh-installer:publish-sparkle-assets-only|fresh-installer:verify-sparkle-assets-only)
+    echo "ERROR: fresh-installer cannot execute Sparkle-only phase $PACKAGE_PHASE." >&2
+    exit 1
+    ;;
+esac
 
 case "$PACKAGE_PHASE" in
   sparkle-update|full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only|trusted-ring-fast)
@@ -1665,9 +1742,11 @@ if [[ "$PACKAGE_PHASE" == "sparkle-update" || "$PACKAGE_PHASE" == "full" || "$PA
   # build outputs under dist/ are still needed by the packaged CLI/runtime.
   rm -f \
     "$ROOT_DIR"/dist/"$APP_NAME"*.zip \
-    "$ROOT_DIR"/dist/"$APP_NAME"*.dmg \
     "$ROOT_DIR"/dist/"$PRODUCT"*.dSYM.zip \
     "$ROOT_DIR"/dist/*appcast*.xml
+  if [[ "$RELEASE_CLASS" == "fresh-installer" ]]; then
+    rm -f "$ROOT_DIR"/dist/"$APP_NAME"*.dmg
+  fi
 
   app_package_started_ms="$(release_phase_now_ms)"
   APP_NAME="$APP_NAME" \
@@ -1826,7 +1905,10 @@ case "$PACKAGE_PHASE" in
     # Remove stale final artifacts only when this run is about to recreate them.
     # Narrow resume phases must preserve the artifacts they are explicitly
     # resuming from.
-    rm -f "$ZIP" "$DMG" "${DMG%.dmg}-rw.dmg"
+    rm -f "$ZIP"
+    if [[ "$RELEASE_CLASS" == "fresh-installer" ]]; then
+      rm -f "$DMG" "${DMG%.dmg}-rw.dmg"
+    fi
     ;;
 esac
 

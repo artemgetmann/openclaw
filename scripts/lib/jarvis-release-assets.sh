@@ -58,3 +58,30 @@ openclaw_jarvis_release_upload_immutable_asset_if_needed() {
     echo "immutable_asset_upload=already-identical asset=$(basename "$artifact_path")"
   fi
 }
+
+# Read back the unauthenticated public URL and compare the exact bytes before
+# the mutable appcast can point clients at a new immutable enclosure.
+openclaw_jarvis_release_verify_public_asset_bytes() {
+  local repo="$1"
+  local tag="$2"
+  local artifact_path="$3"
+  local asset_name local_digest public_digest curl_bin
+
+  asset_name="$(basename "$artifact_path")"
+  local_digest="$(/usr/bin/shasum -a 256 "$artifact_path" | /usr/bin/awk '{ print $1 }')"
+  curl_bin="${OPENCLAW_JARVIS_RELEASE_CURL_BIN:-/usr/bin/curl}"
+  public_digest="$(
+    "$curl_bin" --fail --location --silent --show-error \
+      "https://github.com/$repo/releases/download/$tag/$asset_name" \
+      | /usr/bin/shasum -a 256 \
+      | /usr/bin/awk '{ print $1 }'
+  )" || return $?
+
+  if [[ "$public_digest" != "$local_digest" ]]; then
+    echo "ERROR: public immutable asset bytes differ after upload: $repo@$tag/$asset_name" >&2
+    echo "Local digest:  sha256:$local_digest" >&2
+    echo "Public digest: sha256:${public_digest:-missing}" >&2
+    return 1
+  fi
+  echo "immutable_asset_public_bytes=verified asset=$asset_name digest=sha256:$local_digest"
+}
