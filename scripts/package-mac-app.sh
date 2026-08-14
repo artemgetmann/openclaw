@@ -8,20 +8,110 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/lib/heavy-local-slot.sh
 source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 
+# Hotfix preparation is the one packaging mode that deliberately runs without
+# the release lease. It is safe only when every writable build/output path is
+# inside an isolated checkout and final signing is deferred to the protected
+# apply phase. Reject partial opt-ins instead of turning these variables into a
+# general lock bypass.
+OPENCLAW_PACKAGE_UNSIGNED_PREPARE="${OPENCLAW_PACKAGE_UNSIGNED_PREPARE:-0}"
+OPENCLAW_PACKAGE_PREPARE_ROOT="${OPENCLAW_PACKAGE_PREPARE_ROOT:-}"
+OPENCLAW_PACKAGE_APP_ROOT="${OPENCLAW_PACKAGE_APP_ROOT:-}"
+OPENCLAW_PACKAGE_BUILD_ROOT="${OPENCLAW_PACKAGE_BUILD_ROOT:-}"
+if [[ "$OPENCLAW_PACKAGE_UNSIGNED_PREPARE" == "1" ]]; then
+  [[ "$OPENCLAW_PACKAGE_APP_ROOT" == /* ]] || {
+    echo "ERROR: unsigned prepare requires an absolute OPENCLAW_PACKAGE_APP_ROOT." >&2
+    exit 1
+  }
+  [[ "$OPENCLAW_PACKAGE_BUILD_ROOT" == /* ]] || {
+    echo "ERROR: unsigned prepare requires an absolute OPENCLAW_PACKAGE_BUILD_ROOT." >&2
+    exit 1
+  }
+  [[ "$OPENCLAW_PACKAGE_PREPARE_ROOT" == /* ]] || {
+    echo "ERROR: unsigned prepare requires an absolute OPENCLAW_PACKAGE_PREPARE_ROOT." >&2
+    exit 1
+  }
+  [[ -d "$OPENCLAW_PACKAGE_PREPARE_ROOT" && ! -L "$OPENCLAW_PACKAGE_PREPARE_ROOT" ]] || {
+    echo "ERROR: unsigned prepare root must be an existing non-symlink directory." >&2
+    exit 1
+  }
+  [[ "$(cd "$OPENCLAW_PACKAGE_PREPARE_ROOT" && pwd -P)" == "$OPENCLAW_PACKAGE_PREPARE_ROOT" ]] || {
+    echo "ERROR: unsigned prepare root must be canonical and contain no symlink aliases." >&2
+    exit 1
+  }
+  [[ -z "$(find "$OPENCLAW_PACKAGE_PREPARE_ROOT" -mindepth 1 -maxdepth 1 -print -quit)" ]] || {
+    echo "ERROR: unsigned prepare root must be empty before lock-free packaging." >&2
+    exit 1
+  }
+  case "$OPENCLAW_PACKAGE_APP_ROOT:$OPENCLAW_PACKAGE_BUILD_ROOT" in
+    *"/../"* | *"/./"*)
+      echo "ERROR: unsigned app and build roots must not contain traversal components." >&2
+      exit 1
+      ;;
+  esac
+  case "$OPENCLAW_PACKAGE_APP_ROOT:$OPENCLAW_PACKAGE_BUILD_ROOT" in
+    "$OPENCLAW_PACKAGE_PREPARE_ROOT"/*:"$OPENCLAW_PACKAGE_PREPARE_ROOT"/*) ;;
+    *)
+      echo "ERROR: unsigned app and build roots must stay inside OPENCLAW_PACKAGE_PREPARE_ROOT." >&2
+      exit 1
+      ;;
+  esac
+  [[ "$(dirname "$OPENCLAW_PACKAGE_APP_ROOT")" == "$OPENCLAW_PACKAGE_PREPARE_ROOT" && \
+      "$(dirname "$OPENCLAW_PACKAGE_BUILD_ROOT")" == "$OPENCLAW_PACKAGE_PREPARE_ROOT" && \
+      "$OPENCLAW_PACKAGE_APP_ROOT" != "$OPENCLAW_PACKAGE_BUILD_ROOT" ]] || {
+    echo "ERROR: unsigned app and build roots must be distinct direct children of the empty prepare root." >&2
+    exit 1
+  }
+  case "$OPENCLAW_PACKAGE_PREPARE_ROOT" in
+    "$ROOT_DIR/dist" | "$ROOT_DIR/dist"/* | "$ROOT_DIR/apps/macos/.build" | "$ROOT_DIR/apps/macos/.build"/*)
+      echo "ERROR: unsigned prepare root must not overlap canonical package outputs." >&2
+      exit 1
+      ;;
+  esac
+  # Only the wrapper-created standalone detached clone may bypass the package
+  # lock. A linked worktree or branch checkout still has other writable repo
+  # outputs (dist, node_modules, UI assets, and tool caches) outside the custom
+  # app/build roots, so allowing either would turn this into a general bypass.
+  [[ -d "$ROOT_DIR/.git" && ! -L "$ROOT_DIR/.git" ]] || {
+    echo "ERROR: unsigned prepare requires a standalone private Git clone." >&2
+    exit 1
+  }
+  if git -C "$ROOT_DIR" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+    echo "ERROR: unsigned prepare requires detached HEAD in its private clone." >&2
+    exit 1
+  fi
+  [[ -z "$(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)" ]] || {
+    echo "ERROR: unsigned prepare requires a clean private clone before packaging." >&2
+    exit 1
+  }
+  if openclaw_shared_resource_lock_is_held gateway-main || \
+      openclaw_shared_resource_lock_is_held release-jarvis; then
+    echo "ERROR: unsigned prepare must not inherit gateway-main or release-jarvis." >&2
+    exit 75
+  fi
+else
+  [[ -z "$OPENCLAW_PACKAGE_PREPARE_ROOT" && -z "$OPENCLAW_PACKAGE_APP_ROOT" && -z "$OPENCLAW_PACKAGE_BUILD_ROOT" ]] || {
+    echo "ERROR: custom package roots are reserved for unsigned prepare." >&2
+    exit 1
+  }
+fi
+
 # This remains a documented direct packaging command as well as a nested
 # implementation detail. Direct callers self-admit; consumer/release wrappers
 # pass a verified live capability and continue without reacquiring.
-if ! openclaw_shared_resource_lock_is_held release-jarvis; then
+if [[ "$OPENCLAW_PACKAGE_UNSIGNED_PREPARE" != "1" ]] && \
+    ! openclaw_shared_resource_lock_is_held release-jarvis; then
   # An ambient marker is not proof. Clear it before this entrypoint acquires its
   # own lock so only a wrapper that already owns the live lease can delegate a
   # completed admission check to the nested package process.
   unset OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED
 fi
-openclaw_heavy_local_slot_require_or_reexec \
-  "package-mac-app:${APP_VARIANT:-consumer}" \
-  "$ROOT_DIR" \
-  "$ROOT_DIR/scripts/package-mac-app.sh" \
-  "$@"
+if [[ "$OPENCLAW_PACKAGE_UNSIGNED_PREPARE" != "1" ]]; then
+  openclaw_heavy_local_slot_require_or_reexec \
+    "package-mac-app:${APP_VARIANT:-consumer}" \
+    "$ROOT_DIR" \
+    "$ROOT_DIR/scripts/package-mac-app.sh" \
+    "$@"
+fi
 
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 source "$ROOT_DIR/scripts/lib/macos-runtime-prune.sh"
@@ -41,8 +131,8 @@ else
 fi
 APP_NAME="${APP_NAME:-$DEFAULT_APP_NAME}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
-APP_ROOT="$ROOT_DIR/dist/${APP_BUNDLE_NAME}"
-BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
+APP_ROOT="${OPENCLAW_PACKAGE_APP_ROOT:-$ROOT_DIR/dist/${APP_BUNDLE_NAME}}"
+BUILD_ROOT="${OPENCLAW_PACKAGE_BUILD_ROOT:-$ROOT_DIR/apps/macos/.build}"
 PRODUCT="OpenClaw"
 WATCHDOG_PRODUCT="JarvisGatewayWatchdog"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.consumer.mac.debug}"
@@ -87,6 +177,7 @@ CLI_ARCHIVE_STAGE_DIR=""
 OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
 OPENCLAW_CONSUMER_REUSE_RUNTIME="${OPENCLAW_CONSUMER_REUSE_RUNTIME:-0}"
 OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="${OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE:-0}"
+OPENCLAW_CONSUMER_RUNTIME_CACHE_READ_ONLY="${OPENCLAW_CONSUMER_RUNTIME_CACHE_READ_ONLY:-0}"
 OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS="${OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS:-0}"
 OPENCLAW_CONSUMER_ALLOW_CAPABILITY_DRIFT="${OPENCLAW_CONSUMER_ALLOW_CAPABILITY_DRIFT:-0}"
 PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
@@ -1431,7 +1522,9 @@ prepare_bundled_consumer_runtime() {
     fi
 
     echo "📦 Cached bundled runtime is incomplete; rebuilding it"
-    rm -rf "$cache_root"
+    if [[ "$OPENCLAW_CONSUMER_RUNTIME_CACHE_READ_ONLY" != "1" ]]; then
+      rm -rf "$cache_root"
+    fi
   fi
 
   echo "📦 Staging bundled consumer runtime"
@@ -1583,7 +1676,8 @@ EOF
 
   sync_bundled_runtime_package_version
 
-  if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" ]]; then
+  if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" && \
+      "$OPENCLAW_CONSUMER_RUNTIME_CACHE_READ_ONLY" != "1" ]]; then
     local cache_stage_root=""
 
     echo "📦 Caching bundled consumer runtime for the next smoke build"
@@ -1683,20 +1777,35 @@ if ((disk_admission_inherited == 0)); then
     package_operation="direct-cold-package"
   fi
 
-  # Direct callers do not have an outer release wrapper to protect them. Admit
-  # before the first dependency/build write, then mark nested helpers so one
-  # operation cannot clean and remeasure the same filesystem repeatedly.
-  jarvis_release_disk_ensure_operation_capacity "$ROOT_DIR" "$package_operation" \
-    "$(jarvis_release_disk_post_write_floor_kib)" "$package_reserve_kib" \
-    package-output "$APP_ROOT" \
-    package-staging "${TMPDIR:-/tmp}"
+  if [[ "$OPENCLAW_PACKAGE_UNSIGNED_PREPARE" == "1" ]]; then
+    # Prepare has no release owner and therefore has no authority to run the
+    # global build-cache cleanup recovery. Re-measure immediately before the
+    # first write and stop read-only if capacity has changed since the wrapper
+    # preflight.
+    jarvis_release_disk_preflight_operation "$package_operation" \
+      "$(jarvis_release_disk_post_write_floor_kib)" "$package_reserve_kib" \
+      package-output "$APP_ROOT" \
+      package-staging "${TMPDIR:-/tmp}"
+  else
+    # Direct protected callers may use the canonical owned cleanup recovery.
+    jarvis_release_disk_ensure_operation_capacity "$ROOT_DIR" "$package_operation" \
+      "$(jarvis_release_disk_post_write_floor_kib)" "$package_reserve_kib" \
+      package-output "$APP_ROOT" \
+      package-staging "${TMPDIR:-/tmp}"
+  fi
   export OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED=1
 fi
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install)"
   pnpm_install_started_ms="$(phase_now_ms)"
-  openclaw_run_repo_pnpm "$ROOT_DIR" install --no-frozen-lockfile --config.node-linker=hoisted
+  if [[ "$OPENCLAW_PACKAGE_UNSIGNED_PREPARE" == "1" ]]; then
+    # The receipt hashes the committed lockfile. A frozen install guarantees
+    # the dependency graph actually built is the graph that apply revalidates.
+    openclaw_run_repo_pnpm "$ROOT_DIR" install --frozen-lockfile --config.node-linker=hoisted
+  else
+    openclaw_run_repo_pnpm "$ROOT_DIR" install --no-frozen-lockfile --config.node-linker=hoisted
+  fi
   phase_log_elapsed "$pnpm_install_started_ms" "Dependency install"
 else
   echo "📦 Skipping dependency install (SKIP_PNPM_INSTALL=1)"
@@ -1965,10 +2074,14 @@ else
   fi
 fi
 
-echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
-codesign_started_ms="$(phase_now_ms)"
-"$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
-phase_log_elapsed "$codesign_started_ms" "Codesign"
+if [[ "$OPENCLAW_PACKAGE_UNSIGNED_PREPARE" == "1" ]]; then
+  echo "📦 Unsigned prepare complete; protected apply must sign and verify this bundle"
+else
+  echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
+  codesign_started_ms="$(phase_now_ms)"
+  "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
+  phase_log_elapsed "$codesign_started_ms" "Codesign"
+fi
 
 if [[ -n "$REUSABLE_RUNTIME_STAGE_DIR" ]]; then
   rm -rf "$REUSABLE_RUNTIME_STAGE_DIR"

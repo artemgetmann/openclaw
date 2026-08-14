@@ -197,6 +197,30 @@ scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy exact-pr --dry-run
 scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy exact-pr
 ```
 
+The command above remains the one-shot rollback path. When measured lock
+occupancy matters, first fast-forward sacred `main`, then opt into the two
+phases with one unique output directory:
+
+```bash
+scripts/ship-jarvis-hotfix.sh \
+  --pr <number> \
+  --main-policy exact-pr \
+  --prepare-output /absolute/unique/path
+
+scripts/ship-jarvis-hotfix.sh \
+  --pr <number> \
+  --main-policy exact-pr \
+  --apply-prepared /absolute/unique/path/receipt.json
+```
+
+Prepare clones the exact reviewed `main` commit into that private directory,
+uses only private build/staging/tool-cache paths, and publishes an immutable
+unsigned app plus receipt last. It does not acquire `gateway-main` or
+`release-jarvis`. Apply fail-fast acquires both resources before validating the
+receipt, canonical `dist` mutation, signing, full verification, seed/restart,
+reseed protection, and final live-runtime proof. Status `75` preserves the
+prepared artifact for a later supervised retry with the exact same arguments.
+
 Replace `exact-pr` with `current-green-main` only when that moving target was
 explicitly recorded at task start. The wrapper requires one of the two values;
 it never infers broader authority from “ship” at deployment time. Persist the
