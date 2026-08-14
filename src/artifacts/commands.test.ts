@@ -166,6 +166,20 @@ describe("artifact commands", () => {
     expect(pdf.getPageCount()).toBeGreaterThan(1);
   });
 
+  it("makes progress when a repeated PDF table header fills a page", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-tall-header-test-"));
+    const input = path.join(dir, "brief.json");
+    const out = path.join(dir, "brief.pdf");
+    await fs.writeFile(
+      input,
+      JSON.stringify({ sections: [{ table: { columns: ["W".repeat(3305)], rows: [["data"]] } }] }),
+    );
+
+    await createPdfCommand(input, { out });
+    const pdf = await PDFDocument.load(await fs.readFile(out));
+    expect(pdf.getPageCount()).toBeGreaterThan(1);
+  });
+
   it("wraps wide PDF glyphs using measured font widths", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-wide-glyph-test-"));
     const input = path.join(dir, "brief.json");

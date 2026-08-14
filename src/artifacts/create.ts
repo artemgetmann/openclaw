@@ -54,7 +54,13 @@ function tableRows(tableValue: unknown): string[][] {
   const table = asRecord(tableValue);
   const columns = asList(table.columns).map(asText);
   const rows = asList(table.rows).map((row) => asList(row).map(asText));
-  return columns.length > 0 ? [columns, ...rows] : rows;
+  const allRows = columns.length > 0 ? [columns, ...rows] : rows;
+  const columnCount = Math.max(0, ...allRows.map((row) => row.length));
+  // Office table models are rectangular. Preserve missing cells explicitly so
+  // ragged input keeps the same borders and column alignment as the old creators.
+  return allRows.map((row) =>
+    Array.from({ length: columnCount }, (_, columnIndex) => row[columnIndex] ?? ""),
+  );
 }
 
 function wrapText(text: string, maxWidth: number, measure: (value: string) => number): string[] {
@@ -176,6 +182,14 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
             writeRow(rows[0], 0, false);
           }
           availableLines = Math.floor((y - margin - 8) / lineHeight);
+          if (availableLines < 1) {
+            // An unusually tall repeated header may consume the entire page.
+            // Continue the data on a fresh page without repeating it again so
+            // this loop always makes positive progress.
+            page = pdf.addPage(pageSize);
+            y = page.getHeight() - margin;
+            availableLines = Math.floor((y - margin - 8) / lineHeight);
+          }
         }
         // A logical row may exceed a whole page. Continue its bordered cells
         // on subsequent pages instead of drawing below the page and clipping.
