@@ -671,11 +671,20 @@ jarvis_release_upload_full_assets_attempt() {
   openclaw_require_jarvis_release_intent \
     "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub full release upload attempt" \
     || return $?
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub DMG release upload" \
+    || return $?
   openclaw_jarvis_release_upload_immutable_asset_if_needed "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$DMG" || return $?
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub ZIP release upload" \
+    || return $?
   openclaw_jarvis_release_upload_immutable_asset_if_needed "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
   openclaw_jarvis_release_verify_public_asset_bytes "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$DMG" || return $?
   openclaw_jarvis_release_verify_public_asset_bytes "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
   # The appcast is the mutable go-live pointer and must remain the final upload.
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub appcast release upload" \
+    || return $?
   gh release upload "$GITHUB_RELEASE_TAG" "$appcast" --repo "$GITHUB_RELEASE_REPO" --clobber
 }
 
@@ -683,9 +692,15 @@ jarvis_release_upload_sparkle_assets_attempt() {
   openclaw_require_jarvis_release_intent \
     "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub Sparkle release upload attempt" \
     || return $?
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub ZIP release upload" \
+    || return $?
   openclaw_jarvis_release_upload_immutable_asset_if_needed "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
   openclaw_jarvis_release_verify_public_asset_bytes "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
   # Sparkle reads this feed as the go-live switch, so it always uploads last.
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub appcast release upload" \
+    || return $?
   gh release upload "$GITHUB_RELEASE_TAG" "$appcast" --repo "$GITHUB_RELEASE_REPO" --clobber
 }
 
