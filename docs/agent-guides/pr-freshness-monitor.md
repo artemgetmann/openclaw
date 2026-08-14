@@ -4,7 +4,7 @@ This private automation checks `artemgetmann/openclaw` without changing a branch
 
 The default active window is seven days. Drafts and stale PRs are excluded unless the PR has the `pr-freshness-monitor` label or auto-merge is armed. The script reports transitions into required-CI failure, relevant base drift/conflict, blocked merge readiness, merge readiness, or merged state. Unchanged and still-pending CI stays silent.
 
-Use a 30-minute cron cadence. Pin these instructions in the job: run the script from the installed OpenClaw repository, parse its single JSON line, return `HEARTBEAT_OK` when `changed=false`, and otherwise summarize only the listed transitions. Never run git mutation commands or GitHub mutations. Deliver with `mode=announce`, `channel=telegram`, and `to=<jarvis-lab-chat-id>:topic:<topic-anchor>`.
+Use a 30-minute cron cadence. Pin these instructions in the job: run the script from the installed OpenClaw repository and parse its single JSON line. If `ok=false`, report the bounded operational failure. Otherwise return `HEARTBEAT_OK` when `changed=false`, and summarize only the listed transitions when `changed=true`. Never run git mutation commands or GitHub mutations. Deliver with `mode=announce`, `channel=telegram`, and `to=<jarvis-lab-chat-id>:topic:<topic-anchor>`.
 
 State defaults to `$OPENCLAW_STATE_DIR/cron/pr-freshness-state.json`. Override it with `--state-file` for tests or recovery. A GitHub read failure exits non-zero and does not replace the last good state.
 

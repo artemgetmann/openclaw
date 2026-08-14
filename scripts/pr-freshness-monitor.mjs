@@ -118,7 +118,7 @@ try {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } catch (error) {
   process.stdout.write(
-    `${JSON.stringify({ schemaVersion: 1, changed: false, error: "github-check-failed", detail: String(error?.message ?? error).slice(0, 240) })}\n`,
+    `${JSON.stringify({ schemaVersion: 1, ok: false, error: "github-check-failed", detail: String(error?.message ?? error).slice(0, 240) })}\n`,
   );
   process.exitCode = 1;
 }

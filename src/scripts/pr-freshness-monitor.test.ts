@@ -149,7 +149,7 @@ describe("PR freshness monitor", () => {
       );
       expect(failed.status).toBe(1);
       expect(JSON.parse(failed.stdout)).toMatchObject({
-        changed: false,
+        ok: false,
         error: "github-check-failed",
       });
       expect(fs.readFileSync(state, "utf8")).toBe(good);
