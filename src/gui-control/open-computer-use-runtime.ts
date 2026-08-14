@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { withOpenComputerUseLock } from "./open-computer-use-lock.js";
 import type {
   ActionResult,
   AppState,
@@ -158,8 +159,36 @@ function inferOpenComputerUseAppIdentity(command: string): OpenComputerUseAppIde
   return { recognized: false, command };
 }
 
-function openComputerUseBundleIdentifier(command: string): string | undefined {
-  const normalizedCommand = command.replaceAll("\\", "/");
+function resolveOpenComputerUseExecutable(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const candidates = command.includes(path.sep)
+    ? [command]
+    : (env.PATH ?? "")
+        .split(path.delimiter)
+        .filter(Boolean)
+        .map((directory) => path.join(directory, command));
+  for (const candidate of candidates) {
+    try {
+      fsSync.accessSync(candidate, fsSync.constants.X_OK);
+      // A PATH entry or explicit symlink may sit outside the app bundle while
+      // targeting its executable. Resolve it before reading bundle metadata so
+      // every supported alias converges on the app-agent socket identity.
+      return fsSync.realpathSync(candidate);
+    } catch {
+      // Continue through PATH. An unresolved custom command remains identity-
+      // neutral and falls back to the canonical command lock namespace.
+    }
+  }
+  return command;
+}
+
+function openComputerUseBundleIdentifier(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const normalizedCommand = resolveOpenComputerUseExecutable(command, env).replaceAll("\\", "/");
   // Jarvis embeds OCU beneath an outer Jarvis.app path. The executable's TCC
   // identity belongs to the innermost containing app, not the first app bundle
   // present in the absolute path.
@@ -198,6 +227,20 @@ function openComputerUseBundleIdentifier(command: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function resolveOpenComputerUseSocketIdentity(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const bundleIdentifier = openComputerUseBundleIdentifier(command, env);
+  if (!bundleIdentifier) {
+    return undefined;
+  }
+  // The pinned OCU runtime derives its app-agent socket from the innermost
+  // helper bundle identifier. Keying by that derivation makes separate copies
+  // of one signed helper converge without collapsing production and Dev lanes.
+  return `socket:bundle:${bundleIdentifier}`;
 }
 
 function isDevelopmentOpenComputerUseCommand(command: string): boolean {
@@ -838,12 +881,14 @@ function elementArgs(target: ElementRef): Record<string, unknown> {
 export class OpenComputerUseRuntime implements GuiRuntime {
   readonly name = "open-computer-use" as const;
   private readonly command: string;
+  private readonly socketIdentity?: string;
   private readonly baseArgs: string[];
   private readonly timeoutMs: number;
   private readonly visualCursorObservationFile?: string;
 
   constructor(options: OpenComputerUseRuntimeOptions = {}) {
     this.command = resolveOpenComputerUseCommand(options.command);
+    this.socketIdentity = resolveOpenComputerUseSocketIdentity(this.command);
     this.baseArgs = options.baseArgs ?? [];
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.visualCursorObservationFile = options.visualCursorObservationFile;
@@ -852,9 +897,15 @@ export class OpenComputerUseRuntime implements GuiRuntime {
   private async runJson(args: string[]): Promise<unknown> {
     const commandArgs = [...this.baseArgs, ...args];
     try {
-      const result = await runExec(this.command, commandArgs, {
+      const result = await withOpenComputerUseLock({
+        socketIdentity: this.socketIdentity,
+        command: this.command,
         timeoutMs: this.timeoutMs,
-        maxBuffer: 10 * 1024 * 1024,
+        run: async (remainingTimeoutMs) =>
+          await runExec(this.command, commandArgs, {
+            timeoutMs: remainingTimeoutMs,
+            maxBuffer: 10 * 1024 * 1024,
+          }),
       });
       return parseJsonOutput(result.stdout, result.stderr);
     } catch (error) {
@@ -865,18 +916,24 @@ export class OpenComputerUseRuntime implements GuiRuntime {
   }
 
   private async runActionJson(args: string[]): Promise<{ ok: boolean; raw: unknown }> {
-    const result = await runCommandWithTimeout([this.command, ...this.baseArgs, ...args], {
+    const result = await withOpenComputerUseLock({
+      socketIdentity: this.socketIdentity,
+      command: this.command,
       timeoutMs: this.timeoutMs,
-      noOutputTimeoutMs: this.timeoutMs,
-      env: this.visualCursorObservationFile
-        ? {
-            // OCU writes this debug-only JSON file whenever its software cursor
-            // overlay paints. Treat the file as proof of visible intent only
-            // after parsing a non-hidden phase with cursor geometry.
-            OPEN_COMPUTER_USE_VISUAL_CURSOR: "1",
-            OPEN_COMPUTER_USE_VISUAL_CURSOR_OBSERVATION_FILE: this.visualCursorObservationFile,
-          }
-        : undefined,
+      run: async (remainingTimeoutMs) =>
+        await runCommandWithTimeout([this.command, ...this.baseArgs, ...args], {
+          timeoutMs: remainingTimeoutMs,
+          noOutputTimeoutMs: remainingTimeoutMs,
+          env: this.visualCursorObservationFile
+            ? {
+                // OCU writes this debug-only JSON file whenever its software cursor
+                // overlay paints. Treat the file as proof of visible intent only
+                // after parsing a non-hidden phase with cursor geometry.
+                OPEN_COMPUTER_USE_VISUAL_CURSOR: "1",
+                OPEN_COMPUTER_USE_VISUAL_CURSOR_OBSERVATION_FILE: this.visualCursorObservationFile,
+              }
+            : undefined,
+        }),
     });
     return {
       ok: result.code === 0,
