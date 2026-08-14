@@ -93,6 +93,33 @@ load_release_helpers
 
 [[ "${SHIP_TEST_MODE}" == "1" ]] || fail "self-contained fixture did not enable test mode"
 
+# Protection runs with a deliberately restricted PATH, so the hotfix wrapper
+# must forward the absolute lsof binary it already selected for production.
+PROTECT_SCRIPT_FIXTURE="${TMP_ROOT}/protect.sh"
+cat >"${PROTECT_SCRIPT_FIXTURE}" <<'EOF'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "${PATH}" "${OPENCLAW_LSOF_BIN:-missing}" "$*"
+EOF
+chmod +x "${PROTECT_SCRIPT_FIXTURE}"
+PROTECT_SCRIPT="${PROTECT_SCRIPT_FIXTURE}"
+LSOF_BIN="/usr/sbin/lsof"
+
+offline_protection_output="$(run_offline_seeded_protection deadbeef verify)"
+[[ "${offline_protection_output}" == \
+  "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin|/usr/sbin/lsof|--expected-live-commit deadbeef --offline-seeded-fallback --verify" ]] || \
+  fail "offline protection did not receive pinned lsof under the restricted PATH: ${offline_protection_output}"
+
+DRY_RUN=0
+runtime_protection_output="$(protect_runtime deadbeef)"
+[[ "$(printf '%s\n' "${runtime_protection_output}" | /usr/bin/wc -l | /usr/bin/tr -d ' ')" == "2" ]] || \
+  fail "runtime protection fixture did not observe dry-run and apply invocations"
+while IFS= read -r protection_line; do
+  [[ "${protection_line}" == \
+    /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\|/usr/sbin/lsof\|--expected-live-commit\ deadbeef* ]] || \
+    fail "runtime protection did not receive pinned lsof under the restricted PATH: ${protection_line}"
+done <<<"${runtime_protection_output}"
+pass "sanitized recovery and runtime protection receive the pinned lsof path"
+
 production_probe="$(
   OPENCLAW_SHIP_JARVIS_HOTFIX_LIB_ONLY=1 \
     OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE=1 \
