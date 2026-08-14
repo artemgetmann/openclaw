@@ -7,9 +7,9 @@ import io
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
