@@ -50,9 +50,10 @@ function requiredChecks(repository, number) {
 }
 
 function fetchPullRequests(repository, trackedNumbers) {
-  // Open PRs are queried separately so recently closed history cannot crowd
-  // them out of GitHub's result limit. Only tracked missing PRs get a bounded
-  // follow-up read, solely to detect their successful merge transition.
+  // Fetch lightweight metadata for every open PR within GitHub CLI's bounded
+  // page ceiling before filtering. Applying a small limit before this filter
+  // can silently hide an older explicitly opted-in or auto-merge-armed PR.
+  // Only the 20 selected entries receive follow-up check reads.
   const fields =
     "number,title,url,state,isDraft,updatedAt,labels,autoMergeRequest,mergeStateStatus,headRefOid,baseRefOid";
   const raw = runGh([
@@ -63,7 +64,7 @@ function fetchPullRequests(repository, trackedNumbers) {
     "--state",
     "open",
     "--limit",
-    "50",
+    "1000",
     "--json",
     fields,
   ]);
