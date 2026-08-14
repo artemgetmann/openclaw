@@ -6,6 +6,7 @@ import {
   cancelTelegramAutoSteer,
   parseTelegramQueueCallback,
   scheduleTelegramAutoSteer,
+  TELEGRAM_AUTO_STEER_GRACE_MS,
 } from "./queue-buttons.js";
 
 const DURABLE_ID = "12345678-1234-4234-8234-123456789abc";
@@ -57,6 +58,22 @@ describe("Telegram queue buttons", () => {
     expect(cancelTelegramAutoSteer(DURABLE_ID)).toBe("cancelled");
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("keeps the production choice cancellable beyond the old three-second window", async () => {
+    vi.useFakeTimers();
+    const run = vi.fn();
+    try {
+      scheduleTelegramAutoSteer(DURABLE_ID, run);
+      await vi.advanceTimersByTimeAsync(3_500);
+
+      expect(TELEGRAM_AUTO_STEER_GRACE_MS).toBe(10_000);
+      expect(cancelTelegramAutoSteer(DURABLE_ID)).toBe("cancelled");
+      await vi.advanceTimersByTimeAsync(TELEGRAM_AUTO_STEER_GRACE_MS);
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("runs the default auto-steer once after its grace period", async () => {
