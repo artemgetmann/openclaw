@@ -5,7 +5,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { buildSnapshot, isActivePullRequest, monitorResult } from "./lib/pr-freshness-monitor.mjs";
+import {
+  buildSnapshot,
+  isActivePullRequest,
+  monitorResult,
+  snapshotForPersistence,
+} from "./lib/pr-freshness-monitor.mjs";
 
 function option(name) {
   const index = process.argv.indexOf(name);
@@ -110,7 +115,7 @@ try {
   const raw = fixture ? readJson(fixture) : fetchPullRequests(repository, trackedNumbers);
   const current = buildSnapshot(raw, { trackedNumbers });
   const result = monitorResult(previous, current);
-  atomicWrite(stateFile, current);
+  atomicWrite(stateFile, snapshotForPersistence(current));
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } catch (error) {
   process.stdout.write(

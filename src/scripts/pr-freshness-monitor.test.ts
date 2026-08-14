@@ -8,6 +8,7 @@ import {
   diffSnapshots,
   isActivePullRequest,
   monitorResult,
+  snapshotForPersistence,
 } from "../../scripts/lib/pr-freshness-monitor.mjs";
 
 const nowMs = Date.parse("2026-08-14T05:00:00Z");
@@ -29,6 +30,12 @@ describe("PR freshness monitor", () => {
   it("filters drafts and stale abandoned PRs while retaining opt-ins and active PRs", () => {
     expect(isActivePullRequest(base, { nowMs })).toBe(true);
     expect(isActivePullRequest({ ...base, isDraft: true }, { nowMs })).toBe(false);
+    expect(
+      isActivePullRequest(
+        { ...base, isDraft: true, labels: [{ name: "pr-freshness-monitor" }] },
+        { nowMs },
+      ),
+    ).toBe(true);
     expect(isActivePullRequest({ ...base, updatedAt: "2026-07-01T00:00:00Z" }, { nowMs })).toBe(
       false,
     );
@@ -73,6 +80,7 @@ describe("PR freshness monitor", () => {
       expect.objectContaining({ from: "merge-ready", to: "merged" }),
     ]);
     expect(buildSnapshot([{ ...base, state: "MERGED" }], { nowMs }).pullRequests).toEqual([]);
+    expect(snapshotForPersistence(merged).pullRequests).toEqual([]);
   });
 
   it("deduplicates unchanged state and suppresses routine pending transitions", () => {

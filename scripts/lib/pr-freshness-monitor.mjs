@@ -14,12 +14,15 @@ function text(value, max = 160) {
 }
 
 export function isActivePullRequest(pr, options = {}) {
-  if (pr?.state !== "OPEN" || pr?.isDraft === true) {
+  if (pr?.state !== "OPEN") {
     return false;
   }
   const labels = Array.isArray(pr.labels) ? pr.labels.map((label) => label?.name ?? label) : [];
   if (labels.includes(options.optInLabel ?? "pr-freshness-monitor")) {
     return true;
+  }
+  if (pr.isDraft === true) {
+    return false;
   }
   if (pr.autoMergeRequest) {
     return true;
@@ -28,6 +31,15 @@ export function isActivePullRequest(pr, options = {}) {
   const now = options.nowMs ?? Date.now();
   const activeWindowMs = (options.activeHours ?? 168) * 60 * 60 * 1000;
   return Number.isFinite(updated) && now - updated <= activeWindowMs;
+}
+
+// Merged entries exist only to generate one terminal transition. Excluding
+// them from the next baseline prevents old merges from consuming the 20-PR cap.
+export function snapshotForPersistence(snapshot) {
+  return {
+    ...snapshot,
+    pullRequests: snapshot.pullRequests.filter((pr) => pr.state !== "merged"),
+  };
 }
 
 // Classification order matters: an explicit required-check failure is more
