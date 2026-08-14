@@ -265,6 +265,21 @@ describe("artifact commands", () => {
     expect(workbook.getWorksheet(1)?.getCell("A3").value).toEqual({ formula: "SUM(A1:A2)" });
   });
 
+  it("keeps duplicate XLSX sheet names unique", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-xlsx-names-test-"));
+    const input = path.join(dir, "book.json");
+    const out = path.join(dir, "book.xlsx");
+    await fs.writeFile(
+      input,
+      JSON.stringify({ sheets: [{ name: "Same" }, { name: "Same" }, { name: "same" }] }),
+    );
+
+    await createXlsxCommand(input, { out });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(out);
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["Same", "Same1", "same2"]);
+  });
+
   it("rejects invalid PDF spec JSON before creating output", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-json-test-"));
     const input = path.join(dir, "brief.json");

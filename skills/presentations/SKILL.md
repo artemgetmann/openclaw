@@ -12,8 +12,9 @@ Use this skill for PPTX/PowerPoint artifacts and PDF slide handouts.
 
 1. Plan the deck as structured slide content before authoring: title, story arc, slide list, and per-slide content.
 2. If the user needs editable slides, create a JSON spec and run `openclaw artifacts create-pptx deck.json --out deck.pptx`.
-3. Keep layouts simple and inspect for text overflow, overlap, and bad wrapping when an Office-compatible viewer is available.
-4. If the user wants native Google Slides, create and verify a local PPTX first, then import through the Google Drive route if available.
+3. If the user needs a read-only PDF handout, create a structured PDF directly with `openclaw artifacts create-pdf handout.json --out handout.pdf`. Do not make the default route depend on Office or LibreOffice conversion.
+4. Keep layouts simple and inspect for text overflow, overlap, and bad wrapping when an Office-compatible viewer is available.
+5. If the user wants native Google Slides, create and verify a local PPTX first, then import through the Google Drive route if available.
 
 ## Stop rules
 
@@ -26,4 +27,5 @@ Use this skill for PPTX/PowerPoint artifacts and PDF slide handouts.
 
 ```bash
 openclaw artifacts create-pptx deck.json --out deck.pptx
+openclaw artifacts create-pdf handout.json --out handout.pdf
 ```

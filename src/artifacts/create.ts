@@ -327,15 +327,33 @@ export async function createDocx(specValue: unknown, outputPath: string): Promis
   await fs.writeFile(outputPath, await Packer.toBuffer(document));
 }
 
+function uniqueWorksheetName(requested: string, existingNames: Set<string>): string {
+  const base = (requested.trim() || "Sheet").slice(0, 31);
+  let candidate = base;
+  let suffix = 1;
+  // Excel treats worksheet names case-insensitively. Match openpyxl's prior
+  // behavior by suffixing duplicates while respecting Excel's 31-char limit.
+  while (existingNames.has(candidate.toLocaleLowerCase())) {
+    const suffixText = String(suffix);
+    candidate = `${base.slice(0, 31 - suffixText.length)}${suffixText}`;
+    suffix += 1;
+  }
+  existingNames.add(candidate.toLocaleLowerCase());
+  return candidate;
+}
+
 export async function createXlsx(specValue: unknown, outputPath: string): Promise<void> {
   const spec = asRecord(specValue);
   const workbook = new ExcelJS.Workbook();
+  const worksheetNames = new Set<string>();
   const sheets = asList(spec.sheets);
   const sheetSpecs =
     sheets.length > 0 ? sheets : [{ name: spec.title || "Sheet1", rows: spec.rows || [] }];
   for (const [index, value] of sheetSpecs.entries()) {
     const sheetSpec = asRecord(value);
-    const worksheet = workbook.addWorksheet(asText(sheetSpec.name).trim() || `Sheet${index + 1}`);
+    const worksheet = workbook.addWorksheet(
+      uniqueWorksheetName(asText(sheetSpec.name).trim() || `Sheet${index + 1}`, worksheetNames),
+    );
     for (const row of asList(sheetSpec.rows)) {
       const cells = (Array.isArray(row) ? row : [row]).map((cell) => {
         // Keep the established JSON contract: a leading '=' denotes a real
