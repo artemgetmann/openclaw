@@ -205,17 +205,20 @@ package_phase_creates_heavy_local_artifacts() {
 }
 
 require_release_disk_preflight() {
-  local required_kib
+  local post_write_floor_kib
+  local expected_write_reserve_kib
   local staging_path
   local package_temp_path="${TMPDIR:-/tmp}"
 
-  required_kib="${JARVIS_RELEASE_DISK_REQUIRED_KIB:-$(jarvis_release_disk_default_required_kib)}"
+  post_write_floor_kib="${JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB:-$(jarvis_release_disk_post_write_floor_kib)}"
+  expected_write_reserve_kib="${JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB:-$(jarvis_release_disk_full_release_reserve_kib)}"
   staging_path="$(release_staging_preflight_path)"
 
   # Preserve the helper's complete multi-target report on stdout. Operators
   # need each target, filesystem, free-space, shortfall, and final status line.
   JARVIS_RELEASE_DISK_BEFORE_CLEANUP_FUNCTION=require_release_disk_cleanup_authorization \
-    jarvis_release_disk_ensure_capacity "$ROOT_DIR" "$required_kib" \
+    jarvis_release_disk_ensure_operation_capacity "$ROOT_DIR" \
+    full-signed-notarized-release "$post_write_floor_kib" "$expected_write_reserve_kib" \
     release-output "$ROOT_DIR/dist" \
     release-staging "$staging_path" \
     package-temp "$package_temp_path" \
@@ -1627,6 +1630,7 @@ esac
 if package_phase_creates_heavy_local_artifacts "$PACKAGE_PHASE"; then
   openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "release disk preflight"
   require_release_disk_preflight
+  export OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED=1
   openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "release artifact mutation"
 fi
 

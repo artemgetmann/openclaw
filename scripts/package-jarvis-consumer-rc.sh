@@ -14,6 +14,8 @@ source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/macos-activation.sh"
+# shellcheck source=scripts/lib/jarvis-release-disk-preflight.sh
+source "$ROOT_DIR/scripts/lib/jarvis-release-disk-preflight.sh"
 
 ORIGINAL_ARGS=("$@")
 MODE=""
@@ -185,6 +187,28 @@ package_rc_app_fast() {
     "$ROOT_DIR/scripts/package-consumer-mac-app-fast.sh" "${package_args[@]}"
 }
 
+require_rc_disk_preflight() {
+  local operation=""
+  local reserve_kib=""
+  local skip_pnpm_install="${SKIP_PNPM_INSTALL:-1}"
+
+  if [[ "$MODE" == "notarize" ]]; then
+    operation="consumer-rc-signed-notarized-package"
+    reserve_kib="$(jarvis_release_disk_full_release_reserve_kib)"
+  elif [[ "$skip_pnpm_install" == "1" && -d "$ROOT_DIR/node_modules" ]]; then
+    operation="consumer-rc-warm-package"
+    reserve_kib="$(jarvis_release_disk_warm_package_reserve_kib)"
+  else
+    operation="consumer-rc-cold-package"
+    reserve_kib="$(jarvis_release_disk_cold_package_reserve_kib)"
+  fi
+
+  jarvis_release_disk_ensure_operation_capacity "$ROOT_DIR" "$operation" \
+    "$(jarvis_release_disk_post_write_floor_kib)" "$reserve_kib" \
+    rc-output "$ROOT_DIR/dist" \
+    package-staging "${TMPDIR:-/tmp}"
+}
+
 package_rc_app_notarized() {
   APP_NAME="$RC_APP_NAME" \
   APP_BUNDLE_NAME="$RC_APP_BUNDLE_NAME" \
@@ -311,6 +335,11 @@ openclaw_heavy_local_slot_require_or_reexec \
   "$ROOT_DIR" \
   "$ROOT_DIR/scripts/package-jarvis-consumer-rc.sh" \
   "${ORIGINAL_ARGS[@]}"
+
+# Select the reserve from the actual RC mode after the wrapper owns its release
+# lock but before dependency installation, source build, staging, or app writes.
+require_rc_disk_preflight
+export OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED=1
 
 case "$MODE" in
   fast)

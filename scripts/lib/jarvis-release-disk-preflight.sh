@@ -4,16 +4,55 @@
 #
 # Public interfaces:
 #   jarvis_release_disk_preflight_targets <required-kib> <label> <path> [<label> <path> ...]
-#   jarvis_release_disk_ensure_capacity <repo-root> <required-kib> <label> <path> [...]
+#   jarvis_release_disk_preflight_operation <operation> <post-write-floor-kib> <reserve-kib> <label> <path> [...]
+#   jarvis_release_disk_ensure_operation_capacity <repo-root> <operation> <post-write-floor-kib> <reserve-kib> <label> <path> [...]
+#   jarvis_release_disk_ensure_capacity <repo-root> <required-kib> <label> <path> [...]  # compatibility
 #   jarvis_release_disk_preflight <target-path> [required-kib]  # compatibility
 #
-# The default 25 GiB floor is capacity insurance for the full release lane, not
-# an artifact estimate. Each distinct filesystem holding release output or
-# heavy staging must independently satisfy that floor. Multiple targets on one
-# filesystem are checked once so the same free space is never double-counted.
+# Admission protects a 35 GiB post-write floor by adding a fixed reserve for the
+# selected write class. This avoids admitting a job merely because the floor is
+# present before the job consumes it. Each distinct output/staging filesystem
+# must independently satisfy the resulting threshold. Multiple targets on one
+# filesystem are checked once so free space is never double-counted.
+
+jarvis_release_disk_post_write_floor_kib() {
+  printf '%s\n' $((35 * 1024 * 1024))
+}
+
+jarvis_release_disk_dependency_reserve_kib() {
+  printf '%s\n' $((6 * 1024 * 1024))
+}
+
+jarvis_release_disk_warm_package_reserve_kib() {
+  printf '%s\n' $((3 * 1024 * 1024))
+}
+
+jarvis_release_disk_cold_package_reserve_kib() {
+  local dependency_reserve_kib
+  local warm_package_reserve_kib
+
+  # Cold packaging performs both write classes, so derive its reserve instead
+  # of letting the additive policy drift into a second hard-coded constant.
+  dependency_reserve_kib="$(jarvis_release_disk_dependency_reserve_kib)"
+  warm_package_reserve_kib="$(jarvis_release_disk_warm_package_reserve_kib)"
+  printf '%s\n' $((dependency_reserve_kib + warm_package_reserve_kib))
+}
+
+jarvis_release_disk_full_release_reserve_kib() {
+  printf '%s\n' $((10 * 1024 * 1024))
+}
 
 jarvis_release_disk_default_required_kib() {
-  printf '%s\n' $((25 * 1024 * 1024))
+  printf '%s\n' $((45 * 1024 * 1024))
+}
+
+jarvis_release_disk_admission_required_kib() {
+  local post_write_floor_kib="${1:-}"
+  local expected_write_reserve_kib="${2:-}"
+
+  jarvis_release_disk_is_positive_integer "$post_write_floor_kib" || return 2
+  jarvis_release_disk_is_nonnegative_integer "$expected_write_reserve_kib" || return 2
+  printf '%s\n' $((post_write_floor_kib + expected_write_reserve_kib))
 }
 
 jarvis_release_disk_existing_path() {
@@ -100,6 +139,8 @@ jarvis_release_disk_preflight_targets() {
   local filesystem_index
   local i
   local shortfall_kib
+  local projected_post_write_kib
+  local operation_metadata_enabled=0
   local overall_status=0
   local -a filesystem_ids=()
   local -a filesystem_mounts=()
@@ -116,6 +157,21 @@ jarvis_release_disk_preflight_targets() {
   if [[ $# -lt 2 || $(( $# % 2 )) -ne 0 ]]; then
     printf 'ERROR: disk preflight requires one or more <label> <path> target pairs\n' >&2
     return 2
+  fi
+
+  if [[ -n "${JARVIS_RELEASE_DISK_OPERATION:-}${JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB:-}${JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB:-}" ]]; then
+    [[ -n "${JARVIS_RELEASE_DISK_OPERATION:-}" ]] && \
+      jarvis_release_disk_is_positive_integer "${JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB:-}" && \
+      jarvis_release_disk_is_nonnegative_integer "${JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB:-}" && \
+      [[ "$required_kib" == "$((JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB + JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB))" ]] || {
+        printf 'ERROR: incomplete or inconsistent disk admission metadata\n' >&2
+        return 2
+      }
+    operation_metadata_enabled=1
+    printf 'operation=%s\n' "$JARVIS_RELEASE_DISK_OPERATION"
+    printf 'post_write_floor_kib=%s\n' "${JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB}"
+    printf 'expected_write_reserve_kib=%s\n' "${JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB}"
+    printf 'admission_required_kib=%s\n' "$required_kib"
   fi
 
   while [[ $# -gt 0 ]]; do
@@ -209,6 +265,12 @@ jarvis_release_disk_preflight_targets() {
     printf 'filesystem[%s].required_gib=%s\n' "$filesystem_index" "$(jarvis_release_disk_kib_to_gib "$required_kib")"
     printf 'filesystem[%s].free_kib=%s\n' "$filesystem_index" "$free_kib"
     printf 'filesystem[%s].free_gib=%s\n' "$filesystem_index" "$(jarvis_release_disk_kib_to_gib "$free_kib")"
+    if ((operation_metadata_enabled == 1)); then
+      projected_post_write_kib=$((free_kib - JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB))
+      ((projected_post_write_kib >= 0)) || projected_post_write_kib=0
+      printf 'filesystem[%s].projected_post_write_kib=%s\n' "$filesystem_index" "$projected_post_write_kib"
+      printf 'filesystem[%s].projected_post_write_gib=%s\n' "$filesystem_index" "$(jarvis_release_disk_kib_to_gib "$projected_post_write_kib")"
+    fi
     printf 'filesystem[%s].shortfall_kib=%s\n' "$filesystem_index" "$shortfall_kib"
     printf 'filesystem[%s].shortfall_gib=%s\n' "$filesystem_index" "$(jarvis_release_disk_kib_to_gib "$shortfall_kib")"
     if ((shortfall_kib > 0)); then
@@ -223,6 +285,9 @@ jarvis_release_disk_preflight_targets() {
   printf 'filesystems_checked=%s\n' "${#filesystem_ids[@]}"
   if [[ "$overall_status" -ne 0 ]]; then
     printf 'status=fail\n'
+    if ((operation_metadata_enabled == 1)); then
+      printf 'reason=projected-post-write-capacity-below-protected-floor\n'
+    fi
     # A release preflight failure happens before packaging starts, so the same
     # owner can safely reclaim one proven-generated batch and retry exactly
     # once. Emit the canonical skill and a stable action instead of vague
@@ -236,6 +301,29 @@ jarvis_release_disk_preflight_targets() {
 
   printf 'status=pass\n'
   return 0
+}
+
+jarvis_release_disk_preflight_operation() {
+  local operation="${1:-}"
+  local post_write_floor_kib="${2:-}"
+  local expected_write_reserve_kib="${3:-}"
+  local admission_required_kib=""
+  shift 3 || true
+
+  [[ -n "$operation" ]] || {
+    printf 'ERROR: disk admission operation must be nonempty\n' >&2
+    return 2
+  }
+  admission_required_kib="$(jarvis_release_disk_admission_required_kib \
+    "$post_write_floor_kib" "$expected_write_reserve_kib")" || {
+    printf 'ERROR: disk admission floor must be positive and reserve must be nonnegative KiB integers\n' >&2
+    return 2
+  }
+
+  JARVIS_RELEASE_DISK_OPERATION="$operation" \
+  JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB="$post_write_floor_kib" \
+  JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB="$expected_write_reserve_kib" \
+    jarvis_release_disk_preflight_targets "$admission_required_kib" "$@"
 }
 
 jarvis_release_disk_cleanup_can_help() {
@@ -345,6 +433,30 @@ jarvis_release_disk_ensure_capacity() {
   printf 'release_disk_capacity_status=blocked\n'
   printf 'release_disk_blocker=safe_repo_cleanup_exhausted_protected_or_external_capacity_required\n'
   return 1
+}
+
+jarvis_release_disk_ensure_operation_capacity() {
+  local repo_root="${1:-}"
+  local operation="${2:-}"
+  local post_write_floor_kib="${3:-}"
+  local expected_write_reserve_kib="${4:-}"
+  local admission_required_kib=""
+  shift 4 || true
+
+  [[ -n "$operation" ]] || {
+    printf 'ERROR: disk admission operation must be nonempty\n' >&2
+    return 2
+  }
+  admission_required_kib="$(jarvis_release_disk_admission_required_kib \
+    "$post_write_floor_kib" "$expected_write_reserve_kib")" || {
+    printf 'ERROR: disk admission floor must be positive and reserve must be nonnegative KiB integers\n' >&2
+    return 2
+  }
+
+  JARVIS_RELEASE_DISK_OPERATION="$operation" \
+  JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB="$post_write_floor_kib" \
+  JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB="$expected_write_reserve_kib" \
+    jarvis_release_disk_ensure_capacity "$repo_root" "$admission_required_kib" "$@"
 }
 
 jarvis_release_disk_preflight() {

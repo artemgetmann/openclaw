@@ -1101,7 +1101,8 @@ printf "bound-package-fs\t/Volumes/bound-package\t0\t%s\n" "$1"'
   OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$TMP_DIR/bound-package-summary.env" \
   OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$TMP_DIR/bound-package-timing.tsv" \
   OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT="$TMP_DIR/bound-package-artifacts" \
-  JARVIS_RELEASE_DISK_REQUIRED_KIB=1 \
+  JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB=1 \
+  JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB=0 \
   JARVIS_RELEASE_DISK_PROBE_COMMAND="$disk_probe" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
       --release-intent bound-package-recovery \

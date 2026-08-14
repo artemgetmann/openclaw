@@ -1080,7 +1080,8 @@ esac'
   PACKAGE_DISK_EXPECTED_STAGING="$explicit_staging" \
   PACKAGE_DISK_EXPECTED_PACKAGE_TEMP="$package_temp" \
   TMPDIR="$package_temp" \
-  JARVIS_RELEASE_DISK_REQUIRED_KIB=2048 \
+  JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB=2048 \
+  JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB=0 \
   JARVIS_RELEASE_DISK_PROBE_COMMAND="$probe" \
     /bin/bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase build-app-only \
@@ -1117,7 +1118,8 @@ esac'
   PACKAGE_DISK_EXPECTED_STAGING="$default_staging" \
   PACKAGE_DISK_EXPECTED_PACKAGE_TEMP="$package_temp" \
   TMPDIR="$package_temp" \
-  JARVIS_RELEASE_DISK_REQUIRED_KIB=2048 \
+  JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB=2048 \
+  JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB=0 \
   JARVIS_RELEASE_DISK_PROBE_COMMAND="$probe" \
     /bin/bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase build-app-only \
@@ -1155,7 +1157,8 @@ esac'
   PACKAGE_DISK_INTENT_HELPER="$ROOT_DIR/scripts/lib/jarvis-release-intent.sh" \
   PACKAGE_DISK_GIT_ROOT="$ROOT_DIR" \
   TMPDIR="$package_temp" \
-  JARVIS_RELEASE_DISK_REQUIRED_KIB=2048 \
+  JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB=2048 \
+  JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB=0 \
   JARVIS_RELEASE_DISK_PROBE_COMMAND="$probe" \
     /bin/bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase build-app-only \

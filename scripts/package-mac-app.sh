@@ -11,6 +11,12 @@ source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 # This remains a documented direct packaging command as well as a nested
 # implementation detail. Direct callers self-admit; consumer/release wrappers
 # pass a verified live capability and continue without reacquiring.
+if ! openclaw_shared_resource_lock_is_held release-jarvis; then
+  # An ambient marker is not proof. Clear it before this entrypoint acquires its
+  # own lock so only a wrapper that already owns the live lease can delegate a
+  # completed admission check to the nested package process.
+  unset OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED
+fi
 openclaw_heavy_local_slot_require_or_reexec \
   "package-mac-app:${APP_VARIANT:-consumer}" \
   "$ROOT_DIR" \
@@ -23,6 +29,8 @@ source "$ROOT_DIR/scripts/lib/consumer-runtime-manifest.sh"
 source "$ROOT_DIR/scripts/lib/openclaw-runtime-payloads.sh"
 source "$ROOT_DIR/scripts/lib/consumer-gog-runtime.sh"
 source "$ROOT_DIR/scripts/lib/consumer-mcporter-runtime.sh"
+# shellcheck source=scripts/lib/jarvis-release-disk-preflight.sh
+source "$ROOT_DIR/scripts/lib/jarvis-release-disk-preflight.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 APP_VARIANT="${APP_VARIANT:-consumer}"
@@ -1641,6 +1649,33 @@ prune_bundled_runtime_dangling_symlinks() {
     rm -f "$broken_link"
   done < <(find "$BUNDLED_RUNTIME_RESOURCE_DIR" -type l ! -exec test -e {} \; -print)
 }
+
+disk_admission_inherited=0
+if [[ "${OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED:-0}" == "1" ]] && \
+  openclaw_shared_resource_lock_is_held release-jarvis; then
+  # The outer RC/public-release/hotfix wrapper measured the same output and
+  # staging filesystems while holding this exact kernel-owned release lock.
+  # The environment marker is never sufficient without that live descriptor.
+  disk_admission_inherited=1
+fi
+
+if ((disk_admission_inherited == 0)); then
+  package_reserve_kib="$(jarvis_release_disk_warm_package_reserve_kib)"
+  package_operation="direct-warm-package"
+  if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" || ! -d "$ROOT_DIR/node_modules" ]]; then
+    package_reserve_kib="$(jarvis_release_disk_cold_package_reserve_kib)"
+    package_operation="direct-cold-package"
+  fi
+
+  # Direct callers do not have an outer release wrapper to protect them. Admit
+  # before the first dependency/build write, then mark nested helpers so one
+  # operation cannot clean and remeasure the same filesystem repeatedly.
+  jarvis_release_disk_ensure_operation_capacity "$ROOT_DIR" "$package_operation" \
+    "$(jarvis_release_disk_post_write_floor_kib)" "$package_reserve_kib" \
+    package-output "$APP_ROOT" \
+    package-staging "${TMPDIR:-/tmp}"
+  export OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED=1
+fi
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install)"

@@ -734,6 +734,7 @@ package_hotfix() {
     "SKIP_PNPM_INSTALL=0"
     "SKIP_TSC=0"
     "SKIP_UI_BUILD=0"
+    "OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED=1"
   )
   if [[ "${SHIP_TEST_MODE}" == "1" && -n "${PACKAGE_MARKER:-}" ]]; then
     command+=("PACKAGE_MARKER=${PACKAGE_MARKER}")
@@ -765,18 +766,22 @@ package_hotfix() {
 }
 
 require_hotfix_disk_preflight() {
-  local required_kib=""
+  local post_write_floor_kib=""
+  local expected_write_reserve_kib=""
   if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
-    required_kib="${JARVIS_RELEASE_DISK_REQUIRED_KIB:-$(jarvis_release_disk_default_required_kib)}"
+    post_write_floor_kib="${JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB:-$(jarvis_release_disk_post_write_floor_kib)}"
+    expected_write_reserve_kib="${JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB:-$(jarvis_release_disk_cold_package_reserve_kib)}"
   else
-    required_kib="$(jarvis_release_disk_default_required_kib)"
+    post_write_floor_kib="$(jarvis_release_disk_post_write_floor_kib)"
+    expected_write_reserve_kib="$(jarvis_release_disk_cold_package_reserve_kib)"
     unset JARVIS_RELEASE_DISK_PROBE_COMMAND JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE
   fi
 
   # The hotfix package writes its final app under dist/ and performs its heavy
   # CLI/runtime staging under TMPDIR. The repo checkout, dependency install,
   # and dist output share the output target's filesystem in this lane.
-  jarvis_release_disk_preflight_targets "${required_kib}" \
+  jarvis_release_disk_preflight_operation main-jarvis-cold-package \
+    "${post_write_floor_kib}" "${expected_write_reserve_kib}" \
     hotfix-output "${JARVIS_APP_PATH}" \
     package-staging "${TMPDIR:-/tmp}"
 }
