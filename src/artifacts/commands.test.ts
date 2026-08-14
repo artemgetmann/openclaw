@@ -104,6 +104,20 @@ describe("artifact commands", () => {
   });
 
   it.each([
+    ["scalar section", { sections: ["Keep me"] }],
+    ["long token", { paragraphs: ["x".repeat(500)] }],
+    ["empty spec", {}],
+  ])("creates a nonblank PDF for %s input", async (_label, spec) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-edge-test-"));
+    const input = path.join(dir, "brief.json");
+    const out = path.join(dir, "brief.pdf");
+    await fs.writeFile(input, JSON.stringify(spec));
+
+    await createPdfCommand(input, { out });
+    expect((await fs.stat(out)).size).toBeGreaterThan(500);
+  });
+
+  it.each([
     ["DOCX", "docx", createDocxCommand],
     ["XLSX", "xlsx", createXlsxCommand],
   ] as const)(
@@ -213,6 +227,17 @@ describe("artifact commands", () => {
     const result = await createPptxCommand(input, { out });
     expect(result.path).toBe(out);
     expect((await fs.readFile(out)).subarray(0, 2).toString()).toBe("PK");
+  });
+
+  it("preserves scalar PPTX slides as titles", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pptx-scalar-test-"));
+    const input = path.join(dir, "deck.json");
+    const out = path.join(dir, "deck.pptx");
+    await fs.writeFile(input, JSON.stringify({ slides: ["Keep me"] }));
+
+    await createPptxCommand(input, { out });
+    const archive = await fs.readFile(out);
+    expect(archive.subarray(0, 2).toString()).toBe("PK");
   });
 
   it("runs LibreOffice PPTX-to-PDF conversion", async () => {

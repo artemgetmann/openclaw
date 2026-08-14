@@ -39,7 +39,11 @@ function asText(value: unknown): string {
 }
 
 function sectionsFor(spec: JsonRecord): JsonRecord[] {
-  const sections = asList(spec.sections).map(asRecord);
+  const sections = asList(spec.sections).map((section) =>
+    section && typeof section === "object" && !Array.isArray(section)
+      ? asRecord(section)
+      : { paragraphs: [section] },
+  );
   if (sections.length > 0) {
     return sections;
   }
@@ -54,7 +58,16 @@ function tableRows(tableValue: unknown): string[][] {
 }
 
 function wrapText(text: string, maxChars: number): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
+  const words = text
+    .split(/\s+/)
+    .filter(Boolean)
+    .flatMap((word) => {
+      const chunks: string[] = [];
+      for (let offset = 0; offset < word.length; offset += maxChars) {
+        chunks.push(word.slice(offset, offset + maxChars));
+      }
+      return chunks;
+    });
   const lines: string[] = [];
   let line = "";
   for (const word of words) {
@@ -147,11 +160,12 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
     }
     y -= 8;
   }
-  if (
-    !title &&
-    !subtitle &&
-    sectionsFor(spec).every((section) => Object.keys(section).length === 0)
-  ) {
+  const hasSectionContent = sectionsFor(spec).some((section) =>
+    [section.heading, section.paragraphs, section.bullets, section.callout, section.table].some(
+      (value) => asList(value).some((item) => asText(item).trim()),
+    ),
+  );
+  if (!title && !subtitle && !hasSectionContent) {
     writeLines("Untitled", 22, true);
   }
 
@@ -278,7 +292,10 @@ export async function createPptx(specValue: unknown, outputPath: string): Promis
 
   const slides = asList(spec.slides).length > 0 ? asList(spec.slides) : asList(spec.sections);
   for (const value of slides) {
-    const slideSpec = asRecord(value);
+    const slideSpec =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? asRecord(value)
+        : { title: value };
     const slide = presentation.addSlide();
     slideCount += 1;
     slide.addText(asText(slideSpec.title || slideSpec.heading).trim() || "Slide", {
