@@ -10,6 +10,7 @@ import {
   monitorResult,
   parseRequiredChecksResult,
   snapshotForPersistence,
+  // @ts-expect-error The operational helper is intentionally plain ESM for direct Node execution.
 } from "../../scripts/lib/pr-freshness-monitor.mjs";
 
 const nowMs = Date.parse("2026-08-14T05:00:00Z");
@@ -100,8 +101,12 @@ describe("PR freshness monitor", () => {
     const active = Array.from({ length: 20 }, (_, index) => ({ ...base, number: index + 1 }));
     const merged = { ...base, number: 99, state: "MERGED", updatedAt: "2026-08-14T04:30:00Z" };
     const snapshot = buildSnapshot([...active, merged], { nowMs, trackedNumbers: [99] });
-    expect(snapshot.pullRequests.filter((pr) => pr.state !== "merged")).toHaveLength(20);
-    expect(snapshot.pullRequests.filter((pr) => pr.state === "merged")).toHaveLength(1);
+    expect(
+      snapshot.pullRequests.filter((pr: { state: string }) => pr.state !== "merged"),
+    ).toHaveLength(20);
+    expect(
+      snapshot.pullRequests.filter((pr: { state: string }) => pr.state === "merged"),
+    ).toHaveLength(1);
     expect(snapshotForPersistence(snapshot).pullRequests).toHaveLength(20);
   });
 
