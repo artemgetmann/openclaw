@@ -28,11 +28,10 @@ Use this skill for PDF creation, export, inspection, and delivery QA.
 ## Default route
 
 1. For a new simple PDF, create a JSON spec and run `openclaw artifacts create-pdf spec.json --out output.pdf`.
-2. For document-like content that may also need Word output, create the DOCX first, then export it with `openclaw artifacts docx-to-pdf input.docx --out output.pdf`.
-3. Use `openclaw artifacts html-to-pdf input.html --out output.pdf --scale 1` only when the source is already HTML/CSS or the user explicitly asks for an HTML-backed PDF.
-4. Render final PDF pages to PNG before sending with `openclaw artifacts render-pdf output.pdf --out-dir rendered`.
-5. Inspect rendered pages for clipping, missing spaces, bad glyphs, overlap, and unreadable tables.
-6. Use text extraction only as a quick sanity check. Do not treat extracted text as proof that visual layout is correct.
+2. Use `openclaw artifacts html-to-pdf input.html --out output.pdf --scale 1` only when the source is already HTML/CSS or the user explicitly asks for an HTML-backed PDF.
+3. Render final PDF pages to PNG before sending when Poppler is available with `openclaw artifacts render-pdf output.pdf --out-dir rendered`.
+4. Inspect rendered pages for clipping, missing spaces, bad glyphs, overlap, and unreadable tables.
+5. Use text extraction only as a quick sanity check. Do not treat extracted text as proof that visual layout is correct.
 
 ## Stop rules
 
@@ -45,7 +44,6 @@ Use this skill for PDF creation, export, inspection, and delivery QA.
 
 ```bash
 openclaw artifacts create-pdf spec.json --out output.pdf
-openclaw artifacts docx-to-pdf input.docx --out output.pdf
 openclaw artifacts html-to-pdf input.html --out output.pdf --scale 1
 openclaw artifacts render-pdf output.pdf --out-dir rendered
 pdftoppm -png input.pdf output/page

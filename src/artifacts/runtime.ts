@@ -53,6 +53,9 @@ const ENV_EXECUTABLES: Record<ArtifactExecutableName, string[]> = {
   soffice: ["OPENCLAW_ARTIFACT_SOFFICE", "SOFFICE"],
 };
 
+// Keep explicitly configured legacy Codex roots for conversion compatibility.
+// Unlike the removed ~/.cache fallback, these paths are deliberate inputs and
+// do not make a packaged Jarvis silently depend on one developer's machine.
 const RUNTIME_ROOT_ENVS = [
   "OPENCLAW_ARTIFACT_RUNTIME_DIR",
   "OPENCLAW_CODEX_PRIMARY_RUNTIME_DIR",
@@ -104,15 +107,6 @@ function getRuntimeRoots(env: NodeJS.ProcessEnv): string[] {
       roots.push(resolveUserPath(raw));
     }
   }
-  roots.push(
-    path.join(
-      process.env.HOME ?? "",
-      ".cache",
-      "codex-runtimes",
-      "codex-primary-runtime",
-      "dependencies",
-    ),
-  );
   return Array.from(new Set(roots.filter((root) => root && fs.existsSync(root))));
 }
 
@@ -134,8 +128,9 @@ function resolveFromRuntimeRoots(
   roots: string[],
 ): ArtifactExecutableResolution | null {
   for (const root of roots) {
-    // Codex-style runtimes keep host tools, Python, and Node in separate
-    // nested bins. Search all of them before falling back to the host PATH.
+    // Explicit artifact runtimes may keep tools in a few common nested bins.
+    // Never search a developer-product cache implicitly: packaged Jarvis must
+    // behave the same on a clean customer machine.
     const binDirs = [
       path.join(root, "bin"),
       path.join(root, "dependencies", "bin"),

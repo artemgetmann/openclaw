@@ -451,6 +451,17 @@ verify_required_gateway_lifecycle_tooling() {
   fi
 }
 
+verify_required_document_creation_runtime() {
+  local runtime_root="$1"
+  local context_label="$2"
+
+  if ! "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/verify-document-creation-runtime.mjs" \
+    "$runtime_root/openclaw"; then
+    echo "ERROR: ${context_label} cannot provide packaged document creation." >&2
+    return 1
+  fi
+}
+
 verify_required_capabilities_manifest() {
   local runtime_root="$1"
   local context_label="$2"
@@ -1391,6 +1402,7 @@ prepare_bundled_consumer_runtime() {
     if verify_required_workspace_templates "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/docs/reference/templates" "reused bundled consumer runtime workspace templates" \
       && verify_required_telegram_user_tooling "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/scripts/telegram-e2e" "reused bundled consumer runtime Telegram user tooling" \
       && verify_required_gateway_lifecycle_tooling "$REUSABLE_RUNTIME_STAGE_DIR/openclaw" "reused bundled consumer runtime" \
+      && verify_required_document_creation_runtime "$REUSABLE_RUNTIME_STAGE_DIR" "reused bundled consumer runtime" \
       && verify_required_capabilities_manifest "$REUSABLE_RUNTIME_STAGE_DIR" "reused bundled consumer runtime"; then
       echo "📦 Reusing previous bundled consumer runtime (smoke-only)"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
@@ -1408,6 +1420,7 @@ prepare_bundled_consumer_runtime() {
     if verify_required_workspace_templates "$cache_templates_dir" "cached bundled consumer runtime workspace templates" \
       && verify_required_telegram_user_tooling "$cache_telegram_user_tooling_dir" "cached bundled consumer runtime Telegram user tooling" \
       && verify_required_gateway_lifecycle_tooling "$cache_root/openclaw" "cached bundled consumer runtime" \
+      && verify_required_document_creation_runtime "$cache_root" "cached bundled consumer runtime" \
       && verify_required_capabilities_manifest "$cache_root" "cached bundled consumer runtime"; then
       echo "📦 Reusing cached bundled consumer runtime"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
@@ -1462,6 +1475,9 @@ prepare_bundled_consumer_runtime() {
     "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules" \
     "$VALIDATED_NODE_BIN"
   openclaw_prune_bundled_koffi_non_macos "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules"
+  verify_required_document_creation_runtime \
+    "$BUNDLED_RUNTIME_RESOURCE_DIR" \
+    "fresh bundled consumer runtime"
 
   stage_consumer_matrix_crypto_x64_twin
 
