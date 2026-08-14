@@ -158,6 +158,7 @@ describe("artifact commands", () => {
     ["scalar section", { sections: ["Keep me"] }],
     ["long token", { paragraphs: ["x".repeat(500)] }],
     ["empty spec", {}],
+    ["empty table", { sections: [{ table: { rows: [] } }] }],
   ])("creates a nonblank PDF for %s input", async (_label, spec) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-edge-test-"));
     const input = path.join(dir, "brief.json");

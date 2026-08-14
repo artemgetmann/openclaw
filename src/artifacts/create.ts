@@ -231,11 +231,15 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
     writeTable(tableRows(section.table));
     y -= 8;
   }
-  const hasSectionContent = sectionsFor(spec).some((section) =>
-    [section.heading, section.paragraphs, section.bullets, section.callout, section.table].some(
+  const hasSectionContent = sectionsFor(spec).some((section) => {
+    // A table object is only visible content when it yields at least one row.
+    // Checking the object itself would suppress the fallback for `{ table: {} }`
+    // even though the renderer has nothing to draw.
+    const hasText = [section.heading, section.paragraphs, section.bullets, section.callout].some(
       (value) => asList(value).some((item) => asText(item).trim()),
-    ),
-  );
+    );
+    return hasText || tableRows(section.table).length > 0;
+  });
   if (!title && !subtitle && !hasSectionContent) {
     writeLines("Untitled", 22, true);
   }
