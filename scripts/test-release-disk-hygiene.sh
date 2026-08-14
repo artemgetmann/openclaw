@@ -201,7 +201,8 @@ if [[ "${1:-}" == "+D" && "${2:-}" == "${OPENCLAW_TEST_LSOF_MUTATION_TARGET:-}" 
       : >"$OPENCLAW_TEST_LSOF_MUTATION_TARGET/.openclaw-protected"
       ;;
     dirty)
-      printf 'late user state\n' >"$OPENCLAW_TEST_LSOF_MUTATION_WORKTREE/user-state.txt"
+      printf 'late tracked state\n' >"$OPENCLAW_TEST_LSOF_MUTATION_TARGET/late-tracked.txt"
+      git -C "$OPENCLAW_TEST_LSOF_MUTATION_WORKTREE" add -f dist/late-tracked.txt
       ;;
     release-receipt)
       printf 'late receipt\n' >"$OPENCLAW_TEST_LSOF_MUTATION_TARGET/Jarvis.app.notary.env"
@@ -376,6 +377,8 @@ for fixture_repo in "$RELEASE_WORKTREE" "$ORDINARY_WORKTREE"; do
 done
 printf 'submission receipt\n' >"$RELEASE_WORKTREE/dist/Jarvis.app.notary.env"
 printf 'ordinary generated output\n' >"$ORDINARY_WORKTREE/dist/payload.txt"
+printf 'valuable dirty source\n' >>"$ORDINARY_WORKTREE/tracked.txt"
+printf 'valuable untracked source\n' >"$ORDINARY_WORKTREE/user-notes.txt"
 touch -t 202001010000 "$RELEASE_WORKTREE/dist" "$ORDINARY_WORKTREE/dist"
 
 OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
@@ -386,6 +389,8 @@ OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
 
 assert_file_exists "$RELEASE_WORKTREE/dist/Jarvis.app.notary.env" "apply keeps resumable release receipt"
 assert_file_missing "$ORDINARY_WORKTREE/dist" "apply still removes ordinary generated dist output"
+assert_file_exists "$ORDINARY_WORKTREE/tracked.txt" "apply preserves modified source beside generated output"
+assert_file_exists "$ORDINARY_WORKTREE/user-notes.txt" "apply preserves untracked source beside generated output"
 assert_output_has "release-artifact-or-receipt" "cleanup explains protected release dist"
 
 # Every destructive worktree-artifact policy is re-evaluated after the fresh
@@ -434,6 +439,8 @@ REGISTERED_CLEAN="$REGISTERED_ROOT/clean-uuid/openclaw"
 REGISTERED_UNTRACKED="$REGISTERED_ROOT/untracked-uuid/openclaw"
 REGISTERED_MODIFIED="$REGISTERED_ROOT/modified-uuid/openclaw"
 REGISTERED_STATUS_ERROR="$REGISTERED_ROOT/status-error-uuid/openclaw"
+REGISTERED_TRACKED_DIST="$REGISTERED_ROOT/tracked-dist-uuid/openclaw"
+REGISTERED_DIRTY_SWIFTPM="$REGISTERED_ROOT/dirty-swiftpm-uuid/openclaw"
 REGISTERED_MAIN="$REGISTERED_ROOT/main-uuid/openclaw"
 GIT_WRAPPER_DIR="$TMP_DIR/git-wrapper"
 GIT_WRAPPER="$GIT_WRAPPER_DIR/git"
@@ -452,6 +459,33 @@ for fixture_repo in "$REGISTERED_CLEAN" "$REGISTERED_UNTRACKED" "$REGISTERED_MOD
 done
 printf 'untracked user state\n' >"$REGISTERED_UNTRACKED/user-notes.txt"
 printf 'modified user state\n' >>"$REGISTERED_MODIFIED/tracked.txt"
+mkdir -p "$REGISTERED_MODIFIED/apps/macos/.build"
+printf '/apps/macos/.build/\n' >>"$REGISTERED_MODIFIED/.gitignore"
+printf 'old Swift build output\n' >"$REGISTERED_MODIFIED/apps/macos/.build/payload.txt"
+touch -t 202001010000 "$REGISTERED_MODIFIED/apps/macos/.build"
+
+# A generated-looking name is not deletion authority. Tracked content beneath
+# dist must survive even when the worktree itself is otherwise clean.
+mkdir -p "$REGISTERED_TRACKED_DIST/dist"
+git -C "$REGISTERED_TRACKED_DIST" init -q -b fixture
+printf '/dist/\n' >"$REGISTERED_TRACKED_DIST/.gitignore"
+printf 'tracked artifact state\n' >"$REGISTERED_TRACKED_DIST/dist/tracked.txt"
+git -C "$REGISTERED_TRACKED_DIST" add .gitignore
+git -C "$REGISTERED_TRACKED_DIST" add -f dist/tracked.txt
+git -C "$REGISTERED_TRACKED_DIST" -c user.name='Fixture' -c user.email='fixture@example.invalid' commit -qm 'fixture'
+touch -t 202001010000 "$REGISTERED_TRACKED_DIST/dist"
+
+# `.swiftpm` can hold local package mirror or registry configuration, so dirty
+# worktrees do not receive the generated-artifact exception for this path.
+mkdir -p "$REGISTERED_DIRTY_SWIFTPM/.swiftpm"
+git -C "$REGISTERED_DIRTY_SWIFTPM" init -q -b fixture
+printf 'fixture\n' >"$REGISTERED_DIRTY_SWIFTPM/tracked.txt"
+printf '/.swiftpm/\n' >"$REGISTERED_DIRTY_SWIFTPM/.gitignore"
+git -C "$REGISTERED_DIRTY_SWIFTPM" add tracked.txt .gitignore
+git -C "$REGISTERED_DIRTY_SWIFTPM" -c user.name='Fixture' -c user.email='fixture@example.invalid' commit -qm 'fixture'
+printf 'local package state\n' >"$REGISTERED_DIRTY_SWIFTPM/.swiftpm/state.json"
+printf 'dirty source\n' >>"$REGISTERED_DIRTY_SWIFTPM/tracked.txt"
+touch -t 202001010000 "$REGISTERED_DIRTY_SWIFTPM/.swiftpm"
 mkdir -p "$REGISTERED_MAIN/dist"
 git -C "$REGISTERED_MAIN" init -q -b main
 printf 'fixture\n' >"$REGISTERED_MAIN/tracked.txt"
@@ -468,11 +502,19 @@ touch -t 202001010000 "$REGISTERED_MAIN/dist"
   printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_UNTRACKED"'
   printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_MODIFIED"'
   printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_STATUS_ERROR"'
+  printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_TRACKED_DIST"'
+  printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_DIRTY_SWIFTPM"'
   printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/main\0\0" "$REGISTERED_MAIN"'
   printf '%s\n' '  exit 0'
   printf '%s\n' 'fi'
   printf '%s\n' 'if [[ "$1" == "-C" && "$2" == "$REGISTERED_STATUS_ERROR" && "$3" == "status" ]]; then'
   printf '%s\n' '  exit 1'
+  printf '%s\n' 'fi'
+  # Model a nested inspector that reads stdin. The production registry walker
+  # must isolate each candidate inspection from its NUL-delimited input or the
+  # first status call silently consumes every later worktree record.
+  printf '%s\n' 'if [[ "$1" == "-C" && "$3" == "status" ]]; then'
+  printf '%s\n' '  cat >/dev/null'
   printf '%s\n' 'fi'
   printf '%s\n' 'exec "$REAL_GIT" "$@"'
 } >"$GIT_WRAPPER"
@@ -485,16 +527,22 @@ REGISTERED_CLEAN="$REGISTERED_CLEAN" \
 REGISTERED_UNTRACKED="$REGISTERED_UNTRACKED" \
 REGISTERED_MODIFIED="$REGISTERED_MODIFIED" \
 REGISTERED_STATUS_ERROR="$REGISTERED_STATUS_ERROR" \
+REGISTERED_TRACKED_DIST="$REGISTERED_TRACKED_DIST" \
+REGISTERED_DIRTY_SWIFTPM="$REGISTERED_DIRTY_SWIFTPM" \
 REGISTERED_MAIN="$REGISTERED_MAIN" \
 OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
   /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
     --worktrees >"$OUT" 2>&1
 
 assert_record "would_rm" "$REGISTERED_CLEAN/dist" "default discovery finds nested registered worktree"
-assert_record "skip" "$REGISTERED_UNTRACKED/dist" "untracked-only worktree is protected"
-assert_output_has "reason: dirty" "untracked-only protection explains dirty state"
-assert_record "skip" "$REGISTERED_MODIFIED/dist" "tracked-dirty worktree remains protected"
+assert_record "would_rm" "$REGISTERED_UNTRACKED/dist" "untracked source no longer makes ignored generated output immortal"
+assert_record "would_rm" "$REGISTERED_MODIFIED/dist" "modified source no longer makes ignored generated output immortal"
+assert_record "would_rm" "$REGISTERED_MODIFIED/apps/macos/.build" "nested Swift build output is included in registered retention"
 assert_record "skip" "$REGISTERED_STATUS_ERROR/dist" "status failure protects indeterminate worktree"
+assert_record "skip" "$REGISTERED_TRACKED_DIST/dist" "tracked content under a generated-looking path remains protected"
+assert_output_has "worktree-artifact-has-tracked-files" "tracked artifact protection is explicit"
+assert_record "skip" "$REGISTERED_DIRTY_SWIFTPM/.swiftpm" "dirty worktree keeps local Swift package configuration"
+assert_output_has "dirty-worktree-unsafe-artifact-kind" "unsafe dirty artifact kind is explicit"
 assert_record "skip" "$REGISTERED_MAIN/dist" "sacred main worktree remains protected"
 assert_output_has "control-or-release-worktree" "control-lane protection explains sacred main skip"
 assert_file_exists "$REGISTERED_CLEAN/dist" "default registered-worktree fixture remains dry-run only"

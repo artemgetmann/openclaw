@@ -328,6 +328,7 @@ worktree_artifact_policy_block_reason() {
   local worktree="$2"
   local kind="$3"
   local min_age_days="$4"
+  local reason=""
 
   if [[ ! -d "$worktree" || "$target_path" != "$worktree/$kind" ]]; then
     printf 'worktree-or-candidate-identity-changed'
@@ -341,8 +342,8 @@ worktree_artifact_policy_block_reason() {
     printf 'control-or-release-worktree'
     return 0
   fi
-  if worktree_is_dirty "$worktree"; then
-    printf 'dirty-or-status-indeterminate'
+  if reason="$(worktree_artifact_safety_block_reason "$worktree" "$target_path" "$kind")"; then
+    printf '%s' "$reason"
     return 0
   fi
   if [[ "$kind" == "dist" ]] && dist_has_release_recovery_state "$target_path"; then
@@ -598,17 +599,56 @@ consider_generated_path() {
     generated_age_policy_block_reason "$min_age_days" days
 }
 
-worktree_is_dirty() {
+# Dirty source outside a generated directory must not make that directory
+# immortal. Agents routinely leave valuable source changes beside multi-GiB
+# dependency and build trees, and hourly retention cannot depend on a terminal
+# chat remembering to clean those trees manually.
+#
+# Keep this exception deliberately narrower than ordinary dirtiness handling.
+# Git must report no tracked files below any artifact. In a dirty worktree, the
+# exact top-level directory must also be a known rebuildable kind and ignored.
+# `.swiftpm` is not included in the dirty exception because it may contain
+# user-authored mirror or registry settings. Any failed inspection remains a
+# protection signal.
+worktree_artifact_safety_block_reason() {
   local worktree="$1"
-  local status_output
+  local target_path="$2"
+  local kind="$3"
+  local status_output=""
+  local tracked_output=""
 
-  # Untracked files are user state too. A generated directory may itself be
-  # ignored, but any unrelated untracked file protects the whole worktree.
-  # A failed status probe is indeterminate, so fail closed and protect it too.
   if ! status_output="$(git -C "$worktree" status --short 2>/dev/null)"; then
+    printf 'dirty-status-indeterminate'
     return 0
   fi
-  [[ -n "$status_output" ]]
+  if [[ "$target_path" != "$worktree/$kind" ]]; then
+    printf 'worktree-or-candidate-identity-changed'
+    return 0
+  fi
+  if ! tracked_output="$(git -C "$worktree" ls-files -- "$kind" 2>/dev/null)"; then
+    printf 'dirty-worktree-tracked-file-inspection-failed'
+    return 0
+  fi
+  if [[ -n "$tracked_output" ]]; then
+    printf 'worktree-artifact-has-tracked-files'
+    return 0
+  fi
+  [[ -n "$status_output" ]] || return 1
+
+  case "$kind" in
+    dist|.build|apps/macos/.build|.build-ui-smoke|dist-ui-smoke|DerivedData|.turbo|coverage|node_modules)
+      ;;
+    *)
+      printf 'dirty-worktree-unsafe-artifact-kind'
+      return 0
+      ;;
+  esac
+
+  if ! git -C "$worktree" check-ignore --quiet --no-index -- "$kind/" 2>/dev/null; then
+    printf 'dirty-worktree-artifact-not-ignored'
+    return 0
+  fi
+  return 1
 }
 
 worktree_is_protected_control_lane() {
@@ -666,11 +706,23 @@ consider_worktree_candidate() {
   [[ -d "$target_path" ]] || return 0
 
   age_days="$(path_age_days "$target_path")"
-  size_kib="$(path_size_kib_or_zero "$target_path")"
 
   if (( age_days < min_age_days )); then
     return 0
   fi
+  # Liveness is cheap and decisive. Do not recursively traverse a multi-GiB
+  # dependency tree merely to discover that a running owner already protects
+  # it; unknown size is honest for a candidate we cannot reclaim this pass.
+  if path_has_process_ref "$target_path"; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$worktree" "$target_path" "active-process" "worktree-generated"
+    return 0
+  fi
+  if path_has_open_files "$target_path"; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$worktree" "$target_path" "open-files" "worktree-generated"
+    return 0
+  fi
+
+  size_kib="$(path_size_kib_or_zero "$target_path")"
   if [[ "$INCLUDE_CURRENT" != "1" && "$(cd "$worktree" && pwd -P)" == "$CURRENT_ROOT" ]]; then
     print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "current-checkout"
     return 0
@@ -683,19 +735,11 @@ consider_worktree_candidate() {
     print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "release-artifact-or-receipt"
     return 0
   fi
-  if worktree_is_dirty "$worktree"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "dirty" "worktree-generated"
+  local dirty_block_reason=""
+  if dirty_block_reason="$(worktree_artifact_safety_block_reason "$worktree" "$target_path" "$kind")"; then
+    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "$dirty_block_reason" "worktree-generated"
     return 0
   fi
-  if path_has_process_ref "$target_path"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "active-process" "worktree-generated"
-    return 0
-  fi
-  if path_has_open_files "$target_path"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "open-files" "worktree-generated"
-    return 0
-  fi
-
   delete_or_report_candidate "$kind" "$worktree" "$target_path" "$age_days" "$size_kib" \
     worktree_artifact_policy_block_reason "$worktree" "$kind" "$min_age_days"
 }
@@ -705,6 +749,10 @@ scan_worktree() {
   local generated_names=(
     "dist"
     ".build"
+    # SwiftPM keeps the macOS app's rebuildable output below its package root,
+    # not at the repository root. Missing this exact path left months of large
+    # build trees invisible to both hourly retention and packaging recovery.
+    "apps/macos/.build"
     ".build-ui-smoke"
     "dist-ui-smoke"
     "DerivedData"
@@ -736,19 +784,36 @@ scan_worktrees_root() {
 scan_registered_worktrees() {
   local field
   local worktree
+  local registry_snapshot=""
 
   # Git's registry is the authority for linked worktrees. NUL-delimited
   # porcelain output preserves spaces and other shell-sensitive path bytes,
   # while avoiding assumptions about whether a checkout lives under
   # .worktrees/name or a nested Codex UUID/openclaw directory.
-  while IFS= read -r -d '' field; do
+  #
+  # Snapshot before inspection. With hundreds of worktrees the producer can
+  # outgrow a pipe buffer while nested Git commands inspect early candidates;
+  # the resulting shared-stream interaction previously ended real scans after
+  # their first artifact even though small fixtures passed. A private regular
+  # file makes discovery finite and independent from candidate inspection.
+  registry_snapshot="$(mktemp "${TMPDIR:-/tmp}/openclaw-worktrees.XXXXXX")" || die "failed to create worktree registry snapshot"
+  if ! git -C "$ROOT_DIR" worktree list --porcelain -z >"$registry_snapshot"; then
+    rm -f "$registry_snapshot"
+    die "failed to read Git worktree registry"
+  fi
+  # Keep registry input on a private descriptor. Candidate inspection invokes
+  # external commands which are not entitled to read or close this stream.
+  while IFS= read -r -d '' -u 9 field; do
     case "$field" in
       "worktree "*)
         worktree="${field#worktree }"
-        scan_worktree "$worktree"
+        # Also provide an empty conventional stdin: candidate inspectors never
+        # need interactive input and must not inherit an unrelated caller.
+        scan_worktree "$worktree" </dev/null
         ;;
     esac
-  done < <(git -C "$ROOT_DIR" worktree list --porcelain -z)
+  done 9<"$registry_snapshot"
+  rm -f "$registry_snapshot"
 }
 
 scan_worktrees() {

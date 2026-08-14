@@ -147,11 +147,12 @@ openclaw_build_path_permission_protection_reason() {
 openclaw_build_tree_removal_protection_reason() {
   local target="$1"
   local target_parent
-  local descendant_dir
   local protected_acl_path=""
+  local protected_directory_path=""
   local protected_flags_path=""
   local protected_parent_acl_path=""
   local protection_reason
+  local current_uid=""
 
   if protection_reason="$(openclaw_build_path_permission_protection_reason "$target")"; then
     printf '%s\n' "$protection_reason"
@@ -204,19 +205,23 @@ openclaw_build_tree_removal_protection_reason() {
   [[ -d "$target" ]] || return 1
 
   # rm -rf can delete accessible siblings before discovering a blocked nested
-  # directory. Keep permission/removal validation on directories only; the
-  # batched flag query above already covers every regular file.
-  while IFS= read -r -d '' descendant_dir; do
-    if protection_reason="$(openclaw_build_path_permission_protection_reason "$descendant_dir")"; then
-      printf 'protected_descendant=%s; %s\n' "$descendant_dir" "$protection_reason"
+  # directory. Ask find to locate the first wrong-owner or non-rwx directory
+  # in-process. The previous shell loop spawned multiple metadata commands for
+  # every directory in node_modules and Swift .build trees, turning an hourly
+  # safety check into minutes per candidate without adding protection.
+  current_uid="$(id -u)"
+  while IFS= read -r -d '' protected_directory_path; do
+    break
+  done < <(find "$target" -type d \( ! -user "$current_uid" -o ! -perm -700 \) -print0 -quit 2>/dev/null)
+  if [[ -n "$protected_directory_path" ]]; then
+    if protection_reason="$(openclaw_build_path_permission_protection_reason "$protected_directory_path")"; then
+      printf 'protected_descendant=%s; %s\n' "$protected_directory_path" "$protection_reason"
       return 0
     fi
-    if [[ ! -w "$descendant_dir" ]]; then
-      printf 'removal-protected descendant=%s; %s; operator action: inspect this exact nested directory; cleanup will not alter permissions\n' \
-        "$descendant_dir" "$(openclaw_build_path_metadata "$descendant_dir")"
-      return 0
-    fi
-  done < <(find "$target" -type d -print0 2>/dev/null)
+    printf 'removal-protected descendant=%s; %s; operator action: inspect this exact nested directory; cleanup will not alter permissions\n' \
+      "$protected_directory_path" "$(openclaw_build_path_metadata "$protected_directory_path")"
+    return 0
+  fi
 
   # A second traversal captures errors that occur before find can emit a path.
   # No deletion happens if the complete tree cannot be enumerated reliably.
