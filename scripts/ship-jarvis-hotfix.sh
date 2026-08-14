@@ -61,11 +61,15 @@ else
 fi
 if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
   PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
+  CODESIGN_SCRIPT="${OPENCLAW_SHIP_CODESIGN_SCRIPT:-${MAIN_REPO}/scripts/codesign-mac-app.sh}"
+  VERIFY_APP_SCRIPT="${OPENCLAW_SHIP_VERIFY_APP_SCRIPT:-${MAIN_REPO}/scripts/verify-consumer-mac-app.sh}"
   OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
   PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
   PROVE_RUNTIME_SCRIPT="${OPENCLAW_SHIP_PROVE_RUNTIME_SCRIPT:-${MAIN_REPO}/scripts/prove-jarvis-runtime.sh}"
 else
   PACKAGE_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh"
+  CODESIGN_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/codesign-mac-app.sh"
+  VERIFY_APP_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/verify-consumer-mac-app.sh"
   OPEN_APP_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/open-consumer-mac-app.sh"
   PROTECT_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh"
   PROVE_RUNTIME_SCRIPT="${CANONICAL_MAIN_REPO}/scripts/prove-jarvis-runtime.sh"
@@ -108,6 +112,9 @@ CI_TIMEOUT_SECONDS="${OPENCLAW_SHIP_CI_TIMEOUT_SECONDS:-1800}"
 
 PR_NUMBER=""
 MAIN_POLICY=""
+HOTFIX_PHASE="one-shot"
+PREPARE_OUTPUT=""
+PREPARED_RECEIPT=""
 APPROVED_PROTECTED_PRS=()
 REVIEWED_ROUTINE_PROTECTED_PRS=()
 DRY_RUN=0
@@ -117,6 +124,9 @@ STATUS_JSON_FILE=""
 TRANSACTION_ARMED=0
 TRANSACTION_EXPECTED_COMMIT=""
 TRANSACTION_LAUNCH_RECEIPT_DIR=""
+TRANSACTION_STAGED_APP=""
+TRANSACTION_ROLLBACK_APP=""
+TRANSACTION_CANONICAL_UNCOMMITTED=0
 CONFIRMED_PR_MERGE_COMMIT=""
 
 assert_source_checkout_safe() {
@@ -132,6 +142,10 @@ assert_source_checkout_safe() {
   /usr/bin/git -C "${CANONICAL_MAIN_REPO}" diff --quiet HEAD -- \
     scripts/ship-jarvis-hotfix.sh \
     scripts/lib/ship-jarvis-hotfix-guarded-entry.sh \
+    scripts/lib/jarvis-hotfix-prepared-artifact.mjs \
+    scripts/package-mac-app.sh \
+    scripts/codesign-mac-app.sh \
+    scripts/verify-consumer-mac-app.sh \
     scripts/lib/heavy-local-slot.sh \
     scripts/lib/shared-resource-lock.sh \
     scripts/with-shared-resource-lock.pl \
@@ -161,12 +175,18 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage: scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy <exact-pr|current-green-main> [--reviewed-routine-protected-pr <number>]... [--approved-protected-pr <number>]... [--dry-run]
+Usage: scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy <exact-pr|current-green-main> [--prepare-output <unique-dir> | --apply-prepared <receipt.json>] [--reviewed-routine-protected-pr <number>]... [--approved-protected-pr <number>]... [--dry-run]
 
 Ship an already-merged main-targeted PR to this Mac's default Jarvis as an
 explicit app-support break-glass hotfix. The wrapper builds and launches only
 dist/Jarvis.app; it never replaces /Applications/Jarvis.app and never claims a
 public release or managed-bundle steady state.
+
+The default remains the proven one-shot rollback path. --prepare-output builds
+an unsigned exact-HEAD candidate in an isolated clone without shared resource
+locks. --apply-prepared fail-fast acquires both existing locks, validates the
+immutable receipt, copies/signs/verifies the exact candidate, then runs the
+unchanged seed/restart/protection/final-proof transaction.
 
 The main policy must match the delivery authority recorded when the task began:
   exact-pr            Ship only when current main is the requested PR merge.
@@ -191,6 +211,18 @@ parse_args() {
         ;;
       --main-policy)
         MAIN_POLICY="${2:-}"
+        shift 2
+        ;;
+      --prepare-output)
+        [[ "${HOTFIX_PHASE}" == "one-shot" ]] || die "choose exactly one hotfix phase"
+        HOTFIX_PHASE="prepare"
+        PREPARE_OUTPUT="${2:-}"
+        shift 2
+        ;;
+      --apply-prepared)
+        [[ "${HOTFIX_PHASE}" == "one-shot" ]] || die "choose exactly one hotfix phase"
+        HOTFIX_PHASE="apply"
+        PREPARED_RECEIPT="${2:-}"
         shift 2
         ;;
       --approved-protected-pr)
@@ -254,6 +286,15 @@ parse_args() {
     exact-pr | current-green-main) ;;
     *) die "--main-policy must be exact-pr or current-green-main and match task-start authority" ;;
   esac
+  if [[ "${HOTFIX_PHASE}" == "prepare" ]]; then
+    [[ "${PREPARE_OUTPUT}" == /* ]] || die "--prepare-output must be an absolute path"
+    [[ ! -e "${PREPARE_OUTPUT}" ]] || die "prepare output already exists: ${PREPARE_OUTPUT}"
+  elif [[ "${HOTFIX_PHASE}" == "apply" ]]; then
+    [[ "${PREPARED_RECEIPT}" == /* ]] || die "--apply-prepared must name an absolute receipt path"
+  fi
+  if (( DRY_RUN == 1 )) && [[ "${HOTFIX_PHASE}" != "one-shot" ]]; then
+    die "--dry-run is supported only by the default one-shot rollback path"
+  fi
   if [[ "${MAIN_POLICY}" != "current-green-main" ]] && \
     (( ${#APPROVED_PROTECTED_PRS[@]} > 0 || ${#REVIEWED_ROUTINE_PROTECTED_PRS[@]} > 0 )); then
     die "protected-drift receipts are valid only with task-start current-green-main authority"
@@ -287,6 +328,8 @@ require_preflight_tools() {
   require_command "${PLISTBUDDY_BIN}"
   [[ -x "${PR_REQUIRED_SCRIPT}" ]] || die "required-check helper is missing or not executable: ${PR_REQUIRED_SCRIPT}"
   [[ -x "${PACKAGE_SCRIPT}" ]] || die "package helper is missing or not executable: ${PACKAGE_SCRIPT}"
+  [[ -x "${CODESIGN_SCRIPT}" ]] || die "codesign helper is missing or not executable: ${CODESIGN_SCRIPT}"
+  [[ -x "${VERIFY_APP_SCRIPT}" ]] || die "app verifier is missing or not executable: ${VERIFY_APP_SCRIPT}"
   [[ -x "${OPEN_APP_SCRIPT}" ]] || die "app-open helper is missing or not executable: ${OPEN_APP_SCRIPT}"
   [[ -x "${PROTECT_SCRIPT}" ]] || die "runtime-protection helper is missing or not executable: ${PROTECT_SCRIPT}"
   [[ -x "${PROVE_RUNTIME_SCRIPT}" ]] || die "runtime-proof helper is missing or not executable: ${PROVE_RUNTIME_SCRIPT}"
@@ -772,6 +815,223 @@ select_hotfix_build() {
   fi
 }
 
+hotfix_input_digest() {
+  local root="$1"
+  shift
+  (
+    cd "${root}"
+    local input=""
+    for input in "$@"; do
+      [[ -f "${input}" ]] || die "prepared hotfix input is missing: ${input}"
+      printf 'FILE %s\n' "${input}"
+      "${SHASUM_BIN}" -a 256 "${input}"
+    done
+  ) | "${SHASUM_BIN}" -a 256 | /usr/bin/awk '{print $1}'
+}
+
+select_hotfix_signing_identity_line() {
+  local team_id="$1"
+  /usr/bin/awk -v team="${team_id}" '
+    /Developer ID Application/ && index($0, "(" team ")") { print; exit }
+  '
+}
+
+select_hotfix_signing_receipt() {
+  local identity_line=""
+  local identity_hash=""
+  local identity_name=""
+  local team_id=""
+  team_id="$(/usr/bin/codesign -dv --verbose=4 "${INSTALLED_JARVIS_APP_PATH}" 2>&1 | \
+    /usr/bin/awk -F= '/^TeamIdentifier=/{print $2; exit}')"
+  [[ "${team_id}" =~ ^[A-Z0-9]{10}$ ]] || die "installed Jarvis Team ID is missing or invalid"
+  identity_line="$(/usr/bin/security find-identity -p codesigning -v 2>/dev/null | \
+    select_hotfix_signing_identity_line "${team_id}")"
+  [[ -n "${identity_line}" ]] || \
+    die "no Developer ID Application identity matches installed Jarvis Team ID ${team_id}"
+  identity_hash="$(printf '%s\n' "${identity_line}" | /usr/bin/sed -nE 's/^[[:space:]]*[0-9]+\) ([0-9A-F]+) .*/\1/p')"
+  identity_name="$(printf '%s\n' "${identity_line}" | /usr/bin/sed -nE 's/^[^"]*"([^"]+)".*/\1/p')"
+  [[ "${identity_hash}" =~ ^[0-9A-F]{40}$ ]] || die "selected signing certificate hash is invalid"
+  printf '%s\t%s\t%s\n' "${identity_hash}" "${identity_name}" "${team_id}"
+}
+
+resolve_prepared_source_commit() {
+  local json=""
+  local merge_sha=""
+  local remote_head=""
+  local local_head=""
+  json="$(pr_json)"
+  assert_pr_can_ship "${json}"
+  # This resolver is consumed through command substitution. Keep confirmation
+  # diagnostics visible on stderr so stdout remains the exact commit only.
+  confirm_merged_pr "${json}" >&2
+  merge_sha="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.mergeCommit.oid // empty')"
+  valid_commit "${merge_sha}" || die "merged PR is missing a valid mergeCommit.oid"
+  remote_head="$(dry_run_reviewed_remote_main "${merge_sha}")"
+  local_head="$(${GIT_BIN} -C "${MAIN_REPO}" rev-parse HEAD)"
+  commit_matches "${remote_head}" "${local_head}" || \
+    die "sacred main is not at reviewed remote main; run git pull --ff-only before prepare/apply"
+  printf '%s\n' "${local_head}"
+}
+
+resolve_prepare_output_root() {
+  local output_parent=""
+  local output_root=""
+  local main_root=""
+  output_parent="$(cd "$(dirname "${PREPARE_OUTPUT}")" && pwd -P)" || \
+    die "prepare output parent does not exist: $(dirname "${PREPARE_OUTPUT}")"
+  output_root="${output_parent}/$(basename "${PREPARE_OUTPUT}")"
+  main_root="$(cd "${MAIN_REPO}" && pwd -P)"
+  case "${output_root}" in
+    "${main_root}" | "${main_root}"/*)
+      die "prepare output must be outside sacred main: ${output_root}"
+      ;;
+  esac
+  printf '%s\n' "${output_root}"
+}
+
+prepare_hotfix_artifact() {
+  local expected_commit="$1"
+  local app_build="$2"
+  local app_version="$3"
+  local host_arch="$4"
+  local output_root=""
+  output_root="$(resolve_prepare_output_root)"
+  local workspace="${output_root}/workspace"
+  # Keep package outputs beside the detached clone. Creating them inside the
+  # clone before package entry would invalidate the clean-checkout proof that
+  # authorizes lock-free JS/UI/dependency writes in that clone.
+  local package_root="${output_root}/package"
+  local prepared_app="${package_root}/Jarvis.app"
+  local artifact_root="${output_root}/artifact"
+  local artifact_app="${artifact_root}/Jarvis.app"
+  local prepare_tmp="${output_root}/tmp"
+  local metadata_file="${output_root}/metadata.json"
+  local receipt_file="${output_root}/receipt.json"
+  local helper="${MAIN_REPO}/scripts/lib/jarvis-hotfix-prepared-artifact.mjs"
+  local signing_receipt=""
+  local signing_hash=""
+  local signing_name=""
+  local signing_team=""
+  local lockfile_digest=""
+  local packaging_digest=""
+  local node_version=""
+  local runtime_node=""
+  local runtime_uv=""
+  local runtime_key=""
+  local receipt_node=""
+  local created_at=""
+  local expires_at=""
+  local started_epoch=""
+  local finished_epoch=""
+  local free_before=""
+  local free_after=""
+  local cache_result="miss"
+
+  [[ ! -e "${output_root}" ]] || die "prepare output already exists: ${output_root}"
+  /bin/mkdir -p "${output_root}" "${artifact_root}" "${prepare_tmp}"
+  /bin/chmod 700 "${output_root}" "${artifact_root}" "${prepare_tmp}"
+  started_epoch="$(/bin/date +%s)"
+  free_before="$(/bin/df -k "${output_root}" | /usr/bin/awk 'NR == 2 {print $4}')"
+  log "prepare_locks gateway-main=false release-jarvis=false output=${output_root}"
+
+  "${GIT_BIN}" clone --local --no-hardlinks --no-checkout "${MAIN_REPO}" "${workspace}"
+  "${GIT_BIN}" -C "${workspace}" checkout --detach "${expected_commit}"
+  [[ -z "$("${GIT_BIN}" -C "${workspace}" status --porcelain)" ]] || \
+    die "isolated prepare clone is unexpectedly dirty"
+
+  jarvis_release_disk_preflight_operation main-jarvis-cold-package \
+    "$(jarvis_release_disk_post_write_floor_kib)" \
+    "$(jarvis_release_disk_cold_package_reserve_kib)" \
+    hotfix-output "${artifact_app}" \
+    package-staging "${prepare_tmp}"
+  /bin/mkdir -p "${package_root}"
+  (
+    cd "${workspace}"
+    /usr/bin/env -i \
+      PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
+      HOME=/Users/user \
+      TMPDIR="${prepare_tmp}" \
+      APP_NAME=Jarvis \
+      APP_BUNDLE_NAME=Jarvis.app \
+      BUNDLE_ID=ai.openclaw.consumer.mac.debug \
+      APP_VARIANT=consumer \
+      URL_SCHEME=openclaw-consumer \
+      APP_BUILD="${app_build}" \
+      APP_VERSION="${app_version}" \
+      BUILD_ARCHS="${host_arch}" \
+      BUILD_CONFIG=release \
+      ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1 \
+      ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE=1 \
+      SKIP_NOTARIZE=1 \
+      SKIP_DSYM=1 \
+      SKIP_PNPM_INSTALL=0 \
+      SKIP_TSC=0 \
+      SKIP_UI_BUILD=0 \
+      OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED=1 \
+      OPENCLAW_CONSUMER_FAST_PACKAGING=1 \
+      OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE=1 \
+      OPENCLAW_CONSUMER_RUNTIME_CACHE_ROOT="${MAIN_REPO}/.cache/consumer-runtime-packages" \
+      OPENCLAW_CONSUMER_RUNTIME_CACHE_READ_ONLY=1 \
+      OPENCLAW_PACKAGE_UNSIGNED_PREPARE=1 \
+      OPENCLAW_PACKAGE_PREPARE_ROOT="${package_root}" \
+      OPENCLAW_PACKAGE_APP_ROOT="${prepared_app}" \
+      OPENCLAW_PACKAGE_BUILD_ROOT="${package_root}/swift-build" \
+      PACKAGE_TIMING=1 \
+      /bin/bash "${workspace}/scripts/package-mac-app.sh"
+  ) 2>&1 | /usr/bin/tee "${output_root}/prepare.log"
+
+  [[ -d "${prepared_app}" ]] || die "unsigned prepare did not produce ${prepared_app}"
+  /bin/mv "${prepared_app}" "${artifact_app}"
+  /bin/rm -rf "${workspace}" "${package_root}" "${prepare_tmp}"
+  # Use the same pinned Node resolver as packaging for both the receipt value
+  # and the receipt writer. Ambient shell Node is not release authority.
+  source "${MAIN_REPO}/scripts/lib/validated-node.sh"
+  node_version="$(openclaw_validated_node_version "${MAIN_REPO}")"
+  openclaw_use_validated_node "${MAIN_REPO}" >/dev/null
+  receipt_node="${OPENCLAW_NODE_BIN}"
+  runtime_node="$("${JQ_BIN}" -r '.nodeVersion // empty' "${artifact_app}/Contents/Resources/OpenClawRuntime/manifest.json")"
+  runtime_uv="$("${JQ_BIN}" -r '.uvVersion // empty' "${artifact_app}/Contents/Resources/OpenClawRuntime/manifest.json")"
+  runtime_key="$("${JQ_BIN}" -r '.runtimeInputKey // empty' "${artifact_app}/Contents/Resources/OpenClawRuntime/manifest.json")"
+  lockfile_digest="$(hotfix_input_digest "${MAIN_REPO}" pnpm-lock.yaml apps/macos/Package.resolved)"
+  packaging_digest="$(hotfix_input_digest "${MAIN_REPO}" scripts/package-mac-app.sh scripts/codesign-mac-app.sh scripts/verify-consumer-mac-app.sh scripts/ship-jarvis-hotfix.sh scripts/lib/jarvis-hotfix-prepared-artifact.mjs)"
+  signing_receipt="$(select_hotfix_signing_receipt)"
+  IFS=$'\t' read -r signing_hash signing_name signing_team <<<"${signing_receipt}"
+  created_at="$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)"
+  expires_at="$(/bin/date -u -v+6H +%Y-%m-%dT%H:%M:%SZ)"
+  finished_epoch="$(/bin/date +%s)"
+  free_after="$(/bin/df -k "${output_root}" | /usr/bin/awk 'NR == 2 {print $4}')"
+  if /usr/bin/grep -Fq 'Reusing cached bundled consumer runtime' "${output_root}/prepare.log"; then
+    cache_result="hit"
+  fi
+
+  "${JQ_BIN}" -n \
+    --argjson pr "${PR_NUMBER}" --arg policy "${MAIN_POLICY}" \
+    --arg reviewed "${REVIEWED_ROUTINE_PROTECTED_PRS[*]:-}" \
+    --arg approved "${APPROVED_PROTECTED_PRS[*]:-}" \
+    --arg commit "${expected_commit}" --arg lockfiles "${lockfile_digest}" \
+    --arg packaging "${packaging_digest}" --arg node "${node_version}" \
+    --arg arch "${host_arch}" --arg runtimeNode "${runtime_node}" \
+    --arg runtimeUv "${runtime_uv}" --arg runtimeKey "${runtime_key}" \
+    --arg version "${app_version}" --arg build "${app_build}" \
+    --arg certSha1 "${signing_hash}" --arg certName "${signing_name}" \
+    --arg teamId "${signing_team}" --arg createdAt "${created_at}" \
+    --arg expiresAt "${expires_at}" --arg cache "${cache_result}" \
+    --argjson duration "$((finished_epoch - started_epoch))" \
+    --argjson diskDelta "$((free_before - free_after))" \
+    '{authority:{pr:$pr,mainPolicy:$policy,reviewedRoutineProtectedPrs:$reviewed,approvedProtectedPrs:$approved},source:{gitCommit:$commit},inputs:{lockfilesSha256:$lockfiles,packagingScriptsSha256:$packaging},toolchain:{nodeVersion:$node,hostArchitecture:$arch,runtimeNodeVersion:$runtimeNode,runtimeUvVersion:$runtimeUv,runtimeInputKey:$runtimeKey},app:{version:$version,build:$build},signing:{certificateSha1:$certSha1,certificateCommonName:$certName,teamId:$teamId,requirement:"Developer ID Application with hardened runtime and exact Team ID"},locks:{gatewayMain:false,releaseJarvis:false},metrics:{prepareSeconds:$duration,runtimeCache:$cache,diskDeltaKiB:$diskDelta},createdAt:$createdAt,expiresAt:$expiresAt}' \
+    >"${metadata_file}"
+
+  /bin/chmod -R a-w "${artifact_app}"
+  /usr/bin/chflags -R uchg "${artifact_app}"
+  "${receipt_node}" "${helper}" create "${artifact_app}" "${metadata_file}" "${receipt_file}" >/dev/null
+  /bin/rm -f "${metadata_file}"
+  /bin/chmod a-w "${receipt_file}" "${output_root}/prepare.log"
+  /usr/bin/chflags uchg "${receipt_file}" "${output_root}/prepare.log"
+  /bin/chmod a-w "${artifact_root}" "${output_root}"
+  /usr/bin/chflags uchg "${artifact_root}" "${output_root}"
+  log "prepare_complete receipt=${receipt_file} commit=${expected_commit} artifact_sha256=$("${JQ_BIN}" -r '.artifact.treeSha256' "${receipt_file}") duration_seconds=$((finished_epoch - started_epoch)) runtime_cache=${cache_result} disk_delta_kib=$((free_before - free_after))"
+}
+
 package_hotfix() {
   local app_build="$1"
   local app_version="$2"
@@ -854,9 +1114,10 @@ verify_built_hotfix() {
   local expected_commit="$1"
   local expected_build="$2"
   local expected_version="$3"
-  local app_manifest="${JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/manifest.json"
-  local runtime_package_json="${JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/openclaw/package.json"
-  local info_plist="${JARVIS_APP_PATH}/Contents/Info.plist"
+  local app_path="${4:-${JARVIS_APP_PATH}}"
+  local app_manifest="${app_path}/Contents/Resources/OpenClawRuntime/manifest.json"
+  local runtime_package_json="${app_path}/Contents/Resources/OpenClawRuntime/openclaw/package.json"
+  local info_plist="${app_path}/Contents/Info.plist"
   local app_commit=""
   local app_build=""
   local app_version=""
@@ -879,6 +1140,137 @@ verify_built_hotfix() {
     die "built Jarvis CFBundleShortVersionString ${app_version:-missing} does not preserve installed ${expected_version}"
   [[ "${runtime_package_version}" == "${expected_version}" ]] || \
     die "built runtime package version ${runtime_package_version:-missing} does not preserve installed ${expected_version}"
+}
+
+validate_prepared_hotfix() {
+  local expected_commit="$1"
+  local expected_build="$2"
+  local expected_version="$3"
+  local host_arch="$4"
+  local receipt_file="${PREPARED_RECEIPT}"
+  local output_root=""
+  local artifact_app=""
+  local helper="${MAIN_REPO}/scripts/lib/jarvis-hotfix-prepared-artifact.mjs"
+  local receipt_node=""
+  local verified=""
+  local lockfile_digest=""
+  local packaging_digest=""
+  local signing_receipt=""
+  local signing_hash=""
+  local signing_name=""
+  local signing_team=""
+
+  [[ -f "${receipt_file}" && ! -L "${receipt_file}" ]] || \
+    die "prepared receipt must be a regular non-symlink file: ${receipt_file}"
+  output_root="$(cd "$(dirname "${receipt_file}")" && pwd -P)"
+  receipt_file="${output_root}/$(basename "${receipt_file}")"
+  [[ "${receipt_file}" == "${output_root}/receipt.json" ]] || die "prepared receipt must be the output root receipt.json"
+  artifact_app="${output_root}/artifact/Jarvis.app"
+  [[ -d "${artifact_app}" && ! -L "${artifact_app}" ]] || \
+    die "prepared artifact must be a real directory: ${artifact_app}"
+  [[ "$(/usr/bin/stat -f '%Sf' "${output_root}")" == *uchg* ]] || die "prepared output root is not immutable"
+  [[ "$(/usr/bin/stat -f '%Sf' "${receipt_file}")" == *uchg* ]] || die "prepared receipt is not immutable"
+  if /usr/bin/find "${artifact_app}" ! -flags uchg -print -quit | /usr/bin/grep -q .; then
+    die "prepared artifact contains a non-immutable entry"
+  fi
+
+  source "${MAIN_REPO}/scripts/lib/validated-node.sh"
+  openclaw_use_validated_node "${MAIN_REPO}" >/dev/null
+  receipt_node="${OPENCLAW_NODE_BIN}"
+  verified="$("${receipt_node}" "${helper}" verify "${artifact_app}" "${receipt_file}")"
+  lockfile_digest="$(hotfix_input_digest "${MAIN_REPO}" pnpm-lock.yaml apps/macos/Package.resolved)"
+  packaging_digest="$(hotfix_input_digest "${MAIN_REPO}" scripts/package-mac-app.sh scripts/codesign-mac-app.sh scripts/verify-consumer-mac-app.sh scripts/ship-jarvis-hotfix.sh scripts/lib/jarvis-hotfix-prepared-artifact.mjs)"
+  signing_receipt="$(select_hotfix_signing_receipt)"
+  IFS=$'\t' read -r signing_hash signing_name signing_team <<<"${signing_receipt}"
+
+  printf '%s\n' "${verified}" | "${JQ_BIN}" -e \
+    --argjson pr "${PR_NUMBER}" --arg policy "${MAIN_POLICY}" \
+    --arg reviewed "${REVIEWED_ROUTINE_PROTECTED_PRS[*]:-}" \
+    --arg approved "${APPROVED_PROTECTED_PRS[*]:-}" \
+    --arg commit "${expected_commit}" --arg lockfiles "${lockfile_digest}" \
+    --arg packaging "${packaging_digest}" --arg node "$(openclaw_validated_node_version "${MAIN_REPO}")" \
+    --arg arch "${host_arch}" \
+    --arg runtimeNode "$("${JQ_BIN}" -r '.nodeVersion // empty' "${artifact_app}/Contents/Resources/OpenClawRuntime/manifest.json")" \
+    --arg runtimeUv "$("${JQ_BIN}" -r '.uvVersion // empty' "${artifact_app}/Contents/Resources/OpenClawRuntime/manifest.json")" \
+    --arg runtimeKey "$("${JQ_BIN}" -r '.runtimeInputKey // empty' "${artifact_app}/Contents/Resources/OpenClawRuntime/manifest.json")" \
+    --arg version "${expected_version}" --arg build "${expected_build}" \
+    --arg certSha1 "${signing_hash}" --arg certName "${signing_name}" --arg teamId "${signing_team}" '
+      .authority.pr == $pr and .authority.mainPolicy == $policy and
+      .authority.reviewedRoutineProtectedPrs == $reviewed and
+      .authority.approvedProtectedPrs == $approved and
+      .source.gitCommit == $commit and
+      .inputs.lockfilesSha256 == $lockfiles and
+      .inputs.packagingScriptsSha256 == $packaging and
+      .toolchain.nodeVersion == $node and .toolchain.hostArchitecture == $arch and
+      .toolchain.runtimeNodeVersion == $runtimeNode and
+      .toolchain.runtimeUvVersion == $runtimeUv and .toolchain.runtimeInputKey == $runtimeKey and
+      .app.version == $version and .app.build == $build and
+      .signing.certificateSha1 == $certSha1 and
+      .signing.certificateCommonName == $certName and .signing.teamId == $teamId and
+      .signing.requirement == "Developer ID Application with hardened runtime and exact Team ID" and
+      .locks.gatewayMain == false and .locks.releaseJarvis == false
+    ' >/dev/null || die "prepared receipt no longer matches exact source, authority, toolchain, app, or signing inputs"
+
+  verify_built_hotfix "${expected_commit}" "${expected_build}" "${expected_version}" "${artifact_app}"
+  printf '%s\t%s\t%s\t%s\n' \
+    "${artifact_app}" \
+    "${signing_hash}" \
+    "${signing_name}" \
+    "$(printf '%s\n' "${verified}" | "${JQ_BIN}" -r '.receiptDigest')"
+}
+
+place_sign_and_verify_prepared_hotfix() {
+  local artifact_app="$1"
+  local signing_hash="$2"
+  local signing_name="$3"
+  local expected_commit="$4"
+  local expected_build="$5"
+  local expected_version="$6"
+  local staged_app="${MAIN_REPO}/dist/.Jarvis.hotfix-apply.$$.app"
+  local expected_team=""
+  local actual_team=""
+  local actual_authority=""
+  local rollback_app="${MAIN_REPO}/dist/.Jarvis.hotfix-rollback.$$.app"
+
+  [[ ! -e "${staged_app}" && ! -e "${rollback_app}" ]] || \
+    die "prepared apply staging or rollback path already exists"
+  TRANSACTION_STAGED_APP="${staged_app}"
+  /bin/mkdir -p "${MAIN_REPO}/dist"
+  /usr/bin/ditto "${artifact_app}" "${staged_app}"
+  /usr/bin/chflags -R nouchg "${staged_app}"
+  /bin/chmod -R u+w "${staged_app}"
+  verify_built_hotfix "${expected_commit}" "${expected_build}" "${expected_version}" "${staged_app}"
+  # Bind signing to the exact receipt fingerprint. A display name alone can
+  # match more than one valid certificate in the host keychain.
+  SIGN_IDENTITY="${signing_hash}" CODESIGN_TIMESTAMP=on PACKAGE_TIMING=1 \
+    /bin/bash "${CODESIGN_SCRIPT}" "${staged_app}"
+  /bin/bash "${VERIFY_APP_SCRIPT}" "${staged_app}"
+  expected_team="$(printf '%s\n' "${signing_name}" | /usr/bin/sed -nE 's/.*\(([A-Z0-9]{10})\)$/\1/p')"
+  actual_team="$(/usr/bin/codesign -dv --verbose=4 "${staged_app}" 2>&1 | /usr/bin/awk -F= '/^TeamIdentifier=/{print $2; exit}')"
+  actual_authority="$(/usr/bin/codesign -dv --verbose=4 "${staged_app}" 2>&1 | /usr/bin/awk -F= '/^Authority=/{print $2; exit}')"
+  [[ -n "${expected_team}" && "${actual_team}" == "${expected_team}" ]] || \
+    die "signed Jarvis Team ID ${actual_team:-missing} does not match prepared requirement ${expected_team:-missing}"
+  [[ "${actual_authority}" == "${signing_name}" ]] || \
+    die "signed Jarvis authority ${actual_authority:-missing} does not match prepared certificate ${signing_name}"
+  verify_built_hotfix "${expected_commit}" "${expected_build}" "${expected_version}" "${staged_app}"
+
+  # Rename the old and new bundles on the same filesystem. The EXIT guard keeps
+  # the rollback path authoritative until the replacement passes final proof.
+  if [[ -e "${JARVIS_APP_PATH}" ]]; then
+    TRANSACTION_ROLLBACK_APP="${rollback_app}"
+    /bin/mv "${JARVIS_APP_PATH}" "${rollback_app}"
+  fi
+  TRANSACTION_CANONICAL_UNCOMMITTED=1
+  /bin/mv "${staged_app}" "${JARVIS_APP_PATH}"
+  verify_built_hotfix "${expected_commit}" "${expected_build}" "${expected_version}"
+  TRANSACTION_CANONICAL_UNCOMMITTED=0
+  TRANSACTION_STAGED_APP=""
+  TRANSACTION_ROLLBACK_APP=""
+  if [[ -e "${rollback_app}" ]]; then
+    /usr/bin/chflags -R nouchg "${rollback_app}" 2>/dev/null || true
+    /bin/chmod -R u+w "${rollback_app}" 2>/dev/null || true
+    /bin/rm -rf "${rollback_app}"
+  fi
 }
 
 wait_for_seeded_runtime() {
@@ -939,6 +1331,31 @@ cleanup_launch_receipt() {
   TRANSACTION_LAUNCH_RECEIPT_DIR=""
 }
 
+cleanup_prepared_apply_artifacts() {
+  # A rollback path means canonical replacement was not committed. Restore the
+  # previous verified app with same-filesystem renames before deleting the
+  # uncommitted candidate from its original staging path.
+  if [[ -n "${TRANSACTION_ROLLBACK_APP}" && -e "${TRANSACTION_ROLLBACK_APP}" ]]; then
+    if [[ -e "${JARVIS_APP_PATH}" ]]; then
+      [[ -n "${TRANSACTION_STAGED_APP}" && ! -e "${TRANSACTION_STAGED_APP}" ]] && \
+        /bin/mv "${JARVIS_APP_PATH}" "${TRANSACTION_STAGED_APP}"
+    fi
+    /bin/mv "${TRANSACTION_ROLLBACK_APP}" "${JARVIS_APP_PATH}"
+  elif (( TRANSACTION_CANONICAL_UNCOMMITTED == 1 )) && [[ -e "${JARVIS_APP_PATH}" ]]; then
+    [[ -n "${TRANSACTION_STAGED_APP}" && ! -e "${TRANSACTION_STAGED_APP}" ]] && \
+      /bin/mv "${JARVIS_APP_PATH}" "${TRANSACTION_STAGED_APP}"
+  fi
+  TRANSACTION_ROLLBACK_APP=""
+  TRANSACTION_CANONICAL_UNCOMMITTED=0
+
+  if [[ -n "${TRANSACTION_STAGED_APP}" && -e "${TRANSACTION_STAGED_APP}" ]]; then
+    /usr/bin/chflags -R nouchg "${TRANSACTION_STAGED_APP}" 2>/dev/null || true
+    /bin/chmod -R u+w "${TRANSACTION_STAGED_APP}" 2>/dev/null || true
+    /bin/rm -rf "${TRANSACTION_STAGED_APP}"
+  fi
+  TRANSACTION_STAGED_APP=""
+}
+
 exit_after_transaction_cleanup() {
   local status="$1"
   # Lock release is deliberately last. Every seeded-runtime recovery and proof
@@ -955,6 +1372,7 @@ transaction_exit_guard() {
   # its old EXIT trap cannot bypass transaction recovery on proof failure.
   cleanup_status_files
   cleanup_launch_receipt
+  cleanup_prepared_apply_artifacts
   if (( original_status == 0 || TRANSACTION_ARMED != 1 )); then
     exit_after_transaction_cleanup "${original_status}"
   fi
@@ -1262,9 +1680,37 @@ prove_break_glass_runtime() {
 
 main() {
   parse_args "$@"
-  log "delivery_authority_policy=${MAIN_POLICY} requested_pr=${PR_NUMBER} reviewed_routine_protected_prs=${REVIEWED_ROUTINE_PROTECTED_PRS[*]:-none} approved_protected_prs=${APPROVED_PROTECTED_PRS[*]:-none}"
+  log "delivery_authority_policy=${MAIN_POLICY} requested_pr=${PR_NUMBER} phase=${HOTFIX_PHASE} reviewed_routine_protected_prs=${REVIEWED_ROUTINE_PROTECTED_PRS[*]:-none} approved_protected_prs=${APPROVED_PROTECTED_PRS[*]:-none}"
   assert_source_checkout_safe
   load_release_helpers
+  require_preflight_tools
+  assert_clean_sacred_main
+
+  local json=""
+  local pr_state=""
+  local expected_commit=""
+  local app_build=""
+  local app_version=""
+  local host_arch=""
+  local apply_result=""
+  local prepared_app=""
+  local signing_hash=""
+  local signing_name=""
+  local prepared_receipt_digest=""
+  local apply_started_epoch=""
+
+  if [[ "${HOTFIX_PHASE}" == "prepare" ]]; then
+    expected_commit="$(resolve_prepared_source_commit)"
+    assert_installed_app_needs_hotfix "${expected_commit}"
+    app_version="$(select_hotfix_version)"
+    app_build="$(select_hotfix_build "${app_version}")"
+    host_arch="$(${UNAME_BIN} -m)"
+    [[ "${host_arch}" == "arm64" || "${host_arch}" == "x86_64" ]] || die "unsupported host architecture: ${host_arch}"
+    log "selected APP_VERSION=${app_version} APP_BUILD=${app_build} for lock-free exact-HEAD prepare"
+    prepare_hotfix_artifact "${expected_commit}" "${app_build}" "${app_version}" "${host_arch}"
+    return 0
+  fi
+
   trap transaction_exit_guard EXIT
   if (( DRY_RUN != 1 )); then
     # The shared gateway lock wraps the live hotfix transaction and precedes
@@ -1276,15 +1722,7 @@ main() {
       "$ROOT_DIR/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" \
       "$@"
   fi
-  require_preflight_tools
-  assert_clean_sacred_main
-
-  local json=""
-  local pr_state=""
-  local expected_commit=""
-  local app_build=""
-  local app_version=""
-  local host_arch=""
+  apply_started_epoch="$(/bin/date +%s)"
   json="$(pr_json)"
   assert_pr_can_ship "${json}"
   pr_state="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state')"
@@ -1301,6 +1739,35 @@ main() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
   fi
+
+  if [[ "${HOTFIX_PHASE}" == "apply" ]]; then
+    expected_commit="$(resolve_prepared_source_commit)"
+    assert_installed_app_needs_hotfix "${expected_commit}"
+    app_version="$(select_hotfix_version)"
+    app_build="$(select_hotfix_build "${app_version}")"
+    host_arch="$(${UNAME_BIN} -m)"
+    [[ "${host_arch}" == "arm64" || "${host_arch}" == "x86_64" ]] || die "unsupported host architecture: ${host_arch}"
+    apply_result="$(validate_prepared_hotfix "${expected_commit}" "${app_build}" "${app_version}" "${host_arch}")"
+    IFS=$'\t' read -r prepared_app signing_hash signing_name prepared_receipt_digest <<<"${apply_result}"
+    [[ -n "${prepared_app}" && "${signing_hash}" =~ ^[0-9A-Fa-f]{40}$ && -n "${signing_name}" && "${prepared_receipt_digest}" =~ ^[0-9a-f]{64}$ ]] || \
+      die "prepared validation omitted exact artifact or signing identity"
+    log "apply_locks gateway-main=true release-jarvis=true receipt_digest=${prepared_receipt_digest}"
+    place_sign_and_verify_prepared_hotfix "${prepared_app}" "${signing_hash}" "${signing_name}" \
+      "${expected_commit}" "${app_build}" "${app_version}"
+    launch_seed_and_restart "${expected_commit}" "${app_build}" "${app_version}"
+    protect_runtime "${expected_commit}"
+    prove_break_glass_runtime "${expected_commit}" "${app_version}"
+    "${JQ_BIN}" -n \
+      --arg receiptDigest "${prepared_receipt_digest}" --arg commit "${expected_commit}" \
+      --arg build "${app_build}" --arg version "${app_version}" \
+      --argjson protectedSeconds "$(( $(/bin/date +%s) - apply_started_epoch ))" \
+      '{schema:1,phase:"apply",receiptDigest:$receiptDigest,gitCommit:$commit,appVersion:$version,appBuild:$build,locks:{gatewayMain:true,releaseJarvis:true},protectedSeconds:$protectedSeconds,status:"complete"}' \
+      >"${MAIN_REPO}/dist/jarvis-hotfix-apply-receipt.json"
+    log "apply_complete receipt=${MAIN_REPO}/dist/jarvis-hotfix-apply-receipt.json protected_seconds=$(( $(/bin/date +%s) - apply_started_epoch ))"
+    TRANSACTION_ARMED=0
+    return 0
+  fi
+
   confirm_merged_pr "${json}"
   pull_and_confirm_merge
 
