@@ -427,8 +427,35 @@ const ToolExecSafeBinProfileSchema = z
   .object({
     minPositional: z.number().int().nonnegative().optional(),
     maxPositional: z.number().int().nonnegative().optional(),
+    // Keep the persisted config schema aligned with SafeBinProfileFixture.
+    // Config loading normalizes profiles into this full shape before a later
+    // config.patch validates the snapshot, so rejecting these fields makes an
+    // otherwise valid existing config impossible to update.
+    allowedFlags: z.array(z.string()).optional(),
     allowedValueFlags: z.array(z.string()).optional(),
     deniedFlags: z.array(z.string()).optional(),
+    commandFamilies: z.array(z.array(z.string())).optional(),
+    commandFamilyOptions: z
+      .array(
+        z
+          .object({
+            family: z.array(z.string()),
+            allowedFlags: z.array(z.string()).optional(),
+            allowedValueFlags: z.array(z.string()).optional(),
+            guardedValueFlags: z
+              .record(
+                z.string(),
+                z.enum(["forbid", "pathOrSafeLiteral", "safeLiteral", "stdinOnly"]),
+              )
+              .optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    allowUnknownOptions: z.boolean().optional(),
+    guardedValueFlags: z
+      .record(z.string(), z.enum(["forbid", "pathOrSafeLiteral", "safeLiteral", "stdinOnly"]))
+      .optional(),
   })
   .strict();
 

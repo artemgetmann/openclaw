@@ -644,6 +644,17 @@ function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBin
   const allowedValueFlags = normalizeFixtureFlags(
     (normalizedAllowedValueFlags ?? []).filter((flag) => !LEGACY_BOOLEAN_COMPAT_FLAGS.has(flag)),
   );
+  // Preserve family-specific restrictions when config IO normalizes a
+  // persisted profile before strict validation or runtime compilation.
+  const commandFamilyOptions = (fixture.commandFamilyOptions ?? [])
+    .map((entry) => ({
+      // A command family is an ordered token sequence, not a flag set.
+      family: normalizeCommandFamilies([entry.family])?.[0] ?? [],
+      allowedFlags: normalizeFixtureFlags(entry.allowedFlags),
+      allowedValueFlags: normalizeFixtureFlags(entry.allowedValueFlags),
+      guardedValueFlags: normalizeGuardedValueFlags(entry.guardedValueFlags),
+    }))
+    .filter((entry) => entry.family.length > 0);
   return {
     minPositional,
     maxPositional,
@@ -651,6 +662,7 @@ function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBin
     allowedValueFlags,
     deniedFlags: normalizeFixtureFlags(fixture.deniedFlags),
     commandFamilies: normalizeCommandFamilies(fixture.commandFamilies),
+    commandFamilyOptions: commandFamilyOptions.length > 0 ? commandFamilyOptions : undefined,
     allowUnknownOptions: fixture.allowUnknownOptions === true || undefined,
     guardedValueFlags: normalizeGuardedValueFlags(fixture.guardedValueFlags),
   };
