@@ -85,11 +85,19 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
   // small structured contract as the other formats; rich layout stays out of
   // this product feature until it has a separate user need and proof boundary.
   const writeLines = (text: string, size = 11, isBold = false, indent = 0) => {
+    const font = isBold ? bold : regular;
+    const supportedCharacters = new Set(font.getCharacterSet());
+    // pdf-lib's standard fonts use WinAnsi. Replace unsupported code points
+    // deterministically instead of aborting the entire PDF for multilingual
+    // input; a future rich-layout feature can justify bundling a large font.
+    const encodableText = Array.from(text, (character) =>
+      supportedCharacters.has(character.codePointAt(0) ?? 0) ? character : "?",
+    ).join("");
     const maxChars = Math.max(
       12,
       Math.floor((page.getWidth() - margin * 2 - indent) / (size * 0.55)),
     );
-    for (const line of wrapText(text, maxChars)) {
+    for (const line of wrapText(encodableText, maxChars)) {
       if (y < margin + size) {
         page = pdf.addPage(pageSize);
         y = page.getHeight() - margin;
@@ -98,7 +106,7 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
         x: margin + indent,
         y,
         size,
-        font: isBold ? bold : regular,
+        font,
         color: rgb(0.1, 0.1, 0.12),
       });
       y -= size * 1.35;
@@ -203,7 +211,12 @@ export async function createXlsx(specValue: unknown, outputPath: string): Promis
     const sheetSpec = asRecord(value);
     const worksheet = workbook.addWorksheet(asText(sheetSpec.name).trim() || `Sheet${index + 1}`);
     for (const row of asList(sheetSpec.rows)) {
-      worksheet.addRow(Array.isArray(row) ? row : [row]);
+      const cells = (Array.isArray(row) ? row : [row]).map((cell) => {
+        // Keep the established JSON contract: a leading '=' denotes a real
+        // spreadsheet formula, not display text.
+        return typeof cell === "string" && cell.startsWith("=") ? { formula: cell.slice(1) } : cell;
+      });
+      worksheet.addRow(cells);
     }
     const freeze = asText(sheetSpec.freeze).trim();
     if (freeze) {

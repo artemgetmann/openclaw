@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import ExcelJS from "exceljs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec.js";
 import {
@@ -92,6 +93,16 @@ describe("artifact commands", () => {
     expect((await fs.readFile(out)).subarray(0, 5).toString()).toBe("%PDF-");
   });
 
+  it("creates a PDF when text contains characters outside WinAnsi", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-unicode-test-"));
+    const input = path.join(dir, "brief.json");
+    const out = path.join(dir, "brief.pdf");
+    await fs.writeFile(input, JSON.stringify({ title: "Привет 世界 👋" }));
+
+    await expect(createPdfCommand(input, { out })).resolves.toMatchObject({ path: out });
+    expect((await fs.readFile(out)).subarray(0, 5).toString()).toBe("%PDF-");
+  });
+
   it.each([
     ["DOCX", "docx", createDocxCommand],
     ["XLSX", "xlsx", createXlsxCommand],
@@ -107,6 +118,18 @@ describe("artifact commands", () => {
       expect((await fs.readFile(out)).subarray(0, 2).toString()).toBe("PK");
     },
   );
+
+  it("preserves formula-prefixed XLSX cells as formulas", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-xlsx-formula-test-"));
+    const input = path.join(dir, "spec.json");
+    const out = path.join(dir, "output.xlsx");
+    await fs.writeFile(input, JSON.stringify({ rows: [[1], [2], ["=SUM(A1:A2)"]] }));
+
+    await createXlsxCommand(input, { out });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(out);
+    expect(workbook.getWorksheet(1)?.getCell("A3").value).toEqual({ formula: "SUM(A1:A2)" });
+  });
 
   it("rejects invalid PDF spec JSON before creating output", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-json-test-"));
