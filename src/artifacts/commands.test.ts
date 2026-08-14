@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import ExcelJS from "exceljs";
-import { PDFDocument } from "pdf-lib";
+import JSZip from "jszip";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec.js";
 import {
@@ -58,6 +57,17 @@ function okSpawnResult(): SpawnResult {
   };
 }
 
+async function pdfPageCount(filePath: string): Promise<number> {
+  // Parse the bytes with the repository's existing PDF reader. This proves the
+  // in-repo writer emits a valid cross-reference table, not just a PDF header.
+  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const document = await getDocument({
+    data: new Uint8Array(await fs.readFile(filePath)),
+    disableWorker: true,
+  }).promise;
+  return document.numPages;
+}
+
 describe("artifact commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -83,7 +93,7 @@ describe("artifact commands", () => {
     );
   });
 
-  it("creates PDF with the bundled Node dependency", async () => {
+  it("creates PDF with the bundled creator", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-test-"));
     const input = path.join(dir, "brief.json");
     const out = path.join(dir, "brief.pdf");
@@ -139,8 +149,7 @@ describe("artifact commands", () => {
     );
 
     await createPdfCommand(input, { out });
-    const pdf = await PDFDocument.load(await fs.readFile(out));
-    expect(pdf.getPageCount()).toBeGreaterThan(1);
+    expect(await pdfPageCount(out)).toBeGreaterThan(1);
   });
 
   it("paginates a headed PDF table without losing the header route", async () => {
@@ -162,8 +171,7 @@ describe("artifact commands", () => {
     );
 
     await createPdfCommand(input, { out });
-    const pdf = await PDFDocument.load(await fs.readFile(out));
-    expect(pdf.getPageCount()).toBeGreaterThan(1);
+    expect(await pdfPageCount(out)).toBeGreaterThan(1);
   });
 
   it("makes progress when a repeated PDF table header fills a page", async () => {
@@ -176,8 +184,7 @@ describe("artifact commands", () => {
     );
 
     await createPdfCommand(input, { out });
-    const pdf = await PDFDocument.load(await fs.readFile(out));
-    expect(pdf.getPageCount()).toBeGreaterThan(1);
+    expect(await pdfPageCount(out)).toBeGreaterThan(1);
   });
 
   it("wraps wide PDF glyphs using measured font widths", async () => {
@@ -187,8 +194,7 @@ describe("artifact commands", () => {
     await fs.writeFile(input, JSON.stringify({ paragraphs: ["W".repeat(4000)] }));
 
     await createPdfCommand(input, { out });
-    const pdf = await PDFDocument.load(await fs.readFile(out));
-    expect(pdf.getPageCount()).toBeGreaterThan(1);
+    expect(await pdfPageCount(out)).toBeGreaterThan(1);
   });
 
   it.each([
@@ -217,8 +223,7 @@ describe("artifact commands", () => {
     );
 
     await createPdfCommand(input, { out });
-    const pdf = await PDFDocument.load(await fs.readFile(out));
-    expect(pdf.getPageCount()).toBe(1);
+    expect(await pdfPageCount(out)).toBe(1);
   });
 
   it("does not paginate empty PDF sections", async () => {
@@ -233,23 +238,23 @@ describe("artifact commands", () => {
     );
 
     await createPdfCommand(input, { out });
-    const pdf = await PDFDocument.load(await fs.readFile(out));
-    expect(pdf.getPageCount()).toBe(1);
+    expect(await pdfPageCount(out)).toBe(1);
   });
 
   it.each([
-    ["DOCX", "docx", createDocxCommand],
-    ["XLSX", "xlsx", createXlsxCommand],
+    ["DOCX", "docx", createDocxCommand, "word/document.xml"],
+    ["XLSX", "xlsx", createXlsxCommand, "xl/workbook.xml"],
   ] as const)(
-    "creates editable %s with bundled Node dependencies",
-    async (_label, ext, command) => {
+    "creates editable %s with the bundled creator",
+    async (_label, ext, command, requiredEntry) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-create-${ext}-test-`));
       const input = path.join(dir, "spec.json");
       const out = path.join(dir, `output.${ext}`);
       await fs.writeFile(input, JSON.stringify({ title: "Artifact", rows: [["A", 1]] }));
       const result = await command(input, { out });
       expect(result.path).toBe(out);
-      expect((await fs.readFile(out)).subarray(0, 2).toString()).toBe("PK");
+      const archive = await JSZip.loadAsync(await fs.readFile(out));
+      expect(archive.file(requiredEntry)).not.toBeNull();
     },
   );
 
@@ -260,9 +265,9 @@ describe("artifact commands", () => {
     await fs.writeFile(input, JSON.stringify({ rows: [[1], [2], ["=SUM(A1:A2)"]] }));
 
     await createXlsxCommand(input, { out });
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(out);
-    expect(workbook.getWorksheet(1)?.getCell("A3").value).toEqual({ formula: "SUM(A1:A2)" });
+    const archive = await JSZip.loadAsync(await fs.readFile(out));
+    const worksheet = await archive.file("xl/worksheets/sheet1.xml")?.async("string");
+    expect(worksheet).toContain('<c r="A3"><f>SUM(A1:A2)</f></c>');
   });
 
   it("keeps duplicate XLSX sheet names unique", async () => {
@@ -275,9 +280,11 @@ describe("artifact commands", () => {
     );
 
     await createXlsxCommand(input, { out });
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(out);
-    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["Same", "Same1", "same2"]);
+    const archive = await JSZip.loadAsync(await fs.readFile(out));
+    const workbook = await archive.file("xl/workbook.xml")?.async("string");
+    expect(
+      Array.from(workbook?.matchAll(/<sheet name="([^"]+)"/g) ?? [], (match) => match[1]),
+    ).toEqual(["Same", "Same1", "same2"]);
   });
 
   it("rejects invalid PDF spec JSON before creating output", async () => {
@@ -353,7 +360,7 @@ describe("artifact commands", () => {
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("converted");
   });
 
-  it("creates editable PPTX with the bundled Node dependency", async () => {
+  it("creates editable PPTX with the bundled creator", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pptx-test-"));
     const input = path.join(dir, "deck.json");
     const out = path.join(dir, "deck.pptx");
@@ -361,7 +368,9 @@ describe("artifact commands", () => {
 
     const result = await createPptxCommand(input, { out });
     expect(result.path).toBe(out);
-    expect((await fs.readFile(out)).subarray(0, 2).toString()).toBe("PK");
+    const archive = await JSZip.loadAsync(await fs.readFile(out));
+    expect(archive.file("ppt/presentation.xml")).not.toBeNull();
+    expect(archive.file("ppt/slides/slide1.xml")).not.toBeNull();
   });
 
   it("preserves scalar PPTX slides as titles", async () => {
@@ -371,8 +380,9 @@ describe("artifact commands", () => {
     await fs.writeFile(input, JSON.stringify({ slides: ["Keep me"] }));
 
     await createPptxCommand(input, { out });
-    const archive = await fs.readFile(out);
-    expect(archive.subarray(0, 2).toString()).toBe("PK");
+    const archive = await JSZip.loadAsync(await fs.readFile(out));
+    const slide = await archive.file("ppt/slides/slide1.xml")?.async("string");
+    expect(slide).toContain("Keep me");
   });
 
   it("runs LibreOffice PPTX-to-PDF conversion", async () => {

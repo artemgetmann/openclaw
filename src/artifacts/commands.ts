@@ -67,7 +67,7 @@ export async function createPdfCommand(
   const spec = await readArtifactSpec(inputPath, "PDF");
   await ensureParentDir(outputPath);
   await createPdf(spec, outputPath);
-  return { ok: true, path: outputPath, details: { source: inputPath, engine: "pdf-lib" } };
+  return { ok: true, path: outputPath, details: { source: inputPath, engine: "jarvis-pdf" } };
 }
 
 async function readArtifactSpec(inputPath: string, label: string): Promise<unknown> {
@@ -101,14 +101,14 @@ export async function createDocxCommand(
   input: string,
   opts: { out?: string; timeoutMs?: number } = {},
 ) {
-  return await createBundledArtifactCommand(input, opts.out, "docx", createDocx, "docx");
+  return await createBundledArtifactCommand(input, opts.out, "docx", createDocx, "jarvis-ooxml");
 }
 
 export async function createXlsxCommand(
   input: string,
   opts: { out?: string; timeoutMs?: number } = {},
 ) {
-  return await createBundledArtifactCommand(input, opts.out, "xlsx", createXlsx, "exceljs");
+  return await createBundledArtifactCommand(input, opts.out, "xlsx", createXlsx, "jarvis-ooxml");
 }
 
 async function officeToPdfCommand(
@@ -171,7 +171,11 @@ export async function createPptxCommand(
   const spec = await readArtifactSpec(inputPath, "PPTX");
   await ensureParentDir(outputPath);
   await createPptx(spec, outputPath);
-  return { ok: true, path: outputPath, details: { source: inputPath, engine: "pptxgenjs" } };
+  return {
+    ok: true,
+    path: outputPath,
+    details: { source: inputPath, engine: "jarvis-ooxml" },
+  };
 }
 
 export async function docxToPdfCommand(
