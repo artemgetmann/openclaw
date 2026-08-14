@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import ExcelJS from "exceljs";
+import { PDFDocument } from "pdf-lib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec.js";
 import {
@@ -124,6 +125,22 @@ describe("artifact commands", () => {
     await createPdfCommand(input, { out });
     expect((await fs.readFile(out)).subarray(0, 5).toString()).toBe("%PDF-");
     expect((await fs.stat(out)).size).toBeGreaterThan(800);
+  });
+
+  it("splits a PDF table row that is taller than one page", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-tall-row-test-"));
+    const input = path.join(dir, "brief.json");
+    const out = path.join(dir, "brief.pdf");
+    await fs.writeFile(
+      input,
+      JSON.stringify({
+        sections: [{ table: { columns: ["Notes"], rows: [["long ".repeat(2500)]] } }],
+      }),
+    );
+
+    await createPdfCommand(input, { out });
+    const pdf = await PDFDocument.load(await fs.readFile(out));
+    expect(pdf.getPageCount()).toBeGreaterThan(1);
   });
 
   it.each([

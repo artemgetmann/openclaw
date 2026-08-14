@@ -148,34 +148,45 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
       const wrappedCells = Array.from({ length: columnCount }, (_, columnIndex) =>
         wrapText(row[columnIndex] ?? "", Math.max(4, Math.floor((columnWidth - 8) / 5))),
       );
-      const rowHeight = Math.max(...wrappedCells.map((lines) => lines.length)) * lineHeight + 8;
-      if (y - rowHeight < margin) {
-        page = pdf.addPage(pageSize);
-        y = page.getHeight() - margin;
-      }
-      const rowTop = y;
-      for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
-        const x = margin + columnIndex * columnWidth;
-        page.drawRectangle({
-          x,
-          y: rowTop - rowHeight,
-          width: columnWidth,
-          height: rowHeight,
-          borderWidth: 0.75,
-          borderColor: rgb(0.55, 0.57, 0.6),
-          color: rowIndex === 0 ? rgb(0.92, 0.93, 0.95) : undefined,
-        });
-        for (const [lineIndex, line] of wrappedCells[columnIndex].entries()) {
-          page.drawText(line, {
-            x: x + cellPadding,
-            y: rowTop - cellPadding - fontSize - lineIndex * lineHeight,
-            size: fontSize,
-            font: rowIndex === 0 ? bold : regular,
-            color: rgb(0.1, 0.1, 0.12),
-          });
+      let lineOffset = 0;
+      const totalLines = Math.max(...wrappedCells.map((lines) => lines.length));
+      while (lineOffset < totalLines) {
+        let availableLines = Math.floor((y - margin - 8) / lineHeight);
+        if (availableLines < 1) {
+          page = pdf.addPage(pageSize);
+          y = page.getHeight() - margin;
+          availableLines = Math.floor((y - margin - 8) / lineHeight);
         }
+        // A logical row may exceed a whole page. Continue its bordered cells
+        // on subsequent pages instead of drawing below the page and clipping.
+        const segmentLines = Math.min(totalLines - lineOffset, availableLines);
+        const segmentHeight = segmentLines * lineHeight + 8;
+        const rowTop = y;
+        for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+          const x = margin + columnIndex * columnWidth;
+          page.drawRectangle({
+            x,
+            y: rowTop - segmentHeight,
+            width: columnWidth,
+            height: segmentHeight,
+            borderWidth: 0.75,
+            borderColor: rgb(0.55, 0.57, 0.6),
+            color: rowIndex === 0 ? rgb(0.92, 0.93, 0.95) : undefined,
+          });
+          const lines = wrappedCells[columnIndex].slice(lineOffset, lineOffset + segmentLines);
+          for (const [lineIndex, line] of lines.entries()) {
+            page.drawText(line, {
+              x: x + cellPadding,
+              y: rowTop - cellPadding - fontSize - lineIndex * lineHeight,
+              size: fontSize,
+              font: rowIndex === 0 ? bold : regular,
+              color: rgb(0.1, 0.1, 0.12),
+            });
+          }
+        }
+        y -= segmentHeight;
+        lineOffset += segmentLines;
       }
-      y -= rowHeight;
     }
   };
 
