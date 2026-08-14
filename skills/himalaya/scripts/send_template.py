@@ -108,7 +108,28 @@ def parse_args() -> argparse.Namespace:
             "multiple recipients; never added implicitly."
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--source-folder",
+        help=(
+            "Folder containing the verified inbound envelope(s) this send replies to. "
+            "Required with --source-envelope-id."
+        ),
+    )
+    parser.add_argument(
+        "--source-envelope-id",
+        action="append",
+        default=[],
+        help=(
+            "Verified inbound envelope ID to mark seen after this send succeeds. "
+            "Repeat for each exact source envelope in an explicitly cleared thread."
+        ),
+    )
+    args = parser.parse_args()
+    if args.source_envelope_id and not args.source_folder:
+        parser.error("--source-folder is required with --source-envelope-id")
+    if args.source_folder and not args.source_envelope_id:
+        parser.error("--source-envelope-id is required with --source-folder")
+    return args
 
 
 def determine_config_paths(explicit_paths: list[str] | None) -> list[Path]:
@@ -185,6 +206,42 @@ def run_send(
     return subprocess.run(
         command,
         input=template_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def build_mark_read_command(
+    himalaya_bin: str,
+    config_paths: list[Path],
+    account: str,
+    folder: str,
+    envelope_ids: list[str],
+) -> list[str]:
+    """Build one scoped flag update for verified inbound source envelopes.
+
+    Himalaya's `seen` state belongs to individual envelope IDs within one
+    account/folder. Keeping all IDs in one command makes the postcondition
+    observable while preventing the wrapper from guessing conversation members.
+    """
+    command = [himalaya_bin]
+    for config_path in config_paths:
+        command.extend(["-c", str(config_path)])
+    command.extend(["flag", "add", "-a", account, "-f", folder, *envelope_ids, "seen"])
+    return command
+
+
+def mark_source_envelopes_read(
+    himalaya_bin: str,
+    config_paths: list[Path],
+    account: str,
+    folder: str,
+    envelope_ids: list[str],
+) -> subprocess.CompletedProcess[bytes]:
+    """Mark only explicit reply-source envelopes read after a clean send."""
+    return subprocess.run(
+        build_mark_read_command(himalaya_bin, config_paths, account, folder, envelope_ids),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -416,6 +473,22 @@ def main() -> int:
     write_stream(sys.stderr, result.stderr)
     append_failure = should_retry(args.account, config_paths, combined_output)
 
+    # A template send is the only authority for clearing its exact inbound
+    # source envelopes. Never run this after a failed/ambiguous send: iCloud can
+    # report a post-SMTP Sent-copy failure, where retrying or clearing state
+    # would hide an unresolved delivery outcome.
+    read_mark_result: subprocess.CompletedProcess[bytes] | None = None
+    if result.returncode == 0 and args.source_envelope_id:
+        read_mark_result = mark_source_envelopes_read(
+            args.himalaya_bin,
+            config_paths,
+            args.account,
+            args.source_folder,
+            args.source_envelope_id,
+        )
+        write_stream(sys.stdout, read_mark_result.stdout)
+        write_stream(sys.stderr, read_mark_result.stderr)
+
     if archive_path is not None:
         try:
             result_path = write_result_proof(
@@ -432,6 +505,25 @@ def main() -> int:
                     "messageId": message_id,
                     "returnCode": result.returncode,
                     "saveCopyDisabled": send_without_save_copy,
+                    "sourceReadMarking": {
+                        "attempted": read_mark_result is not None,
+                        "command": (
+                            build_mark_read_command(
+                                args.himalaya_bin,
+                                config_paths,
+                                args.account,
+                                args.source_folder,
+                                args.source_envelope_id,
+                            )
+                            if read_mark_result is not None
+                            else None
+                        ),
+                        "folder": args.source_folder,
+                        "returnCode": read_mark_result.returncode if read_mark_result else None,
+                        "sourceEnvelopeIds": args.source_envelope_id,
+                        "stderrTail": output_excerpt(read_mark_result.stderr) if read_mark_result else "",
+                        "stdoutTail": output_excerpt(read_mark_result.stdout) if read_mark_result else "",
+                    },
                     "stderrTail": output_excerpt(result.stderr),
                     "stdoutTail": output_excerpt(result.stdout),
                 }
@@ -452,6 +544,18 @@ def main() -> int:
             "larger iCloud attachment payload.",
             file=sys.stderr,
         )
+        if read_mark_result is None or read_mark_result.returncode == 0:
+            return 0
+
+    if result.returncode == 0 and read_mark_result is not None and read_mark_result.returncode != 0:
+        print(
+            "Message sent, but Himalaya could not mark the verified source envelope(s) read. "
+            "Not retrying the email; reconcile the listed source IDs manually.",
+            file=sys.stderr,
+        )
+        return read_mark_result.returncode or 1
+
+    if result.returncode == 0:
         return 0
 
     if result.returncode != 0 and append_failure:

@@ -19,6 +19,16 @@ metadata: { "openclaw": { "dependencies": ["personal-tone-of-voice"] } }
   dates, numbers, and links.
 - Make the output ready for the user to approve, revise, or send.
 
+## Post-Send Conversation State
+
+- After the destination reports a successful outbound send, follow that
+  channel skill's post-send conversation-state rule before reporting the item
+  complete. The channel implementation owns the exact chat, dialog, thread, or
+  envelope semantics.
+- Keep the send receipt and conversation-state receipt separate. If the send
+  succeeded but the state update failed, report the partial result clearly and
+  never retry the already-sent message just to repair bookkeeping.
+
 ## Exact Recipient Payload Formatting
 
 - Render every exact recipient-ready payload as one Markdown blockquote: prefix

@@ -68,6 +68,13 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 - Before any approved email send, refresh the same thread/person again. Stop if
   newer relevant thread movement, inbound or outbound, changes or duplicates the
   reply, even when the draft and approval happen in the same short flow.
+- For an automated reply sent with `scripts/send_template.py`, pass the verified
+  inbound source with `--source-folder <folder> --source-envelope-id <id>`.
+  The wrapper marks only those explicit source envelopes `seen` after a clean
+  send. Repeat `--source-envelope-id` only for verified inbound envelopes the
+  user explicitly wants cleared; a Himalaya thread is not one atomic read-state
+  object. For direct interactive replies, run the scoped `flag add` command for
+  the exact source envelope after the send succeeds.
 
 ## Time-aware email replies
 
@@ -282,6 +289,23 @@ Message-ID exists, and only then runs Himalaya. If that local archive cannot be
 written, the wrapper refuses to send instead of creating an unprovable automated
 send. Set `OPENCLAW_EMAIL_PROOF_DIR` or pass `--proof-dir` for a different local
 proof directory.
+
+For an automated reply, provide the already verified source envelope scope:
+
+```bash
+python3 skills/himalaya/scripts/send_template.py --account personal \
+  --source-folder INBOX --source-envelope-id 42
+```
+
+The wrapper marks those source IDs `seen` only when the send exits successfully.
+If read-state marking fails, it reports a failed postcondition and never resends
+the already-sent email. New outbound messages have no source IDs, so omit both
+options. For interactive `himalaya message reply`, mark the exact verified
+source only after a successful send:
+
+```bash
+himalaya flag add -a personal -f INBOX 42 seen
+```
 
 The local proof is command evidence, not recipient delivery confirmation. Raw
 Himalaya v1 does not expose SMTP RCPT acceptance details, so do not claim live

@@ -187,6 +187,19 @@ It creates a local `.eml` proof archive, ensures a Message-ID, and writes a
 `.result.json` command receipt. That is local command proof only; do not treat
 iCloud Sent-folder presence or absence as final delivery proof.
 
+For an automated reply, pass the verified inbound source envelope so the wrapper
+marks that exact message read only after the send succeeds:
+
+```bash
+python3 skills/himalaya/scripts/send_template.py --account personal \
+  --source-folder INBOX --source-envelope-id 42
+```
+
+Repeat `--source-envelope-id` only for verified inbound messages that the user
+explicitly wants cleared. A thread does not have one shared read flag. Direct
+interactive replies must run `himalaya flag add -a personal -f INBOX 42 seen`
+only after the reply sends successfully.
+
 ### Prefill headers from CLI
 
 ```bash
