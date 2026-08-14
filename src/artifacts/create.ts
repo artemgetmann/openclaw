@@ -109,10 +109,14 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
   const writeLines = (text: string, size = 11, isBold = false, indent = 0) => {
     const font = isBold ? bold : regular;
     const supportedCharacters = new Set(font.getCharacterSet());
+    // Structured input may contain line breaks and tabs. They are layout
+    // whitespace, not printable font glyphs, so normalize them before both
+    // validation and measured wrapping.
+    const printableText = text.replace(/[\t\n\v\f\r]+/g, " ");
     // Standard PDF fonts are deliberately small, but silently replacing user
     // text would create a valid-looking corrupt document. Fail with an exact
     // explanation until a separately reviewed Unicode font is bundled.
-    const unsupported = Array.from(text).find(
+    const unsupported = Array.from(printableText).find(
       (character) => !supportedCharacters.has(character.codePointAt(0) ?? 0),
     );
     if (unsupported) {
@@ -121,7 +125,9 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
       );
     }
     const maxWidth = page.getWidth() - margin * 2 - indent;
-    for (const line of wrapText(text, maxWidth, (value) => font.widthOfTextAtSize(value, size))) {
+    for (const line of wrapText(printableText, maxWidth, (value) =>
+      font.widthOfTextAtSize(value, size),
+    )) {
       if (y < margin + size) {
         page = pdf.addPage(pageSize);
         y = page.getHeight() - margin;
@@ -216,7 +222,11 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
       writeLines(heading, 15, true);
     }
     for (const paragraph of asList(section.paragraphs)) {
-      writeLines(asText(paragraph), 11);
+      const text = asText(paragraph).trim();
+      if (!text) {
+        continue;
+      }
+      writeLines(text, 11);
       y -= 5;
     }
     for (const bullet of asList(section.bullets)) {

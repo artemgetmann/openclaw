@@ -6,6 +6,7 @@ import path from "node:path";
 
 const runtimeRoot = path.resolve(process.argv[2] || "");
 const packageJson = path.join(runtimeRoot, "package.json");
+const runtimeNodeModules = path.join(runtimeRoot, "node_modules");
 const requiredPackages = ["docx", "exceljs", "pdf-lib", "pptxgenjs"];
 
 if (!process.argv[2] || !fs.existsSync(packageJson)) {
@@ -20,7 +21,15 @@ const requireFromRuntime = createRequire(packageJson);
 const missing = [];
 for (const packageName of requiredPackages) {
   try {
-    requireFromRuntime.resolve(packageName);
+    const resolved = fs.realpathSync(requireFromRuntime.resolve(packageName));
+    const nodeModulesRoot = fs.realpathSync(runtimeNodeModules);
+    const relative = path.relative(nodeModulesRoot, resolved);
+    // Node resolution walks parent directories. Reject any result outside the
+    // staged tree so a checkout's ambient node_modules cannot satisfy this
+    // release gate for an incomplete app bundle or runtime cache.
+    if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      missing.push(packageName);
+    }
   } catch {
     missing.push(packageName);
   }

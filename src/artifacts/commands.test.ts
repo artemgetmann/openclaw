@@ -159,6 +159,7 @@ describe("artifact commands", () => {
     ["long token", { paragraphs: ["x".repeat(500)] }],
     ["empty spec", {}],
     ["empty table", { sections: [{ table: { rows: [] } }] }],
+    ["control whitespace", { paragraphs: ["Line one\nLine two\tTabbed"] }],
   ])("creates a nonblank PDF for %s input", async (_label, spec) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-edge-test-"));
     const input = path.join(dir, "brief.json");
@@ -167,6 +168,20 @@ describe("artifact commands", () => {
 
     await createPdfCommand(input, { out });
     expect((await fs.stat(out)).size).toBeGreaterThan(500);
+  });
+
+  it("does not paginate empty PDF paragraphs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-empty-lines-test-"));
+    const input = path.join(dir, "brief.json");
+    const out = path.join(dir, "brief.pdf");
+    await fs.writeFile(
+      input,
+      JSON.stringify({ paragraphs: Array.from({ length: 1000 }, () => " \t\n") }),
+    );
+
+    await createPdfCommand(input, { out });
+    const pdf = await PDFDocument.load(await fs.readFile(out));
+    expect(pdf.getPageCount()).toBe(1);
   });
 
   it.each([
