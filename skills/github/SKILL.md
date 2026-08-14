@@ -1,36 +1,24 @@
 ---
 name: github
-description: "GitHub operations via `gh` CLI: issues, PRs, CI runs, code review, API queries. Use when: (1) checking PR status or CI, (2) creating/commenting on issues, (3) listing/filtering PRs or issues, (4) viewing run logs. NOT for: complex web UI interactions requiring manual browser flows (use browser tooling when available), bulk operations across many repos (script with gh api), or when gh auth is not configured."
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🐙",
-        "requires": { "bins": ["gh"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "gh",
-              "bins": ["gh"],
-              "label": "Install GitHub CLI (brew)",
-            },
-            {
-              "id": "apt",
-              "kind": "apt",
-              "package": "gh",
-              "bins": ["gh"],
-              "label": "Install GitHub CLI (apt)",
-            },
-          ],
-      },
-  }
+description: "GitHub API and PR lifecycle operations. Prefer an installed GitHub connector for supported metadata, comments, reviews, checks, refs, and expected-head merges; use host `gh` only as a proven capability fallback. Keep local Git on SSH for commits, diffs, fetches, and pushes."
+metadata: { "openclaw": { "emoji": "🐙" } }
 ---
 
 # GitHub Skill
 
-Use the `gh` CLI to interact with GitHub repositories, issues, PRs, and CI.
+Use the installed GitHub connector for supported API operations. Use host `gh`
+only when the connector lacks the required capability and a secret-free
+authenticated API probe succeeds.
+
+## Transport Policy
+
+- Connector API health, host `gh` API health, and Git fetch/push health are
+  separate states. Never report GitHub unavailable because only one failed.
+- Local Git remains authoritative for commits, diffs, rebases, and object
+  upload. Use SSH GitHub remotes by default.
+- Select failover by operation capability. After an ambiguous mutation, read
+  the authoritative remote state before any retry and never silently switch
+  transports.
 
 ## When to Use
 
@@ -53,17 +41,22 @@ Use the `gh` CLI to interact with GitHub repositories, issues, PRs, and CI.
 - Reviewing actual code changes → use `coding-agent` skill
 - Complex multi-file diffs → use `coding-agent` or read files directly
 
-## Setup
+## Capability Check
 
 ```bash
-# Authenticate (one-time)
-gh auth login
+# Host gh fallback proves API access, not Git push access.
+gh api user --jq .login
 
-# Verify
-gh auth status
+# Git transport proves remote object access, not API capability.
+git remote get-url origin
+git ls-remote --exit-code origin HEAD
 ```
 
-## Common Commands
+Do not reauthenticate, log out, delete credentials, or change remotes merely
+because one read-only probe fails. Use the repository's preflight helper when
+available.
+
+## Host `gh` Fallback Commands
 
 ### Pull Requests
 
