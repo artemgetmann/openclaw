@@ -706,11 +706,23 @@ consider_worktree_candidate() {
   [[ -d "$target_path" ]] || return 0
 
   age_days="$(path_age_days "$target_path")"
-  size_kib="$(path_size_kib_or_zero "$target_path")"
 
   if (( age_days < min_age_days )); then
     return 0
   fi
+  # Liveness is cheap and decisive. Do not recursively traverse a multi-GiB
+  # dependency tree merely to discover that a running owner already protects
+  # it; unknown size is honest for a candidate we cannot reclaim this pass.
+  if path_has_process_ref "$target_path"; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$worktree" "$target_path" "active-process" "worktree-generated"
+    return 0
+  fi
+  if path_has_open_files "$target_path"; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$worktree" "$target_path" "open-files" "worktree-generated"
+    return 0
+  fi
+
+  size_kib="$(path_size_kib_or_zero "$target_path")"
   if [[ "$INCLUDE_CURRENT" != "1" && "$(cd "$worktree" && pwd -P)" == "$CURRENT_ROOT" ]]; then
     print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "current-checkout"
     return 0
@@ -728,15 +740,6 @@ consider_worktree_candidate() {
     print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "$dirty_block_reason" "worktree-generated"
     return 0
   fi
-  if path_has_process_ref "$target_path"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "active-process" "worktree-generated"
-    return 0
-  fi
-  if path_has_open_files "$target_path"; then
-    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "open-files" "worktree-generated"
-    return 0
-  fi
-
   delete_or_report_candidate "$kind" "$worktree" "$target_path" "$age_days" "$size_kib" \
     worktree_artifact_policy_block_reason "$worktree" "$kind" "$min_age_days"
 }
@@ -777,19 +780,36 @@ scan_worktrees_root() {
 scan_registered_worktrees() {
   local field
   local worktree
+  local registry_snapshot=""
 
   # Git's registry is the authority for linked worktrees. NUL-delimited
   # porcelain output preserves spaces and other shell-sensitive path bytes,
   # while avoiding assumptions about whether a checkout lives under
   # .worktrees/name or a nested Codex UUID/openclaw directory.
-  while IFS= read -r -d '' field; do
+  #
+  # Snapshot before inspection. With hundreds of worktrees the producer can
+  # outgrow a pipe buffer while nested Git commands inspect early candidates;
+  # the resulting shared-stream interaction previously ended real scans after
+  # their first artifact even though small fixtures passed. A private regular
+  # file makes discovery finite and independent from candidate inspection.
+  registry_snapshot="$(mktemp "${TMPDIR:-/tmp}/openclaw-worktrees.XXXXXX")" || die "failed to create worktree registry snapshot"
+  if ! git -C "$ROOT_DIR" worktree list --porcelain -z >"$registry_snapshot"; then
+    rm -f "$registry_snapshot"
+    die "failed to read Git worktree registry"
+  fi
+  # Keep registry input on a private descriptor. Candidate inspection invokes
+  # external commands which are not entitled to read or close this stream.
+  while IFS= read -r -d '' -u 9 field; do
     case "$field" in
       "worktree "*)
         worktree="${field#worktree }"
-        scan_worktree "$worktree"
+        # Also provide an empty conventional stdin: candidate inspectors never
+        # need interactive input and must not inherit an unrelated caller.
+        scan_worktree "$worktree" </dev/null
         ;;
     esac
-  done < <(git -C "$ROOT_DIR" worktree list --porcelain -z)
+  done 9<"$registry_snapshot"
+  rm -f "$registry_snapshot"
 }
 
 scan_worktrees() {

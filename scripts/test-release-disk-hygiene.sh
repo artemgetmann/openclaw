@@ -506,6 +506,12 @@ touch -t 202001010000 "$REGISTERED_MAIN/dist"
   printf '%s\n' 'if [[ "$1" == "-C" && "$2" == "$REGISTERED_STATUS_ERROR" && "$3" == "status" ]]; then'
   printf '%s\n' '  exit 1'
   printf '%s\n' 'fi'
+  # Model a nested inspector that reads stdin. The production registry walker
+  # must isolate each candidate inspection from its NUL-delimited input or the
+  # first status call silently consumes every later worktree record.
+  printf '%s\n' 'if [[ "$1" == "-C" && "$3" == "status" ]]; then'
+  printf '%s\n' '  cat >/dev/null'
+  printf '%s\n' 'fi'
   printf '%s\n' 'exec "$REAL_GIT" "$@"'
 } >"$GIT_WRAPPER"
 chmod +x "$GIT_WRAPPER"
