@@ -6,6 +6,18 @@ const ACTIONABLE = new Set([
   "merged",
 ]);
 
+export function parseRequiredChecksResult(result, number) {
+  if (result.stdout?.trim()) {
+    return JSON.parse(result.stdout);
+  }
+  // GitHub's CLI uses exit 1 and no JSON when a PR has no checks at all.
+  // That is a valid empty required-check set, not a transport outage.
+  if (/no checks reported/i.test(result.stderr ?? "")) {
+    return [];
+  }
+  throw new Error(result.stderr?.trim() || `unable to read required checks for PR #${number}`);
+}
+
 // Keep every string written to durable state bounded. PR bodies and titles are
 // intentionally never selected, so the cron result cannot leak private content.
 function text(value, max = 160) {

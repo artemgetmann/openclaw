@@ -9,6 +9,7 @@ import {
   buildSnapshot,
   isActivePullRequest,
   monitorResult,
+  parseRequiredChecksResult,
   snapshotForPersistence,
 } from "./lib/pr-freshness-monitor.mjs";
 
@@ -45,10 +46,7 @@ function requiredChecks(repository, number) {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  if (!result.stdout?.trim()) {
-    throw new Error(result.stderr?.trim() || `unable to read required checks for PR #${number}`);
-  }
-  return JSON.parse(result.stdout);
+  return parseRequiredChecksResult(result, number);
 }
 
 function fetchPullRequests(repository, trackedNumbers) {

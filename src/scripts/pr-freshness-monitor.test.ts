@@ -8,6 +8,7 @@ import {
   diffSnapshots,
   isActivePullRequest,
   monitorResult,
+  parseRequiredChecksResult,
   snapshotForPersistence,
 } from "../../scripts/lib/pr-freshness-monitor.mjs";
 
@@ -27,6 +28,18 @@ const base = {
 };
 
 describe("PR freshness monitor", () => {
+  it("accepts GitHub's no-checks response but rejects real command failures", () => {
+    expect(
+      parseRequiredChecksResult(
+        { stdout: "", stderr: "no checks reported on the 'example' branch" },
+        10,
+      ),
+    ).toEqual([]);
+    expect(() =>
+      parseRequiredChecksResult({ stdout: "", stderr: "HTTP 503: unavailable" }, 10),
+    ).toThrow("HTTP 503: unavailable");
+  });
+
   it("filters drafts and stale abandoned PRs while retaining opt-ins and active PRs", () => {
     expect(isActivePullRequest(base, { nowMs })).toBe(true);
     expect(isActivePullRequest({ ...base, isDraft: true }, { nowMs })).toBe(false);
