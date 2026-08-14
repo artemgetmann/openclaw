@@ -1257,11 +1257,16 @@ test_release_class_defaults_and_fresh_installer_gate() {
 test_tagged_asset_immutability() {
   local fake_bin="$TMP_DIR/immutable-fake-bin"
   local artifact="$TMP_DIR/Jarvis.zip"
-  local digest out err status
+  local digest out err status upload_log
   mkdir -p "$fake_bin"
   printf 'immutable fixture\n' >"$artifact"
   digest="sha256:$(/usr/bin/shasum -a 256 "$artifact" | /usr/bin/awk '{ print $1 }')"
+  upload_log="$TMP_DIR/immutable-upload.log"
   write_release_control_stub "$fake_bin/gh" '#!/usr/bin/env bash
+if [[ "$1" == "release" && "$2" == "upload" ]]; then
+  printf "upload\n" >>"${UPLOAD_LOG:?}"
+  exit 0
+fi
 printf "%s\n" "${REMOTE_DIGEST:-}"'
 
   out="$(PATH="$fake_bin:$PATH" REMOTE_DIGEST="" \
@@ -1281,6 +1286,15 @@ printf "%s\n" "${REMOTE_DIGEST:-}"'
   [[ "$status" -ne 0 ]] || fail "different bytes were allowed to replace a tagged asset"
   grep -q 'Create a new release tag' "$TMP_DIR/immutable.err" \
     || fail "immutable conflict did not give the safe recovery action"
+
+  PATH="$fake_bin:$PATH" REMOTE_DIGEST="" UPLOAD_LOG="$upload_log" \
+    openclaw_jarvis_release_upload_immutable_asset_if_needed repo v1 "$artifact"
+  [[ "$(wc -l <"$upload_log" | tr -d ' ')" == "1" ]] \
+    || fail "missing immutable asset did not upload exactly once"
+  PATH="$fake_bin:$PATH" REMOTE_DIGEST="$digest" UPLOAD_LOG="$upload_log" \
+    openclaw_jarvis_release_upload_immutable_asset_if_needed repo v1 "$artifact" >/dev/null
+  [[ "$(wc -l <"$upload_log" | tr -d ' ')" == "1" ]] \
+    || fail "identical immutable retry attempted another upload"
   pass "tagged ZIP and DMG bytes are immutable"
 }
 

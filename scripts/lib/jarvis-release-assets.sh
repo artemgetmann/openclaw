@@ -40,3 +40,21 @@ openclaw_jarvis_release_require_immutable_asset_compatible() {
   echo "Create a new release tag. Never overwrite a tagged Jarvis ZIP or DMG." >&2
   return 1
 }
+
+# Upload one immutable asset idempotently [safe to retry]. Rechecking inside
+# every retry matters when a prior attempt uploaded the DMG but failed before
+# the ZIP or appcast: the next attempt must recognize the first upload instead
+# of trying to overwrite it.
+openclaw_jarvis_release_upload_immutable_asset_if_needed() {
+  local repo="$1"
+  local tag="$2"
+  local artifact_path="$3"
+  local action
+
+  action="$(openclaw_jarvis_release_require_immutable_asset_compatible "$repo" "$tag" "$artifact_path")" || return $?
+  if [[ "$action" == "upload" ]]; then
+    gh release upload "$tag" "$artifact_path" --repo "$repo"
+  else
+    echo "immutable_asset_upload=already-identical asset=$(basename "$artifact_path")"
+  fi
+}

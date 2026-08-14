@@ -567,16 +567,15 @@ publish_release_assets() {
 
   # Validate every permanent URL before uploading anything. Otherwise the first
   # new asset could land before a later conflicting asset stops the release.
-  local dmg_action zip_action
-  dmg_action="$(openclaw_jarvis_release_require_immutable_asset_compatible "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$DMG")"
-  zip_action="$(openclaw_jarvis_release_require_immutable_asset_compatible "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP")"
+  openclaw_jarvis_release_require_immutable_asset_compatible "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$DMG" >/dev/null
+  openclaw_jarvis_release_require_immutable_asset_compatible "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" >/dev/null
   github_release_upload_preflight
   openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub full release upload"
 
   echo "🚀 Uploading Jarvis release assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
   jarvis_release_retry \
     "gh release upload Jarvis assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG" \
-    jarvis_release_upload_full_assets_attempt "$dmg_action" "$zip_action"
+    jarvis_release_upload_full_assets_attempt
 
   verify_public_release_assets
 }
@@ -635,8 +634,7 @@ publish_sparkle_release_assets() {
   done
   require_local_appcast_targets_current_tag
 
-  local zip_action
-  zip_action="$(openclaw_jarvis_release_require_immutable_asset_compatible "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP")"
+  openclaw_jarvis_release_require_immutable_asset_compatible "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" >/dev/null
   github_release_upload_preflight
   openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub Sparkle release upload"
 
@@ -646,7 +644,7 @@ publish_sparkle_release_assets() {
   echo "🚀 Uploading Jarvis Sparkle update assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
   jarvis_release_retry \
     "gh release upload Jarvis Sparkle assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG" \
-    jarvis_release_upload_sparkle_assets_attempt "$zip_action"
+    jarvis_release_upload_sparkle_assets_attempt
 
   verify_sparkle_public_release_assets
 }
@@ -656,23 +654,20 @@ publish_sparkle_release_assets() {
 # errexit while it captures command output, so the explicit return preserves the
 # guard: a replaced/expired intent must never fall through to `gh`.
 jarvis_release_upload_full_assets_attempt() {
-  local dmg_action="$1"
-  local zip_action="$2"
   openclaw_require_jarvis_release_intent \
     "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub full release upload attempt" \
     || return $?
-  [[ "$dmg_action" != "upload" ]] || gh release upload "$GITHUB_RELEASE_TAG" "$DMG" --repo "$GITHUB_RELEASE_REPO"
-  [[ "$zip_action" != "upload" ]] || gh release upload "$GITHUB_RELEASE_TAG" "$ZIP" --repo "$GITHUB_RELEASE_REPO"
+  openclaw_jarvis_release_upload_immutable_asset_if_needed "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$DMG" || return $?
+  openclaw_jarvis_release_upload_immutable_asset_if_needed "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
   # The appcast is the mutable go-live pointer and must remain the final upload.
   gh release upload "$GITHUB_RELEASE_TAG" "$appcast" --repo "$GITHUB_RELEASE_REPO" --clobber
 }
 
 jarvis_release_upload_sparkle_assets_attempt() {
-  local zip_action="$1"
   openclaw_require_jarvis_release_intent \
     "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub Sparkle release upload attempt" \
     || return $?
-  [[ "$zip_action" != "upload" ]] || gh release upload "$GITHUB_RELEASE_TAG" "$ZIP" --repo "$GITHUB_RELEASE_REPO"
+  openclaw_jarvis_release_upload_immutable_asset_if_needed "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG" "$ZIP" || return $?
   # Sparkle reads this feed as the go-live switch, so it always uploads last.
   gh release upload "$GITHUB_RELEASE_TAG" "$appcast" --repo "$GITHUB_RELEASE_REPO" --clobber
 }
