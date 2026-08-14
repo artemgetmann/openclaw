@@ -71,31 +71,33 @@ export function buildSnapshot(rawPullRequests, options = {}) {
   const maxPullRequests = Math.min(Math.max(options.maxPullRequests ?? 20, 1), 20);
   const trackedNumbers = new Set(options.trackedNumbers ?? []);
   const active = rawPullRequests
-    .filter(
-      (pr) =>
-        isActivePullRequest(pr, options) ||
-        (pr?.state === "MERGED" && trackedNumbers.has(Number(pr.number))),
-    )
+    .filter((pr) => isActivePullRequest(pr, options))
     .toSorted((a, b) => Date.parse(b.updatedAt ?? "") - Date.parse(a.updatedAt ?? ""))
-    .slice(0, maxPullRequests)
-    .map((pr) => ({
-      number: Number(pr.number),
-      headSha: text(pr.headRefOid, 40),
-      baseSha: text(pr.baseRefOid, 40),
-      updatedAt: pr.updatedAt,
-      autoMerge: Boolean(pr.autoMergeRequest),
-      state: classifyPullRequest(pr),
-      requiredChecks: (pr.requiredChecks ?? []).slice(0, 30).map((check) => ({
-        name: text(check.name, 100),
-        workflow: text(check.workflow, 100),
-        bucket: check.bucket,
-        state: text(check.state, 40),
-      })),
-    }));
+    .slice(0, maxPullRequests);
+  // Terminal receipts have their own bounded lane so they cannot evict an
+  // active baseline and make that PR look newly discovered on the next run.
+  const merged = rawPullRequests
+    .filter((pr) => pr?.state === "MERGED" && trackedNumbers.has(Number(pr.number)))
+    .toSorted((a, b) => Date.parse(b.updatedAt ?? "") - Date.parse(a.updatedAt ?? ""))
+    .slice(0, maxPullRequests);
+  const pullRequests = [...active, ...merged].map((pr) => ({
+    number: Number(pr.number),
+    headSha: text(pr.headRefOid, 40),
+    baseSha: text(pr.baseRefOid, 40),
+    updatedAt: pr.updatedAt,
+    autoMerge: Boolean(pr.autoMergeRequest),
+    state: classifyPullRequest(pr),
+    requiredChecks: (pr.requiredChecks ?? []).slice(0, 30).map((check) => ({
+      name: text(check.name, 100),
+      workflow: text(check.workflow, 100),
+      bucket: check.bucket,
+      state: text(check.state, 40),
+    })),
+  }));
   return {
     schemaVersion: 1,
     generatedAt: new Date(options.nowMs ?? Date.now()).toISOString(),
-    pullRequests: active,
+    pullRequests,
   };
 }
 

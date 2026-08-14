@@ -83,6 +83,15 @@ describe("PR freshness monitor", () => {
     expect(snapshotForPersistence(merged).pullRequests).toEqual([]);
   });
 
+  it("keeps a full active baseline when a terminal receipt is emitted", () => {
+    const active = Array.from({ length: 20 }, (_, index) => ({ ...base, number: index + 1 }));
+    const merged = { ...base, number: 99, state: "MERGED", updatedAt: "2026-08-14T04:30:00Z" };
+    const snapshot = buildSnapshot([...active, merged], { nowMs, trackedNumbers: [99] });
+    expect(snapshot.pullRequests.filter((pr) => pr.state !== "merged")).toHaveLength(20);
+    expect(snapshot.pullRequests.filter((pr) => pr.state === "merged")).toHaveLength(1);
+    expect(snapshotForPersistence(snapshot).pullRequests).toHaveLength(20);
+  });
+
   it("deduplicates unchanged state and suppresses routine pending transitions", () => {
     const pending = buildSnapshot([{ ...base, requiredChecks: [{ bucket: "pending" }] }], {
       nowMs,

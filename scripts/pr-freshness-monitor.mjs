@@ -75,8 +75,7 @@ function fetchPullRequests(repository, trackedNumbers) {
     .slice(0, 20)
     .map((pr) => ({
       ...pr,
-      requiredChecks:
-        pr.state === "OPEN" && pr.isDraft !== true ? requiredChecks(repository, pr.number) : [],
+      requiredChecks: requiredChecks(repository, pr.number),
     }));
   const openNumbers = new Set(open.map((pr) => Number(pr.number)));
   const merged = trackedNumbers
