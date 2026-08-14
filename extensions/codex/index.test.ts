@@ -1131,6 +1131,17 @@ describe("Codex natural-language delegation", () => {
       turnId: "turn-natural",
       lifecycle: "accepted",
       recoveryPolicy: "local-safe",
+      taskPayload: expect.stringContaining("Keep the API narrow and continue."),
+    });
+
+    await tool.execute("message-async-steer-followup", {
+      action: "message_async",
+      thread_id: "thread-natural",
+      text: "Use the focused callback proof before finishing.",
+    });
+    await expect(registry.get(delegationId!)).resolves.toMatchObject({
+      recoveryPolicy: "local-safe",
+      taskPayload: expect.stringContaining("Use the focused callback proof before finishing."),
     });
 
     for (const handler of appServer.handlers) {
@@ -1458,6 +1469,7 @@ describe("Codex natural-language delegation", () => {
       threadId: "thread-natural",
       deliveryKey: "codex-relay:delegation-interrupted",
       recoveryPolicy: "local-safe",
+      taskPayload: "Run the exact bounded local analysis and return the acceptance nonce.",
     });
     await registry.markAccepted("delegation-interrupted", "turn-interrupted");
     const routes = new CodexCallbackRouteRegistry(
@@ -1503,7 +1515,13 @@ describe("Codex natural-language delegation", () => {
     expect(starts).toHaveLength(1);
     expect(starts[0]?.params).toMatchObject({ threadId: "thread-natural" });
     const prompt = (starts[0]?.params as { input?: Array<{ text?: string }> }).input?.[0]?.text;
-    expect(prompt).toContain("Inspect the existing conversation, workspace files, git status");
+    expect(prompt).toContain(
+      "Treat it as the only task to continue; do not infer a different objective",
+    );
+    expect(prompt).toContain(
+      "Run the exact bounded local analysis and return the acceptance nonce.",
+    );
+    expect(prompt).toContain("Inspect this task's prior messages, workspace files, git status");
     expect(prompt).toContain("Do not repeat or initiate messages, purchases, deploys, releases");
     const freshRoute = readCallbackRoute(prompt);
     expect(freshRoute.routeId).not.toBe(priorRoute.routeId);

@@ -14,6 +14,53 @@ async function createRegistry(now: () => number = () => 1_000) {
 }
 
 describe("CodexDelegationRegistry", () => {
+  it("keeps the exact accepted task for one interrupted recovery and clears it afterward", async () => {
+    const { registry } = await createRegistry();
+    await registry.createStarting({
+      delegationId: "delegation-recovery-task",
+      sessionKey: "agent:main",
+      threadId: "thread-recovery-task",
+      deliveryKey: "codex-relay:delegation-recovery-task",
+      recoveryPolicy: "local-safe",
+      taskPayload: "Inspect only fixture alpha and report its exact result.",
+    });
+    await registry.markAccepted("delegation-recovery-task", "turn-recovery-task");
+    await registry.authorizeRecovery({
+      delegationId: "delegation-recovery-task",
+      threadId: "thread-recovery-task",
+      turnId: "turn-recovery-task",
+      policy: "local-safe",
+      guidance: "Also verify fixture beta before reporting.",
+    });
+    await expect(registry.get("delegation-recovery-task")).resolves.toMatchObject({
+      taskPayload: expect.stringContaining("Also verify fixture beta before reporting."),
+    });
+    await registry.markTerminal("delegation-recovery-task", "interrupted");
+    await registry.claimRecovery("delegation-recovery-task", "recovery-child");
+    await registry.markRecovered("delegation-recovery-task");
+    expect((await registry.get("delegation-recovery-task"))?.taskPayload).toBeUndefined();
+  });
+
+  it("refuses a recovery grant when the exact original task was not durable", async () => {
+    const { registry } = await createRegistry();
+    await registry.createStarting({
+      delegationId: "delegation-legacy",
+      sessionKey: "agent:main",
+      threadId: "thread-legacy",
+      deliveryKey: "codex-relay:delegation-legacy",
+    });
+    await registry.markAccepted("delegation-legacy", "turn-legacy");
+    await expect(
+      registry.authorizeRecovery({
+        delegationId: "delegation-legacy",
+        threadId: "thread-legacy",
+        turnId: "turn-legacy",
+        policy: "local-safe",
+        guidance: "Continue safely.",
+      }),
+    ).rejects.toThrow("without the original task payload");
+  });
+
   it("claims one overdue progress update without consuming terminal authority", async () => {
     const { registry } = await createRegistry();
     await registry.createStarting({
@@ -221,5 +268,40 @@ describe("CodexDelegationRegistry", () => {
     expect(JSON.parse(await readFile(filePath, "utf8")).records).toEqual([
       { delegationId: "broken-without-routing-identity" },
     ]);
+  });
+
+  it("rejects an oversized mutation without replacing the readable registry", async () => {
+    const { filePath, registry } = await createRegistry();
+    const taskPayload = "x".repeat(32_768);
+    let acceptedRecords = 0;
+
+    // Fill with valid active recovery records until the next atomic document
+    // would exceed the reader's one-MiB ceiling.
+    for (let index = 0; index < 40; index += 1) {
+      try {
+        await registry.createStarting({
+          delegationId: `delegation-large-${index}`,
+          sessionKey: "agent:main",
+          threadId: `thread-large-${index}`,
+          deliveryKey: `codex-relay:delegation-large-${index}`,
+          recoveryPolicy: "local-safe",
+          taskPayload,
+        });
+        acceptedRecords += 1;
+      } catch (error) {
+        expect(error).toMatchObject({ message: expect.stringContaining("exceeds 1048576 bytes") });
+        break;
+      }
+    }
+
+    expect(acceptedRecords).toBeGreaterThan(0);
+    expect(acceptedRecords).toBeLessThan(40);
+    await expect(registry.snapshot()).resolves.toMatchObject({
+      records: expect.arrayContaining([
+        expect.objectContaining({ delegationId: "delegation-large-0" }),
+      ]),
+      issues: [],
+    });
+    expect(JSON.parse(await readFile(filePath, "utf8")).records).toHaveLength(acceptedRecords);
   });
 });
