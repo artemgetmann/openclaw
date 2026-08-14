@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct ConsumerSetupResumeTests {
     @Test func `preflight suppresses onboarding for existing usable setup`() async {
-        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+        await Self.withConsumerTestState {
             let defaults = Self.makeDefaults()
             let profile = Self.profile()
             defaults.set(profile.directoryName, forKey: browserSelectedChromeProfileIDKey)
@@ -23,7 +23,7 @@ struct ConsumerSetupResumeTests {
     }
 
     @Test func `preflight does not skip fresh incomplete setup`() async {
-        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+        await Self.withConsumerTestState {
             let defaults = Self.makeDefaults()
             let completed = ConsumerSetupResumePreflight.completeIfExistingSetupLooksUsable(
                 defaults: defaults,
@@ -38,7 +38,7 @@ struct ConsumerSetupResumeTests {
     }
 
     @Test func `fresh install does not auto skip setup`() async {
-        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+        await Self.withConsumerTestState {
             let model = ConsumerSetupResumeModel(configExists: { false })
             let channels = ChannelsStore(isPreview: true)
             channels.configDraft = [
@@ -63,8 +63,8 @@ struct ConsumerSetupResumeTests {
         }
     }
 
-    @Test func `setup resume completes without a permission gate`() async {
-        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+    @Test func `setup resume advances past the removed permission gate`() async {
+        await Self.withConsumerTestState {
             let defaults = Self.makeDefaults()
             let profile = Self.profile()
             defaults.set(profile.directoryName, forKey: browserSelectedChromeProfileIDKey)
@@ -86,13 +86,16 @@ struct ConsumerSetupResumeTests {
                 accountActivation: Self.activatedAccountModel(),
                 channelsStore: ChannelsStore(isPreview: true))
 
-            #expect(decision == .complete)
+            // This fixture has no Telegram setup. Reaching the Telegram gate
+            // proves permissions no longer block resume without borrowing the
+            // developer's installed Jarvis config to make the test pass.
+            #expect(decision == .blocked(.telegram))
             #expect(!browserProbeCalled)
         }
     }
 
     @Test func `existing healthy setup auto completes and promotes telegram marker`() async {
-        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+        await Self.withConsumerTestState {
             Self.clearTelegramVerificationMarker()
             let defaults = Self.makeDefaults()
             let profile = Self.profile()
@@ -198,7 +201,7 @@ struct ConsumerSetupResumeTests {
     }
 
     @Test func `broken model blocks only after healthy browser`() async {
-        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+        await Self.withConsumerTestState {
             Self.clearTelegramVerificationMarker()
             let defaults = Self.makeDefaults()
             let profile = Self.profile()
@@ -234,7 +237,7 @@ struct ConsumerSetupResumeTests {
     }
 
     @Test func `broken telegram blocks after browser and model pass`() async {
-        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+        await Self.withConsumerTestState {
             Self.clearTelegramVerificationMarker()
             let defaults = Self.makeDefaults()
             let profile = Self.profile()
@@ -278,6 +281,17 @@ struct ConsumerSetupResumeTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return defaults
+    }
+
+    private static func withConsumerTestState<T>(_ body: () async throws -> T) async rethrows -> T {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("consumer-setup-resume-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        return try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": stateDir.appendingPathComponent("openclaw.json").path,
+        ], body)
     }
 
     private static func profile() -> ChromeProfileCandidate {
