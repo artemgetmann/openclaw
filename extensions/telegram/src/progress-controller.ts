@@ -319,6 +319,11 @@ export function createTelegramProgressController(params: {
         return;
       }
       cleared = true;
+      // Authorization ends when the controller becomes terminal, not when
+      // best-effort Telegram cleanup eventually finishes. A stalled flush or
+      // delete may outlive the dispatcher's cleanup timeout and overlap the
+      // next run on this route; revoke the old Stop token before any such I/O.
+      dispose();
       try {
         if (options?.flushBeforeDelete !== false) {
           // Normal progress cleanup flushes pending progress edits before
@@ -334,9 +339,8 @@ export function createTelegramProgressController(params: {
         // the visible progress bubble beats faithfully rendering stale progress.
         await stream.clear({ waitForInFlight: options?.waitForInFlight });
       } finally {
-        // Cleanup failures must never leave an exact route-bound Stop token
-        // authorized after this controller has become terminal. A visible
-        // leftover button then resolves as stale instead of aborting a later run.
+        // Keep disposal idempotent for callers that provide an onDispose hook
+        // with its own cleanup bookkeeping.
         dispose();
       }
     },

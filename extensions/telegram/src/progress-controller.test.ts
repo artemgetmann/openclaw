@@ -2,6 +2,11 @@ import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramProgressController } from "./progress-controller.js";
 import {
+  __testing as runStopTesting,
+  claimTelegramRunStop,
+  registerTelegramRunStop,
+} from "./run-stop-control.js";
+import {
   __testing as workLogTesting,
   getTelegramWorkLog,
   renderTelegramWorkLog,
@@ -30,6 +35,7 @@ function createProgressControllerHarness() {
 describe("createTelegramProgressController", () => {
   beforeEach(() => {
     workLogTesting.resetTelegramWorkLogsForTests();
+    runStopTesting.resetTelegramRunStopsForTests();
   });
 
   it("serializes pending first send, flushes pending progress edit, then deletes the same message", async () => {
@@ -141,6 +147,56 @@ describe("createTelegramProgressController", () => {
 
     expect(adoptedStream.clear).not.toHaveBeenCalled();
     expect(onDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("retires run A before stalled cleanup can overlap same-route run B", () => {
+    const route = {
+      accountId: "default",
+      chatId: 123,
+      requesterId: 9,
+      threadId: 77,
+    };
+    const runA = registerTelegramRunStop(route);
+    const runAToken = runA.buttons[0]?.[0]?.callback_data ?? "";
+    const neverFlushes = new Promise<void>(() => {});
+    const controller = createTelegramProgressController({
+      api: {} as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      stream: {
+        update: vi.fn(),
+        flush: vi.fn().mockReturnValue(neverFlushes),
+        messageId: vi.fn().mockReturnValue(88),
+        clear: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        materialize: vi.fn().mockResolvedValue(88),
+        forceNewMessage: vi.fn(),
+      },
+      activeReplyMarkup: {
+        inline_keyboard: runA.buttons.map((row) => row.map((button) => ({ ...button }))),
+      },
+      onDispose: runA.release,
+      renderText: (text) => ({ text }),
+    });
+
+    // Do not await: this models dispatch cleanup timing out while Telegram's
+    // flush remains stuck. The terminal transition itself must revoke run A.
+    void controller.clear();
+    const runB = registerTelegramRunStop(route);
+    const runBToken = runB.buttons[0]?.[0]?.callback_data ?? "";
+
+    expect(
+      claimTelegramRunStop({
+        data: runAToken,
+        ...route,
+      }),
+    ).toEqual({ status: "stale" });
+    expect(
+      claimTelegramRunStop({
+        data: runBToken,
+        ...route,
+      })?.status,
+    ).toBe("claimed");
   });
 
   it("releases the active Stop claim when Work log conversion flush fails", async () => {
