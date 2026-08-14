@@ -92,7 +92,26 @@ describe("config io paths", () => {
                 safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
                 safeBinProfiles: {
                   " MyFilter ": {
+                    allowedFlags: ["--verbose", " --verbose ", ""],
                     allowedValueFlags: ["--limit", " --limit ", ""],
+                    commandFamilies: [
+                      ["list", "items"],
+                      [" list ", "items"],
+                    ],
+                    commandFamilyOptions: [
+                      {
+                        family: ["show", " item "],
+                        allowedFlags: ["--verbose", " --verbose "],
+                        allowedValueFlags: ["--format"],
+                        guardedValueFlags: {
+                          "--output": "pathOrSafeLiteral",
+                        },
+                      },
+                    ],
+                    allowUnknownOptions: true,
+                    guardedValueFlags: {
+                      "--output": "pathOrSafeLiteral",
+                    },
                   },
                 },
               },
@@ -125,7 +144,26 @@ describe("config io paths", () => {
       const cfg = io.loadConfig();
       expect(cfg.tools?.exec?.safeBinProfiles).toEqual({
         myfilter: {
+          minPositional: undefined,
+          maxPositional: undefined,
+          allowedFlags: ["--verbose"],
           allowedValueFlags: ["--limit"],
+          deniedFlags: undefined,
+          commandFamilies: [["list", "items"]],
+          commandFamilyOptions: [
+            {
+              family: ["show", "item"],
+              allowedFlags: ["--verbose"],
+              allowedValueFlags: ["--format"],
+              guardedValueFlags: {
+                "--output": "pathOrSafeLiteral",
+              },
+            },
+          ],
+          allowUnknownOptions: true,
+          guardedValueFlags: {
+            "--output": "pathOrSafeLiteral",
+          },
         },
       });
       expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
