@@ -60,4 +60,26 @@ describe("artifact runtime", () => {
       source: "runtime",
     });
   });
+
+  it.each(["OPENCLAW_CODEX_PRIMARY_RUNTIME_DIR", "CODEX_PRIMARY_RUNTIME_DIR"])(
+    "preserves the explicit %s compatibility root",
+    (envName) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-explicit-codex-runtime-"));
+      const bin = path.join(root, "bin");
+      fs.mkdirSync(bin, { recursive: true });
+      fs.writeFileSync(path.join(bin, "soffice"), "#!/bin/sh\n");
+
+      const runtime = resolveArtifactRuntime({
+        [envName]: root,
+        PATH: "",
+        HOME: os.homedir(),
+      } as NodeJS.ProcessEnv);
+
+      expect(runtime.roots).toContain(root);
+      expect(runtime.executables.soffice).toMatchObject({
+        path: path.join(bin, "soffice"),
+        source: "runtime",
+      });
+    },
+  );
 });

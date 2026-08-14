@@ -53,7 +53,14 @@ const ENV_EXECUTABLES: Record<ArtifactExecutableName, string[]> = {
   soffice: ["OPENCLAW_ARTIFACT_SOFFICE", "SOFFICE"],
 };
 
-const RUNTIME_ROOT_ENVS = ["OPENCLAW_ARTIFACT_RUNTIME_DIR"];
+// Keep explicitly configured legacy Codex roots for conversion compatibility.
+// Unlike the removed ~/.cache fallback, these paths are deliberate inputs and
+// do not make a packaged Jarvis silently depend on one developer's machine.
+const RUNTIME_ROOT_ENVS = [
+  "OPENCLAW_ARTIFACT_RUNTIME_DIR",
+  "OPENCLAW_CODEX_PRIMARY_RUNTIME_DIR",
+  "CODEX_PRIMARY_RUNTIME_DIR",
+];
 
 export function normalizePdfScale(raw: unknown): number {
   const value =
