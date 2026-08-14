@@ -100,17 +100,22 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
   const writeLines = (text: string, size = 11, isBold = false, indent = 0) => {
     const font = isBold ? bold : regular;
     const supportedCharacters = new Set(font.getCharacterSet());
-    // pdf-lib's standard fonts use WinAnsi. Replace unsupported code points
-    // deterministically instead of aborting the entire PDF for multilingual
-    // input; a future rich-layout feature can justify bundling a large font.
-    const encodableText = Array.from(text, (character) =>
-      supportedCharacters.has(character.codePointAt(0) ?? 0) ? character : "?",
-    ).join("");
+    // Standard PDF fonts are deliberately small, but silently replacing user
+    // text would create a valid-looking corrupt document. Fail with an exact
+    // explanation until a separately reviewed Unicode font is bundled.
+    const unsupported = Array.from(text).find(
+      (character) => !supportedCharacters.has(character.codePointAt(0) ?? 0),
+    );
+    if (unsupported) {
+      throw new Error(
+        `PDF text contains unsupported character ${JSON.stringify(unsupported)}; use DOCX for Unicode text`,
+      );
+    }
     const maxChars = Math.max(
       12,
       Math.floor((page.getWidth() - margin * 2 - indent) / (size * 0.55)),
     );
-    for (const line of wrapText(encodableText, maxChars)) {
+    for (const line of wrapText(text, maxChars)) {
       if (y < margin + size) {
         page = pdf.addPage(pageSize);
         y = page.getHeight() - margin;
@@ -123,6 +128,54 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
         color: rgb(0.1, 0.1, 0.12),
       });
       y -= size * 1.35;
+    }
+  };
+
+  const writeTable = (rows: string[][]) => {
+    if (rows.length === 0) {
+      return;
+    }
+    const columnCount = Math.max(...rows.map((row) => row.length), 1);
+    const tableWidth = page.getWidth() - margin * 2;
+    const columnWidth = tableWidth / columnCount;
+    const fontSize = 9;
+    const lineHeight = fontSize * 1.3;
+    const cellPadding = 4;
+
+    for (const [rowIndex, row] of rows.entries()) {
+      // Measure every cell first so the row remains a single aligned unit when
+      // it wraps or moves to the next page.
+      const wrappedCells = Array.from({ length: columnCount }, (_, columnIndex) =>
+        wrapText(row[columnIndex] ?? "", Math.max(4, Math.floor((columnWidth - 8) / 5))),
+      );
+      const rowHeight = Math.max(...wrappedCells.map((lines) => lines.length)) * lineHeight + 8;
+      if (y - rowHeight < margin) {
+        page = pdf.addPage(pageSize);
+        y = page.getHeight() - margin;
+      }
+      const rowTop = y;
+      for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+        const x = margin + columnIndex * columnWidth;
+        page.drawRectangle({
+          x,
+          y: rowTop - rowHeight,
+          width: columnWidth,
+          height: rowHeight,
+          borderWidth: 0.75,
+          borderColor: rgb(0.55, 0.57, 0.6),
+          color: rowIndex === 0 ? rgb(0.92, 0.93, 0.95) : undefined,
+        });
+        for (const [lineIndex, line] of wrappedCells[columnIndex].entries()) {
+          page.drawText(line, {
+            x: x + cellPadding,
+            y: rowTop - cellPadding - fontSize - lineIndex * lineHeight,
+            size: fontSize,
+            font: rowIndex === 0 ? bold : regular,
+            color: rgb(0.1, 0.1, 0.12),
+          });
+        }
+      }
+      y -= rowHeight;
     }
   };
 
@@ -155,9 +208,7 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
       writeLines(callout, 11, true, 10);
       y -= 4;
     }
-    for (const row of tableRows(section.table)) {
-      writeLines(row.join("  |  "), 9);
-    }
+    writeTable(tableRows(section.table));
     y -= 8;
   }
   const hasSectionContent = sectionsFor(spec).some((section) =>

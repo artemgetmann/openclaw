@@ -93,14 +93,37 @@ describe("artifact commands", () => {
     expect((await fs.readFile(out)).subarray(0, 5).toString()).toBe("%PDF-");
   });
 
-  it("creates a PDF when text contains characters outside WinAnsi", async () => {
+  it("rejects unsupported PDF text instead of silently corrupting it", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-unicode-test-"));
     const input = path.join(dir, "brief.json");
     const out = path.join(dir, "brief.pdf");
     await fs.writeFile(input, JSON.stringify({ title: "Привет 世界 👋" }));
 
-    await expect(createPdfCommand(input, { out })).resolves.toMatchObject({ path: out });
+    await expect(createPdfCommand(input, { out })).rejects.toThrow(/unsupported character/);
+    await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("creates a PDF with aligned table rows and wrapped cells", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-table-test-"));
+    const input = path.join(dir, "brief.json");
+    const out = path.join(dir, "brief.pdf");
+    await fs.writeFile(
+      input,
+      JSON.stringify({
+        sections: [
+          {
+            table: {
+              columns: ["Name", "Notes"],
+              rows: [["Alpha", "A long table cell that must wrap while its row remains aligned"]],
+            },
+          },
+        ],
+      }),
+    );
+
+    await createPdfCommand(input, { out });
     expect((await fs.readFile(out)).subarray(0, 5).toString()).toBe("%PDF-");
+    expect((await fs.stat(out)).size).toBeGreaterThan(800);
   });
 
   it.each([
