@@ -74,6 +74,14 @@ Moving main is never inferred late. Security/release-class paths, non-green or
 unmerged work, and mutation classes absent from the original authority still
 stop even under `current-green-main`.
 
+Keep the original requested PR as the release anchor for the whole task. If
+`current-green-main` later finds protected drift, report the exact PR, merge
+commit, and protected paths once. After the user explicitly authorizes that
+delta, pass each approved PR as `--approved-protected-pr <number>` without
+changing `--pr`. The same receipt remains valid across routine main movement,
+CI waiting, and named-resource contention. Ask again only when the protected PR
+set changes; unused receipts fail closed and cannot pre-authorize future drift.
+
 ## Two-clone model
 
 `~/Programming_Projects/openclaw` is the sacred home clone on `main`. It is the
