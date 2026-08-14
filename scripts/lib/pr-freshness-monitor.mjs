@@ -12,7 +12,7 @@ export function parseRequiredChecksResult(result, number) {
   }
   // GitHub's CLI uses exit 1 and no JSON when a PR has no checks at all.
   // That is a valid empty required-check set, not a transport outage.
-  if (/no checks reported/i.test(result.stderr ?? "")) {
+  if (/no (?:required )?checks reported/i.test(result.stderr ?? "")) {
     return [];
   }
   throw new Error(result.stderr?.trim() || `unable to read required checks for PR #${number}`);

@@ -31,7 +31,7 @@ describe("PR freshness monitor", () => {
   it("accepts GitHub's no-checks response but rejects real command failures", () => {
     expect(
       parseRequiredChecksResult(
-        { stdout: "", stderr: "no checks reported on the 'example' branch" },
+        { stdout: "", stderr: "no required checks reported on the 'example' branch" },
         10,
       ),
     ).toEqual([]);
