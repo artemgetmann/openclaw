@@ -77,7 +77,20 @@ Setup routing
   child argv so `gog` keeps its own flags.
 - Start with the cheapest truthful checks: `gog auth list`, then a read-only
   surface probe such as `gog gmail search`, `gog drive search`, or
-  `gog calendar events`.
+  `gog calendar events`. The `services` reported by `gog auth list` are a saved
+  OAuth scope inventory, not proof that each backing Google API is enabled in
+  the OAuth client's Cloud project.
+- Before the first mutation on a Google surface, run a harmless read through
+  that same API against the exact task target when one exists. For Sheets, use
+  `gog sheets metadata <sheetId> --json --no-input` before updates, clears,
+  copy-paste, or other writes. A successful Drive-backed spreadsheet copy proves
+  Drive access only; it does not prove Sheets API readiness or any cell change.
+- Treat exit code 6, `SERVICE_DISABLED`, `accessNotConfigured`, or an error that
+  the requested API "is not enabled for this OAuth project" as product setup,
+  not missing scopes or a stale token. Do not retry the mutation or start OAuth
+  again. Route to `consumer-setup` with the named API and exact Cloud project
+  from the provider error; that project's owner must enable the API before the
+  original read-only probe and task can resume.
 - Allow node execution when the runtime supports it. Missing
   `system.run.prepare` alone is not a valid reason to mark `gog` execution as
   blocked.

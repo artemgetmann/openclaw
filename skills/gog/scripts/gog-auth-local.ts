@@ -87,6 +87,17 @@ export const AUTH_KEYRING_OPEN_TIMEOUT = "10m";
 export const VERIFICATION_KEYRING_OPEN_TIMEOUT = "15s";
 const AUTH_URL_RE = /^https:\/\/accounts\.google\.com\/o\/oauth2\/auth\?/;
 
+export function authorizedAccountMessage(email: string, services: string) {
+  // auth list proves that the account and requested scopes were stored. Google
+  // API enablement is a separate Cloud-project control and needs a real surface
+  // read before callers can safely claim readiness or attempt a write.
+  return (
+    `Google Workspace authorization is stored for ${email}. gog auth list confirmed ` +
+    `the saved account and requested services (${services}); it does not verify that each ` +
+    "Google API is enabled. Run a read-only check on the requested service before any write."
+  );
+}
+
 function usage() {
   console.error(`Usage:
   gog-auth-local.sh start --email <email> [--services <csv>] [--client <name>] [--readonly] [--force-consent] [--timeout <duration>] [--session <id>]
@@ -1038,9 +1049,7 @@ async function runWorker(flags: Map<string, string | boolean>) {
       }
       await writeStatus(sessionDir, {
         phase: "authorized",
-        message:
-          `Google Workspace core is connected for ${email}. Verified with gog auth list ` +
-          `(${services}).`,
+        message: authorizedAccountMessage(email, services),
         authorized: true,
         exitCode: result.code,
         signal: result.signal,

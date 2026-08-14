@@ -183,11 +183,15 @@ details, translate only those details into friendly wording:
 
 ### Google Workspace (`gog`)
 
-- Missing states usually look like: no OAuth client credentials, no authorized
-  account, auth/account list coming back empty, or `invalid_grant` showing that
-  the saved refresh token expired or was revoked.
-- Tell the user Google Workspace needs to reconnect; do not frame a recoverable
-  expired token as a terminal blocker.
+- Auth setup states usually look like: no OAuth client credentials, no
+  authorized account, auth/account list coming back empty, or `invalid_grant`
+  showing that the saved refresh token expired or was revoked. A provider
+  `SERVICE_DISABLED` error is different: the OAuth connection can be valid while
+  its Cloud project is missing an API.
+- For missing or expired auth, tell the user Google Workspace needs to
+  reconnect; do not frame a recoverable expired token as a terminal blocker.
+  For `SERVICE_DISABLED`, say the named Google API needs project-owner setup and
+  do not send the user through OAuth again.
 - For a new or ambiguous setup, ask which Google account and surfaces they want
   enabled first (Gmail, Calendar, Drive, Docs, Sheets, Contacts). Reuse the
   known account and requested surface during expired-token recovery.
@@ -242,11 +246,23 @@ details, translate only those details into friendly wording:
 - Poll the guarded session with `skills/gog/scripts/gog-auth-local.sh wait`.
   Its successful exit already verifies the account with a short bounded
   `gog auth list`; do not launch a parallel direct verification probe.
+- Treat that `gog auth list` result as an OAuth account and scope receipt only.
+  It does not prove that every requested Google API is enabled in the Cloud
+  project that owns the selected OAuth client.
 - If Keychain approval times out, ask the user to unlock the Mac, retry once,
   complete the single macOS Keychain prompt with their Mac login password, and
   choose Always Allow. Never capture, store, type, or bypass that password.
-- After the guarded session succeeds, a read-only Gmail search or calendar/list
-  call can verify the requested surface before creating drafts or events.
+- After the guarded session succeeds, verify each surface needed by the original
+  task with a harmless read through that same API before any mutation. For
+  Sheets with a known spreadsheet, use
+  `gog sheets metadata <sheetId> --json --no-input`; if no target exists yet,
+  keep Sheets API readiness explicitly unverified until a real task supplies one.
+- If a surface probe returns exit code 6, `SERVICE_DISABLED`,
+  `accessNotConfigured`, or says the API "is not enabled for this OAuth
+  project", do not reconnect the account. Name the API and exact Cloud project
+  from the error, then ask for one owner action: enable that API in the project
+  that owns the OAuth client. Retry only the read-only probe after Google has
+  propagated the change, then resume the original task.
 - Confirm the resolved services in `gog auth list --json`. When the recovery is
   supposed to restore both Gmail and Calendar, prove both with separate harmless
   reads; do not call the connection complete after Gmail alone succeeds.
