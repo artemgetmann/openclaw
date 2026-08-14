@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import io
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -133,6 +136,165 @@ backend.host = "imap.example.com"
 
             self.assertTrue(archive_path.name.endswith("-proof@example.com.eml"))
             self.assertEqual(archive_path.read_bytes(), b"From: founder@example.com\n\nbody")
+
+    def test_build_mark_read_command_scopes_account_folder_and_exact_ids(self) -> None:
+        command = send_template.build_mark_read_command(
+            "himalaya",
+            [Path("base.toml"), Path("private.toml")],
+            "personal",
+            "INBOX",
+            ["42", "43"],
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "himalaya",
+                "-c",
+                "base.toml",
+                "-c",
+                "private.toml",
+                "flag",
+                "add",
+                "-a",
+                "personal",
+                "-f",
+                "INBOX",
+                "42",
+                "43",
+                "seen",
+            ],
+        )
+
+    def test_mark_read_runs_after_clean_send_with_expected_args(self) -> None:
+        completed = send_template.subprocess.CompletedProcess
+        events: list[str] = []
+
+        def fake_run(command: list[str], **_kwargs: object) -> object:
+            events.append("flag")
+            self.assertIn("flag", command)
+            self.assertEqual(command[-3:], ["42", "43", "seen"])
+            return completed(command, 0, b"", b"")
+
+        with patch.object(send_template.subprocess, "run", side_effect=fake_run):
+            events.append("send")
+            result = send_template.mark_source_envelopes_read(
+                "himalaya", [], "personal", "INBOX", ["42", "43"]
+            )
+
+        self.assertEqual(events, ["send", "flag"])
+        self.assertEqual(result.returncode, 0)
+
+    def test_mark_read_failure_is_reported_without_send_retry(self) -> None:
+        completed = send_template.subprocess.CompletedProcess
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **_kwargs: object) -> object:
+            calls.append(command)
+            return completed(command, 75, b"", b"IMAP update failed")
+
+        with patch.object(send_template.subprocess, "run", side_effect=fake_run):
+            result = send_template.mark_source_envelopes_read(
+                "himalaya", [], "personal", "INBOX", ["42"]
+            )
+
+        self.assertEqual(result.returncode, 75)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][2:4], ["add", "-a"])
+
+    def test_main_marks_sources_only_after_a_successful_send(self) -> None:
+        completed = send_template.subprocess.CompletedProcess
+        events: list[str] = []
+        args = SimpleNamespace(
+            account="personal",
+            audit_bcc=[],
+            config_paths=[],
+            himalaya_bin="himalaya",
+            no_proof_archive=True,
+            proof_dir="unused",
+            source_envelope_id=["42", "43"],
+            source_folder="INBOX",
+        )
+
+        def fake_send(*_args: object) -> object:
+            events.append("send")
+            return completed([], 0, b"sent", b"")
+
+        def fake_mark(*_args: object) -> object:
+            events.append("mark")
+            return completed([], 0, b"", b"")
+
+        with (
+            patch.object(send_template, "parse_args", return_value=args),
+            patch.object(send_template, "run_send", side_effect=fake_send),
+            patch.object(send_template, "mark_source_envelopes_read", side_effect=fake_mark),
+            patch.object(send_template, "write_stream"),
+            patch.object(send_template.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(b"To: x@example.com\n\nhi"))),
+        ):
+            self.assertEqual(send_template.main(), 0)
+
+        self.assertEqual(events, ["send", "mark"])
+
+    def test_main_does_not_mark_sources_after_ambiguous_send_failure(self) -> None:
+        completed = send_template.subprocess.CompletedProcess
+        args = SimpleNamespace(
+            account="icloud",
+            audit_bcc=[],
+            config_paths=[],
+            himalaya_bin="himalaya",
+            no_proof_archive=True,
+            proof_dir="unused",
+            source_envelope_id=["42"],
+            source_folder="INBOX",
+        )
+
+        with (
+            patch.object(send_template, "parse_args", return_value=args),
+            patch.object(
+                send_template,
+                "run_send",
+                return_value=completed([], 1, b"", b"cannot add IMAP message: request timed out"),
+            ),
+            patch.object(send_template, "mark_source_envelopes_read") as mark_read,
+            patch.object(send_template, "write_stream"),
+            patch.object(send_template.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(b"To: x@example.com\n\nhi"))),
+        ):
+            self.assertEqual(send_template.main(), 1)
+
+        mark_read.assert_not_called()
+
+    def test_main_reports_failed_read_postcondition_without_resending(self) -> None:
+        completed = send_template.subprocess.CompletedProcess
+        events: list[str] = []
+        args = SimpleNamespace(
+            account="personal",
+            audit_bcc=[],
+            config_paths=[],
+            himalaya_bin="himalaya",
+            no_proof_archive=True,
+            proof_dir="unused",
+            source_envelope_id=["42"],
+            source_folder="INBOX",
+        )
+
+        def fake_send(*_args: object) -> object:
+            events.append("send")
+            return completed([], 0, b"sent", b"")
+
+        def fake_mark(*_args: object) -> object:
+            events.append("mark")
+            return completed([], 75, b"", b"IMAP update failed")
+
+        with (
+            patch.object(send_template, "parse_args", return_value=args),
+            patch.object(send_template, "run_send", side_effect=fake_send),
+            patch.object(send_template, "mark_source_envelopes_read", side_effect=fake_mark),
+            patch.object(send_template, "write_stream"),
+            patch.object(send_template.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(b"To: x@example.com\n\nhi"))),
+        ):
+            self.assertEqual(send_template.main(), 75)
+
+        self.assertEqual(events, ["send", "mark"])
 
 
 if __name__ == "__main__":

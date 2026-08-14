@@ -146,6 +146,9 @@ Time-aware replies
 Read-state commands
 
 - Reading with `read --chat` does not itself mark the Telegram chat read.
+- A successful `send` marks its resolved chat read automatically. If the send
+  reports a read-acknowledgement failure, the outbound message may still have
+  been delivered: inspect the target chat before retrying, never blind-retry.
 - Mark the resolved chat read explicitly:
   `openclaw telegram-user mark-read --chat <chat> --json`
 - Preserve or restore a pending chat as unread explicitly:

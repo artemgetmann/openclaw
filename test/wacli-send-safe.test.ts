@@ -199,6 +199,7 @@ describe("wacli-send-safe", () => {
       "stop",
       "status",
       "send",
+      "chats",
       "ensure",
       "status",
     ]);
@@ -352,7 +353,128 @@ describe("wacli-send-safe", () => {
     expect(report.message).toContain("wa.me fallback");
     expect(report.ownerPaused).toBe(false);
     expect(report.ownerRestored).toBe(false);
-    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it("marks the exact receipt chat read after a successful raw send", async () => {
+    const runCommand = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === "status") {
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: JSON.stringify({ ownerRunning: false, ownerCommandMatches: false }),
+          stderr: "",
+          timedOut: false,
+        };
+      }
+      if (args[2] === "chats") {
+        return { ok: true, exitCode: 0, stdout: "", stderr: "", timedOut: false };
+      }
+      return {
+        ok: true,
+        exitCode: 0,
+        stdout: "Sent to resolved@lid (id sent-1)",
+        stderr: "",
+        timedOut: false,
+      };
+    });
+
+    const report = await runOwnerSafeSend(makeFlags(), {
+      runCommand,
+      verifySend: async () => ({
+        status: "verified_local",
+        chatJid: "resolved@lid",
+        messageId: "sent-1",
+      }),
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.readState).toMatchObject({ status: "marked", chatJid: "resolved@lid" });
+    expect(runCommand).toHaveBeenLastCalledWith(
+      "wacli",
+      ["--store", "/tmp/wacli-store", "chats", "mark-read", "--chat", "resolved@lid", "--json"],
+      1_000,
+    );
+  });
+
+  it("marks the reconciled exact chat read after a failed raw-send exit", async () => {
+    const runCommand = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === "status") {
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: JSON.stringify({ ownerRunning: false, ownerCommandMatches: false }),
+          stderr: "",
+          timedOut: false,
+        };
+      }
+      if (args[2] === "chats") {
+        return { ok: true, exitCode: 0, stdout: "", stderr: "", timedOut: false };
+      }
+      return { ok: false, exitCode: 1, stdout: "", stderr: "timeout", timedOut: true };
+    });
+
+    const report = await runOwnerSafeSend(makeFlags(), {
+      runCommand,
+      verifySend: async () => ({
+        status: "verified_local_after_failed_exit",
+        chatJid: "reconciled@lid",
+        messageId: "sent-2",
+      }),
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.verification.status).toBe("verified_local_after_failed_exit");
+    expect(report.readState).toMatchObject({ status: "marked", chatJid: "reconciled@lid" });
+    expect(runCommand).toHaveBeenLastCalledWith(
+      "wacli",
+      ["--store", "/tmp/wacli-store", "chats", "mark-read", "--chat", "reconciled@lid", "--json"],
+      1_000,
+    );
+  });
+
+  it("preserves an accepted send when marking its chat read fails", async () => {
+    const runCommand = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === "status") {
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: JSON.stringify({ ownerRunning: false, ownerCommandMatches: false }),
+          stderr: "",
+          timedOut: false,
+        };
+      }
+      if (args[2] === "chats") {
+        return {
+          ok: false,
+          exitCode: 1,
+          stdout: "",
+          stderr: "state update rejected",
+          timedOut: false,
+        };
+      }
+      return {
+        ok: true,
+        exitCode: 0,
+        stdout: "Sent to resolved@lid (id sent-3)",
+        stderr: "",
+        timedOut: false,
+      };
+    });
+
+    const report = await runOwnerSafeSend(makeFlags(), {
+      runCommand,
+      verifySend: async () => ({
+        status: "verified_local",
+        chatJid: "resolved@lid",
+        messageId: "sent-3",
+      }),
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.readState).toMatchObject({ status: "failed", chatJid: "resolved@lid" });
+    expect(report.message).toContain("outbound send succeeded, but marking its chat read failed");
+    expect(runCommand).toHaveBeenCalledTimes(3);
   });
 
   it("serializes concurrent safe sends for the same store", async () => {

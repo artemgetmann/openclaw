@@ -268,6 +268,11 @@ Send
   `verification.status` as `verified_local` or
   `verified_local_after_failed_exit`; otherwise open the chat or use a manual
   `wa.me` fallback before claiming delivery or thread proof.
+- After every accepted safe-send, the helper marks the exact resolved chat read
+  in the same serialized store transaction. Check `readState.status=marked`
+  before claiming that chat state changed. A `readState.status=failed` does not
+  undo the accepted send and must not trigger a resend; report the state-update
+  failure clearly instead.
 - Raw `wacli send ...` is not allowed for real external contacts after safe-send
   failure. Use it only for self-chat/test contacts or with explicit break-glass
   approval.

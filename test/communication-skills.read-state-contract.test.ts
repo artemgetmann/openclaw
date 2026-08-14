@@ -37,12 +37,16 @@ describe("cross-channel read-state lifecycle", () => {
     }
   });
 
-  it("does not move the lifecycle into message-drafting", () => {
+  it("keeps lifecycle policy in triage while routing post-send state through channel skills", () => {
     const draftingSkill = readSkill("message-drafting");
 
     expect(draftingSkill).not.toContain("Read-State Lifecycle");
     expect(draftingSkill).not.toContain("mark-read");
     expect(draftingSkill).not.toContain("mark-unread");
+    expect(draftingSkill).toContain("## Post-Send Conversation State");
+    expect(draftingSkill).toContain("channel skill's post-send conversation-state rule");
+    expect(draftingSkill).toContain("send receipt and conversation-state receipt separate");
+    expect(draftingSkill).toContain("never retry the already-sent message");
   });
 });
 
@@ -51,6 +55,7 @@ describe("channel skills expose truthful read-state commands", () => {
     const skill = readSkill("telegram-user");
 
     expect(skill).toContain("Reading with `read --chat` does not itself mark");
+    expect(skill).toContain("A successful `send` marks its resolved chat read automatically");
     expect(skill).toContain("openclaw telegram-user mark-read --chat <chat> --json");
     expect(skill).toContain("openclaw telegram-user mark-unread --chat <chat> --json");
     expect(skill).toContain("chat-level state");
@@ -61,6 +66,10 @@ describe("channel skills expose truthful read-state commands", () => {
   it("documents WhatsApp chat-level state", () => {
     const skill = readSkill("wacli");
 
+    expect(skill).toContain(
+      "After every accepted safe-send, the helper marks the exact resolved chat read",
+    );
+    expect(skill).toContain("readState.status=marked");
     expect(skill).toContain("wacli chats mark-read --chat <target> --json");
     expect(skill).toContain("wacli chats mark-unread --chat <target> --json");
     expect(skill).toContain("chat-level, not per-message");
@@ -81,6 +90,9 @@ describe("channel skills expose truthful read-state commands", () => {
   it("maps Himalaya seen flags within an explicit account and folder", () => {
     const skill = readSkill("himalaya");
 
+    expect(skill).toContain("pass the verified");
+    expect(skill).toContain("--source-folder <folder> --source-envelope-id <id>");
+    expect(skill).toContain("marks only those explicit source envelopes `seen` after a clean");
     expect(skill).toContain("Normal `himalaya message read <id>` automatically adds");
     expect(skill).toContain("himalaya message read --preview <id>");
     expect(skill).toContain("himalaya envelope list not flag seen");

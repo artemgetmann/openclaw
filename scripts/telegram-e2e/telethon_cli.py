@@ -1353,9 +1353,13 @@ async def run_send(args: argparse.Namespace) -> int:
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
+      # Resolve once so send and the acknowledgement apply to exactly the same
+      # dialog while this session owns the lock. A topic is still part of its
+      # parent dialog for Telegram read-state purposes.
+      chat_entity = resolve_chat(args.chat)
       if media:
         sent = await client.send_file(
-          entity = resolve_chat(args.chat),
+          entity = chat_entity,
           file = media,
           caption = caption or message_text or None,
           reply_to = args.reply_to or None,
@@ -1363,13 +1367,28 @@ async def run_send(args: argparse.Namespace) -> int:
         )
       else:
         sent = await client.send_message(
-          entity = resolve_chat(args.chat),
+          entity = chat_entity,
           message = message_text,
           reply_to = args.reply_to or None,
         )
       sent = coerce_single_message(sent)
       if sent is None:
         return fail("E_TELEGRAM_USER_BACKEND", "Telegram send returned no message.")
+      try:
+        # A successful user-account reply resolves the dialog. Keep this in
+        # the same client/lock transaction rather than launching a second
+        # mark-read process that could race another Telegram operation.
+        await client.send_read_acknowledge(chat_entity)
+      except Exception as err:
+        # The message can already be visible even though the acknowledgement
+        # failed. Return an explicit unknown-state failure so callers inspect
+        # history instead of blindly retrying and duplicating the send.
+        return fail(
+          "E_TELEGRAM_USER_SEND_READ_ACK_UNKNOWN",
+          "Telegram send may have succeeded, but marking the chat read failed. "
+          "Read the target chat before retrying to avoid a duplicate message.",
+          details = {"cause": sanitize_error_text(str(err))},
+        )
       chat = await sent.get_chat()
       return emit({"message": build_message_payload(sent, chat = chat)})
     finally:

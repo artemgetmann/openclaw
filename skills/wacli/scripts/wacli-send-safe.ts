@@ -57,6 +57,17 @@ type SendVerification = {
   reason?: string;
 };
 
+// This is deliberately distinct from outbound verification: WhatsApp accepts a
+// send before its chat app-state can be updated, and a failed read-state write
+// must never cause a duplicate outbound attempt.
+type ReadState = {
+  status: "marked" | "failed" | "not_attempted";
+  chatJid?: string;
+  exitCode?: number | null;
+  timedOut?: boolean;
+  reason?: string;
+};
+
 type SendReport = {
   ok: boolean;
   status: "sent" | "sent_with_owner_restored" | "sent_with_restore_warning" | "failed";
@@ -74,6 +85,7 @@ type SendReport = {
     timedOut: boolean;
   };
   verification: SendVerification;
+  readState: ReadState;
   retryAttempted: boolean;
   message: string;
   error?: string;
@@ -404,6 +416,10 @@ function buildSendArgs(flags: Flags) {
   return args;
 }
 
+function buildMarkReadArgs(flags: Flags, chatJid: string) {
+  return ["--store", flags.storeDir, "chats", "mark-read", "--chat", chatJid, "--json"];
+}
+
 async function readOwnerStatus(
   flags: Flags,
   deps: Pick<Deps, "runCommand">,
@@ -490,6 +506,53 @@ async function waitForOwnerRelease(
 
 async function sendOnce(flags: Flags, deps: Pick<Deps, "runCommand">) {
   return await deps.runCommand("wacli", buildSendArgs(flags), flags.timeoutMs);
+}
+
+function readStateNotAttempted(reason: string): ReadState {
+  return { status: "not_attempted", reason };
+}
+
+async function markChatReadAfterSend(
+  flags: Flags,
+  verification: SendVerification,
+  deps: Pick<Deps, "runCommand">,
+): Promise<ReadState> {
+  // A receipt/local reconciliation supplies the concrete chat JID. Never reuse
+  // the caller's possibly ambiguous phone number or display name for this write.
+  if (!verification.chatJid) {
+    return {
+      status: "failed",
+      reason: "Outbound send succeeded, but no exact chat JID was available to mark read.",
+    };
+  }
+
+  let result: CommandResult;
+  try {
+    result = await deps.runCommand(
+      "wacli",
+      buildMarkReadArgs(flags, verification.chatJid),
+      flags.timeoutMs,
+    );
+  } catch (error) {
+    return {
+      status: "failed",
+      chatJid: verification.chatJid,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (result.ok) {
+    return { status: "marked", chatJid: verification.chatJid, exitCode: result.exitCode };
+  }
+  return {
+    status: "failed",
+    chatJid: verification.chatJid,
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    reason:
+      result.stderr.trim() ||
+      result.stdout.trim() ||
+      `wacli chats mark-read exited with ${String(result.exitCode)}`,
+  };
 }
 
 async function verifyAcceptedSendInLocalHistory(params: {
@@ -652,6 +715,7 @@ function buildSuccessMessage(
   ownerPaused: boolean,
   ownerRestored: boolean,
   verification: SendVerification,
+  readState: ReadState,
 ) {
   const acceptedPrefix = ownerPaused
     ? ownerRestored
@@ -660,14 +724,25 @@ function buildSuccessMessage(
     : `Accepted WhatsApp ${flags.command}`;
 
   if (verification.status === "verified_local") {
-    return `${acceptedPrefix} and verified it in local history.`;
+    return `${acceptedPrefix} and verified it in local history.${readStateMessage(readState)}`;
   }
   if (verification.status === "verified_local_after_failed_exit") {
-    return `Raw wacli send did not exit cleanly, but the outbound ${flags.command} was found exactly once in local history.`;
+    return `Raw wacli send did not exit cleanly, but the outbound ${flags.command} was found exactly once in local history.${readStateMessage(readState)}`;
   }
 
   const reason = verification.reason ? ` Reason: ${verification.reason}` : "";
-  return `${acceptedPrefix}, but it was not verified in local history.${reason} Open the WhatsApp chat or use a wa.me fallback manually before claiming delivery or thread proof.`;
+  return `${acceptedPrefix}, but it was not verified in local history.${reason} Open the WhatsApp chat or use a wa.me fallback manually before claiming delivery or thread proof.${readStateMessage(readState)}`;
+}
+
+function readStateMessage(readState: ReadState) {
+  if (readState.status === "marked") {
+    return " Marked the exact chat read.";
+  }
+  if (readState.status === "failed") {
+    const reason = readState.reason ? ` Reason: ${readState.reason}` : "";
+    return ` The outbound send succeeded, but marking its chat read failed.${reason}`;
+  }
+  return "";
 }
 
 function unverified(reason: string): SendVerification {
@@ -729,6 +804,8 @@ async function runOwnerSafeSendLocked(flags: Flags, deps: Deps): Promise<SendRep
   let sendEndedAtMs: number | undefined;
   let ownerStop: LiveStatus | undefined;
   let pauseFailureReport: SendReport | undefined;
+  let verification: SendVerification | undefined;
+  let readState = readStateNotAttempted("Outbound send was not accepted.");
 
   if (shouldPauseOwner) {
     ownerStop = await runLiveCommand("stop", flags, deps);
@@ -746,6 +823,9 @@ async function runOwnerSafeSendLocked(flags: Flags, deps: Deps): Promise<SendRep
         ownerStop,
         send: emptySendResult(),
         verification: failedPauseVerification(),
+        readState: readStateNotAttempted(
+          "Send was not attempted because the sync owner could not be paused.",
+        ),
         retryAttempted: false,
         message: "Failed to pause the recorded wacli sync owner before sending.",
         error:
@@ -771,6 +851,28 @@ async function runOwnerSafeSendLocked(flags: Flags, deps: Deps): Promise<SendRep
         sendEndedAtMs = Date.now();
         sendRaw = `${sendResult.stdout}\n${sendResult.stderr}`;
       }
+
+      if (sendResult) {
+        verification = await deps.verifySend({
+          storeDir: flags.storeDir,
+          stdout: sendResult.stdout,
+          stderr: sendResult.stderr,
+          to: flags.to,
+          command: flags.command,
+          message: flags.message,
+          caption: flags.caption,
+          startedAtMs: sendStartedAtMs,
+          endedAtMs: sendEndedAtMs ?? Date.now(),
+          // A non-zero exit can still be an accepted send. Only that narrowly
+          // reconciled case is permitted to advance to the chat read update.
+          allowTargetTextFallback: !sendResult.ok,
+        });
+        const accepted =
+          sendResult.ok || verification.status === "verified_local_after_failed_exit";
+        if (accepted) {
+          readState = await markChatReadAfterSend(flags, verification, deps);
+        }
+      }
     }
   } finally {
     if (ownerStop?.stoppedPid != null) {
@@ -795,26 +897,19 @@ async function runOwnerSafeSendLocked(flags: Flags, deps: Deps): Promise<SendRep
       ownerBefore,
       send: emptySendResult(),
       verification: missingSendResultVerification(),
+      readState,
       retryAttempted,
       message: "WhatsApp send did not start.",
       error: "No send result was produced.",
     };
   }
 
-  if (!sendResult.ok) {
-    const verification = await deps.verifySend({
-      storeDir: flags.storeDir,
-      stdout: sendResult.stdout,
-      stderr: sendResult.stderr,
-      to: flags.to,
-      command: flags.command,
-      message: flags.message,
-      caption: flags.caption,
-      startedAtMs: sendStartedAtMs,
-      endedAtMs: sendEndedAtMs ?? Date.now(),
-      allowTargetTextFallback: true,
-    });
+  // The send result always receives a verification inside the protected
+  // transaction. Retain the defensive fallback so an injected test dependency
+  // cannot make the reporting path throw after the owner has been restored.
+  verification ??= unverified("Raw wacli send did not produce verification data.");
 
+  if (!sendResult.ok) {
     if (verification.status === "verified_local_after_failed_exit") {
       const reconciledStatus: SendReport["status"] =
         ownerPaused && ownerRestored
@@ -838,8 +933,9 @@ async function runOwnerSafeSendLocked(flags: Flags, deps: Deps): Promise<SendRep
           timedOut: sendResult.timedOut,
         },
         verification,
+        readState,
         retryAttempted,
-        message: buildSuccessMessage(flags, ownerPaused, ownerRestored, verification),
+        message: buildSuccessMessage(flags, ownerPaused, ownerRestored, verification, readState),
         error:
           sendResult.stderr.trim() ||
           sendResult.stdout.trim() ||
@@ -863,6 +959,7 @@ async function runOwnerSafeSendLocked(flags: Flags, deps: Deps): Promise<SendRep
         timedOut: sendResult.timedOut,
       },
       verification,
+      readState,
       retryAttempted,
       message: containsLockError(sendRaw)
         ? "WhatsApp send failed because the store is still locked."
@@ -881,18 +978,6 @@ async function runOwnerSafeSendLocked(flags: Flags, deps: Deps): Promise<SendRep
       : ownerPaused && !ownerRestored
         ? "sent_with_restore_warning"
         : "sent";
-  const verification = await deps.verifySend({
-    storeDir: flags.storeDir,
-    stdout: sendResult.stdout,
-    stderr: sendResult.stderr,
-    to: flags.to,
-    command: flags.command,
-    message: flags.message,
-    caption: flags.caption,
-    startedAtMs: sendStartedAtMs,
-    endedAtMs: sendEndedAtMs,
-  });
-
   return {
     ok: true,
     status,
@@ -910,8 +995,9 @@ async function runOwnerSafeSendLocked(flags: Flags, deps: Deps): Promise<SendRep
       timedOut: sendResult.timedOut,
     },
     verification,
+    readState,
     retryAttempted,
-    message: buildSuccessMessage(flags, ownerPaused, ownerRestored, verification),
+    message: buildSuccessMessage(flags, ownerPaused, ownerRestored, verification, readState),
   };
 }
 
@@ -942,6 +1028,13 @@ function emit(report: SendReport, asJson: boolean) {
   }
   if (report.verification.reason) {
     console.log(`verification_reason=${report.verification.reason}`);
+  }
+  console.log(`read_state_status=${report.readState.status}`);
+  if (report.readState.chatJid) {
+    console.log(`read_state_chat_jid=${report.readState.chatJid}`);
+  }
+  if (report.readState.reason) {
+    console.log(`read_state_reason=${report.readState.reason}`);
   }
   if (report.ownerStop?.forcedStop) {
     console.log("owner_stop_forced=true");
@@ -985,10 +1078,11 @@ if (isEntrypoint()) {
 
 export {
   buildSendArgs,
+  buildMarkReadArgs,
   containsLockError,
   parseArgs,
   parseSendReceipt,
   runOwnerSafeSend,
   verifyAcceptedSendInLocalHistory,
 };
-export type { Flags, LiveStatus, SendReceipt, SendReport, SendVerification };
+export type { Flags, LiveStatus, ReadState, SendReceipt, SendReport, SendVerification };

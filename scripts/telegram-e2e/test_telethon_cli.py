@@ -407,8 +407,10 @@ async def run_fake_topic_read(
 
 
 class FakeSendClient:
-  def __init__(self) -> None:
+  def __init__(self, *, read_ack_error: Exception | None = None) -> None:
     self.disconnected = False
+    self.read_ack_error = read_ack_error
+    self.read_acknowledgements: list[object] = []
     self.send_file_calls: list[dict[str, object]] = []
     self.send_message_calls: list[dict[str, object]] = []
 
@@ -431,6 +433,11 @@ class FakeSendClient:
       message_id = 502,
       text = str(kwargs.get("message") or ""),
     )
+
+  async def send_read_acknowledge(self, chat):
+    self.read_acknowledgements.append(chat)
+    if self.read_ack_error is not None:
+      raise self.read_ack_error
 
 
 class FakeTopicClient:
@@ -2276,9 +2283,11 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
         exit_code = await telethon_cli.run_send(
           argparse.Namespace(
             caption = "voice proof",
+            caption_stdin = False,
             chat = "-1003783709877",
             media = "/tmp/proof.ogg",
             message = None,
+            message_stdin = False,
             reply_to = 15248,
             session = str(session_path),
             voice = True,
@@ -2292,6 +2301,7 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(fake_client.send_file_calls[0]["file"], "/tmp/proof.ogg")
     self.assertEqual(fake_client.send_file_calls[0]["reply_to"], 15248)
     self.assertTrue(fake_client.send_file_calls[0]["voice_note"])
+    self.assertEqual(fake_client.read_acknowledgements, [-1003783709877])
     self.assertEqual(emitted["message"]["media_kind"], "voice")
     self.assertEqual(emitted["message"]["message_id"], 501)
 
@@ -2314,9 +2324,11 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
         exit_code = await telethon_cli.run_send(
           argparse.Namespace(
             caption = None,
+            caption_stdin = False,
             chat = "-1003783709877",
             media = None,
             message = "text proof",
+            message_stdin = False,
             reply_to = 0,
             session = str(session_path),
             voice = False,
@@ -2327,7 +2339,45 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(fake_client.send_file_calls, [])
     self.assertEqual(fake_client.send_message_calls[0]["message"], "text proof")
     self.assertIsNone(fake_client.send_message_calls[0]["reply_to"])
+    self.assertEqual(fake_client.read_acknowledgements, [-1003783709877])
     self.assertEqual(emitted["message"]["media_kind"], None)
+
+  async def test_run_send_reports_unknown_state_when_read_acknowledgement_fails(self) -> None:
+    fake_client = FakeSendClient(read_ack_error = RuntimeError("read acknowledgement unavailable"))
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_send(
+          argparse.Namespace(
+            caption = None,
+            caption_stdin = False,
+            chat = "-1003783709877",
+            media = None,
+            message = "text proof",
+            message_stdin = False,
+            reply_to = 0,
+            session = str(session_path),
+            voice = False,
+          )
+        )
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(len(fake_client.send_message_calls), 1)
+    self.assertEqual(fake_client.read_acknowledgements, [-1003783709877])
+    self.assertTrue(fake_client.disconnected)
+    self.assertEqual(emitted["error"]["code"], "E_TELEGRAM_USER_SEND_READ_ACK_UNKNOWN")
+    self.assertIn("before retrying", emitted["error"]["message"])
 
   async def test_run_topic_create_returns_stable_topic_anchor_payload(self) -> None:
     fake_client = FakeTopicClient()
