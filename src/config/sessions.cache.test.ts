@@ -111,6 +111,35 @@ describe("Session Store Cache", () => {
     expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
   });
 
+  it("isolates cached loads without structured-cloning the whole store", async () => {
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
+        skillsSnapshot: {
+          prompt: "large repeated prompt".repeat(1_000),
+          skills: [{ name: "alpha" }],
+        },
+      }),
+    );
+    await saveSessionStore(storePath, testStore);
+
+    // A production store can be tens of megabytes. Guard the mechanism, not a
+    // machine-specific timing threshold: cached reads must parse isolated JSON
+    // copies and must never enter V8's blocking structured-clone path.
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone").mockImplementation(() => {
+      throw new Error("session cache must not structured-clone the store");
+    });
+    try {
+      const loaded1 = loadSessionStore(storePath);
+      loaded1["session:1"].skillsSnapshot!.skills[0].name = "mutated";
+
+      const loaded2 = loadSessionStore(storePath);
+      expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
+      expect(cloneSpy).not.toHaveBeenCalled();
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
   it("should refresh cache when store file changes on disk", async () => {
     const testStore = createSingleSessionStore();
 

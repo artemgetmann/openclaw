@@ -206,6 +206,10 @@ export function loadSessionStore(
       sizeBytes: currentFileStat?.sizeBytes,
     });
     if (cached) {
+      // The serialized cache intentionally mirrors the durable file bytes.
+      // Reapply best-effort in-memory migrations so cache hits have the same
+      // canonical shape as a disk load without rewriting user state.
+      applySessionStoreMigrations(cached);
       return cached;
     }
   }
@@ -256,17 +260,19 @@ export function loadSessionStore(
   applySessionStoreMigrations(store);
 
   // Cache the result if caching is enabled
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+  if (!opts.skipCache && isSessionStoreCacheEnabled() && serializedFromDisk !== undefined) {
     writeSessionStoreCache({
       storePath,
-      store,
       mtimeMs,
       sizeBytes: fileStat?.sizeBytes,
       serialized: serializedFromDisk,
     });
   }
 
-  return structuredClone(store);
+  // `store` came from this call's JSON.parse and is not retained by the cache,
+  // so ownership can transfer directly to the caller. Cloning it here used to
+  // duplicate the most expensive work on every cache miss and uncached update.
+  return store;
 }
 
 export function readSessionUpdatedAt(params: {
@@ -356,11 +362,7 @@ export async function serializeSessionStoreCooperatively(
   return `{\n${serializedEntries.join(",\n")}\n}`;
 }
 
-function updateSessionStoreWriteCaches(params: {
-  storePath: string;
-  store: Record<string, SessionEntry>;
-  serialized: string;
-}): void {
+function updateSessionStoreWriteCaches(params: { storePath: string; serialized: string }): void {
   const fileStat = getFileStatSnapshot(params.storePath);
   setSerializedSessionStore(params.storePath, params.serialized);
   if (!isSessionStoreCacheEnabled()) {
@@ -369,7 +371,6 @@ function updateSessionStoreWriteCaches(params: {
   }
   writeSessionStoreCache({
     storePath: params.storePath,
-    store: params.store,
     mtimeMs: fileStat?.mtimeMs,
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
@@ -496,7 +497,7 @@ async function saveSessionStoreUnlocked(
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = await serializeSessionStoreCooperatively(store);
   if (getSerializedSessionStore(storePath) === json) {
-    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+    updateSessionStoreWriteCaches({ storePath, serialized: json });
     return;
   }
 
@@ -504,7 +505,7 @@ async function saveSessionStoreUnlocked(
   if (process.platform === "win32") {
     for (let i = 0; i < 5; i++) {
       try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({ storePath, serialized: json });
         return;
       } catch (err) {
         const code = getErrorCode(err);
@@ -524,7 +525,7 @@ async function saveSessionStoreUnlocked(
   }
 
   try {
-    await writeSessionStoreAtomic({ storePath, store, serialized: json });
+    await writeSessionStoreAtomic({ storePath, serialized: json });
   } catch (err) {
     const code = getErrorCode(err);
 
@@ -532,7 +533,7 @@ async function saveSessionStoreUnlocked(
       // In tests the temp session-store directory may be deleted while writes are in-flight.
       // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({ storePath, serialized: json });
       } catch (err2) {
         const code2 = getErrorCode(err2);
         if (code2 === "ENOENT") {
@@ -636,13 +637,11 @@ export function archiveRemovedSessionTranscripts(params: {
 
 async function writeSessionStoreAtomic(params: {
   storePath: string;
-  store: Record<string, SessionEntry>;
   serialized: string;
 }): Promise<void> {
   await writeTextAtomic(params.storePath, params.serialized, { mode: 0o600 });
   updateSessionStoreWriteCaches({
     storePath: params.storePath,
-    store: params.store,
     serialized: params.serialized,
   });
 }

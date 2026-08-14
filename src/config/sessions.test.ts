@@ -563,6 +563,18 @@ describe("sessions", () => {
     expect(entry.provider).toBeUndefined();
     expect(entry.lastChannel).toBe("telegram");
     expect(entry.lastProvider).toBeUndefined();
+
+    // The cache stores the original durable JSON, so cache hits must apply the
+    // same in-memory migration instead of exposing the legacy routing fields.
+    const cachedStore = loadSessionStore(storePath) as unknown as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const cachedEntry = cachedStore[mainSessionKey] ?? {};
+    expect(cachedEntry.channel).toBe("slack");
+    expect(cachedEntry.provider).toBeUndefined();
+    expect(cachedEntry.lastChannel).toBe("telegram");
+    expect(cachedEntry.lastProvider).toBeUndefined();
   });
 
   it("derives session transcripts dir from OPENCLAW_STATE_DIR", () => {
