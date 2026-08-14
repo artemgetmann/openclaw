@@ -109,6 +109,7 @@ CI_TIMEOUT_SECONDS="${OPENCLAW_SHIP_CI_TIMEOUT_SECONDS:-1800}"
 PR_NUMBER=""
 MAIN_POLICY=""
 APPROVED_PROTECTED_PRS=()
+REVIEWED_ROUTINE_PROTECTED_PRS=()
 DRY_RUN=0
 STATUS_STDOUT_FILE=""
 STATUS_STDERR_FILE=""
@@ -160,7 +161,7 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage: scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy <exact-pr|current-green-main> [--approved-protected-pr <number>]... [--dry-run]
+Usage: scripts/ship-jarvis-hotfix.sh --pr <number> --main-policy <exact-pr|current-green-main> [--reviewed-routine-protected-pr <number>]... [--approved-protected-pr <number>]... [--dry-run]
 
 Ship an already-merged main-targeted PR to this Mac's default Jarvis as an
 explicit app-support break-glass hotfix. The wrapper builds and launches only
@@ -172,10 +173,12 @@ The main policy must match the delivery authority recorded when the task began:
   current-green-main  Ship later routine merged PRs after their protected-path,
                       exact merge identity, and required-check proof passes.
 
-When current-green-main discovers protected drift, keep --pr anchored to the
-original task. After explicit approval for the exact protected PR delta, repeat
---approved-protected-pr for each approved merged PR. Unused or newly missing
-protected-PR receipts fail closed; this is never blanket future authority.
+Protected paths always require exact-diff review. When that review proves the
+PR adds no new permission, capability, external effect, destructive action,
+credential use, release/publication, shared-runtime mutation class, or material
+scope, record it with --reviewed-routine-protected-pr. A real authority change
+still requires explicit user approval and --approved-protected-pr. Both receipt
+types bind to the current intervening PR set and cannot authorize future drift.
 EOF
 }
 
@@ -201,7 +204,35 @@ parse_args() {
               die "duplicate --approved-protected-pr ${approved_pr}"
           done
         fi
+        local already_reviewed_pr=""
+        if (( ${#REVIEWED_ROUTINE_PROTECTED_PRS[@]} > 0 )); then
+          for already_reviewed_pr in "${REVIEWED_ROUTINE_PROTECTED_PRS[@]}"; do
+            [[ "${already_reviewed_pr}" != "${approved_pr}" ]] || \
+              die "protected PR ${approved_pr} cannot be both reviewed-routine and user-approved"
+          done
+        fi
         APPROVED_PROTECTED_PRS+=("${approved_pr}")
+        shift 2
+        ;;
+      --reviewed-routine-protected-pr)
+        local reviewed_pr="${2:-}"
+        [[ "${reviewed_pr}" =~ ^[1-9][0-9]*$ ]] || \
+          die "--reviewed-routine-protected-pr must be a positive PR number"
+        local existing_reviewed_pr=""
+        if (( ${#REVIEWED_ROUTINE_PROTECTED_PRS[@]} > 0 )); then
+          for existing_reviewed_pr in "${REVIEWED_ROUTINE_PROTECTED_PRS[@]}"; do
+            [[ "${existing_reviewed_pr}" != "${reviewed_pr}" ]] || \
+              die "duplicate --reviewed-routine-protected-pr ${reviewed_pr}"
+          done
+        fi
+        local already_approved_pr=""
+        if (( ${#APPROVED_PROTECTED_PRS[@]} > 0 )); then
+          for already_approved_pr in "${APPROVED_PROTECTED_PRS[@]}"; do
+            [[ "${already_approved_pr}" != "${reviewed_pr}" ]] || \
+              die "protected PR ${reviewed_pr} cannot be both reviewed-routine and user-approved"
+          done
+        fi
+        REVIEWED_ROUTINE_PROTECTED_PRS+=("${reviewed_pr}")
         shift 2
         ;;
       --dry-run)
@@ -223,8 +254,9 @@ parse_args() {
     exact-pr | current-green-main) ;;
     *) die "--main-policy must be exact-pr or current-green-main and match task-start authority" ;;
   esac
-  if [[ "${MAIN_POLICY}" != "current-green-main" && "${#APPROVED_PROTECTED_PRS[@]}" -gt 0 ]]; then
-    die "--approved-protected-pr is valid only with task-start current-green-main authority"
+  if [[ "${MAIN_POLICY}" != "current-green-main" ]] && \
+    (( ${#APPROVED_PROTECTED_PRS[@]} > 0 || ${#REVIEWED_ROUTINE_PROTECTED_PRS[@]} > 0 )); then
+    die "protected-drift receipts are valid only with task-start current-green-main authority"
   fi
 }
 
@@ -486,12 +518,24 @@ pr_protected_paths() {
   done < <(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.files[].path')
 }
 
-protected_pr_receipt_is_listed() {
+protected_pr_receipt_basis() {
   local pr="$1"
+  local reviewed_pr=""
   local approved_pr=""
+  if (( ${#REVIEWED_ROUTINE_PROTECTED_PRS[@]} > 0 )); then
+    for reviewed_pr in "${REVIEWED_ROUTINE_PROTECTED_PRS[@]}"; do
+      if [[ "${reviewed_pr}" == "${pr}" ]]; then
+        printf 'reviewed-routine\n'
+        return 0
+      fi
+    done
+  fi
   if (( ${#APPROVED_PROTECTED_PRS[@]} > 0 )); then
     for approved_pr in "${APPROVED_PROTECTED_PRS[@]}"; do
-      [[ "${approved_pr}" != "${pr}" ]] || return 0
+      if [[ "${approved_pr}" == "${pr}" ]]; then
+        printf 'user-approved\n'
+        return 0
+      fi
     done
   fi
   return 1
@@ -499,13 +543,27 @@ protected_pr_receipt_is_listed() {
 
 assert_protected_receipts_consumed() {
   local seen_prs="$1"
+  local reviewed_pr=""
   local approved_pr=""
   local seen_pr=""
   local found=0
 
-  # Reject receipts that are not part of the exact current delta. Otherwise an
-  # operator could pre-approve an unrelated protected PR and accidentally turn
-  # it into permission for some future main state.
+  # Reject either receipt type unless the exact PR is in the current protected
+  # delta. Review authority and user authority are different, but neither may
+  # become a reusable pass for a future main state.
+  if (( ${#REVIEWED_ROUTINE_PROTECTED_PRS[@]} > 0 )); then
+    for reviewed_pr in "${REVIEWED_ROUTINE_PROTECTED_PRS[@]}"; do
+      found=0
+      while IFS= read -r seen_pr; do
+        if [[ "${seen_pr}" == "${reviewed_pr}" ]]; then
+          found=1
+          break
+        fi
+      done <<<"${seen_prs}"
+      (( found == 1 )) || \
+        die "reviewed-routine protected PR #${reviewed_pr} is not in the current intervening protected drift; refusing unused future authority"
+    done
+  fi
   if (( ${#APPROVED_PROTECTED_PRS[@]} > 0 )); then
     for approved_pr in "${APPROVED_PROTECTED_PRS[@]}"; do
       found=0
@@ -586,7 +644,8 @@ dry_run_reviewed_remote_main() {
   local mainline_commits=""
   local protected_paths=""
   local protected_paths_inline=""
-  local seen_approved_protected_prs=""
+  local receipt_basis=""
+  local seen_receipted_protected_prs=""
 
   repo="$(${GH_BIN} repo view --json nameWithOwner --jq '.nameWithOwner')"
   [[ -n "${repo}" ]] || die "could not resolve GitHub repository for dry-run main proof"
@@ -625,10 +684,10 @@ dry_run_reviewed_remote_main() {
     fi
     if [[ -n "${protected_paths}" ]]; then
       protected_paths_inline="${protected_paths//$'\n'/,}"
-      protected_pr_receipt_is_listed "${pr}" || \
-        die "protected drift requires new authority: main commit ${commit_sha} PR #${pr} paths=${protected_paths_inline}; after explicit approval rerun with --approved-protected-pr ${pr}"
-      seen_approved_protected_prs+="${pr}"$'\n'
-      log "approved_protected_drift=PR#${pr}@${commit_sha} paths=${protected_paths_inline}" >&2
+      receipt_basis="$(protected_pr_receipt_basis "${pr}")" || \
+        die "protected drift requires classification: main commit ${commit_sha} PR #${pr} paths=${protected_paths_inline}; use --reviewed-routine-protected-pr ${pr} only after exact-diff review proves no authority expansion, otherwise obtain explicit approval and use --approved-protected-pr ${pr}"
+      seen_receipted_protected_prs+="${pr}"$'\n'
+      log "protected_drift_receipt=${receipt_basis} PR#${pr}@${commit_sha} paths=${protected_paths_inline}" >&2
     fi
     # Do not rely on Bash errexit here. A caller can evaluate this classifier
     # in a conditional, which suppresses inherited `set -e` behavior. Required
@@ -636,7 +695,7 @@ dry_run_reviewed_remote_main() {
     run_pr_required --pr "${pr}" --wait --timeout "${CI_TIMEOUT_SECONDS}" >&2 || \
       die "dry-run main commit ${commit_sha} PR #${pr} required checks are not green"
   done <<<"${mainline_commits}"
-  assert_protected_receipts_consumed "${seen_approved_protected_prs}"
+  assert_protected_receipts_consumed "${seen_receipted_protected_prs}"
   printf '%s\n' "${head_sha}"
 }
 
@@ -1203,7 +1262,7 @@ prove_break_glass_runtime() {
 
 main() {
   parse_args "$@"
-  log "delivery_authority_policy=${MAIN_POLICY} requested_pr=${PR_NUMBER} approved_protected_prs=${APPROVED_PROTECTED_PRS[*]:-none}"
+  log "delivery_authority_policy=${MAIN_POLICY} requested_pr=${PR_NUMBER} reviewed_routine_protected_prs=${REVIEWED_ROUTINE_PROTECTED_PRS[*]:-none} approved_protected_prs=${APPROVED_PROTECTED_PRS[*]:-none}"
   assert_source_checkout_safe
   load_release_helpers
   trap transaction_exit_guard EXIT

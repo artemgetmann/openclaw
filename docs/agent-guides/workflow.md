@@ -76,11 +76,14 @@ stop even under `current-green-main`.
 
 Keep the original requested PR as the release anchor for the whole task. If
 `current-green-main` later finds protected drift, report the exact PR, merge
-commit, and protected paths once. After the user explicitly authorizes that
-delta, pass each approved PR as `--approved-protected-pr <number>` without
-changing `--pr`. The same receipt remains valid across routine main movement,
-CI waiting, and named-resource contention. Ask again only when the protected PR
-set changes; unused receipts fail closed and cannot pre-authorize future drift.
+commit, and protected paths once. Protected paths require exact-diff review,
+but they do not automatically create a user decision. If the reviewed PR adds
+no new permission, capability, external effect, destructive action, credential
+use, release/publication, shared-runtime mutation class, or material scope,
+record `--reviewed-routine-protected-pr <number>`. If it does, obtain explicit
+user approval and record `--approved-protected-pr <number>`. Keep the original
+`--pr` in both cases. The exact receipts survive routine main movement, CI
+waiting, and named-resource contention; unused receipts fail closed.
 
 ## Two-clone model
 

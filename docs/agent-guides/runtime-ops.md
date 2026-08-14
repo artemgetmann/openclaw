@@ -205,8 +205,22 @@ release receipt of the same authority, not a late policy decision.
 
 If `current-green-main` stops on a security/release-class PR, do not change
 `--pr` to that intervening PR. Report the wrapper's exact PR, merge commit, and
-protected paths. After the user explicitly approves that exact delta, retain
-the original task anchor and add one receipt per approved protected PR:
+protected paths, then review the exact diff. If it changes only implementation
+inside the already-authorized action classes, retain the original task anchor
+and add a reviewed-routine receipt:
+
+```bash
+scripts/ship-jarvis-hotfix.sh \
+  --pr <original-task-pr> \
+  --main-policy current-green-main \
+  --reviewed-routine-protected-pr <reviewed-protected-pr> \
+  --dry-run
+```
+
+Do not use that receipt for a new permission, capability, external effect,
+destructive action, credential use, release/publication, shared-runtime
+mutation class, or material scope. Those changes still require explicit user
+approval and the distinct user-approved receipt:
 
 ```bash
 scripts/ship-jarvis-hotfix.sh \
@@ -217,9 +231,9 @@ scripts/ship-jarvis-hotfix.sh \
 ```
 
 Reuse the same arguments after ordinary main movement or temporary lock status
-`75`; those events do not expire authority. The wrapper rejects unused
-protected receipts and any newly discovered protected PR, so the option cannot
-become blanket approval for future sensitive changes.
+`75`; those events do not expire either exact receipt. The wrapper rejects
+unused protected receipts and any newly discovered protected PR, so neither
+option can become blanket approval for future sensitive changes.
 
 The PR must already be merged through the canonical builder → tester → fenced
 release lifecycle. The wrapper never readies or merges an OPEN PR; this keeps

@@ -62,9 +62,10 @@ OPENCLAW_SHARED_RESOURCE_LOCK="gateway-main,release-jarvis" \
 OPENCLAW_SHARED_RESOURCE_LOCK_FD="8,9" \
 OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY="${GUARDED_CAPABILITIES}" \
   "${GUARDED_FIXTURE}/scripts/lib/ship-jarvis-hotfix-guarded-entry.sh" \
-    --pr 1 --main-policy current-green-main --approved-protected-pr 1443
+    --pr 1 --main-policy current-green-main \
+    --reviewed-routine-protected-pr 1449 --approved-protected-pr 1446
 [[ "$(<"${GUARDED_FIXTURE}/guarded-entry.out")" == \
-  "1|gateway-main,release-jarvis|8,9|${GUARDED_CAPABILITIES}|unset|--pr 1 --main-policy current-green-main --approved-protected-pr 1443" ]] || \
+  "1|gateway-main,release-jarvis|8,9|${GUARDED_CAPABILITIES}|unset|--pr 1 --main-policy current-green-main --reviewed-routine-protected-pr 1449 --approved-protected-pr 1446" ]] || \
   fail "guarded hotfix entry did not preserve resource proof and exact authority arguments"
 pass "resource-lock re-entry preserves the exact delivery authority after a temporary refusal"
 
@@ -107,7 +108,7 @@ if ! OPENCLAW_SHIP_JARVIS_HOTFIX_LIB_ONLY=1 \
     /bin/bash -c '
       source "$1"
       parse_args --pr 42 --main-policy current-green-main
-      if protected_pr_receipt_is_listed 999; then exit 1; fi
+      if protected_pr_receipt_basis 999; then exit 1; fi
       assert_protected_receipts_consumed ""
     ' "${ROOT_DIR}/scripts/test-ship-jarvis-hotfix.sh" \
       "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh"; then
@@ -189,14 +190,23 @@ parse_args --pr 42 --main-policy current-green-main
 PR_NUMBER=""
 MAIN_POLICY=""
 APPROVED_PROTECTED_PRS=()
+REVIEWED_ROUTINE_PROTECTED_PRS=()
 DRY_RUN=0
 parse_args --pr 42 --main-policy current-green-main \
+  --reviewed-routine-protected-pr 1449 \
   --approved-protected-pr 1443 --approved-protected-pr 1448
 [[ "${APPROVED_PROTECTED_PRS[*]}" == "1443 1448" ]] || \
   fail "exact protected-drift approvals were not persisted by argument parsing"
-if (PR_NUMBER=""; MAIN_POLICY=""; APPROVED_PROTECTED_PRS=(); DRY_RUN=0; \
+[[ "${REVIEWED_ROUTINE_PROTECTED_PRS[*]}" == "1449" ]] || \
+  fail "exact reviewed-routine protected drift was not persisted by argument parsing"
+if (PR_NUMBER=""; MAIN_POLICY=""; APPROVED_PROTECTED_PRS=(); REVIEWED_ROUTINE_PROTECTED_PRS=(); DRY_RUN=0; \
   parse_args --pr 42 --main-policy exact-pr --approved-protected-pr 1443) >/dev/null 2>&1; then
   fail "exact-pr authority silently widened through a protected-drift receipt"
+fi
+if (PR_NUMBER=""; MAIN_POLICY=""; APPROVED_PROTECTED_PRS=(); REVIEWED_ROUTINE_PROTECTED_PRS=(); DRY_RUN=0; \
+  parse_args --pr 42 --main-policy current-green-main \
+    --reviewed-routine-protected-pr 1449 --approved-protected-pr 1449) >/dev/null 2>&1; then
+  fail "one protected PR accepted conflicting reviewed and approved receipt bases"
 fi
 if (PR_NUMBER=""; MAIN_POLICY=""; DRY_RUN=0; parse_args --pr 42) >/dev/null 2>&1; then
   fail "missing task-start delivery authority unexpectedly passed"
@@ -402,8 +412,8 @@ authority_gh_fixture() {
     fi
     if [[ "$4 $5" == "--json files" ]]; then
       case "${pr}" in
-        201) printf '%s\n' '{"files":[{"path":"src/gateway/auth-handler.ts"}]}' ;;
-        202) printf '%s\n' '{"files":[{"path":"scripts/release-helper.sh"}]}' ;;
+        201) printf '%s\n' '{"files":[{"path":"scripts/release-disk-preflight.sh"}]}' ;;
+        202) printf '%s\n' '{"files":[{"path":"src/gateway/auth-handler.ts"}]}' ;;
         *) printf '%s\n' '{"files":[{"path":"src/agents/pi-tools.ts"}]}' ;;
       esac
       return
@@ -430,6 +440,7 @@ GH_BIN=authority_gh_fixture
 PR_NUMBER=42
 MAIN_POLICY=current-green-main
 APPROVED_PROTECTED_PRS=()
+REVIEWED_ROUTINE_PROTECTED_PRS=()
 
 [[ "$(dry_run_reviewed_remote_main "${BASE_SHA}")" == "${SAFE_ONE_SHA}" ]] || \
   fail "first routine main drift did not preserve moving-main authority"
@@ -442,14 +453,14 @@ if (dry_run_reviewed_remote_main "${BASE_SHA}") >"${TMP_ROOT}/protected-one.out"
 fi
 grep -Fq "PR #201" "${TMP_ROOT}/protected-one.out" || \
   fail "protected drift blocker omitted the exact PR delta"
-grep -Fq "src/gateway/auth-handler.ts" "${TMP_ROOT}/protected-one.out" || \
+grep -Fq "scripts/release-disk-preflight.sh" "${TMP_ROOT}/protected-one.out" || \
   fail "protected drift blocker omitted the exact protected path"
 
-APPROVED_PROTECTED_PRS=(201)
+REVIEWED_ROUTINE_PROTECTED_PRS=(201)
 [[ "$(dry_run_reviewed_remote_main "${BASE_SHA}")" == "${PROTECTED_ONE_SHA}" ]] || \
-  fail "explicit protected PR approval did not pass"
+  fail "reviewed routine protected PR did not pass"
 [[ "$(dry_run_reviewed_remote_main "${BASE_SHA}")" == "${PROTECTED_ONE_SHA}" ]] || \
-  fail "identical already-approved protected drift prompted again"
+  fail "identical reviewed routine protected drift prompted again"
 
 FIXTURE_HEAD_SHA="${SAFE_TWO_SHA}"
 [[ "$(dry_run_reviewed_remote_main "${BASE_SHA}")" == "${SAFE_TWO_SHA}" ]] || \
@@ -461,22 +472,24 @@ if (dry_run_reviewed_remote_main "${BASE_SHA}") >"${TMP_ROOT}/protected-two.out"
 fi
 grep -Fq "PR #202" "${TMP_ROOT}/protected-two.out" || \
   fail "changed protected-set blocker omitted the new PR"
-APPROVED_PROTECTED_PRS=(201 202)
+APPROVED_PROTECTED_PRS=(202)
 [[ "$(dry_run_reviewed_remote_main "${BASE_SHA}")" == "${PROTECTED_TWO_SHA}" ]] || \
   fail "second exact protected approval did not pass the changed set"
 
 FIXTURE_HEAD_SHA="${SAFE_ONE_SHA}"
-APPROVED_PROTECTED_PRS=(201)
+APPROVED_PROTECTED_PRS=()
+REVIEWED_ROUTINE_PROTECTED_PRS=(201)
 if (dry_run_reviewed_remote_main "${BASE_SHA}") >"${TMP_ROOT}/unused-approval.out" 2>&1; then
-  fail "unused protected approval silently widened future delivery authority"
+  fail "unused reviewed-routine receipt silently widened future delivery authority"
 fi
 
 APPROVED_PROTECTED_PRS=()
+REVIEWED_ROUTINE_PROTECTED_PRS=()
 FIXTURE_FAIL_REQUIRED_PR=101
 if (dry_run_reviewed_remote_main "${BASE_SHA}") >"${TMP_ROOT}/failed-ci.out" 2>&1; then
   fail "failed required checks were accepted as green main"
 fi
 FIXTURE_FAIL_REQUIRED_PR=""
-pass "authority receipt survives safe drift and delay while changed protected drift and failed CI stop"
+pass "semantic receipt separates reviewed routine drift from new user authority"
 
 printf 'All ship-jarvis-hotfix disk preflight tests passed.\n'
