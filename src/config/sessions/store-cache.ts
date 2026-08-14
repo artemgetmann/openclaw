@@ -1,12 +1,11 @@
 import type { SessionEntry } from "./types.js";
 
 type SessionStoreCacheEntry = {
-  store: Record<string, SessionEntry>;
   loadedAt: number;
   storePath: string;
   mtimeMs?: number;
   sizeBytes?: number;
-  serialized?: string;
+  serialized: string;
 };
 
 const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
@@ -57,25 +56,36 @@ export function readSessionStoreCache(params: {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
-  return structuredClone(cached.store);
+  try {
+    // Keep the cache as serialized JSON instead of a live object graph. Session
+    // stores can contain hundreds of repeated skill snapshots, and V8's
+    // structured clone deserializer can monopolize the gateway event loop for
+    // tens of seconds on those large graphs. Parsing the known-good JSON still
+    // returns an isolated mutable copy without retaining or cloning that graph.
+    const parsed: unknown = JSON.parse(cached.serialized);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      invalidateSessionStoreCache(params.storePath);
+      return null;
+    }
+    return parsed as Record<string, SessionEntry>;
+  } catch {
+    invalidateSessionStoreCache(params.storePath);
+    return null;
+  }
 }
 
 export function writeSessionStoreCache(params: {
   storePath: string;
-  store: Record<string, SessionEntry>;
   mtimeMs?: number;
   sizeBytes?: number;
-  serialized?: string;
+  serialized: string;
 }): void {
   SESSION_STORE_CACHE.set(params.storePath, {
-    store: structuredClone(params.store),
     loadedAt: Date.now(),
     storePath: params.storePath,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
     serialized: params.serialized,
   });
-  if (params.serialized !== undefined) {
-    SESSION_STORE_SERIALIZED_CACHE.set(params.storePath, params.serialized);
-  }
+  SESSION_STORE_SERIALIZED_CACHE.set(params.storePath, params.serialized);
 }
