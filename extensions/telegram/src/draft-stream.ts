@@ -213,11 +213,16 @@ export function createTelegramDraftStream(params: {
     renderedRichMessage?: TelegramInputRichMessage;
     fallbackWarnMessage: string;
   }) => {
-    const sendParams = {
+    const configuredSendParams = {
       ...replyParams,
       ...(sendArgs.renderedParseMode ? { parse_mode: sendArgs.renderedParseMode } : {}),
       ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
     };
+    // Preserve the established no-options call shape for ordinary previews.
+    // Some Telegram clients and tests distinguish an omitted options argument
+    // from an explicitly empty object.
+    const sendParams =
+      Object.keys(configuredSendParams).length > 0 ? configuredSendParams : undefined;
     const usedThreadParams =
       "message_thread_id" in (sendParams ?? {}) &&
       typeof (sendParams as { message_thread_id?: unknown }).message_thread_id === "number";
