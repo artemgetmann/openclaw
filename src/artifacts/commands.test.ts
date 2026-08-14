@@ -258,6 +258,54 @@ describe("artifact commands", () => {
     },
   );
 
+  it("preserves DOCX multiline text as Word line breaks", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-docx-lines-test-"));
+    const input = path.join(dir, "spec.json");
+    const out = path.join(dir, "output.docx");
+    await fs.writeFile(
+      input,
+      JSON.stringify({ paragraphs: ["Line one\nLine two\r\nLine three\rLine four"] }),
+    );
+
+    await createDocxCommand(input, { out });
+    const archive = await JSZip.loadAsync(await fs.readFile(out));
+    const document = await archive.file("word/document.xml")?.async("string");
+    expect(document).toContain(
+      '<w:t xml:space="preserve">Line one</w:t><w:br/><w:t xml:space="preserve">Line two</w:t><w:br/><w:t xml:space="preserve">Line three</w:t><w:br/><w:t xml:space="preserve">Line four</w:t>',
+    );
+  });
+
+  it("encodes DOCX bullets with real Word list semantics", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-docx-list-test-"));
+    const input = path.join(dir, "spec.json");
+    const out = path.join(dir, "output.docx");
+    await fs.writeFile(input, JSON.stringify({ bullets: ["First", "Second"] }));
+
+    await createDocxCommand(input, { out });
+    const archive = await JSZip.loadAsync(await fs.readFile(out));
+    const document = await archive.file("word/document.xml")?.async("string");
+    const numbering = await archive.file("word/numbering.xml")?.async("string");
+    const relationships = await archive.file("word/_rels/document.xml.rels")?.async("string");
+    expect(document?.match(/<w:numPr>/g)).toHaveLength(2);
+    expect(document).toContain('<w:numId w:val="1"/>');
+    expect(numbering).toContain('<w:numFmt w:val="bullet"/>');
+    expect(relationships).toContain('relationships/numbering" Target="numbering.xml"');
+  });
+
+  it.each([
+    ["DOCX", "docx", createDocxCommand],
+    ["XLSX", "xlsx", createXlsxCommand],
+    ["PPTX", "pptx", createPptxCommand],
+  ] as const)("rejects XML 1.0-invalid control characters in %s", async (_label, ext, command) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-create-${ext}-xml-test-`));
+    const input = path.join(dir, "spec.json");
+    const out = path.join(dir, `output.${ext}`);
+    await fs.writeFile(input, JSON.stringify({ title: "Invalid\u0001text" }));
+
+    await expect(command(input, { out })).rejects.toThrow(/XML 1\.0-invalid character.*U\+0001/u);
+    await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("preserves formula-prefixed XLSX cells as formulas", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-xlsx-formula-test-"));
     const input = path.join(dir, "spec.json");

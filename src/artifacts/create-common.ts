@@ -47,7 +47,26 @@ export function tableRows(tableValue: unknown): string[][] {
 }
 
 export function xmlEscape(value: unknown): string {
-  return asText(value)
+  const text = asText(value);
+  for (const character of text) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const valid =
+      codePoint === 0x09 ||
+      codePoint === 0x0a ||
+      codePoint === 0x0d ||
+      (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+      (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+      (codePoint >= 0x10000 && codePoint <= 0x10ffff);
+    if (!valid) {
+      throw new Error(
+        `OOXML text contains XML 1.0-invalid character ${JSON.stringify(character)} (U+${codePoint
+          .toString(16)
+          .toUpperCase()
+          .padStart(4, "0")})`,
+      );
+    }
+  }
+  return text
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")

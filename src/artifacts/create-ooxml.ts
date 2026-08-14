@@ -17,16 +17,25 @@ function wordRun(text: string, options: { bold?: boolean; size?: number } = {}):
           options.size ? `<w:sz w:val="${options.size}"/><w:szCs w:val="${options.size}"/>` : ""
         }</w:rPr>`
       : "";
-  return `<w:r>${properties}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>`;
+  const content = text
+    .split(/\r\n|\r|\n/u)
+    .map(
+      (line, index) =>
+        `${index > 0 ? "<w:br/>" : ""}<w:t xml:space="preserve">${xmlEscape(line)}</w:t>`,
+    )
+    .join("");
+  return `<w:r>${properties}${content}</w:r>`;
 }
 
 function wordParagraph(
   text: string,
-  options: { style?: string; bold?: boolean; size?: number } = {},
+  options: { style?: string; bold?: boolean; size?: number; bullet?: boolean } = {},
 ): string {
-  const paragraphProperties = options.style
-    ? `<w:pPr><w:pStyle w:val="${options.style}"/></w:pPr>`
-    : "";
+  const properties = [
+    options.style ? `<w:pStyle w:val="${options.style}"/>` : "",
+    options.bullet ? '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>' : "",
+  ].join("");
+  const paragraphProperties = properties ? `<w:pPr>${properties}</w:pPr>` : "";
   return `<w:p>${paragraphProperties}${wordRun(text, options)}</w:p>`;
 }
 
@@ -50,9 +59,7 @@ export async function createDocx(specValue: unknown, outputPath: string): Promis
       body.push(wordParagraph(asText(paragraph)));
     }
     for (const bullet of asList(section.bullets)) {
-      // A literal bullet keeps the minimal package independent from a Word
-      // numbering part while remaining editable in every Office reader.
-      body.push(wordParagraph(`• ${asText(bullet)}`));
+      body.push(wordParagraph(asText(bullet), { bullet: true }));
     }
     const rows = tableRows(section.table);
     if (rows.length > 0) {
@@ -75,7 +82,7 @@ export async function createDocx(specValue: unknown, outputPath: string): Promis
   const zip = new JSZip();
   zip.file(
     "[Content_Types].xml",
-    `${XML_DECLARATION}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`,
+    `${XML_DECLARATION}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>`,
   );
   zip.file(
     "_rels/.rels",
@@ -83,11 +90,15 @@ export async function createDocx(specValue: unknown, outputPath: string): Promis
   );
   zip.file(
     "word/_rels/document.xml.rels",
-    `${XML_DECLARATION}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+    `${XML_DECLARATION}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>`,
   );
   zip.file(
     "word/styles.xml",
     `${XML_DECLARATION}<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="44"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:rPr><w:i/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="30"/></w:rPr></w:style></w:styles>`,
+  );
+  zip.file(
+    "word/numbering.xml",
+    `${XML_DECLARATION}<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:tabs><w:tab w:val="num" w:pos="720"/></w:tabs><w:ind w:left="720" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol"/></w:rPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>`,
   );
   zip.file(
     "word/document.xml",
