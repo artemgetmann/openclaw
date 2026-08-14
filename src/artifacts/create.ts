@@ -143,7 +143,7 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
     }
   };
 
-  const writeTable = (rows: string[][]) => {
+  const writeTable = (rows: string[][], repeatHeader: boolean) => {
     if (rows.length === 0) {
       return;
     }
@@ -154,7 +154,7 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
     const lineHeight = fontSize * 1.3;
     const cellPadding = 4;
 
-    for (const [rowIndex, row] of rows.entries()) {
+    const writeRow = (row: string[], rowIndex: number, repeatOnNewPage: boolean) => {
       // Measure every cell first so the row remains a single aligned unit when
       // it wraps or moves to the next page.
       const rowFont = rowIndex === 0 ? bold : regular;
@@ -170,6 +170,11 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
         if (availableLines < 1) {
           page = pdf.addPage(pageSize);
           y = page.getHeight() - margin;
+          // Match the former ReportLab table behavior: later pages need the
+          // column labels to keep continued rows understandable.
+          if (repeatOnNewPage && repeatHeader && rows[0]) {
+            writeRow(rows[0], 0, false);
+          }
           availableLines = Math.floor((y - margin - 8) / lineHeight);
         }
         // A logical row may exceed a whole page. Continue its bordered cells
@@ -202,6 +207,10 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
         y -= segmentHeight;
         lineOffset += segmentLines;
       }
+    };
+
+    for (const [rowIndex, row] of rows.entries()) {
+      writeRow(row, rowIndex, rowIndex > 0);
     }
   };
 
@@ -215,7 +224,18 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
     writeLines(subtitle, 12);
     y -= 8;
   }
-  for (const section of sectionsFor(spec)) {
+  const sections = sectionsFor(spec);
+  const sectionHasContent = (section: Record<string, unknown>) => {
+    const hasText = [section.heading, section.paragraphs, section.bullets, section.callout].some(
+      (value) => asList(value).some((item) => asText(item).trim()),
+    );
+    return hasText || tableRows(section.table).length > 0;
+  };
+  for (const section of sections) {
+    // Do not consume page space for structural placeholders that draw nothing.
+    if (!sectionHasContent(section)) {
+      continue;
+    }
     const heading = asText(section.heading).trim();
     if (heading) {
       y -= 4;
@@ -238,18 +258,11 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
       writeLines(callout, 11, true, 10);
       y -= 4;
     }
-    writeTable(tableRows(section.table));
+    const table = asRecord(section.table);
+    writeTable(tableRows(table), asList(table.columns).length > 0);
     y -= 8;
   }
-  const hasSectionContent = sectionsFor(spec).some((section) => {
-    // A table object is only visible content when it yields at least one row.
-    // Checking the object itself would suppress the fallback for `{ table: {} }`
-    // even though the renderer has nothing to draw.
-    const hasText = [section.heading, section.paragraphs, section.bullets, section.callout].some(
-      (value) => asList(value).some((item) => asText(item).trim()),
-    );
-    return hasText || tableRows(section.table).length > 0;
-  });
+  const hasSectionContent = sections.some(sectionHasContent);
   if (!title && !subtitle && !hasSectionContent) {
     writeLines("Untitled", 22, true);
   }

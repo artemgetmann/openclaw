@@ -143,6 +143,29 @@ describe("artifact commands", () => {
     expect(pdf.getPageCount()).toBeGreaterThan(1);
   });
 
+  it("paginates a headed PDF table without losing the header route", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-table-pages-test-"));
+    const input = path.join(dir, "brief.json");
+    const out = path.join(dir, "brief.pdf");
+    await fs.writeFile(
+      input,
+      JSON.stringify({
+        sections: [
+          {
+            table: {
+              columns: ["Name", "Value"],
+              rows: Array.from({ length: 100 }, () => ["A", 1]),
+            },
+          },
+        ],
+      }),
+    );
+
+    await createPdfCommand(input, { out });
+    const pdf = await PDFDocument.load(await fs.readFile(out));
+    expect(pdf.getPageCount()).toBeGreaterThan(1);
+  });
+
   it("wraps wide PDF glyphs using measured font widths", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-wide-glyph-test-"));
     const input = path.join(dir, "brief.json");
@@ -177,6 +200,22 @@ describe("artifact commands", () => {
     await fs.writeFile(
       input,
       JSON.stringify({ paragraphs: Array.from({ length: 1000 }, () => " \t\n") }),
+    );
+
+    await createPdfCommand(input, { out });
+    const pdf = await PDFDocument.load(await fs.readFile(out));
+    expect(pdf.getPageCount()).toBe(1);
+  });
+
+  it("does not paginate empty PDF sections", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-create-pdf-empty-sections-test-"),
+    );
+    const input = path.join(dir, "brief.json");
+    const out = path.join(dir, "brief.pdf");
+    await fs.writeFile(
+      input,
+      JSON.stringify({ sections: Array.from({ length: 100 }, () => ({})) }),
     );
 
     await createPdfCommand(input, { out });
