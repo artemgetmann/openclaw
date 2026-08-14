@@ -41,9 +41,9 @@ View Notes
 
 Create Notes
 
-- Add a new note: `memo notes -a`
-  - Opens an interactive editor to compose the note.
-- Quick add with title: `memo notes -a "Note Title"`
+- Add a new note to an existing folder: `memo notes -f "Folder Name" -a`
+  - Enter the title and body in the editor that opens.
+  - `-a` is a flag and does not accept a title argument.
 
 Edit Notes
 
