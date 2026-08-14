@@ -2,8 +2,7 @@
 name: gh-issues
 description: "Fetch GitHub issues, spawn sub-agents to implement fixes and open PRs, then monitor and address PR review comments. Usage: /gh-issues [owner/repo] [--label bug] [--limit 5] [--milestone v1.0] [--assignee @me] [--fork user/repo] [--watch] [--interval 5] [--reviews-only] [--cron] [--dry-run] [--model glm-5] [--notify-channel -1002381931352]"
 user-invocable: true
-metadata:
-  { "openclaw": { "requires": { "bins": ["curl", "git", "gh"] }, "primaryEnv": "GH_TOKEN" } }
+metadata: { "openclaw": { "requires": { "bins": ["curl", "git"] }, "primaryEnv": "GH_TOKEN" } }
 ---
 
 # gh-issues — Auto-fix GitHub Issues with Parallel Sub-agents
@@ -15,6 +14,11 @@ IMPORTANT — No `gh` CLI dependency. This skill uses curl + the GitHub REST API
 ```
 curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" ...
 ```
+
+REST API authentication and Git object transport are independent. Use the
+token only in API request headers; never print it or embed it in a remote URL.
+Use SSH remotes for fetch and push, and reconcile remote refs before retrying
+any push whose result is ambiguous.
 
 ---
 
@@ -70,10 +74,10 @@ Derived values:
 ## Phase 2 — Fetch Issues
 
 **Token Resolution:**
-First, ensure GH_TOKEN is available. Check environment:
+First, ensure GH_TOKEN is available without printing it. Check environment:
 
 ```
-echo $GH_TOKEN
+test -n "${GH_TOKEN:-}"
 ```
 
 If empty, read from config:
@@ -189,7 +193,7 @@ Run these checks sequentially via exec:
      ```
      If it doesn't exist, add it:
      ```
-     git remote add fork https://x-access-token:$GH_TOKEN@github.com/{PUSH_REPO}.git
+     git remote add fork git@github.com:{PUSH_REPO}.git
      ```
    - Also verify origin (the source repo) is reachable:
      ```
@@ -345,7 +349,7 @@ You are a focused code-fix agent. Your task is to fix a single GitHub issue and 
 
 IMPORTANT: Do NOT use the gh CLI — it is not installed. Use curl with the GitHub REST API for all GitHub operations.
 
-First, ensure GH_TOKEN is set. Check: `echo $GH_TOKEN`. If empty, read from config:
+First, ensure GH_TOKEN is set without printing it. Check: `test -n "${GH_TOKEN:-}"`. If empty, read from config:
 GH_TOKEN=$(jq -r '.skills.entries["gh-issues"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/openclaw.json}" 2>/dev/null) || GH_TOKEN=$(cat /data/.clawdbot/openclaw.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty')
 
 Use the token in all GitHub API calls:
@@ -424,12 +428,14 @@ git commit -m "fix: {short_description}
 
 Fixes {SOURCE_REPO}#{number}"
 
-7. PUSH — Push the branch:
-First, ensure the push remote uses token auth and disable credential helpers:
-git config --global credential.helper ""
-git remote set-url {PUSH_REMOTE} https://x-access-token:$GH_TOKEN@github.com/{PUSH_REPO}.git
-Then push:
-GIT_ASKPASS=true git push -u {PUSH_REMOTE} fix/issue-{number}
+7. PUSH — Prove and use SSH Git transport. `GH_TOKEN` proves API access only;
+it does not authorize Git pushes. First run this non-mutating push dry run with
+local hooks disabled:
+git -c core.hooksPath=/dev/null push --dry-run git@github.com:{PUSH_REPO}.git HEAD:refs/heads/codex/ssh-preflight-$$
+If it fails, stop with `SSH Git push capability unavailable`; do not embed the
+token in a remote URL or silently switch transport. After it succeeds:
+git remote set-url {PUSH_REMOTE} git@github.com:{PUSH_REPO}.git
+git push -u {PUSH_REMOTE} fix/issue-{number}
 
 8. PR — Create a pull request using the GitHub API:
 
@@ -713,7 +719,7 @@ You are a PR review handler agent. Your task is to address review comments on a 
 
 IMPORTANT: Do NOT use the gh CLI — it is not installed. Use curl with the GitHub REST API for all GitHub operations.
 
-First, ensure GH_TOKEN is set. Check: echo $GH_TOKEN. If empty, read from config:
+First, ensure GH_TOKEN is set without printing it. Check: `test -n "${GH_TOKEN:-}"`. If empty, read from config:
 GH_TOKEN=$(jq -r '.skills.entries["gh-issues"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/openclaw.json}" 2>/dev/null) || GH_TOKEN=$(cat /data/.clawdbot/openclaw.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty')
 
 <config>
@@ -773,10 +779,9 @@ git commit -m "fix: address review comments on PR #{pr_number}
 
 Addresses review feedback from {reviewer_names}"
 
-6. PUSH — Push the updated branch:
-git config --global credential.helper ""
-git remote set-url {PUSH_REMOTE} https://x-access-token:$GH_TOKEN@github.com/{PUSH_REPO}.git
-GIT_ASKPASS=true git push {PUSH_REMOTE} {branch_name}
+6. PUSH — Push the updated branch through SSH Git transport:
+git remote set-url {PUSH_REMOTE} git@github.com:{PUSH_REPO}.git
+git push {PUSH_REMOTE} {branch_name}
 
 7. REPLY — For each addressed comment, post a reply:
 

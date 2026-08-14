@@ -142,14 +142,32 @@ Use normal GitHub merge mechanics without admin or branch-protection bypass.
 After an ambiguous merge response, inspect PR and target-branch state before any
 retry.
 
-### GitHub transport fallback
+### GitHub API and Git transport
 
-Use host `gh` while its authenticated API probe is healthy. If the restricted
-probe is indeterminate, repeat that read-only probe once in authorized host
-context. If host `gh` is still unavailable and the installed GitHub connector
-can read the required PR state, collect fresh secret-free connector evidence
-with only the capabilities the operation needs. Verify it through the canonical
-adapter before relying on the candidate:
+Treat GitHub API access and Git object transport as independent capabilities:
+
+- Use the installed GitHub connector by default for supported PR metadata,
+  bodies, comments, reviews, checks, ref, and normal expected-head merge
+  operations.
+- Use host `gh` only as a capability fallback after its authenticated API probe
+  succeeds. A host `gh` failure does not mean GitHub or Git transport is down.
+- Use local Git for commits, diffs, rebases, fetches, and pushes. GitHub.com
+  remotes use SSH by default; connector authentication never proves Git object
+  transport.
+
+Report the three states separately when diagnosing access:
+
+```bash
+scripts/github-auth-preflight.sh --context host --report --remote origin
+```
+
+The report distinguishes connector API evidence, host `gh` API health, and the
+configured Git fetch/push protocol. If a restricted probe is indeterminate,
+repeat only that read-only probe once in authorized host context.
+
+For connector lifecycle evidence, collect a fresh secret-free candidate with
+only the capabilities the operation needs. Verify it through the canonical
+adapter before relying on it:
 
 ```bash
 OPENCLAW_GITHUB_REPOSITORY=owner/repo \
@@ -176,6 +194,11 @@ squash merge to the expected head. After an ambiguous mutation, read PR state
 once and stop without retrying. If the connector lacks the emitted operation,
 use the reported next action; never fall through to a different mutation
 transport in the same process.
+
+The same rule applies to Git pushes: reconcile the remote ref after a failed or
+timed-out push response. Never retry, switch SSH to HTTPS, or recreate local
+commits through blob/tree/API mutations until that read proves the first push
+did not land and a new operation is explicitly authorized.
 
 ## Delivery after merge
 

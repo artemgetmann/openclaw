@@ -6,11 +6,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/github-auth-preflight.sh"
 
 usage() {
-  echo "Usage: scripts/github-auth-preflight.sh --context <restricted|host> [--transport <host-gh|connector>]" >&2
+  echo "Usage: scripts/github-auth-preflight.sh --context <restricted|host> [--transport <host-gh|connector> | --report] [--remote <name>]" >&2
 }
 
 context=""
 transport="host-gh"
+report=0
+remote="origin"
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --context)
@@ -19,6 +21,14 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --transport)
       transport="${2:-}"
+      shift 2
+      ;;
+    --report)
+      report=1
+      shift
+      ;;
+    --remote)
+      remote="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -33,4 +43,8 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 [[ -n "${context}" ]] || { usage; exit 2; }
+if [[ "${report}" == "1" ]]; then
+  openclaw_github_transport_report "${context}" "${remote}"
+  exit $?
+fi
 openclaw_github_preflight "${context}" "${transport}"
