@@ -1289,18 +1289,22 @@ if [[ "$1" == "release" && "$2" == "upload" ]]; then
   printf "upload\n" >>"${UPLOAD_LOG:?}"
   exit 0
 fi
-printf "%s\n" "${REMOTE_DIGEST:-}"'
+if [[ "$*" == *"| .name"* ]]; then
+  printf "%s\n" "${REMOTE_NAME:-}"
+else
+  printf "%s\n" "${REMOTE_DIGEST:-}"
+fi'
 
-  out="$(PATH="$fake_bin:$PATH" REMOTE_DIGEST="" \
+  out="$(PATH="$fake_bin:$PATH" REMOTE_NAME="" REMOTE_DIGEST="" \
     openclaw_jarvis_release_require_immutable_asset_compatible repo v1 "$artifact")"
   [[ "$out" == "upload" ]] || fail "missing tagged asset was not classified for first upload"
 
-  out="$(PATH="$fake_bin:$PATH" REMOTE_DIGEST="$digest" \
+  out="$(PATH="$fake_bin:$PATH" REMOTE_NAME="Jarvis.zip" REMOTE_DIGEST="$digest" \
     openclaw_jarvis_release_require_immutable_asset_compatible repo v1 "$artifact")"
   [[ "$out" == "identical" ]] || fail "identical tagged asset was not classified as an idempotent retry"
 
   set +e
-  PATH="$fake_bin:$PATH" REMOTE_DIGEST="sha256:deadbeef" \
+  PATH="$fake_bin:$PATH" REMOTE_NAME="Jarvis.zip" REMOTE_DIGEST="sha256:deadbeef" \
     openclaw_jarvis_release_require_immutable_asset_compatible repo v1 "$artifact" \
       >"$TMP_DIR/immutable.out" 2>"$TMP_DIR/immutable.err"
   status=$?
@@ -1309,11 +1313,11 @@ printf "%s\n" "${REMOTE_DIGEST:-}"'
   grep -q 'Create a new release tag' "$TMP_DIR/immutable.err" \
     || fail "immutable conflict did not give the safe recovery action"
 
-  PATH="$fake_bin:$PATH" REMOTE_DIGEST="" UPLOAD_LOG="$upload_log" \
+  PATH="$fake_bin:$PATH" REMOTE_NAME="" REMOTE_DIGEST="" UPLOAD_LOG="$upload_log" \
     openclaw_jarvis_release_upload_immutable_asset_if_needed repo v1 "$artifact"
   [[ "$(wc -l <"$upload_log" | tr -d ' ')" == "1" ]] \
     || fail "missing immutable asset did not upload exactly once"
-  PATH="$fake_bin:$PATH" REMOTE_DIGEST="$digest" UPLOAD_LOG="$upload_log" \
+  PATH="$fake_bin:$PATH" REMOTE_NAME="Jarvis.zip" REMOTE_DIGEST="$digest" UPLOAD_LOG="$upload_log" \
     openclaw_jarvis_release_upload_immutable_asset_if_needed repo v1 "$artifact" >/dev/null
   [[ "$(wc -l <"$upload_log" | tr -d ' ')" == "1" ]] \
     || fail "identical immutable retry attempted another upload"
@@ -1324,6 +1328,11 @@ printf "%s\n" "${REMOTE_DIGEST:-}"'
 printf "immutable fixture\n"'
   write_release_control_stub "$bad_curl" '#!/usr/bin/env bash
 printf "different public bytes\n"'
+  out="$(PATH="$fake_bin:$PATH" REMOTE_NAME="Jarvis.zip" REMOTE_DIGEST="null" \
+    OPENCLAW_JARVIS_RELEASE_CURL_BIN="$good_curl" \
+    openclaw_jarvis_release_require_immutable_asset_compatible repo v1 "$artifact")"
+  [[ "$out" == "identical" ]] \
+    || fail "digest-less existing asset did not fall back to public byte hashing"
   OPENCLAW_JARVIS_RELEASE_CURL_BIN="$good_curl" \
     openclaw_jarvis_release_verify_public_asset_bytes repo v1 "$artifact" >/dev/null
   set +e

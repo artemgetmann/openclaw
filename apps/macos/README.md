@@ -514,6 +514,8 @@ inspecting/mutating release artifacts, then echoes them into one exact direct
 bash scripts/jarvis-public-release.sh --dry-run
 bash scripts/jarvis-public-release.sh \
   --authorize \
+  --release-class fresh-installer \
+  --release-class-reason manual-refresh \
   --parallel-safe-local-assets \
   --latest-release-tag
 # Run the exact persistent_command printed by --authorize.
