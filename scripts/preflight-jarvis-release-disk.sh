@@ -26,7 +26,7 @@ Options:
   --output-path <path>     Add the release-output target.
   --staging-path <path>    Add the release-staging target.
   --path <path>            Compatibility: check one target named "target".
-  --required-kib <kib>     Override the conservative 25 GiB floor per filesystem.
+  --required-kib <kib>     Override the conservative 45 GiB full-release admission threshold.
   --help                   Show this help.
 EOF
 }

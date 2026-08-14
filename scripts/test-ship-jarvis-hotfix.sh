@@ -149,21 +149,23 @@ production_probe="$(
     OPENCLAW_EXPECTED_MAIN_REPO="${ROOT_DIR}" \
     OPENCLAW_JARVIS_HOME=/tmp/redirected-jarvis \
     OPENCLAW_PLISTBUDDY_BIN=/tmp/fake-plistbuddy \
-    JARVIS_RELEASE_DISK_REQUIRED_KIB=1 \
+    JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB=1 \
+    JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB=0 \
     JARVIS_RELEASE_DISK_PROBE_COMMAND=/tmp/fake-probe \
     OPENCLAW_HOTFIX_CLEAN_ENTRY=1 \
     /bin/bash -c '
       source "$0"
       printf "%s|%s|%s" "$SHIP_TEST_MODE" "$JARVIS_HOME" "$PLISTBUDDY_BIN"
-      jarvis_release_disk_default_required_kib() { printf "26214400\n"; }
-      jarvis_release_disk_preflight_targets() {
-        printf "|%s|%s\n" "$1" "${JARVIS_RELEASE_DISK_PROBE_COMMAND:-unset}"
+      jarvis_release_disk_post_write_floor_kib() { printf "36700160\n"; }
+      jarvis_release_disk_cold_package_reserve_kib() { printf "9437184\n"; }
+      jarvis_release_disk_preflight_operation() {
+        printf "|%s|%s|%s|%s\n" "$1" "$2" "$3" "${JARVIS_RELEASE_DISK_PROBE_COMMAND:-unset}"
       }
       require_hotfix_disk_preflight
     ' \
     "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh"
 )"
-[[ "${production_probe}" == "0|/Users/user/Library/Application Support/Jarvis|/usr/libexec/PlistBuddy|26214400|unset" ]] || \
+[[ "${production_probe}" == "0|/Users/user/Library/Application Support/Jarvis|/usr/libexec/PlistBuddy|main-jarvis-cold-package|36700160|9437184|unset" ]] || \
   fail "production authority accepted ambient test/runtime overrides: ${production_probe}"
 
 PR_NUMBER=42
@@ -217,7 +219,8 @@ assert_main_policy_target \
 pass "exact-pr rejects drift while current-green-main reaches fenced drift proof"
 
 export JARVIS_RELEASE_DISK_PROBE_COMMAND="${PROBE_SCRIPT}"
-export JARVIS_RELEASE_DISK_REQUIRED_KIB=100
+export JARVIS_RELEASE_DISK_POST_WRITE_FLOOR_KIB=60
+export JARVIS_RELEASE_DISK_EXPECTED_WRITE_RESERVE_KIB=40
 export PACKAGE_MARKER
 PACKAGE_SCRIPT="${PACKAGE_SCRIPT_FIXTURE}"
 MAIN_REPO="${TMP_ROOT}"

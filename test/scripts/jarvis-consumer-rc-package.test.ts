@@ -67,6 +67,22 @@ describe("Jarvis Consumer RC packaging wrapper", () => {
     );
   });
 
+  it("admits each RC mode against a protected post-write disk floor", () => {
+    const guardIndex = script.indexOf("openclaw_heavy_local_slot_require_or_reexec");
+    const admissionIndex = script.indexOf("require_rc_disk_preflight", guardIndex);
+    const transactionIndex = script.indexOf('case "$MODE" in', guardIndex);
+
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/jarvis-release-disk-preflight.sh"');
+    expect(script).toContain('operation="consumer-rc-warm-package"');
+    expect(script).toContain('operation="consumer-rc-cold-package"');
+    expect(script).toContain('operation="consumer-rc-signed-notarized-package"');
+    expect(script).toContain("jarvis_release_disk_warm_package_reserve_kib");
+    expect(script).toContain("jarvis_release_disk_cold_package_reserve_kib");
+    expect(script).toContain("jarvis_release_disk_full_release_reserve_kib");
+    expect(admissionIndex).toBeGreaterThan(guardIndex);
+    expect(transactionIndex).toBeGreaterThan(admissionIndex);
+  });
+
   it("bounds AppleScript relaunch activation", () => {
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/macos-activation.sh"');
     expect(script).toContain("OPENCLAW_MAC_APP_ACTIVATION_TIMEOUT_SECS=12");
@@ -107,6 +123,19 @@ describe("macOS activation helper", () => {
 
 describe("consumer runtime reuse guard", () => {
   const packageScript = fs.readFileSync(path.join(root, "scripts", "package-mac-app.sh"), "utf8");
+
+  it("does not trust an ambient disk-admission marker when acquiring its own lock", () => {
+    const clearMarkerIndex = packageScript.indexOf(
+      "unset OPENCLAW_RELEASE_DISK_ADMISSION_VERIFIED",
+    );
+    const lockIndex = packageScript.indexOf("openclaw_heavy_local_slot_require_or_reexec");
+
+    expect(packageScript).toContain(
+      "if ! openclaw_shared_resource_lock_is_held release-jarvis; then",
+    );
+    expect(clearMarkerIndex).toBeGreaterThanOrEqual(0);
+    expect(lockIndex).toBeGreaterThan(clearMarkerIndex);
+  });
 
   it("records and verifies a runtime input key before reusing a bundled runtime", () => {
     expect(packageScript).toContain("consumer_runtime_input_key()");

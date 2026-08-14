@@ -572,6 +572,44 @@ JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE=4096 \
 assert_output_has "shortfall_kib=0" "capacity pass has no shortfall"
 assert_output_has "status=pass" "capacity pass succeeds"
 
+# Admission is the protected post-write floor plus the expected writes for the
+# selected operation. Prove the production constants and the exact boundary.
+source "$ROOT_DIR/scripts/lib/jarvis-release-disk-preflight.sh"
+[[ "$(jarvis_release_disk_post_write_floor_kib)" == "36700160" ]] || \
+  fail "protected post-write floor drifted"
+[[ "$(jarvis_release_disk_dependency_reserve_kib)" == "6291456" ]] || \
+  fail "dependency reserve drifted"
+[[ "$(jarvis_release_disk_warm_package_reserve_kib)" == "3145728" ]] || \
+  fail "warm package reserve drifted"
+[[ "$(jarvis_release_disk_cold_package_reserve_kib)" == "9437184" ]] || \
+  fail "cold package reserve drifted"
+[[ "$(jarvis_release_disk_full_release_reserve_kib)" == "10485760" ]] || \
+  fail "full release reserve drifted"
+[[ "$(jarvis_release_disk_admission_required_kib 36700160 9437184)" == "46137344" ]] || \
+  fail "cold package admission arithmetic is wrong"
+pass "operation reserves produce exact admission thresholds"
+
+JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE=46137344 \
+  jarvis_release_disk_preflight_operation cold-consumer-package \
+    36700160 9437184 target "$TMP_DIR/not-created-yet/dist" >"$OUT" 2>&1
+assert_output_has "operation=cold-consumer-package" "operation admission reports write class"
+assert_output_has "post_write_floor_kib=36700160" "operation admission reports protected floor"
+assert_output_has "expected_write_reserve_kib=9437184" "operation admission reports reserve"
+assert_output_has "admission_required_kib=46137344" "operation admission reports threshold"
+assert_output_has "projected_post_write_kib=36700160" "threshold equality preserves exact floor"
+assert_output_has "status=pass" "threshold equality passes"
+
+set +e
+JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE=46137343 \
+  jarvis_release_disk_preflight_operation cold-consumer-package \
+    36700160 9437184 target "$TMP_DIR/not-created-yet/dist" >"$OUT" 2>&1
+ADMISSION_LOW_STATUS=$?
+set -e
+[[ "$ADMISSION_LOW_STATUS" -eq 1 ]] || fail "one-KiB admission shortfall returned $ADMISSION_LOW_STATUS"
+assert_output_has "shortfall_kib=1" "one-KiB admission shortfall is exact"
+assert_output_has "projected_post_write_kib=36700159" "failed admission reports projected remainder"
+assert_output_has "reason=projected-post-write-capacity-below-protected-floor" "failed admission explains protected-floor risk"
+
 PREFLIGHT_SCRIPT="$ROOT_DIR/scripts/preflight-jarvis-release-disk.sh"
 [[ -x "$PREFLIGHT_SCRIPT" ]] || fail "release disk preflight must remain executable"
 pass "release disk preflight has executable mode"
@@ -679,5 +717,7 @@ assert_output_has "status=fail" "unresolved target produces failed final status"
   "$ROOT_DIR/scripts/lib/jarvis-release-disk-preflight.sh" \
   "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
   "$ROOT_DIR/scripts/preflight-jarvis-release-disk.sh" \
+  "$ROOT_DIR/scripts/package-jarvis-consumer-rc.sh" \
+  "$ROOT_DIR/scripts/package-mac-app.sh" \
   "$ROOT_DIR/scripts/test-release-disk-hygiene.sh"
 pass "Bash syntax proof"
