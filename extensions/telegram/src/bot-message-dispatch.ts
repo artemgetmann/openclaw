@@ -3307,6 +3307,14 @@ export const dispatchTelegramMessage = async ({
           // Keep only the opaque id in the transport lifecycle; no prompt,
           // route, credential, or generated text is duplicated here.
           durableDirectTurnId = durableId;
+          // Durable acceptance is the first safe point at which another plain
+          // Telegram message must classify as a queued follow-up. Open the
+          // per-topic bypass here instead of waiting for the model's first
+          // lifecycle event, which may be delayed by memory or provider work.
+          // The later onAgentRunStart callback remains an idempotent fallback.
+          releaseBusySequentialKey ??= markTelegramSequentialKeyBusy(
+            getTelegramSequentialKey({ message: msg }),
+          );
         },
         onFollowupQueued: async ({ durableId }) => {
           // Persistence happens before this callback, so the short grace period

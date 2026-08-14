@@ -10,7 +10,7 @@ const DURABLE_ID_RE = /^[A-Za-z0-9_-]{16,48}$/;
  * The durable queue remains authoritative while this process-local timer runs,
  * so a restart safely falls back to "After this" instead of losing input.
  */
-export const TELEGRAM_AUTO_STEER_GRACE_MS = 3_000;
+export const TELEGRAM_AUTO_STEER_GRACE_MS = 10_000;
 type PendingAutoSteer = {
   timer: ReturnType<typeof setTimeout>;
   state: "scheduled" | "in-flight";

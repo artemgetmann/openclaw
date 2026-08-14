@@ -14,6 +14,7 @@ import {
 } from "./draft-stream.test-helpers.js";
 import { __testing as queueButtonTesting } from "./queue-buttons.js";
 import { clearSentMessageCache, getSentMessageMetadata } from "./sent-message-cache.js";
+import { getTelegramBusyAwareSequentialKey } from "./sequential-key.js";
 import {
   __testing as workLogTesting,
   getTelegramWorkLog,
@@ -342,6 +343,48 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       messageThreadId: 777,
       durableFollowupId: durableId,
     });
+  });
+
+  it("admits a plain follow-up immediately after durable direct-turn acceptance", async () => {
+    const firstMessage = createContext().msg;
+    const followupMessage = { ...firstMessage, message_id: 457, text: "Add this too" };
+    const followupContext = { message: followupMessage };
+    const baseKey = "telegram:123:topic:777";
+    let releaseDispatch!: () => void;
+    const keepDispatchOpen = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    let durableAccepted!: () => void;
+    const accepted = new Promise<void>((resolve) => {
+      durableAccepted = resolve;
+    });
+
+    // Before persistence, a second message must retain normal serialization so
+    // two fresh messages cannot both start the same idle agent session.
+    expect(getTelegramBusyAwareSequentialKey(followupContext)).toBe(baseKey);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async ({ replyOptions }) => {
+      await replyOptions.onDurableReplyAccepted?.("12345678-1234-4234-8234-123456789abc");
+      durableAccepted();
+      await keepDispatchOpen;
+      return { queuedFinal: false };
+    });
+
+    const dispatch = dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+    });
+    await accepted;
+
+    // The first handler is still awaiting model work, but the accepted turn is
+    // now durable and owns finalization. A plain follow-up can safely bypass
+    // grammY's per-topic lock and reach the durable queue immediately.
+    expect(getTelegramBusyAwareSequentialKey(followupContext)).toBe(
+      `${baseKey}:queued-message:457`,
+    );
+
+    releaseDispatch();
+    await dispatch;
+    expect(getTelegramBusyAwareSequentialKey(followupContext)).toBe(baseKey);
   });
 
   it("does not expose a dead Queue/Steer keyboard when inline buttons are off", async () => {
