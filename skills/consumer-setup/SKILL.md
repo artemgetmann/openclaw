@@ -194,6 +194,12 @@ details, translate only those details into friendly wording:
 - Treat an account as known only when the failing command/error or original task
   identifies it, or one configured Gog account clearly matches. If multiple
   accounts could fit, stop and ask instead of choosing from the browser UI.
+- Before starting OAuth for one macOS `No auth for <service> <account>` result,
+  run one `gog auth list --json` health recheck. If the known account still
+  lists that service and the failed operation was read-only, retry that exact
+  read once. A successful retry is transient recovery: continue the original
+  task without opening consent. Never retry sends or writes. If the service is
+  absent or the one read retry fails, continue with the guarded recovery below.
 - Prefer a browser-assisted OAuth flow when available.
 - Check `gog --version` before assuming newer auth helpers exist. Treat
   v0.31.0+ as the cutoff for `gog auth setup`, `GOG_HELP=agent`, classified
@@ -250,6 +256,11 @@ details, translate only those details into friendly wording:
   forced consent as part of the original Google task. Do not require the user to
   propose re-authentication first; pause only for a secure Google challenge or
   an explicit scope/account ambiguity.
+- Treat `persist refreshed token metadata failed` or macOS Keychain error
+  `-25299` as degraded auth health even when the current Google read succeeded.
+  Do not discard the successful task result or delete Keychain items. Report the
+  degraded state once, preserve the known account/services, and use the same
+  guarded recovery path if a later bounded health recheck cannot read them.
 - A roughly seven-day recurrence plus Google's unverified tester warning usually
   means the OAuth app is External + Testing. Explain that the durable owner fix
   is publishing the OAuth app to Production; an administered Workspace domain
