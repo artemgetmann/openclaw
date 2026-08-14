@@ -4,6 +4,25 @@ import Testing
 
 @Suite(.serialized)
 struct OpenClawConfigFileTests {
+    @Test func `test config writes require an isolated path`() {
+        #expect(OpenClawConfigFile.shouldRefuseUnisolatedTestWrite(
+            isRunningTests: true,
+            configPath: "/Users/test/Library/Application Support/Jarvis/.jarvis/openclaw.json",
+            temporaryDirectoryPath: "/private/var/folders/test/T"))
+        #expect(OpenClawConfigFile.shouldRefuseUnisolatedTestWrite(
+            isRunningTests: true,
+            configPath: "/Users/test/.openclaw/openclaw.json",
+            temporaryDirectoryPath: "/private/var/folders/test/T"))
+        #expect(!OpenClawConfigFile.shouldRefuseUnisolatedTestWrite(
+            isRunningTests: true,
+            configPath: "/private/var/folders/test/T/openclaw-test.json",
+            temporaryDirectoryPath: "/private/var/folders/test/T"))
+        #expect(!OpenClawConfigFile.shouldRefuseUnisolatedTestWrite(
+            isRunningTests: false,
+            configPath: "/Users/test/Library/Application Support/Jarvis/.jarvis/openclaw.json",
+            temporaryDirectoryPath: "/private/var/folders/test/T"))
+    }
+
     private func makeConfigOverridePath() -> String {
         FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")

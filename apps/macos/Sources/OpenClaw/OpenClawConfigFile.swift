@@ -34,6 +34,17 @@ enum OpenClawConfigFile {
     }
 
     static func saveDict(_ dict: [String: Any]) {
+        // Tests must opt into a disposable config root before they can write.
+        // A missed fixture override previously let a SwiftPM test overwrite the
+        // installed Jarvis browser selection on a developer's real machine.
+        if self.shouldRefuseUnisolatedTestWrite(
+            isRunningTests: ProcessInfo.processInfo.isRunningTests,
+            configPath: self.url().path,
+            temporaryDirectoryPath: FileManager.default.temporaryDirectory.path)
+        {
+            self.logger.error("refusing unisolated test config write")
+            return
+        }
         // Nix mode disables config writes in production, but tests rely on saving temp configs.
         if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return }
         let url = self.url()
@@ -92,6 +103,22 @@ enum OpenClawConfigFile {
                 "error": error.localizedDescription,
             ])
         }
+    }
+
+    static func shouldRefuseUnisolatedTestWrite(
+        isRunningTests: Bool,
+        configPath: String,
+        temporaryDirectoryPath: String) -> Bool
+    {
+        guard isRunningTests else { return false }
+        let resolvedConfigPath = URL(fileURLWithPath: configPath)
+            .resolvingSymlinksInPath().standardizedFileURL.path
+        let resolvedTemporaryPath = URL(fileURLWithPath: temporaryDirectoryPath)
+            .resolvingSymlinksInPath().standardizedFileURL.path
+        // Presence of an override is insufficient: a developer shell can
+        // inherit an override that points directly at an installed runtime.
+        return resolvedConfigPath == resolvedTemporaryPath ||
+            !resolvedConfigPath.hasPrefix(resolvedTemporaryPath + "/")
     }
 
     static func loadGatewayDict() -> [String: Any] {
