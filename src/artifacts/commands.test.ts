@@ -143,6 +143,17 @@ describe("artifact commands", () => {
     expect(pdf.getPageCount()).toBeGreaterThan(1);
   });
 
+  it("wraps wide PDF glyphs using measured font widths", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-create-pdf-wide-glyph-test-"));
+    const input = path.join(dir, "brief.json");
+    const out = path.join(dir, "brief.pdf");
+    await fs.writeFile(input, JSON.stringify({ paragraphs: ["W".repeat(4000)] }));
+
+    await createPdfCommand(input, { out });
+    const pdf = await PDFDocument.load(await fs.readFile(out));
+    expect(pdf.getPageCount()).toBeGreaterThan(1);
+  });
+
   it.each([
     ["scalar section", { sections: ["Keep me"] }],
     ["long token", { paragraphs: ["x".repeat(500)] }],

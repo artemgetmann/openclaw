@@ -57,25 +57,34 @@ function tableRows(tableValue: unknown): string[][] {
   return columns.length > 0 ? [columns, ...rows] : rows;
 }
 
-function wrapText(text: string, maxChars: number): string[] {
-  const words = text
-    .split(/\s+/)
-    .filter(Boolean)
-    .flatMap((word) => {
-      const chunks: string[] = [];
-      for (let offset = 0; offset < word.length; offset += maxChars) {
-        chunks.push(word.slice(offset, offset + maxChars));
-      }
-      return chunks;
-    });
+function wrapText(text: string, maxWidth: number, measure: (value: string) => number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
   let line = "";
-  for (const word of words) {
-    if (line && `${line} ${word}`.length > maxChars) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = line ? `${line} ${word}` : word;
+  for (const rawWord of words) {
+    // Split unbroken tokens by measured glyph width. Character counts clip
+    // wide glyphs such as W and waste space on narrow glyphs such as i.
+    const chunks: string[] = [];
+    let chunk = "";
+    for (const character of rawWord) {
+      if (chunk && measure(`${chunk}${character}`) > maxWidth) {
+        chunks.push(chunk);
+        chunk = character;
+      } else {
+        chunk += character;
+      }
+    }
+    if (chunk || rawWord.length === 0) {
+      chunks.push(chunk);
+    }
+    for (const word of chunks) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && measure(candidate) > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
     }
   }
   if (line || lines.length === 0) {
@@ -111,11 +120,8 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
         `PDF text contains unsupported character ${JSON.stringify(unsupported)}; use DOCX for Unicode text`,
       );
     }
-    const maxChars = Math.max(
-      12,
-      Math.floor((page.getWidth() - margin * 2 - indent) / (size * 0.55)),
-    );
-    for (const line of wrapText(text, maxChars)) {
+    const maxWidth = page.getWidth() - margin * 2 - indent;
+    for (const line of wrapText(text, maxWidth, (value) => font.widthOfTextAtSize(value, size))) {
       if (y < margin + size) {
         page = pdf.addPage(pageSize);
         y = page.getHeight() - margin;
@@ -145,8 +151,11 @@ export async function createPdf(specValue: unknown, outputPath: string): Promise
     for (const [rowIndex, row] of rows.entries()) {
       // Measure every cell first so the row remains a single aligned unit when
       // it wraps or moves to the next page.
+      const rowFont = rowIndex === 0 ? bold : regular;
       const wrappedCells = Array.from({ length: columnCount }, (_, columnIndex) =>
-        wrapText(row[columnIndex] ?? "", Math.max(4, Math.floor((columnWidth - 8) / 5))),
+        wrapText(row[columnIndex] ?? "", columnWidth - 8, (value) =>
+          rowFont.widthOfTextAtSize(value, fontSize),
+        ),
       );
       let lineOffset = 0;
       const totalLines = Math.max(...wrappedCells.map((lines) => lines.length));
