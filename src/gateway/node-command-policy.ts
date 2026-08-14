@@ -111,6 +111,10 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   macos: [
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
+    // The signed Mac node requests Screen Recording itself on first use. The
+    // gateway must let that initial invocation reach the node; macOS remains
+    // the authority that grants or denies access before capture begins.
+    ...SCREEN_DANGEROUS_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,

@@ -383,9 +383,11 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(macAllow.has("system.appUpdate.check")).toBe(true);
     expect(macAllow.has("system.appUpdate.status")).toBe(true);
     expect(macAllow.has("system.appUpdate.install")).toBe(true);
+    expect(macAllow.has("screen.record")).toBe(true);
     expect(iosAllow.has("system.appUpdate.check")).toBe(false);
     expect(iosAllow.has("system.appUpdate.status")).toBe(false);
     expect(iosAllow.has("system.appUpdate.install")).toBe(false);
+    expect(iosAllow.has("screen.record")).toBe(false);
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {
