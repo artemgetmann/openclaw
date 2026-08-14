@@ -238,6 +238,7 @@ test_sparkle_phase_gate_selection() {
   local phase
 
   for phase in \
+    sparkle-update \
     full \
     local-proof \
     post-app-build \

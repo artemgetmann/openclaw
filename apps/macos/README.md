@@ -514,6 +514,8 @@ inspecting/mutating release artifacts, then echoes them into one exact direct
 bash scripts/jarvis-public-release.sh --dry-run
 bash scripts/jarvis-public-release.sh \
   --authorize \
+  --release-class fresh-installer \
+  --release-class-reason manual-refresh \
   --parallel-safe-local-assets \
   --latest-release-tag
 # Run the exact persistent_command printed by --authorize.
@@ -636,7 +638,8 @@ bash scripts/jarvis-public-release.sh \
 Publishing is never implicit. Use the narrow gate that matches the truth you
 need to make public.
 
-For an urgent existing-user update, publish only after app notarization is
+Routine existing-user releases use the `sparkle-update` class. Publish only
+after app notarization is
 accepted and existing `dist/Jarvis.app`, `dist/Jarvis.zip`, and
 `dist/jarvis-appcast.xml` are present. This uploads only `Jarvis.zip` and
 `jarvis-appcast.xml`; it does not upload `Jarvis.dmg` and must not be described
@@ -646,7 +649,7 @@ as a fresh-install/sendable release:
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/jarvis-public-release.sh \
   --authorize \
-  --urgent-sparkle \
+  --release-class sparkle-update \
   --publish-release-assets \
   --latest-release-tag
 # Run the exact persistent_command printed by --authorize.
@@ -661,14 +664,18 @@ fresh_install_sendable=false
 dmg_update_live=false
 ```
 
-For a full sendable release, publish only after app and DMG notarization are
-accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
-`dist/jarvis-appcast.xml` are present:
+Use `fresh-installer` only when users need a new first-install/recovery DMG.
+Record one reason: `first-release`, `recovery`, `security`, `compatibility`,
+`installer-age`, or `manual-refresh`. Publish only after app and DMG
+notarization are accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`,
+and `dist/jarvis-appcast.xml` are present:
 
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/jarvis-public-release.sh \
   --authorize \
+  --release-class fresh-installer \
+  --release-class-reason recovery \
   --publish-release-assets \
   --latest-release-tag
 # Run the exact persistent_command printed by --authorize.
@@ -678,6 +685,13 @@ Use `--github-release-tag <tag>` only when you intentionally want to pin the
 wrapper to a specific known tag. The wrapper rejects combining it with
 `--latest-release-tag` so publish and verification commands cannot hide
 ambiguous operator intent.
+
+Tagged `Jarvis.zip` and `Jarvis.dmg` assets are immutable. Publication permits
+an absent asset or an identical retry, but refuses different bytes at an
+existing tagged URL. Create a new release tag for every changed ZIP or DMG.
+Only `jarvis-appcast.xml` is replaced, and it uploads last as the Sparkle
+go-live switch. Roll back a bad release by publishing reverted code with a
+higher build number; never rewrite a tagged enclosure or downgrade the appcast.
 
 Before the large GitHub release asset upload, the package script runs a
 GitHub-specific network preflight. It checks routes to `github.com`,
@@ -836,7 +850,7 @@ bash scripts/package-openclaw-mac-dist.sh \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
-Publish an urgent Sparkle-only update from existing `dist/Jarvis.zip` and
+Publish a routine Sparkle-only update from existing `dist/Jarvis.zip` and
 `dist/jarvis-appcast.xml` after the manifest records accepted app notarization:
 
 ```bash

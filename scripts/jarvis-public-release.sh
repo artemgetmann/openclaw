@@ -38,7 +38,8 @@ SUMMARY_REPORT="${OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY:-$ROOT_DIR/dist/jarvis-
 RUN_SIZE_REPORT=0
 REQUESTED_APP_BUILD=""
 PARALLEL_SAFE_LOCAL_ASSETS=0
-URGENT_SPARKLE_ONLY=0
+RELEASE_CLASS="sparkle-update"
+RELEASE_CLASS_REASON="routine-existing-user-update"
 AUTHORIZE_RELEASE=0
 RELEASE_INTENT_ID=""
 RELEASE_INTENT_TTL_SECONDS=7200
@@ -88,8 +89,15 @@ Options:
       Opt into the P2 safe overlap path. After app notarization is accepted and
       DMG notarization has a submitted receipt, create local Jarvis.zip/appcast
       before the separate resumable DMG polling step finishes.
+  --release-class <sparkle-update|fresh-installer>
+      Routine releases default to sparkle-update and never create or publish a
+      DMG. fresh-installer keeps the sendable installer lane and requires an
+      explicit --release-class-reason.
+  --release-class-reason <reason>
+      Required for fresh-installer: first-release, recovery, security,
+      compatibility, installer-age, or manual-refresh.
   --urgent-sparkle
-      Explicit urgent update mode for existing Jarvis installations. Once the
+      Backward-compatible alias for --release-class sparkle-update. Once the
       app notarization is accepted and local Jarvis.zip/appcast exist, publish
       and verify only the Sparkle update assets. This does not publish Jarvis.dmg
       and must not be treated as a fresh-install/sendable DMG release.
@@ -146,7 +154,8 @@ release_action_fingerprint() {
     && -z "$GITHUB_RELEASE_TAG" \
     && "$LATEST_RELEASE_TAG" == "0" \
     && "$PARALLEL_SAFE_LOCAL_ASSETS" == "0" \
-    && "$URGENT_SPARKLE_ONLY" == "0" \
+    && "$RELEASE_CLASS" == "sparkle-update" \
+    && "$RELEASE_CLASS_REASON" == "routine-existing-user-update" \
     && "$RUN_SIZE_REPORT" == "0" \
     && -z "$REQUESTED_APP_BUILD" ]]; then
     printf '\n'
@@ -162,7 +171,8 @@ release_action_fingerprint() {
     printf 'latest=%s\0' "$LATEST_RELEASE_TAG"
     printf 'github-repo=%s\0' "$GITHUB_RELEASE_REPO"
     printf 'parallel=%s\0' "$PARALLEL_SAFE_LOCAL_ASSETS"
-    printf 'urgent=%s\0' "$URGENT_SPARKLE_ONLY"
+    printf 'release-class=%s\0' "$RELEASE_CLASS"
+    printf 'release-class-reason=%s\0' "$RELEASE_CLASS_REASON"
     printf 'size=%s\0' "$RUN_SIZE_REPORT"
     printf 'app-build=%s\0' "$REQUESTED_APP_BUILD"
   } | /usr/bin/shasum -a 256 | /usr/bin/awk '{ print $1 }'
@@ -251,6 +261,8 @@ write_summary_report() {
   {
     printf 'JARVIS_PUBLIC_RELEASE_SUMMARY_VERSION=%q\n' "1"
     printf 'JARVIS_PUBLIC_RELEASE_PHASE=%q\n' "$selected_phase"
+    printf 'JARVIS_RELEASE_CLASS=%q\n' "$RELEASE_CLASS"
+    printf 'JARVIS_RELEASE_CLASS_REASON=%q\n' "$RELEASE_CLASS_REASON"
     printf 'JARVIS_PUBLIC_RELEASE_STATUS=%q\n' "$status"
     printf 'JARVIS_PUBLIC_RELEASE_STARTED_AT=%q\n' "$started_at"
     printf 'JARVIS_PUBLIC_RELEASE_FINISHED_AT=%q\n' "$finished_at"
@@ -333,7 +345,11 @@ select_checkpoint_safe_phase() {
   elif checkpoint_valid "$app" app app-signed; then
     app_state="signed"
   else
-    printf '%s\n' "full"
+    if [[ "$RELEASE_CLASS" == "sparkle-update" ]]; then
+      printf '%s\n' "sparkle-update"
+    else
+      printf '%s\n' "full"
+    fi
     return 0
   fi
 
@@ -346,7 +362,7 @@ select_checkpoint_safe_phase() {
     return 0
   fi
 
-  if [[ "$URGENT_SPARKLE_ONLY" == "1" ]]; then
+  if [[ "$RELEASE_CLASS" == "sparkle-update" ]]; then
     if ! checkpoint_valid "$zip" zip sparkle-zip "" "$app" || ! checkpoint_valid "$appcast" appcast sparkle-appcast "" "$app"; then
       printf '%s\n' "create-local-release-assets-only"
     elif [[ "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
@@ -454,8 +470,19 @@ while [[ $# -gt 0 ]]; do
       PARALLEL_SAFE_LOCAL_ASSETS=1
       shift
       ;;
+    --release-class)
+      [[ $# -ge 2 ]] || { echo "ERROR: --release-class requires a value." >&2; exit 1; }
+      RELEASE_CLASS="$2"
+      shift 2
+      ;;
+    --release-class-reason)
+      [[ $# -ge 2 ]] || { echo "ERROR: --release-class-reason requires a value." >&2; exit 1; }
+      RELEASE_CLASS_REASON="$2"
+      shift 2
+      ;;
     --urgent-sparkle|--sparkle-update-only)
-      URGENT_SPARKLE_ONLY=1
+      RELEASE_CLASS="sparkle-update"
+      RELEASE_CLASS_REASON="routine-existing-user-update"
       shift
       ;;
     --size-report)
@@ -482,6 +509,28 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$RELEASE_CLASS" in
+  sparkle-update)
+    if [[ "$RELEASE_CLASS_REASON" != "routine-existing-user-update" ]]; then
+      echo "ERROR: sparkle-update uses the fixed reason routine-existing-user-update." >&2
+      exit 1
+    fi
+    ;;
+  fresh-installer)
+    case "$RELEASE_CLASS_REASON" in
+      first-release|recovery|security|compatibility|installer-age|manual-refresh) ;;
+      *)
+        echo "ERROR: fresh-installer requires --release-class-reason first-release|recovery|security|compatibility|installer-age|manual-refresh." >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "ERROR: --release-class must be sparkle-update or fresh-installer." >&2
+    exit 1
+    ;;
+esac
+
 if [[ -n "$REQUESTED_APP_BUILD" && ! "$REQUESTED_APP_BUILD" =~ ^[0-9]+$ ]]; then
   echo "ERROR: --app-build must be numeric for Sparkle compare (CFBundleVersion). Got: $REQUESTED_APP_BUILD" >&2
   exit 1
@@ -499,13 +548,30 @@ if [[ "$LATEST_RELEASE_TAG" == "1" && -n "$GITHUB_RELEASE_TAG" ]]; then
 fi
 
 case "$FORCED_PHASE" in
-  auto|full|post-app-build|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only)
+  auto|sparkle-update|full|post-app-build|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only)
     ;;
   *)
     echo "ERROR: unsupported --phase value for public-release wrapper: $FORCED_PHASE" >&2
     exit 1
     ;;
 esac
+
+# A release class is a durable statement about external effects, not a label.
+# Reject forced phases that contradict it before authorization or state access.
+case "$RELEASE_CLASS:$FORCED_PHASE" in
+  sparkle-update:submit-dmg-notarization|sparkle-update:poll-dmg-notarization|sparkle-update:publish-assets-only|sparkle-update:verify-public-assets-only)
+    echo "ERROR: --release-class sparkle-update cannot execute DMG/full-public phase $FORCED_PHASE." >&2
+    exit 1
+    ;;
+  fresh-installer:sparkle-update|fresh-installer:publish-sparkle-assets-only|fresh-installer:verify-sparkle-assets-only)
+    echo "ERROR: --release-class fresh-installer cannot execute Sparkle-only phase $FORCED_PHASE." >&2
+    exit 1
+    ;;
+esac
+if [[ "$RELEASE_CLASS" == "sparkle-update" && "$PARALLEL_SAFE_LOCAL_ASSETS" == "1" ]]; then
+  echo "ERROR: --parallel-safe-local-assets is a fresh-installer DMG overlap mode." >&2
+  exit 1
+fi
 
 case "$FORCED_PHASE" in
   publish-assets-only|publish-sparkle-assets-only)
@@ -550,7 +616,8 @@ if [[ "$AUTHORIZE_RELEASE" == "1" ]]; then
   [[ -z "$GITHUB_RELEASE_TAG" ]] || AUTHORIZED_ARGS+=(--github-release-tag "$GITHUB_RELEASE_TAG")
   [[ "$LATEST_RELEASE_TAG" != "1" ]] || AUTHORIZED_ARGS+=(--latest-release-tag)
   [[ "$PARALLEL_SAFE_LOCAL_ASSETS" != "1" ]] || AUTHORIZED_ARGS+=(--parallel-safe-local-assets)
-  [[ "$URGENT_SPARKLE_ONLY" != "1" ]] || AUTHORIZED_ARGS+=(--urgent-sparkle)
+  AUTHORIZED_ARGS+=(--release-class "$RELEASE_CLASS")
+  [[ "$RELEASE_CLASS" != "fresh-installer" ]] || AUTHORIZED_ARGS+=(--release-class-reason "$RELEASE_CLASS_REASON")
   [[ "$FORCED_PHASE" == "auto" ]] || AUTHORIZED_ARGS+=(--phase "$FORCED_PHASE")
   [[ "$RUN_SIZE_REPORT" != "1" ]] || AUTHORIZED_ARGS+=(--size-report)
   [[ -z "$REQUESTED_APP_BUILD" ]] || AUTHORIZED_ARGS+=(--app-build "$REQUESTED_APP_BUILD")
@@ -674,7 +741,7 @@ if [[ "$SELECTED_PHASE" == "ready-sparkle-local-assets" ]]; then
   if [[ "$RELEASE_INTENT_ACTION_BOUND" == "1" ]]; then
     echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"
   elif [[ -n "$RELEASE_INTENT_ID" ]]; then
-    printf '  next_publish_command=bash scripts/jarvis-public-release.sh --release-intent %q --urgent-sparkle --publish-release-assets --latest-release-tag\n' "$RELEASE_INTENT_ID"
+    printf '  next_publish_command=bash scripts/jarvis-public-release.sh --release-intent %q --release-class sparkle-update --publish-release-assets --latest-release-tag\n' "$RELEASE_INTENT_ID"
   else
     echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"
   fi
@@ -684,12 +751,12 @@ if [[ "$SELECTED_PHASE" == "ready-sparkle-local-assets" ]]; then
   exit 0
 fi
 
-CMD=(bash "$PACKAGE_SCRIPT" --phase "$SELECTED_PHASE")
+CMD=(bash "$PACKAGE_SCRIPT" --phase "$SELECTED_PHASE" --release-class "$RELEASE_CLASS" --release-class-reason "$RELEASE_CLASS_REASON")
 if [[ -n "$RELEASE_INTENT_ID" ]]; then
   CMD+=(--release-intent "$RELEASE_INTENT_ID")
 fi
 case "$SELECTED_PHASE" in
-  full|post-app-build)
+  sparkle-update|full|post-app-build)
     if [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
       CMD+=(--publish-release-assets --github-release-tag "$GITHUB_RELEASE_TAG")
     fi
@@ -727,7 +794,8 @@ if [[ "$FORCED_PHASE" != "auto" ]]; then
     # automatic-selector recovery while preserving publish/verify intent.
     AUTO_RECOVERY_CMD=(bash scripts/jarvis-public-release.sh --release-intent "$RELEASE_INTENT_ID")
     [[ "$PARALLEL_SAFE_LOCAL_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--parallel-safe-local-assets)
-    [[ "$URGENT_SPARKLE_ONLY" != "1" ]] || AUTO_RECOVERY_CMD+=(--urgent-sparkle)
+    AUTO_RECOVERY_CMD+=(--release-class "$RELEASE_CLASS")
+    [[ "$RELEASE_CLASS" != "fresh-installer" ]] || AUTO_RECOVERY_CMD+=(--release-class-reason "$RELEASE_CLASS_REASON")
     [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--publish-release-assets)
     [[ "$VERIFY_PUBLIC_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--verify-public-assets)
     [[ -z "$GITHUB_RELEASE_TAG" ]] || AUTO_RECOVERY_CMD+=(--github-release-tag "$GITHUB_RELEASE_TAG")
@@ -755,13 +823,15 @@ fi
 
 echo "Jarvis public release orchestration:"
 echo "  selected_phase=$SELECTED_PHASE"
+echo "  release_class=$RELEASE_CLASS"
+echo "  release_class_reason=$RELEASE_CLASS_REASON"
 echo "  parallel_safe_local_assets=$PARALLEL_SAFE_LOCAL_ASSETS"
-echo "  urgent_sparkle_only=$URGENT_SPARKLE_ONLY"
+echo "  urgent_sparkle_only=$([[ "$RELEASE_CLASS" == "sparkle-update" ]] && echo 1 || echo 0)"
 echo "  state_root=$STATE_ROOT"
 echo "  app_build=${APP_BUILD:-auto}"
 echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
 echo "  command=$COMMAND_TEXT"
-if [[ "$URGENT_SPARKLE_ONLY" == "1" || "$SELECTED_PHASE" == "publish-sparkle-assets-only" || "$SELECTED_PHASE" == "verify-sparkle-assets-only" ]]; then
+if [[ "$RELEASE_CLASS" == "sparkle-update" || "$SELECTED_PHASE" == "publish-sparkle-assets-only" || "$SELECTED_PHASE" == "verify-sparkle-assets-only" ]]; then
   echo "  appcast_upload_remains_last_for_sparkle=true"
   echo "  fresh_install_sendable=false"
   echo "  dmg_update_live=false"
