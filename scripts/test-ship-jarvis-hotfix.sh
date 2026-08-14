@@ -17,6 +17,8 @@ pass() {
 PROBE_SCRIPT="${TMP_ROOT}/probe.sh"
 PACKAGE_SCRIPT_FIXTURE="${TMP_ROOT}/package.sh"
 PACKAGE_MARKER="${TMP_ROOT}/package-called"
+PROTECT_SCRIPT_FIXTURE="${TMP_ROOT}/protect.sh"
+PROTECT_MARKER="${TMP_ROOT}/protect-called"
 cat >"${PROBE_SCRIPT}" <<'EOF'
 #!/usr/bin/env bash
 printf 'fixture-fs\t/fixture\t%s\t%s\n' "${TEST_FREE_KIB}" "$1"
@@ -25,7 +27,16 @@ cat >"${PACKAGE_SCRIPT_FIXTURE}" <<'EOF'
 #!/usr/bin/env bash
 printf '%s|%s|%s\n' "${OPENCLAW_SHARED_RESOURCE_LOCK:-}" "${OPENCLAW_SHARED_RESOURCE_LOCK_FD:-}" "${OPENCLAW_SHARED_RESOURCE_LOCK_CAPABILITY:-}" >"${PACKAGE_MARKER}"
 EOF
-chmod +x "${PROBE_SCRIPT}" "${PACKAGE_SCRIPT_FIXTURE}"
+cat >"${PROTECT_SCRIPT_FIXTURE}" <<'EOF'
+#!/usr/bin/env bash
+# Record the sanitized environment at the helper boundary. The marker lives
+# beside this fixture because env -i intentionally removes ambient test state.
+printf '%s|%s|%s\n' \
+  "${PATH:-}" \
+  "${OPENCLAW_LSOF_BIN:-missing}" \
+  "$*" >>"$(dirname "$0")/protect-called"
+EOF
+chmod +x "${PROBE_SCRIPT}" "${PACKAGE_SCRIPT_FIXTURE}" "${PROTECT_SCRIPT_FIXTURE}"
 
 if /bin/bash "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh" --help >/dev/null 2>&1; then
   fail "explicit bash launch bypassed the clean-entry sentinel"
@@ -92,6 +103,23 @@ source "${ROOT_DIR}/scripts/ship-jarvis-hotfix.sh"
 load_release_helpers
 
 [[ "${SHIP_TEST_MODE}" == "1" ]] || fail "self-contained fixture did not enable test mode"
+
+# Both protection paths sanitize PATH and must explicitly preserve the pinned
+# system lsof path that the outer shipping verifier already selected.
+PROTECT_SCRIPT="${PROTECT_SCRIPT_FIXTURE}"
+LSOF_BIN="/usr/sbin/lsof"
+DRY_RUN=0
+run_offline_seeded_protection aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa verify
+protect_runtime aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+[[ "$(wc -l <"${PROTECT_MARKER}" | tr -d ' ')" == "3" ]] || \
+  fail "protection fixture did not observe offline plus normal invocations"
+if grep -v '^/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin|/usr/sbin/lsof|' "${PROTECT_MARKER}" >/dev/null; then
+  fail "sanitized protection invocation omitted the pinned /usr/sbin/lsof path"
+fi
+grep -Fq -- '--offline-seeded-fallback --verify' "${PROTECT_MARKER}" || \
+  fail "offline recovery protection invocation was not exercised"
+grep -Fq -- '--apply' "${PROTECT_MARKER}" || fail "normal apply protection invocation was not exercised"
+pass "offline recovery and normal protection preserve pinned lsof outside sanitized PATH"
 
 production_probe="$(
   OPENCLAW_SHIP_JARVIS_HOTFIX_LIB_ONLY=1 \

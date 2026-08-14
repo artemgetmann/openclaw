@@ -763,6 +763,7 @@ run_offline_seeded_protection() {
     "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
     "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
     "OPENCLAW_JARVIS_CONFIG_PATH=${JARVIS_CONFIG_PATH}"
+    "OPENCLAW_LSOF_BIN=${LSOF_BIN}"
     /bin/bash "${PROTECT_SCRIPT}"
     --expected-live-commit "${expected_commit}"
     --offline-seeded-fallback
@@ -993,6 +994,7 @@ protect_runtime() {
     "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
     "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
     "OPENCLAW_JARVIS_CONFIG_PATH=${JARVIS_CONFIG_PATH}"
+    "OPENCLAW_LSOF_BIN=${LSOF_BIN}"
     /bin/bash "${PROTECT_SCRIPT}"
     --expected-live-commit "${expected_commit}"
   )
