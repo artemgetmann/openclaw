@@ -86,6 +86,37 @@ export const NodeInvokeResultParamsSchema = Type.Object(
         {
           code: Type.Optional(NonEmptyString),
           message: Type.Optional(NonEmptyString),
+          permission: Type.Optional(
+            Type.Object(
+              {
+                permission: Type.Union([
+                  Type.Literal("accessibility"),
+                  Type.Literal("screenRecording"),
+                  Type.Literal("location"),
+                  Type.Literal("camera"),
+                  Type.Literal("microphone"),
+                  Type.Literal("desktop"),
+                  Type.Literal("documents"),
+                  Type.Literal("downloads"),
+                ]),
+                state: Type.Union([
+                  Type.Literal("notRequested"),
+                  Type.Literal("requested"),
+                  Type.Literal("requestedStillMissing"),
+                  Type.Literal("granted"),
+                  Type.Literal("denied"),
+                  Type.Literal("unknown"),
+                ]),
+                nextAction: Type.Union([
+                  Type.Literal("approveMacPrompt"),
+                  Type.Literal("checkMacForPrompt"),
+                  Type.Literal("openSystemSettings"),
+                  Type.Literal("openSystemSettingsAndReopen"),
+                ]),
+              },
+              { additionalProperties: false },
+            ),
+          ),
         },
         { additionalProperties: false },
       ),

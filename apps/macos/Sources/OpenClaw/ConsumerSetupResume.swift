@@ -3,7 +3,6 @@ import Foundation
 enum ConsumerSetupResumeBlocker: Equatable {
     case missingConfig
     case browser
-    case permissions
     case model
     case accountActivation
     case telegram
@@ -42,9 +41,9 @@ final class ConsumerSetupResumeModel {
         browserSetup: BrowserSetupModel,
         modelSetup: ConsumerModelSetupModel,
         accountActivation: JarvisAccountActivationModel,
-        channelsStore: ChannelsStore,
-        corePermissionsGranted: Bool
-    ) async -> ConsumerSetupResumeDecision {
+        channelsStore: ChannelsStore)
+        async -> ConsumerSetupResumeDecision
+    {
         guard AppFlavor.current.isConsumer else {
             self.decision = .blocked(.missingConfig)
             return .blocked(.missingConfig)
@@ -58,15 +57,8 @@ final class ConsumerSetupResumeModel {
             return .blocked(.missingConfig)
         }
 
-        guard corePermissionsGranted else {
-            self.decision = .blocked(.permissions)
-            return .blocked(.permissions)
-        }
-
         // Use the same BrowserSetupModel as the visible card so a failed resume
         // probe leaves the user on the browser card with the actual blocker. Run
-        // this after permissions so a half-finished first run does not hang on a
-        // browser probe when the visible next step is still Mac access.
         await browserSetup.refreshForSetupResume()
         guard browserSetup.isComplete else {
             self.decision = .blocked(.browser)

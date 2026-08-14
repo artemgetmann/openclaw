@@ -128,8 +128,7 @@ extension OnboardingView {
             browserSetup: self.browserSetup,
             modelSetup: self.modelSetup,
             accountActivation: self.accountActivation,
-            channelsStore: self.channelsStore,
-            corePermissionsGranted: self.areCorePermissionsGranted)
+            channelsStore: self.channelsStore)
         guard decision == .complete else { return false }
         self.markOnboardingComplete()
         OnboardingController.shared.close()

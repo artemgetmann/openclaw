@@ -211,13 +211,14 @@ struct ConsumerPermissionRecoveryTests {
         #expect(ConsumerPermissionCatalog.optionalCapabilities.contains(.appleScript))
     }
 
-    @Test func `core onboarding permissions include app control but keep location recommended`() {
+    @Test func `permission controls remain in settings instead of onboarding`() {
         #expect(ConsumerPermissionCatalog.coreCapabilities.contains(.accessibility))
         #expect(ConsumerPermissionCatalog.coreCapabilities.contains(.screenRecording))
         #expect(!ConsumerPermissionCatalog.coreCapabilities.contains(.appleScript))
         #expect(!ConsumerPermissionCatalog.coreCapabilities.contains(.location))
         #expect(!ConsumerPermissionCatalog.recommendedOnboardingCapabilities.contains(.appleScript))
         #expect(ConsumerPermissionCatalog.recommendedOnboardingCapabilities.contains(.location))
+        #expect(!ConsumerSetupStep.allCases.contains(where: { $0.title == "Allow Mac Access" }))
     }
 
     @Test func `accessory panel aligns with the System Settings content column`() {

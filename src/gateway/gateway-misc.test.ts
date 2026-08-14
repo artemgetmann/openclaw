@@ -241,6 +241,19 @@ describe("late-arriving invoke results", () => {
         ok: false,
         error: { code: "FAILED", message: "test error" },
       },
+      {
+        id: "permission-error-invoke-id",
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Location permission is required.",
+          permission: {
+            permission: "location",
+            state: "denied",
+            nextAction: "openSystemSettings",
+          },
+        },
+      },
     ] as const;
 
     for (const params of cases) {

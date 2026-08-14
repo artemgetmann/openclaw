@@ -17,8 +17,10 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         fps: Double?,
         includeAudio: Bool?,
         outPath: String?) async throws -> (path: String, hasAudio: Bool)
+    func ensureScreenRecordingPermission() async -> Bool
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus
+    func requestLocationAuthorization() async -> CLAuthorizationStatus
     func locationAccuracyAuthorization() -> CLAccuracyAuthorization
     func currentLocation(
         desiredAccuracy: OpenClawLocationAccuracy,
@@ -66,8 +68,16 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
             outPath: outPath)
     }
 
+    func ensureScreenRecordingPermission() async -> Bool {
+        await PermissionManager.ensure([.screenRecording], interactive: true)[.screenRecording] ?? false
+    }
+
     func locationAuthorizationStatus() -> CLAuthorizationStatus {
         self.locationService.authorizationStatus()
+    }
+
+    func requestLocationAuthorization() async -> CLAuthorizationStatus {
+        await LocationPermissionRequester.shared.request(always: false)
     }
 
     func locationAccuracyAuthorization() -> CLAccuracyAuthorization {

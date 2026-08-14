@@ -139,7 +139,7 @@ extension OnboardingView {
         switch self.consumerSetupStep {
         case .chrome:
             return 260
-        case .permissions, .aiAccess, .accountActivation, .telegram, .telegramGroup:
+        case .aiAccess, .accountActivation, .telegram, .telegramGroup:
             return 345
         }
     }
@@ -150,11 +150,6 @@ extension OnboardingView {
         case .chrome:
             BrowserSetupCardContent(
                 model: self.browserSetup,
-                presentation: .onboarding)
-        case .permissions:
-            ConsumerCorePermissionsSection(
-                status: self.permissionMonitor.status,
-                refresh: self.refreshPerms,
                 presentation: .onboarding)
         case .aiAccess:
             ConsumerModelSetupCardContent(model: self.modelSetup)
@@ -173,8 +168,6 @@ extension OnboardingView {
         switch step {
         case .chrome:
             return self.browserSetup.isComplete
-        case .permissions:
-            return self.areCorePermissionsGranted
         case .aiAccess:
             return self.modelSetup.isComplete
         case .accountActivation:

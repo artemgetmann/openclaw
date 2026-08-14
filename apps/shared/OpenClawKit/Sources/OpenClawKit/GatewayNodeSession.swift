@@ -490,10 +490,18 @@ public actor GatewayNodeSession {
             params["payloadJSON"] = AnyCodable(payloadJSON)
         }
         if let error = response.error {
-            params["error"] = AnyCodable([
+            var nodeError: [String: Any] = [
                 "code": error.code.rawValue,
                 "message": error.message,
-            ])
+            ]
+            if let permission = error.permission {
+                nodeError["permission"] = [
+                    "permission": permission.permission.rawValue,
+                    "state": permission.state.rawValue,
+                    "nextAction": permission.nextAction.rawValue,
+                ]
+            }
+            params["error"] = AnyCodable(nodeError)
         }
         do {
             try await channel.send(method: "node.invoke.result", params: params)
