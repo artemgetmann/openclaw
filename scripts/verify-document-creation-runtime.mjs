@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const runtimeRoot = path.resolve(process.argv[2] || "");
 const packageJson = path.join(runtimeRoot, "package.json");
@@ -29,7 +30,11 @@ for (const packageName of requiredPackages) {
     // release gate for an incomplete app bundle or runtime cache.
     if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
       missing.push(packageName);
+      continue;
     }
+    // Resolution alone does not prove that transitive dependencies survived
+    // deploy and pruning. Load the staged entry point exactly as packaged.
+    await import(pathToFileURL(resolved).href);
   } catch {
     missing.push(packageName);
   }
