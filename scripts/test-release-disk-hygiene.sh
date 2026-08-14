@@ -459,6 +459,10 @@ for fixture_repo in "$REGISTERED_CLEAN" "$REGISTERED_UNTRACKED" "$REGISTERED_MOD
 done
 printf 'untracked user state\n' >"$REGISTERED_UNTRACKED/user-notes.txt"
 printf 'modified user state\n' >>"$REGISTERED_MODIFIED/tracked.txt"
+mkdir -p "$REGISTERED_MODIFIED/apps/macos/.build"
+printf '/apps/macos/.build/\n' >>"$REGISTERED_MODIFIED/.gitignore"
+printf 'old Swift build output\n' >"$REGISTERED_MODIFIED/apps/macos/.build/payload.txt"
+touch -t 202001010000 "$REGISTERED_MODIFIED/apps/macos/.build"
 
 # A generated-looking name is not deletion authority. Tracked content beneath
 # dist must survive even when the worktree itself is otherwise clean.
@@ -533,6 +537,7 @@ OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
 assert_record "would_rm" "$REGISTERED_CLEAN/dist" "default discovery finds nested registered worktree"
 assert_record "would_rm" "$REGISTERED_UNTRACKED/dist" "untracked source no longer makes ignored generated output immortal"
 assert_record "would_rm" "$REGISTERED_MODIFIED/dist" "modified source no longer makes ignored generated output immortal"
+assert_record "would_rm" "$REGISTERED_MODIFIED/apps/macos/.build" "nested Swift build output is included in registered retention"
 assert_record "skip" "$REGISTERED_STATUS_ERROR/dist" "status failure protects indeterminate worktree"
 assert_record "skip" "$REGISTERED_TRACKED_DIST/dist" "tracked content under a generated-looking path remains protected"
 assert_output_has "worktree-artifact-has-tracked-files" "tracked artifact protection is explicit"

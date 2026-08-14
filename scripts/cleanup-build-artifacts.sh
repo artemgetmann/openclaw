@@ -636,7 +636,7 @@ worktree_artifact_safety_block_reason() {
   [[ -n "$status_output" ]] || return 1
 
   case "$kind" in
-    dist|.build|.build-ui-smoke|dist-ui-smoke|DerivedData|.turbo|coverage|node_modules)
+    dist|.build|apps/macos/.build|.build-ui-smoke|dist-ui-smoke|DerivedData|.turbo|coverage|node_modules)
       ;;
     *)
       printf 'dirty-worktree-unsafe-artifact-kind'
@@ -749,6 +749,10 @@ scan_worktree() {
   local generated_names=(
     "dist"
     ".build"
+    # SwiftPM keeps the macOS app's rebuildable output below its package root,
+    # not at the repository root. Missing this exact path left months of large
+    # build trees invisible to both hourly retention and packaging recovery.
+    "apps/macos/.build"
     ".build-ui-smoke"
     "dist-ui-smoke"
     "DerivedData"
