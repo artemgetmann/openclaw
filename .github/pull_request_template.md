@@ -52,7 +52,7 @@ Describe the problem and fix in 2–5 bullets:
 
 Required when the title names Jarvis or the diff touches a direct Jarvis
 product/app path. Generate a clean block with
-`scripts/jarvis-delivery-boundary example --work-scope product-wide --delivery-target public-release`.
+`scripts/jarvis-delivery-boundary example --work-scope product-wide --delivery-target source`.
 Paste its output here. For non-Jarvis work, write `Not required`.
 
 ## User-visible / Behavior Changes

@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   DELIVERY_LAYERS,
+  exampleJarvisDeliveryReceipt,
   extractJarvisDeliveryReceipt,
   validateJarvisDeliveryReceipt,
   validateJarvisPullRequest,
@@ -51,6 +52,29 @@ ${JSON.stringify(value, null, 2)}
 }
 
 describe("Jarvis delivery boundary", () => {
+  it("defaults product-wide work to source without weakening explicit public releases", () => {
+    expect(exampleJarvisDeliveryReceipt()).toMatchObject({
+      workScope: "product-wide",
+      deliveryTarget: "source",
+    });
+    const generated = extractJarvisDeliveryReceipt(
+      execFileSync(process.execPath, [CLI, "example"], { cwd: ROOT, encoding: "utf8" }),
+    );
+    expect(generated).toMatchObject({
+      ok: true,
+      receipt: { workScope: "product-wide", deliveryTarget: "source" },
+    });
+    expect(
+      exampleJarvisDeliveryReceipt({
+        workScope: "product-wide",
+        deliveryTarget: "public-release",
+      }),
+    ).toMatchObject({
+      workScope: "product-wide",
+      deliveryTarget: "public-release",
+    });
+  });
+
   it("allows a personal customization to close only as local-only", () => {
     const local = receipt({
       workScope: "artem-specific",

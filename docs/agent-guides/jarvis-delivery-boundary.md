@@ -20,8 +20,8 @@ proof as a separate authorized layer; do not downgrade the product target.
 
 Choose the requested delivery boundary: `local-only`, `source`, `package`,
 `installed-runtime`, or `public-release`. If no boundary is stated,
-product-wide behavior targets `public-release`; a request explicitly limited to
-source or a PR may target `source`.
+product-wide behavior targets `source`. Classification remains product-wide;
+the source default changes only the authorized delivery and proof boundary.
 
 ## Choose the proof boundary from the failure surface
 
@@ -51,13 +51,23 @@ permissions, restart, or provider scenarios unless those surfaces changed or
 the focused scenario depends on them.
 
 Authorization comes from the user's requested action, not from this
-classification. `Fix this on my Jarvis`, `ship this to my main Jarvis`, or an
-equivalent end-to-end request authorizes the canonical deployment plus one
-targeted acceptance and exact cleanup. `Investigate`, `review`, or `make a PR`
-does not authorize deployment, restart, live traffic, or cleanup. If main
-acceptance is required but not authorized, finish safe source work and stop at
-`blocked-at-boundary` with the missing actions named; do not silently downgrade
-the target to source.
+classification. Generic `ship` or `ship end-to-end` language authorizes the
+source lifecycle through focused proof, PR, and normal merge; it does not
+authorize package, sign, notarize, install, deploy, restart, live traffic, or
+public release work.
+`Fix this on my Jarvis`, `ship this to my main Jarvis`, or equivalent language
+that explicitly names the installed target authorizes the canonical deployment
+plus one targeted acceptance and exact cleanup. `Investigate`, `review`, or
+`make a PR` does not authorize deployment, restart, live traffic, or cleanup.
+If main acceptance is required but not authorized, finish safe source work and
+stop at `blocked-at-boundary` with the missing actions named; do not silently
+downgrade the target to source.
+
+A public Jarvis app release or Sparkle update requires fresh action-time
+confirmation that clearly names that public-release action. A current request
+that unmistakably and explicitly asks for that same public release or Sparkle
+update satisfies the confirmation; source, PR, merge, generic `ship`, and
+generic end-to-end language do not.
 
 Classification does not need approval. Reversible source work proceeds in the
 normal isolated worktree. Return only at a real credential, destructive
@@ -124,7 +134,7 @@ Generate a PR block:
 ```bash
 scripts/jarvis-delivery-boundary example \
   --work-scope product-wide \
-  --delivery-target public-release
+  --delivery-target source
 ```
 
 Validate a standalone receipt before closeout:
