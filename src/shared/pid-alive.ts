@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 
 function isValidPid(pid: number): boolean {
@@ -37,18 +38,32 @@ export function isPidAlive(pid: number): boolean {
 }
 
 /**
- * Read the process start time (field 22 "starttime") from /proc/<pid>/stat.
- * Returns the value in clock ticks since system boot, or null on non-Linux
- * platforms or if the proc file can't be read.
+ * Read a stable process-generation timestamp for Linux or macOS.
+ * Linux exposes clock ticks in /proc; macOS exposes a long-form birth time
+ * through ps. The values are opaque identities and are only compared when the
+ * platform and PID are unchanged.
  *
  * This is used to detect PID recycling: if two readings for the same PID
  * return different starttimes, the PID has been reused by a different process.
  */
 export function getProcessStartTime(pid: number): number | null {
-  if (process.platform !== "linux") {
+  if (!isValidPid(pid)) {
     return null;
   }
-  if (!isValidPid(pid)) {
+  if (process.platform === "darwin") {
+    // Fix the locale and timezone so the ps timestamp parses identically in
+    // every packaged Jarvis environment. A failed lookup stays conservative:
+    // callers preserve rather than reclaim an owner they cannot identify.
+    const result = spawnSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+      timeout: 1_000,
+    });
+    const startedAt = result.status === 0 ? result.stdout.trim().replace(/\s+/g, " ") : "";
+    const startedAtMs = startedAt ? Date.parse(`${startedAt} UTC`) : Number.NaN;
+    return Number.isInteger(startedAtMs) && startedAtMs >= 0 ? startedAtMs : null;
+  }
+  if (process.platform !== "linux") {
     return null;
   }
   try {

@@ -107,7 +107,9 @@ function readProcessStartIdentity(pid: number, nowMs: number): string | undefine
     return cached.identity;
   }
 
-  const linuxStartTime = getProcessStartTime(pid);
+  // Keep the existing Darwin string identity stable across upgrades; the
+  // shared numeric macOS identity is for JSON lease formats that require it.
+  const linuxStartTime = process.platform === "linux" ? getProcessStartTime(pid) : null;
   let identity = linuxStartTime === null ? undefined : `linux:${linuxStartTime}`;
   if (!identity && process.platform === "darwin") {
     // macOS does not expose /proc start ticks. `lstart` binds a PID to its
