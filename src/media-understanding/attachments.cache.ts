@@ -152,7 +152,10 @@ export class MediaAttachmentCache {
           `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
         );
       }
-      if (isAbortError(err)) {
+      if (
+        isAbortError(err) ||
+        (err instanceof MediaFetchError && isAbortError((err as Error).cause))
+      ) {
         throw new MediaUnderstandingSkipError(
           "timeout",
           `Attachment ${params.attachmentIndex + 1} timed out while fetching.`,
