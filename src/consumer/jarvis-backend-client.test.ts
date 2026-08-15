@@ -175,6 +175,7 @@ describe("createJarvisBackendClient", () => {
 
   it("calls managed utility endpoint only in managed mode", async () => {
     const fetchResponse = vi.fn(async (params) => {
+      expect(params.init.headers["Accept-Encoding"]).toBe("identity");
       expect(params.url).toBe("https://jarvis.example/v1/managed/utilities/summarize");
       expect(JSON.parse(params.init.body)).toEqual({
         appVersion: undefined,
