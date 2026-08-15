@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { fetchRemoteMedia } from "../media/fetch.js";
 import { runFfmpeg, runFfprobe } from "../media/ffmpeg-exec.js";
 import { MEDIA_FFMPEG_TIMEOUT_MS } from "../media/ffmpeg-limits.js";
 import {
@@ -25,6 +26,8 @@ const AUDIO_CHUNK_TIMEOUT_GRACE_MS = 60_000;
 const UNKNOWN_AUDIO_CHUNK_TIMEOUT_MS = 10 * 60_000;
 const MAX_AUDIO_CHUNK_TIMEOUT_MS = 2 * 60 * 60_000;
 const MANAGED_TRANSCRIPTION_TIMEOUT_MS = 2 * 60_000;
+const REMOTE_AUDIO_SOURCE_MAX_BYTES = 250 * 1024 * 1024;
+const REMOTE_AUDIO_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 
 function findProviderFailure(decision: MediaUnderstandingDecision): string | undefined {
   // A later provider can successfully transcribe silence after an earlier
@@ -410,17 +413,37 @@ export async function transcribeAudioUrl(params: {
   const mediaUrl = resolved?.audioUrl ?? params.url;
   const mediaType = params.mime ?? resolved?.mime;
   const cfg = resolveExplicitTranscriptionConfig(params.cfg);
-  const { transcript, decision } = await runAudioTranscription({
-    ctx: { MediaUrl: mediaUrl, MediaType: mediaType },
-    cfg,
-    agentDir: params.agentDir,
-  });
-  if (transcript?.trim()) {
-    return { text: transcript };
+  const downloadDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-remote-audio-"),
+  );
+  try {
+    // Download once under the shared DNS-pinned/SSRF-guarded media policy.
+    // Materializing a bounded source file lets the existing file path split
+    // provider-oversized podcasts into safe chunks instead of rejecting them.
+    const media = await fetchRemoteMedia({
+      url: mediaUrl,
+      maxBytes: REMOTE_AUDIO_SOURCE_MAX_BYTES,
+      maxRedirects: 3,
+      timeoutMs: REMOTE_AUDIO_DOWNLOAD_TIMEOUT_MS,
+      readIdleTimeoutMs: 60_000,
+    });
+    const detectedMime = media.contentType ?? mediaType;
+    if (!detectedMime?.toLowerCase().startsWith("audio/")) {
+      throw new Error(
+        `Audio transcription requires audio media; received ${detectedMime ?? "an unknown media type"}`,
+      );
+    }
+    const fileName = path.basename(media.fileName ?? "podcast-audio") || "podcast-audio";
+    const filePath = path.join(downloadDir, fileName);
+    await fs.writeFile(filePath, media.buffer);
+    return await transcribeAudioFile({
+      filePath,
+      cfg,
+      agentDir: params.agentDir,
+      localPathRoots: [downloadDir],
+      mime: detectedMime,
+    });
+  } finally {
+    await fs.rm(downloadDir, { recursive: true, force: true });
   }
-  const providerFailure = findProviderFailure(decision);
-  if (providerFailure) {
-    throw new Error(`Audio transcription provider failed: ${providerFailure}`);
-  }
-  return { text: undefined };
 }

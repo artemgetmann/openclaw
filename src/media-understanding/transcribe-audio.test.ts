@@ -12,12 +12,15 @@ const UNAVAILABLE_AUDIO_OUTCOMES: Array<[string, MediaUnderstandingDecisionOutco
   ["no provider", "skipped"],
 ];
 
-const { runAudioTranscription, runFfmpeg, runFfprobe } = vi.hoisted(() => {
+const { fetchRemoteMedia, runAudioTranscription, runFfmpeg, runFfprobe } = vi.hoisted(() => {
+  const fetchRemoteMedia = vi.fn();
   const runAudioTranscription = vi.fn();
   const runFfmpeg = vi.fn();
   const runFfprobe = vi.fn();
-  return { runAudioTranscription, runFfmpeg, runFfprobe };
+  return { fetchRemoteMedia, runAudioTranscription, runFfmpeg, runFfprobe };
 });
+
+vi.mock("../media/fetch.js", () => ({ fetchRemoteMedia }));
 
 vi.mock("./audio-transcription-runner.js", () => ({
   runAudioTranscription,
@@ -117,6 +120,11 @@ describe("transcribeAudioFile", () => {
   });
 
   it("forces explicit URL transcription through Jarvis managed OpenAI in managed mode", async () => {
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/mpeg",
+      fileName: "episode.mp3",
+    });
     runAudioTranscription.mockResolvedValue(transcriptionResult("managed transcript"));
     const cfg = {
       jarvis: {
@@ -154,6 +162,34 @@ describe("transcribeAudioFile", () => {
         }),
       }),
     );
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxBytes: 250 * MB,
+        url: "https://cdn.example.test/episode.mp3",
+      }),
+    );
+  });
+
+  it("chunks a downloaded podcast when it exceeds the managed provider byte limit", async () => {
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.alloc(11),
+      contentType: "audio/mpeg",
+      fileName: "large.mp3",
+    });
+    runFfprobe.mockResolvedValue("audio\n1200");
+    mockChunkFiles(2);
+    runAudioTranscription
+      .mockResolvedValueOnce(transcriptionResult("first"))
+      .mockResolvedValueOnce(transcriptionResult("second"));
+
+    const result = await transcribeAudioUrl({
+      url: "https://cdn.example.test/large.mp3",
+      cfg: { tools: { media: { audio: { maxBytes: 10 } } } } as OpenClawConfig,
+    });
+
+    expect(result).toEqual({ text: "first\nsecond" });
+    expect(runFfmpeg).toHaveBeenCalledTimes(1);
+    expect(runAudioTranscription).toHaveBeenCalledTimes(2);
   });
 
   it("passes explicit local path roots through to the audio runner", async () => {
