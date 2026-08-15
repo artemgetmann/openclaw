@@ -357,7 +357,13 @@ export function createJarvisBackendClient(
           auditContext: "jarvis-managed-utility",
           init: {
             method: "POST",
-            headers: buildHeaders(managedUtilityAccessToken),
+            headers: {
+              ...buildHeaders(managedUtilityAccessToken),
+              // The SSRF-pinned Undici transport returns encoded response
+              // bytes as-is. Managed payloads can be large enough for an edge
+              // proxy to gzip, so request directly parseable JSON bytes.
+              "Accept-Encoding": "identity",
+            },
             signal: controller.signal,
             body: JSON.stringify({
               appVersion: params.appVersion,
