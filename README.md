@@ -1,5 +1,12 @@
 # 🦞 OpenClaw — Personal AI Assistant
 
+> [!NOTE]
+> **About this fork: Jarvis**
+>
+> [Jarvis](docs/jarvis/README.md) is Artem Getman's current local-first consumer product for bringing coding-agent capabilities to everyday Mac users. It is distinct from both OpenClaw and the earlier cloud-based [Jarvis Voice AI](https://github.com/artemgetmann/jarvis-voice-ai).
+>
+> This repository began as a fork of [`openclaw/openclaw`](https://github.com/openclaw/openclaw), and the engine and substantial upstream code remain inherited. It now contains the Jarvis product direction and Artem-authored changes across onboarding, Telegram-first control, macOS packaging, agent orchestration, approvals, verification, and runtime reliability. See the [product context](CONSUMER.md) and [selected attributable evidence](https://github.com/artemgetmann/artemgetmann/blob/main/EVIDENCE.md).
+
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.svg">
