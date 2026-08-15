@@ -336,7 +336,7 @@ function exampleLayer(layer, personalOnly) {
 
 export function exampleJarvisDeliveryReceipt({
   workScope = "product-wide",
-  deliveryTarget = "public-release",
+  deliveryTarget = "source",
 } = {}) {
   const personalOnly = workScope === "artem-specific";
   return {

@@ -41,8 +41,16 @@ For behavior requests, interpret the smallest amount of language needed:
   release.
 - Unqualified requests to change, fix, or add Jarvis behavior mean product-wide.
 - An explicit source, PR, package, installed-runtime, or public-release boundary
-  sets the delivery target. Otherwise product-wide behavior targets public
-  release and end-user proof.
+  sets the delivery target. Otherwise product-wide behavior defaults to the
+  `source` delivery target, including focused proof and the normal PR/merge
+  lifecycle when requested.
+
+Generic `ship` or `ship end-to-end` language does not widen that source target.
+It does not authorize packaging, signing, notarization, or a public Jarvis app
+release. Before a public Sparkle release or update, obtain fresh action-time
+confirmation that explicitly names the public release or Sparkle update. A
+current request that unmistakably names that same public-release action already
+satisfies this confirmation; generic completion language does not.
 
 State the classification and delivery target in the plan, PR, and closeout.
 Use the enforceable receipt in

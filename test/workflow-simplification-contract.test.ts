@@ -132,4 +132,28 @@ describe("single-owner workflow contract", () => {
       expect(text).not.toContain("handoff-test");
     }
   });
+
+  it("keeps generic shipping authority at source and gates public Sparkle releases", () => {
+    const consumer = read("CONSUMER.md");
+    const agents = read("AGENTS.md");
+    const boundary = read("docs/agent-guides/jarvis-delivery-boundary.md");
+    const workflow = read("docs/agent-guides/workflow.md");
+    const template = read(".github/pull_request_template.md");
+
+    expect(consumer).toMatch(/product-wide behavior defaults to the\s+`source` delivery target/);
+    expect(boundary).toMatch(
+      /Generic `ship` or `ship end-to-end` language authorizes the\s+source lifecycle/,
+    );
+    expect(boundary).toMatch(/fresh action-time\s+confirmation/);
+    expect(workflow).toMatch(/does not authorize a public Jarvis app release or\s+Sparkle update/);
+    expect(template).toContain("--delivery-target source");
+    expect(agents).toMatch(
+      /Source, PR, merge, generic `ship`, and `ship end-to-end` requests never authorize/,
+    );
+
+    for (const text of [consumer, boundary, workflow]) {
+      expect(text).not.toContain("product-wide behavior targets `public-release`");
+      expect(text).not.toContain("product-wide behavior targets public\n  release");
+    }
+  });
 });

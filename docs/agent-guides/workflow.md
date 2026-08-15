@@ -45,13 +45,22 @@ It does not silently authorize:
 - destructive cleanup or irreversible data changes;
 - live messages, live acceptance, or other user-visible external effects.
 
+Generic `ship` or `ship end-to-end` language carries the source lifecycle
+through normal merge. It does not authorize a public Jarvis app release or
+Sparkle update. Before packaging, signing, notarization, or publication for that
+public release, obtain fresh action-time confirmation that clearly names the
+public app release or Sparkle update. A current request that unmistakably and
+explicitly asks for that same public-release action already satisfies this
+confirmation.
+
 Ask only when one of those boundaries is missing, the requested behavior is
 ambiguous, another owner overlaps the same source, or proof fails in a way that
 cannot be repaired safely. Routine rebases, dependency installation, CI fixes,
 review fixes, and normal merge mechanics are not reasons to return work to the
 user.
 
-An owner that was asked to ship end to end keeps going when another PR lands.
+An owner that was asked to ship the source change end to end keeps going when
+another PR lands.
 Fetch the new base, classify the drift, and resolve any in-scope conflict in the
 same worktree. If the effective patch is unchanged and mainline drift touches
 neither the PR paths nor merge-critical infrastructure, retain the existing
