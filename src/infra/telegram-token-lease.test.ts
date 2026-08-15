@@ -192,6 +192,46 @@ describe("telegram token lease", () => {
     await lease.release();
   });
 
+  it("reclaims a lease when the operating system reused its live PID", async () => {
+    const currentPid = process.pid;
+    pidAliveMock.mockReturnValue(true);
+    startTimeMock.mockImplementation((pid) => (pid === currentPid ? 12345 : 33333));
+
+    const existingHash = tokenHash();
+    const leasePath = path.join(leaseRoot, `12345-${existingHash}.json`);
+    await fs.mkdir(path.dirname(leasePath), { recursive: true });
+    await fs.writeFile(
+      leasePath,
+      JSON.stringify({
+        version: 1,
+        pid: 99991,
+        starttime: 22222,
+        createdAt: new Date().toISOString(),
+        tokenHash: existingHash,
+        tokenFingerprint: "recycledpid01",
+        botId: "12345",
+        accountId: "finance",
+        configPath: "/tmp/stale.json",
+        worktree: "/tmp/stale-worktree",
+      }),
+    );
+
+    const { acquireTelegramTokenLease } = await import("./telegram-token-lease.js");
+    const lease = await acquireTelegramTokenLease({
+      token,
+      accountId: "default",
+      leaseRoot,
+      reservationRoot,
+    });
+
+    const next = JSON.parse(await fs.readFile(leasePath, "utf8")) as {
+      pid: number;
+      starttime: number;
+    };
+    expect(next).toMatchObject({ pid: currentPid, starttime: 12345 });
+    await lease.release();
+  });
+
   it("rejects a reserved tester token when runtime ownership metadata is missing", async () => {
     const existingHash = tokenHash();
     await fs.writeFile(

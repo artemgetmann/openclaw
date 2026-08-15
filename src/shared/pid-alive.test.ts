@@ -2,6 +2,12 @@ import fsSync from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { getProcessStartTime, isPidAlive } from "./pid-alive.js";
 
+const spawnSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", () => ({
+  spawnSync: spawnSyncMock,
+}));
+
 function mockProcReads(entries: Record<string, string>) {
   const originalReadFileSync = fsSync.readFileSync;
   vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
@@ -14,13 +20,20 @@ function mockProcReads(entries: Record<string, string>) {
 }
 
 async function withLinuxProcessPlatform<T>(run: () => Promise<T>): Promise<T> {
+  return await withProcessPlatform("linux", run);
+}
+
+async function withProcessPlatform<T>(
+  platform: NodeJS.Platform,
+  run: () => Promise<T>,
+): Promise<T> {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
   if (!originalPlatformDescriptor) {
     throw new Error("missing process.platform descriptor");
   }
   Object.defineProperty(process, "platform", {
     ...originalPlatformDescriptor,
-    value: "linux",
+    value: platform,
   });
   try {
     vi.resetModules();
@@ -91,13 +104,26 @@ describe("getProcessStartTime", () => {
     });
   });
 
-  it("returns null on non-Linux platforms", () => {
-    if (process.platform === "linux") {
-      // On actual Linux, this test is trivially satisfied by the other tests.
-      expect(true).toBe(true);
-      return;
-    }
-    expect(getProcessStartTime(process.pid)).toBeNull();
+  it("returns the process birth time on macOS", async () => {
+    spawnSyncMock.mockReturnValue({
+      pid: 42,
+      output: [null, "Sat Aug  1 02:03:04 2026\n", ""],
+      stdout: "Sat Aug  1 02:03:04 2026\n",
+      stderr: "",
+      status: 0,
+      signal: null,
+    });
+
+    await withProcessPlatform("darwin", async () => {
+      const { getProcessStartTime: fresh } = await import("./pid-alive.js");
+      expect(fresh(42)).toBe(Date.parse("Sat Aug  1 02:03:04 2026 UTC"));
+    });
+
+    expect(spawnSyncMock).toHaveBeenCalledWith("/bin/ps", ["-p", "42", "-o", "lstart="], {
+      encoding: "utf8",
+      env: expect.objectContaining({ LC_ALL: "C", TZ: "UTC" }),
+      timeout: 1_000,
+    });
   });
 
   it("returns null for invalid PIDs", () => {
