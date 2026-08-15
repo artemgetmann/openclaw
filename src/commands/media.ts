@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { loadConfig } from "../config/config.js";
-import { transcribeAudioFile } from "../media-understanding/transcribe-audio.js";
+import {
+  transcribeAudioFile,
+  transcribeAudioUrl,
+} from "../media-understanding/transcribe-audio.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 function readBooleanOpt(opts: Record<string, unknown>, key: string): boolean {
@@ -15,7 +18,8 @@ function readStringOpt(opts: Record<string, unknown>, key: string): string | und
 }
 
 export type MediaTranscribeCommandResult = {
-  file_path: string;
+  file_path?: string;
+  source_url?: string;
   mime: string | null;
   text: string;
 };
@@ -26,32 +30,39 @@ export async function mediaTranscribeCommand(
   runtime: RuntimeEnv,
 ) {
   const rawFilePath = readStringOpt(opts, "file") ?? (fileArg?.trim() ? fileArg.trim() : undefined);
-  if (!rawFilePath) {
-    throw new Error("Media transcribe requires a file path.");
+  const sourceUrl = readStringOpt(opts, "url");
+  if (Boolean(rawFilePath) === Boolean(sourceUrl)) {
+    throw new Error("Media transcribe requires exactly one file or URL.");
   }
-  const filePath = path.resolve(rawFilePath);
+  const filePath = rawFilePath ? path.resolve(rawFilePath) : undefined;
 
   // Fail early with a plain file error before the media runner starts provider
   // selection. This keeps CLI mistakes separate from STT provider/config issues.
-  await fs.access(filePath);
+  if (filePath) {
+    await fs.access(filePath);
+  }
 
   const mime = readStringOpt(opts, "mime");
-  const result = await transcribeAudioFile({
-    filePath,
+  const common = {
     cfg: loadConfig(),
     agentDir: readStringOpt(opts, "agentDir") ?? resolveOpenClawAgentDir(),
-    // The media-understanding runner normally restricts attachment paths to
-    // inbound media roots. A CLI operator-provided file is its own trust
-    // boundary, so allow exactly the containing directory for this one call.
-    localPathRoots: [path.dirname(filePath)],
     mime,
-  });
+  };
+  const result = filePath
+    ? await transcribeAudioFile({
+        ...common,
+        filePath,
+        // A CLI operator-provided file is its own trust boundary. Allow only
+        // its containing directory for this one call.
+        localPathRoots: [path.dirname(filePath)],
+      })
+    : await transcribeAudioUrl({ ...common, url: sourceUrl as string });
   const text = result.text?.trim();
   if (!text) {
     throw new Error("Media transcribe produced no transcript.");
   }
   const payload: MediaTranscribeCommandResult = {
-    file_path: filePath,
+    ...(filePath ? { file_path: filePath } : { source_url: sourceUrl }),
     mime: mime ?? null,
     text,
   };

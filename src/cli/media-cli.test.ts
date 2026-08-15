@@ -72,6 +72,31 @@ describe("media cli", () => {
     );
   });
 
+  it("forwards podcast URLs to the managed media command", async () => {
+    const program = new Command();
+    registerMediaCli(program);
+
+    await program.parseAsync(
+      [
+        "media",
+        "transcribe",
+        "--url",
+        "https://open.spotify.com/episode/0Sk4PpgAwdS6j4DPpkRLRh",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(mediaTranscribeCommand).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        json: true,
+        url: "https://open.spotify.com/episode/0Sk4PpgAwdS6j4DPpkRLRh",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("supports the human-friendly positional file form", async () => {
     const program = new Command();
     registerMediaCli(program);

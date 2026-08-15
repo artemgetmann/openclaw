@@ -28,6 +28,10 @@ export function registerMediaCli(program: Command) {
             "openclaw media transcribe --file /tmp/voice.oga --json",
             "Agent-safe equivalent when the command policy guards path-like positionals.",
           ],
+          [
+            "openclaw media transcribe --url https://open.spotify.com/episode/ID --json",
+            "Resolve a podcast and transcribe it with the configured managed audio provider.",
+          ],
         ])}\n`,
     )
     .action(() => {
@@ -36,9 +40,10 @@ export function registerMediaCli(program: Command) {
 
   media
     .command("transcribe")
-    .description("Transcribe a local audio file with configured media audio models")
+    .description("Transcribe a local file or podcast/audio URL with configured media audio models")
     .argument("[file]", "Audio file path")
     .option("--file <path>", "Audio file path; useful when positional paths are policy-guarded")
+    .option("--url <url>", "Direct audio URL or supported podcast episode URL")
     .option("--mime <mime>", "Optional media MIME type hint")
     .option("--agent-dir <path>", "Agent directory for model auth lookup")
     .option("--json", "Output JSON", false)

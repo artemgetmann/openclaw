@@ -28,7 +28,7 @@ vi.mock("../media/ffmpeg-exec.js", () => ({
   runFfprobe,
 }));
 
-import { transcribeAudioFile } from "./transcribe-audio.js";
+import { transcribeAudioFile, transcribeAudioUrl } from "./transcribe-audio.js";
 
 describe("transcribeAudioFile", () => {
   let tempDir = "";
@@ -114,6 +114,46 @@ describe("transcribeAudioFile", () => {
     expect(result).toEqual({ text: "hello" });
     expect(runFfprobe).not.toHaveBeenCalled();
     expect(runFfmpeg).not.toHaveBeenCalled();
+  });
+
+  it("forces explicit URL transcription through Jarvis managed OpenAI in managed mode", async () => {
+    runAudioTranscription.mockResolvedValue(transcriptionResult("managed transcript"));
+    const cfg = {
+      jarvis: {
+        backend: { baseUrl: "https://jarvis.example" },
+        managedServices: { mode: "managed" },
+      },
+      tools: {
+        media: {
+          audio: {
+            models: [{ type: "cli", command: "whisper", args: ["{{MediaPath}}"] }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      transcribeAudioUrl({
+        url: "https://cdn.example.test/episode.mp3",
+        cfg,
+      }),
+    ).resolves.toEqual({ text: "managed transcript" });
+
+    expect(runAudioTranscription).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          tools: expect.objectContaining({
+            media: expect.objectContaining({
+              audio: expect.objectContaining({
+                models: [
+                  expect.objectContaining({ provider: "jarvis-managed-openai", type: "provider" }),
+                ],
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("passes explicit local path roots through to the audio runner", async () => {

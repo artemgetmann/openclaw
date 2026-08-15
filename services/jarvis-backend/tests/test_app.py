@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from app.main import (
+    OPENAI_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS,
     OPENAI_IMAGE_TIMEOUT_SECONDS,
     TELEGRAM_MANAGED_SETUP_TTL_MINUTES,
     TelegramManagedStartResponse,
@@ -1797,7 +1798,7 @@ def test_openai_audio_transcribe_calls_provider_and_redacts_key(monkeypatch):
             },
         )
 
-    install_mock_async_client(monkeypatch, handler)
+    async_client_calls = install_mock_async_client(monkeypatch, handler)
 
     response = TestClient(app).post(
         "/v1/managed/utilities/openai.audio.transcribe",
@@ -1823,6 +1824,10 @@ def test_openai_audio_transcribe_calls_provider_and_redacts_key(monkeypatch):
         "model": "gpt-4o-mini-transcribe",
     }
     assert "test-openai-provider-placeholder" not in response.text
+    assert (
+        async_client_calls[0]["kwargs"]["timeout"]
+        == OPENAI_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS
+    )
 
 
 def test_openai_audio_transcribe_requires_provider_key(monkeypatch):

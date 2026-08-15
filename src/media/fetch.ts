@@ -33,6 +33,8 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Abort the complete guarded request, including body consumption, after this long (ms). */
+  timeoutMs?: number;
   /** Abort if the response body stops yielding data for this long (ms). */
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -69,7 +71,12 @@ function parseContentDispositionFileName(header?: string | null): string | undef
 
 async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<string | undefined> {
   try {
-    const text = await res.text();
+    // Error responses are untrusted too. Read only enough bytes for a useful
+    // diagnostic instead of allowing a hostile 404 body to consume memory.
+    const buffer = await readResponseWithLimit(res, maxChars * 4, {
+      onOverflow: () => new Error("error response snippet exceeded limit"),
+    }).catch(() => undefined);
+    const text = buffer?.toString("utf8");
     if (!text) {
       return undefined;
     }
@@ -98,6 +105,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     filePathHint,
     maxBytes,
     maxRedirects,
+    timeoutMs,
     readIdleTimeoutMs,
     ssrfPolicy,
     lookupFn,
@@ -117,6 +125,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         fetchImpl,
         init: requestInit,
         maxRedirects,
+        timeoutMs,
         policy: ssrfPolicy,
         lookupFn,
         dispatcherPolicy: policy,

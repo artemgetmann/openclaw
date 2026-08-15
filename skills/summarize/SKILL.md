@@ -7,7 +7,6 @@ metadata:
     "openclaw":
       {
         "emoji": "🧾",
-        "requires": { "bins": ["summarize"] },
         "install":
           [
             {
@@ -27,7 +26,9 @@ metadata:
 
 # Summarize
 
-Fast CLI to summarize URLs, local files, YouTube links, podcasts, and audio/video files.
+Summarize URLs and files. Podcast and direct-audio transcription uses Jarvis's
+managed OpenAI provider first, so the user does not need Whisper or a personal
+provider API key.
 
 ## When to use (trigger phrases)
 
@@ -47,6 +48,30 @@ summarize "https://youtu.be/dQw4w9WgXcQ" --youtube auto
 summarize "/path/to/podcast.mp3" --transcriber auto
 ```
 
+## Podcast and direct-audio URLs: managed first
+
+For a Spotify episode or direct HTTP(S) audio URL, transcribe through the
+product-managed media path:
+
+```bash
+openclaw media transcribe --url "https://open.spotify.com/episode/ID" --json
+```
+
+Then summarize the returned `text` with the active agent model. Do not send the
+URL to the external `summarize` CLI first: that CLI has separate transcription
+providers and can incorrectly ask a Jarvis user to install Whisper or supply a
+personal API key.
+
+Spotify resolution is limited to episodes that can be matched to a publisher's
+public RSS feed. If no public feed or matching episode exists, report that
+boundary. Do not attempt to download Spotify's protected stream.
+
+For a local audio file, use the same managed provider when available:
+
+```bash
+openclaw media transcribe --file "/path/to/podcast.mp3" --json
+```
+
 ## YouTube: summary vs transcript
 
 Best-effort transcript/extraction:
@@ -58,7 +83,10 @@ summarize "/path/to/podcast.mp3" --transcriber auto --extract
 
 If the user asked for a transcript but it’s huge, return a tight summary first, then ask which section/time range to expand.
 
-## Model + keys
+## External CLI fallback: model + keys
+
+Use the external `summarize` CLI for ordinary web pages, documents, and YouTube
+extraction. It is optional for the managed podcast path above.
 
 Set the API key for your chosen provider:
 

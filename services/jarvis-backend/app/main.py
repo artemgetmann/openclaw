@@ -36,6 +36,10 @@ OPENAI_AUDIO_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions
 OPENAI_AUDIO_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 TELEGRAM_BOT_API_BASE_URL = "https://api.telegram.org"
 MANAGED_UTILITY_TIMEOUT_SECONDS = 20.0
+# Podcast uploads and transcription take materially longer than small managed
+# JSON utilities. Keep a separate finite deadline instead of weakening every
+# backend-held-key provider call.
+OPENAI_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS = 120.0
 # OpenAI image operations commonly run longer than search/scrape/audio utility
 # calls. Keep the generic timeout tight, but do not abort image edits mid-flight.
 OPENAI_IMAGE_TIMEOUT_SECONDS = 120.0
@@ -1832,7 +1836,7 @@ async def _openai_audio_transcribe(
         data["prompt"] = prompt
 
     try:
-        async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=OPENAI_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS) as client:
             response = await client.post(
                 OPENAI_AUDIO_TRANSCRIPTION_URL,
                 headers={"Authorization": f"Bearer {api_key}"},

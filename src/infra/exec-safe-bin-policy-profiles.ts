@@ -420,7 +420,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       },
       {
         family: ["media", "transcribe"],
-        allowedValueFlags: ["--agent-dir", "--file", "--mime"],
+        allowedValueFlags: ["--agent-dir", "--file", "--mime", "--url"],
         guardedValueFlags: {
           "--agent-dir": "pathOrSafeLiteral",
           "--file": "pathOrSafeLiteral",

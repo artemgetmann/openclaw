@@ -474,6 +474,11 @@ async function runManagedOpenAiAudioEntry(params: {
     maxBytes,
     timeoutMs,
   });
+  if (!media.mime?.toLowerCase().startsWith("audio/")) {
+    throw new Error(
+      `Audio transcription requires audio media; received ${media.mime ?? "an unknown media type"}`,
+    );
+  }
   assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
 
   const client = createJarvisManagedUtilityClient(params.cfg);
