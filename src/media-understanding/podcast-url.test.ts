@@ -127,4 +127,59 @@ describe("resolvePodcastAudioUrl", () => {
       resolvePodcastAudioUrl({ url: SPOTIFY_URL, fetchImpl, lookupFn: publicLookup() }),
     ).resolves.toMatchObject({ audioUrl: AUDIO_URL, publishedAt: undefined });
   });
+
+  it("uses the publication date to disambiguate duplicate episode titles", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === SPOTIFY_URL) {
+        return new Response(
+          '<script type="application/ld+json">' +
+            JSON.stringify({
+              name: "Q&A",
+              datePublished: "2026-06-17",
+              description: "Listen to this episode from Example Show on Spotify.",
+            }) +
+            "</script>",
+        );
+      }
+      if (url.startsWith("https://itunes.apple.com/search?")) {
+        return Response.json({ results: [{ collectionName: "Example Show", feedUrl: FEED_URL }] });
+      }
+      return new Response(`<rss><channel>
+        <item><title>Q&amp;A</title><pubDate>Wed, 10 Jun 2026 12:00:00 GMT</pubDate><enclosure url="https://cdn.example.test/old.mp3" type="audio/mpeg"/></item>
+        <item><title>Q&amp;A</title><pubDate>Wed, 17 Jun 2026 12:00:00 GMT</pubDate><enclosure url="${AUDIO_URL}" type="audio/mpeg"/></item>
+      </channel></rss>`);
+    });
+
+    await expect(
+      resolvePodcastAudioUrl({ url: SPOTIFY_URL, fetchImpl, lookupFn: publicLookup() }),
+    ).resolves.toMatchObject({ audioUrl: AUDIO_URL, publishedAt: "2026-06-17" });
+  });
+
+  it("accepts a bounded publisher feed larger than page metadata", async () => {
+    const padding = "x".repeat(2 * 1024 * 1024);
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === SPOTIFY_URL) {
+        return new Response(
+          '<script type="application/ld+json">' +
+            JSON.stringify({
+              name: "Large Catalog Episode",
+              description: "Listen to this episode from Example Show on Spotify.",
+            }) +
+            "</script>",
+        );
+      }
+      if (url.startsWith("https://itunes.apple.com/search?")) {
+        return Response.json({ results: [{ collectionName: "Example Show", feedUrl: FEED_URL }] });
+      }
+      return new Response(
+        `<rss><channel><!--${padding}--><item><title>Large Catalog Episode</title><enclosure url="${AUDIO_URL}" type="audio/mpeg"/></item></channel></rss>`,
+      );
+    });
+
+    await expect(
+      resolvePodcastAudioUrl({ url: SPOTIFY_URL, fetchImpl, lookupFn: publicLookup() }),
+    ).resolves.toMatchObject({ audioUrl: AUDIO_URL });
+  });
 });

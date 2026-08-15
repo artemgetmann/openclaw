@@ -2,6 +2,7 @@ import type { LookupFn } from "../infra/net/ssrf.js";
 import { fetchRemoteMedia, type FetchLike } from "../media/fetch.js";
 
 const METADATA_MAX_BYTES = 2 * 1024 * 1024;
+const RSS_MAX_BYTES = 16 * 1024 * 1024;
 const METADATA_TIMEOUT_MS = 15_000;
 
 export type ResolvedPodcastAudio = {
@@ -86,6 +87,7 @@ async function fetchText(params: {
   url: string;
   fetchImpl?: FetchLike;
   lookupFn?: LookupFn;
+  maxBytes?: number;
 }): Promise<string> {
   const result = await fetchRemoteMedia({
     ...params,
@@ -94,7 +96,7 @@ async function fetchText(params: {
     requestInit: {
       headers: { "accept-encoding": "identity", "user-agent": "OpenClaw podcast resolver" },
     },
-    maxBytes: METADATA_MAX_BYTES,
+    maxBytes: params.maxBytes ?? METADATA_MAX_BYTES,
     maxRedirects: 3,
     timeoutMs: METADATA_TIMEOUT_MS,
     readIdleTimeoutMs: METADATA_TIMEOUT_MS,
@@ -165,7 +167,11 @@ export async function resolvePodcastAudioUrl(params: {
     throw new Error(`No public publisher RSS feed was found for “${metadata.showTitle}”.`);
   }
 
-  const rss = await fetchText({ ...params, url: show.feedUrl });
+  const rss = await fetchText({ ...params, url: show.feedUrl, maxBytes: RSS_MAX_BYTES });
+  const titleMatches: Array<{
+    enclosure: Record<string, string>;
+    publishedAt?: string;
+  }> = [];
   for (const item of rss.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)) {
     const title = elementText(item[1], "title");
     if (!title || normalizeTitle(title) !== normalizeTitle(metadata.title)) {
@@ -175,12 +181,22 @@ export async function resolvePodcastAudioUrl(params: {
     if (!enclosure.url) {
       continue;
     }
-    const published = elementText(item[1], "pubDate");
+    titleMatches.push({
+      enclosure,
+      publishedAt: optionalIsoDate(elementText(item[1], "pubDate")),
+    });
+  }
+  const spotifyDate = optionalIsoDate(metadata.publishedAt);
+  const match =
+    titleMatches.length === 1
+      ? titleMatches[0]
+      : titleMatches.find((candidate) => spotifyDate && candidate.publishedAt === spotifyDate);
+  if (match?.enclosure.url) {
     return {
-      audioUrl: normalizeEnclosureUrl(enclosure.url),
+      audioUrl: normalizeEnclosureUrl(match.enclosure.url),
       episodeTitle: metadata.title,
-      mime: enclosure.type,
-      publishedAt: metadata.publishedAt ?? optionalIsoDate(published),
+      mime: match.enclosure.type,
+      publishedAt: spotifyDate ?? match.publishedAt,
       showTitle: metadata.showTitle,
       sourceUrl,
     };
