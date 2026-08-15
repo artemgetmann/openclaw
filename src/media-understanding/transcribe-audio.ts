@@ -427,7 +427,9 @@ export async function transcribeAudioUrl(params: {
       timeoutMs: REMOTE_AUDIO_DOWNLOAD_TIMEOUT_MS,
       readIdleTimeoutMs: 60_000,
     });
-    const detectedMime = media.contentType ?? mediaType;
+    const fetchedMime = media.contentType?.toLowerCase();
+    const detectedMime =
+      !fetchedMime || fetchedMime === "application/octet-stream" ? mediaType : fetchedMime;
     if (!detectedMime?.toLowerCase().startsWith("audio/")) {
       throw new Error(
         `Audio transcription requires audio media; received ${detectedMime ?? "an unknown media type"}`,

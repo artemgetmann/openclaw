@@ -99,4 +99,32 @@ describe("resolvePodcastAudioUrl", () => {
       resolvePodcastAudioUrl({ url: SPOTIFY_URL, fetchImpl, lookupFn: publicLookup() }),
     ).rejects.toThrow(/matching episode/i);
   });
+
+  it("omits an invalid optional RSS publication date", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === SPOTIFY_URL) {
+        return new Response(
+          '<script type="application/ld+json">' +
+            JSON.stringify({
+              name: "How To Pick A Startup Idea",
+              description: "Listen to this episode from Y Combinator Startup Podcast on Spotify.",
+            }) +
+            "</script>",
+        );
+      }
+      if (url.startsWith("https://itunes.apple.com/search?")) {
+        return Response.json({
+          results: [{ collectionName: "Y Combinator Startup Podcast", feedUrl: FEED_URL }],
+        });
+      }
+      return new Response(
+        `<rss><channel><item><title>How To Pick A Startup Idea</title><pubDate>not-a-date</pubDate><enclosure url="${AUDIO_URL}" type="audio/mpeg"/></item></channel></rss>`,
+      );
+    });
+
+    await expect(
+      resolvePodcastAudioUrl({ url: SPOTIFY_URL, fetchImpl, lookupFn: publicLookup() }),
+    ).resolves.toMatchObject({ audioUrl: AUDIO_URL, publishedAt: undefined });
+  });
 });

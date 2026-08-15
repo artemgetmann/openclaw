@@ -36,6 +36,14 @@ function normalizeTitle(value: string): string {
     .trim();
 }
 
+function optionalIsoDate(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
+}
+
 function elementText(xml: string, tag: string): string | undefined {
   const match = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i").exec(xml);
   return match?.[1] ? decodeXml(match[1].trim()) : undefined;
@@ -172,9 +180,7 @@ export async function resolvePodcastAudioUrl(params: {
       audioUrl: normalizeEnclosureUrl(enclosure.url),
       episodeTitle: metadata.title,
       mime: enclosure.type,
-      publishedAt:
-        metadata.publishedAt ??
-        (published ? new Date(published).toISOString().slice(0, 10) : undefined),
+      publishedAt: metadata.publishedAt ?? optionalIsoDate(published),
       showTitle: metadata.showTitle,
       sourceUrl,
     };

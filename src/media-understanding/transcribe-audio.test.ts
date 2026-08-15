@@ -192,6 +192,27 @@ describe("transcribeAudioFile", () => {
     expect(runAudioTranscription).toHaveBeenCalledTimes(2);
   });
 
+  it("uses the RSS audio hint when the CDN returns a generic MIME type", async () => {
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("audio"),
+      contentType: "application/octet-stream",
+      fileName: "download",
+    });
+    runAudioTranscription.mockResolvedValue(transcriptionResult("transcript"));
+
+    await expect(
+      transcribeAudioUrl({
+        url: "https://cdn.example.test/download",
+        cfg: {} as OpenClawConfig,
+        mime: "audio/mpeg",
+      }),
+    ).resolves.toEqual({ text: "transcript" });
+
+    expect(runAudioTranscription).toHaveBeenCalledWith(
+      expect.objectContaining({ ctx: expect.objectContaining({ MediaType: "audio/mpeg" }) }),
+    );
+  });
+
   it("passes explicit local path roots through to the audio runner", async () => {
     runAudioTranscription.mockResolvedValue({ transcript: "hello", attachments: [] });
     const mediaDir = path.join(tempDir, "media");
