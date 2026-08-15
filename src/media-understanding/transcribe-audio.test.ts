@@ -12,12 +12,15 @@ const UNAVAILABLE_AUDIO_OUTCOMES: Array<[string, MediaUnderstandingDecisionOutco
   ["no provider", "skipped"],
 ];
 
-const { runAudioTranscription, runFfmpeg, runFfprobe } = vi.hoisted(() => {
+const { fetchRemoteMedia, runAudioTranscription, runFfmpeg, runFfprobe } = vi.hoisted(() => {
+  const fetchRemoteMedia = vi.fn();
   const runAudioTranscription = vi.fn();
   const runFfmpeg = vi.fn();
   const runFfprobe = vi.fn();
-  return { runAudioTranscription, runFfmpeg, runFfprobe };
+  return { fetchRemoteMedia, runAudioTranscription, runFfmpeg, runFfprobe };
 });
+
+vi.mock("../media/fetch.js", () => ({ fetchRemoteMedia }));
 
 vi.mock("./audio-transcription-runner.js", () => ({
   runAudioTranscription,
@@ -28,7 +31,7 @@ vi.mock("../media/ffmpeg-exec.js", () => ({
   runFfprobe,
 }));
 
-import { transcribeAudioFile } from "./transcribe-audio.js";
+import { transcribeAudioFile, transcribeAudioUrl } from "./transcribe-audio.js";
 
 describe("transcribeAudioFile", () => {
   let tempDir = "";
@@ -114,6 +117,127 @@ describe("transcribeAudioFile", () => {
     expect(result).toEqual({ text: "hello" });
     expect(runFfprobe).not.toHaveBeenCalled();
     expect(runFfmpeg).not.toHaveBeenCalled();
+  });
+
+  it("forces explicit URL transcription through Jarvis managed OpenAI in managed mode", async () => {
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/mpeg",
+      fileName: "episode.mp3",
+    });
+    runAudioTranscription.mockResolvedValue(transcriptionResult("managed transcript"));
+    const cfg = {
+      jarvis: {
+        backend: { baseUrl: "https://jarvis.example" },
+        managedServices: { mode: "managed" },
+      },
+      tools: {
+        media: {
+          audio: {
+            models: [{ type: "cli", command: "whisper", args: ["{{MediaPath}}"] }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      transcribeAudioUrl({
+        url: "https://cdn.example.test/episode.mp3",
+        cfg,
+      }),
+    ).resolves.toEqual({ text: "managed transcript" });
+
+    expect(runAudioTranscription).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          jarvis: expect.objectContaining({
+            backend: expect.objectContaining({ timeoutMs: 5 * 60_000 }),
+          }),
+          tools: expect.objectContaining({
+            media: expect.objectContaining({
+              audio: expect.objectContaining({
+                models: [
+                  expect.objectContaining({
+                    maxBytes: 20 * MB,
+                    provider: "jarvis-managed-openai",
+                    type: "provider",
+                  }),
+                ],
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxBytes: 250 * MB,
+        url: "https://cdn.example.test/episode.mp3",
+      }),
+    );
+  });
+
+  it("detects direct audio bytes when the server omits its MIME type", async () => {
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from(
+        "524946462400000057415645666d74201000000001000100401f0000803e0000020010006461746100000000",
+        "hex",
+      ),
+      fileName: "episode",
+    });
+    runAudioTranscription.mockResolvedValue(transcriptionResult("detected transcript"));
+
+    await expect(
+      transcribeAudioUrl({
+        url: "https://cdn.example.test/episode",
+        cfg: {} as OpenClawConfig,
+      }),
+    ).resolves.toEqual({ text: "detected transcript" });
+
+    expect(runAudioTranscription).toHaveBeenCalled();
+  });
+
+  it("chunks a downloaded podcast when it exceeds the managed provider byte limit", async () => {
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.alloc(11),
+      contentType: "audio/mpeg",
+      fileName: "large.mp3",
+    });
+    runFfprobe.mockResolvedValue("audio\n1200");
+    mockChunkFiles(2);
+    runAudioTranscription
+      .mockResolvedValueOnce(transcriptionResult("first"))
+      .mockResolvedValueOnce(transcriptionResult("second"));
+
+    const result = await transcribeAudioUrl({
+      url: "https://cdn.example.test/large.mp3",
+      cfg: { tools: { media: { audio: { maxBytes: 10 } } } } as OpenClawConfig,
+    });
+
+    expect(result).toEqual({ text: "first\nsecond" });
+    expect(runFfmpeg).toHaveBeenCalledTimes(1);
+    expect(runAudioTranscription).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the RSS audio hint when the CDN returns a generic MIME type", async () => {
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("audio"),
+      contentType: "application/octet-stream",
+      fileName: "download",
+    });
+    runAudioTranscription.mockResolvedValue(transcriptionResult("transcript"));
+
+    await expect(
+      transcribeAudioUrl({
+        url: "https://cdn.example.test/download",
+        cfg: {} as OpenClawConfig,
+        mime: "audio/mpeg",
+      }),
+    ).resolves.toEqual({ text: "transcript" });
+
+    expect(runAudioTranscription).toHaveBeenCalledWith(
+      expect.objectContaining({ ctx: expect.objectContaining({ MediaType: "audio/mpeg" }) }),
+    );
   });
 
   it("passes explicit local path roots through to the audio runner", async () => {

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({ tools: { media: { audio: { enabled: true } } } })),
   resolveOpenClawAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
   transcribeAudioFile: vi.fn(),
+  transcribeAudioUrl: vi.fn(),
 }));
 
 vi.mock("../agents/agent-paths.js", () => ({
@@ -20,6 +21,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../media-understanding/transcribe-audio.js", () => ({
   transcribeAudioFile: mocks.transcribeAudioFile,
+  transcribeAudioUrl: mocks.transcribeAudioUrl,
 }));
 
 const { mediaTranscribeCommand } = await import("./media.js");
@@ -74,10 +76,37 @@ describe("media commands", () => {
     expect(runtime.log).toHaveBeenCalledWith("from flag");
   });
 
-  it("rejects missing file input before provider selection", async () => {
-    await expect(mediaTranscribeCommand(undefined, {}, runtime)).rejects.toThrow(
-      /requires a file path/i,
+  it("transcribes a remote podcast URL without touching the local filesystem", async () => {
+    const url = "https://open.spotify.com/episode/0Sk4PpgAwdS6j4DPpkRLRh";
+    mocks.transcribeAudioUrl.mockResolvedValueOnce({
+      text: "managed podcast transcript",
+      sourceUrl: url,
+      resolvedAudioUrl: "https://cdn.example.test/episode.mp3",
+    });
+
+    await mediaTranscribeCommand(undefined, { url, json: true }, runtime);
+
+    expect(mocks.transcribeAudioUrl).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw-agent",
+      cfg: { tools: { media: { audio: { enabled: true } } } },
+      url,
+    });
+    expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining('"text": "managed podcast transcript"'),
     );
+  });
+
+  it("rejects ambiguous file and URL inputs", async () => {
+    await expect(
+      mediaTranscribeCommand("/tmp/voice.oga", { url: "https://example.com/audio.mp3" }, runtime),
+    ).rejects.toThrow(/exactly one/i);
+    expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
+    expect(mocks.transcribeAudioUrl).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing file input before provider selection", async () => {
+    await expect(mediaTranscribeCommand(undefined, {}, runtime)).rejects.toThrow(/file or URL/i);
     expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
   });
 

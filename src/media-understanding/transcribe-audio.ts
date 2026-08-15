@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { fetchRemoteMedia } from "../media/fetch.js";
 import { runFfmpeg, runFfprobe } from "../media/ffmpeg-exec.js";
 import { MEDIA_FFMPEG_TIMEOUT_MS } from "../media/ffmpeg-limits.js";
 import {
@@ -11,8 +12,11 @@ import {
   mergeInboundPathRoots,
 } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
+import { detectMime } from "../media/mime.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.js";
+import { resolvePodcastAudioUrl } from "./podcast-url.js";
+import { MANAGED_OPENAI_AUDIO_PROVIDER_ID } from "./runner.entries.js";
 import type { MediaUnderstandingDecision, MediaUnderstandingDecisionOutcome } from "./types.js";
 
 const MAX_AUDIO_CHUNK_DURATION_SECONDS = 15 * 60;
@@ -22,6 +26,11 @@ const AUDIO_CHUNK_SIZE_SAFETY_RATIO = 0.8;
 const AUDIO_CHUNK_TIMEOUT_GRACE_MS = 60_000;
 const UNKNOWN_AUDIO_CHUNK_TIMEOUT_MS = 10 * 60_000;
 const MAX_AUDIO_CHUNK_TIMEOUT_MS = 2 * 60 * 60_000;
+// This end-to-end deadline includes the client upload, backend work, the
+// provider's own 120-second transcription window, and response delivery.
+const MANAGED_TRANSCRIPTION_TIMEOUT_MS = 5 * 60_000;
+const REMOTE_AUDIO_SOURCE_MAX_BYTES = 250 * 1024 * 1024;
+const REMOTE_AUDIO_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 
 function findProviderFailure(decision: MediaUnderstandingDecision): string | undefined {
   // A later provider can successfully transcribe silence after an earlier
@@ -54,6 +63,47 @@ function resolveAudioMaxBytes(cfg: OpenClawConfig): number {
     return defaultMaxBytes;
   }
   return Math.min(...configuredEntries.map((entry) => entry.maxBytes ?? defaultMaxBytes));
+}
+
+function resolveExplicitTranscriptionConfig(cfg: OpenClawConfig): OpenClawConfig {
+  if (cfg.jarvis?.managedServices?.mode !== "managed" || !cfg.jarvis.backend?.baseUrl) {
+    return cfg;
+  }
+  // Explicit transcription is a Jarvis product operation. In managed mode it
+  // must not silently fall through to a local Whisper install or a personal
+  // OpenAI key merely because a legacy audio-model entry remains in config.
+  return {
+    ...cfg,
+    jarvis: {
+      ...cfg.jarvis,
+      backend: {
+        ...cfg.jarvis.backend,
+        // The general managed-utility timeout is optimized for small text
+        // calls. Podcast upload plus transcription needs a wider bounded
+        // window, especially on consumer connections.
+        timeoutMs: Math.max(cfg.jarvis.backend.timeoutMs ?? 0, MANAGED_TRANSCRIPTION_TIMEOUT_MS),
+      },
+    },
+    tools: {
+      ...cfg.tools,
+      media: {
+        ...cfg.tools?.media,
+        audio: {
+          ...cfg.tools?.media?.audio,
+          models: [
+            {
+              type: "provider",
+              provider: MANAGED_OPENAI_AUDIO_PROVIDER_ID,
+              model: "gpt-4o-mini-transcribe",
+              // The backend accepts at most 28M base64 characters, which is
+              // safely covered by the existing 20 MiB audio default.
+              maxBytes: DEFAULT_MAX_BYTES.audio,
+            },
+          ],
+        },
+      },
+    },
+  };
 }
 
 async function inspectAudioDuration(filePath: string): Promise<number> {
@@ -299,7 +349,8 @@ export async function transcribeAudioFile(params: {
   localPathRoots?: readonly string[];
   mime?: string;
 }): Promise<{ text: string | undefined }> {
-  const maxBytes = resolveAudioMaxBytes(params.cfg);
+  const cfg = resolveExplicitTranscriptionConfig(params.cfg);
+  const maxBytes = resolveAudioMaxBytes(cfg);
   const stat = await fs.stat(params.filePath);
   if (!stat.isFile()) {
     throw new Error(`Audio transcription requires a regular file: ${params.filePath}`);
@@ -309,12 +360,12 @@ export async function transcribeAudioFile(params: {
   // before any provider call, while short files keep their existing fast path.
   if (stat.size > maxBytes) {
     const durationSeconds = await inspectAudioDuration(params.filePath);
-    return await transcribeAudioChunks({ ...params, maxBytes, durationSeconds });
+    return await transcribeAudioChunks({ ...params, cfg, maxBytes, durationSeconds });
   }
 
   const { transcript, decision } = await runAudioTranscription({
     ctx: { MediaPath: params.filePath, MediaType: params.mime },
-    cfg: params.cfg,
+    cfg,
     agentDir: params.agentDir,
     localPathRoots: params.localPathRoots,
   });
@@ -326,7 +377,7 @@ export async function transcribeAudioFile(params: {
   // miss, then recover with chunks when its duration exceeds the safe ceiling.
   const durationSeconds = await inspectAudioDuration(params.filePath);
   if (durationSeconds > MAX_AUDIO_CHUNK_DURATION_SECONDS) {
-    return await transcribeAudioChunks({ ...params, maxBytes, durationSeconds });
+    return await transcribeAudioChunks({ ...params, cfg, maxBytes, durationSeconds });
   }
   const providerFailure = findProviderFailure(decision);
   if (providerFailure) {
@@ -336,4 +387,73 @@ export async function transcribeAudioFile(params: {
     throw new Error(`Audio transcription provider failed: ${providerFailure}`);
   }
   return { text: undefined };
+}
+
+/**
+ * Transcribe a direct audio URL or a supported podcast page URL.
+ *
+ * Spotify pages contain no usable audio file. Resolve those pages through the
+ * publisher's public RSS feed, then keep the actual download and provider call
+ * on the same guarded, managed path used for message attachments.
+ */
+export async function transcribeAudioUrl(params: {
+  url: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  mime?: string;
+}): Promise<{ text: string | undefined }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(params.url);
+  } catch {
+    throw new Error("Audio transcription requires a valid HTTP(S) URL.");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Audio transcription requires an HTTP(S) URL.");
+  }
+
+  const resolved =
+    parsed.hostname === "open.spotify.com"
+      ? await resolvePodcastAudioUrl({ url: params.url })
+      : undefined;
+  const mediaUrl = resolved?.audioUrl ?? params.url;
+  const mediaType = params.mime ?? resolved?.mime;
+  const cfg = resolveExplicitTranscriptionConfig(params.cfg);
+  const downloadDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-remote-audio-"),
+  );
+  try {
+    // Download once under the shared DNS-pinned/SSRF-guarded media policy.
+    // Materializing a bounded source file lets the existing file path split
+    // provider-oversized podcasts into safe chunks instead of rejecting them.
+    const media = await fetchRemoteMedia({
+      url: mediaUrl,
+      maxBytes: REMOTE_AUDIO_SOURCE_MAX_BYTES,
+      maxRedirects: 3,
+      timeoutMs: REMOTE_AUDIO_DOWNLOAD_TIMEOUT_MS,
+      readIdleTimeoutMs: 60_000,
+    });
+    const fetchedMime = media.contentType?.toLowerCase();
+    const detectedMime =
+      !fetchedMime || fetchedMime === "application/octet-stream"
+        ? (mediaType ?? (await detectMime({ buffer: media.buffer, filePath: media.fileName })))
+        : fetchedMime;
+    if (!detectedMime?.toLowerCase().startsWith("audio/")) {
+      throw new Error(
+        `Audio transcription requires audio media; received ${detectedMime ?? "an unknown media type"}`,
+      );
+    }
+    const fileName = path.basename(media.fileName ?? "podcast-audio") || "podcast-audio";
+    const filePath = path.join(downloadDir, fileName);
+    await fs.writeFile(filePath, media.buffer);
+    return await transcribeAudioFile({
+      filePath,
+      cfg,
+      agentDir: params.agentDir,
+      localPathRoots: [downloadDir],
+      mime: detectedMime,
+    });
+  } finally {
+    await fs.rm(downloadDir, { recursive: true, force: true });
+  }
 }

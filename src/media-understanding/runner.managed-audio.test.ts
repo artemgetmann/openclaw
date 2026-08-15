@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { withRemoteHttpResponse } from "../memory/remote-http.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
-import { withAudioFixture } from "./runner.test-utils.js";
+import {
+  createSafeAudioFixtureBuffer,
+  withAudioFixture,
+  withMediaFixture,
+} from "./runner.test-utils.js";
 
 const fetchResponse = vi.hoisted(() => vi.fn<typeof withRemoteHttpResponse>());
 
@@ -15,6 +19,53 @@ vi.mock("../memory/remote-http.js", async (importOriginal) => {
 });
 
 describe("runCapability managed audio", () => {
+  it("sniffs generically labeled audio before enforcing the managed MIME boundary", async () => {
+    fetchResponse.mockImplementationOnce(
+      async (params) =>
+        await params.onResponse(
+          new Response(
+            JSON.stringify({
+              ok: true,
+              result: { provider: "openai", payload: { text: "generic audio", model: "test" } },
+            }),
+            { status: 200 },
+          ),
+        ),
+    );
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-generic-managed-audio",
+        extension: "wav",
+        mediaType: "application/octet-stream",
+        fileContents: createSafeAudioFixtureBuffer(2048, 0x52),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {
+          jarvis: {
+            backend: { baseUrl: "https://jarvis.example", accountAccessToken: "token" },
+            managedServices: { mode: "managed" },
+          },
+          tools: {
+            media: {
+              audio: {
+                models: [{ type: "provider", provider: "jarvis-managed-openai" }],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+        const result = await runCapability({
+          capability: "audio",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          providerRegistry: buildProviderRegistry(),
+        });
+        expect(result.outputs[0]).toMatchObject({ text: "generic audio" });
+      },
+    );
+  });
+
   it.each([
     {
       name: "routes a non-empty transcript through the backend",

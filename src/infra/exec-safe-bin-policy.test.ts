@@ -473,6 +473,18 @@ describe("exec safe bin policy product-owned cli defaults", () => {
         openclawProfile,
       ),
     ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "media",
+          "transcribe",
+          "--url",
+          "https://open.spotify.com/episode/0Sk4PpgAwdS6j4DPpkRLRh",
+          "--json",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
   });
 
   it("still blocks path handoffs for product-owned CLIs even when the flag itself is allowed", () => {

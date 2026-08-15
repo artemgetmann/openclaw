@@ -14,7 +14,6 @@ import { detectMime } from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
-import { fetchWithTimeout } from "./providers/shared.js";
 import type { MediaAttachment } from "./types.js";
 
 type MediaBufferResult = {
@@ -48,16 +47,6 @@ const DEFAULT_LOCAL_PATH_ROOTS = mergeInboundPathRoots(
 export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
 };
-
-function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
 
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
@@ -132,9 +121,15 @@ export class MediaAttachmentCache {
     }
 
     try {
-      const fetchImpl = (input: RequestInfo | URL, init?: RequestInit) =>
-        fetchWithTimeout(resolveRequestUrl(input), init ?? {}, params.timeoutMs, fetch);
-      const fetched = await fetchRemoteMedia({ url, fetchImpl, maxBytes: params.maxBytes });
+      const fetched = await fetchRemoteMedia({
+        url,
+        maxBytes: params.maxBytes,
+        // The guarded fetch retains its abort controller until the body is
+        // consumed, so this bounds the complete download rather than headers.
+        timeoutMs: params.timeoutMs,
+        readIdleTimeoutMs: params.timeoutMs,
+        maxRedirects: 3,
+      });
       entry.buffer = fetched.buffer;
       entry.bufferMime =
         entry.attachment.mime ??
@@ -157,7 +152,10 @@ export class MediaAttachmentCache {
           `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
         );
       }
-      if (isAbortError(err)) {
+      if (
+        isAbortError(err) ||
+        (err instanceof MediaFetchError && isAbortError((err as Error).cause))
+      ) {
         throw new MediaUnderstandingSkipError(
           "timeout",
           `Attachment ${params.attachmentIndex + 1} timed out while fetching.`,
