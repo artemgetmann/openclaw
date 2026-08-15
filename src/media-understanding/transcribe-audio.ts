@@ -25,7 +25,9 @@ const AUDIO_CHUNK_SIZE_SAFETY_RATIO = 0.8;
 const AUDIO_CHUNK_TIMEOUT_GRACE_MS = 60_000;
 const UNKNOWN_AUDIO_CHUNK_TIMEOUT_MS = 10 * 60_000;
 const MAX_AUDIO_CHUNK_TIMEOUT_MS = 2 * 60 * 60_000;
-const MANAGED_TRANSCRIPTION_TIMEOUT_MS = 2 * 60_000;
+// This end-to-end deadline includes the client upload, backend work, the
+// provider's own 120-second transcription window, and response delivery.
+const MANAGED_TRANSCRIPTION_TIMEOUT_MS = 5 * 60_000;
 const REMOTE_AUDIO_SOURCE_MAX_BYTES = 250 * 1024 * 1024;
 const REMOTE_AUDIO_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 

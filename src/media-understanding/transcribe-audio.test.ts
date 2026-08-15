@@ -150,6 +150,9 @@ describe("transcribeAudioFile", () => {
     expect(runAudioTranscription).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: expect.objectContaining({
+          jarvis: expect.objectContaining({
+            backend: expect.objectContaining({ timeoutMs: 5 * 60_000 }),
+          }),
           tools: expect.objectContaining({
             media: expect.objectContaining({
               audio: expect.objectContaining({
