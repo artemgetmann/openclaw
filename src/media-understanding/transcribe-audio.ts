@@ -92,6 +92,9 @@ function resolveExplicitTranscriptionConfig(cfg: OpenClawConfig): OpenClawConfig
               type: "provider",
               provider: MANAGED_OPENAI_AUDIO_PROVIDER_ID,
               model: "gpt-4o-mini-transcribe",
+              // The backend accepts at most 28M base64 characters, which is
+              // safely covered by the existing 20 MiB audio default.
+              maxBytes: DEFAULT_MAX_BYTES.audio,
             },
           ],
         },

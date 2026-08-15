@@ -154,7 +154,11 @@ describe("transcribeAudioFile", () => {
             media: expect.objectContaining({
               audio: expect.objectContaining({
                 models: [
-                  expect.objectContaining({ provider: "jarvis-managed-openai", type: "provider" }),
+                  expect.objectContaining({
+                    maxBytes: 20 * MB,
+                    provider: "jarvis-managed-openai",
+                    type: "provider",
+                  }),
                 ],
               }),
             }),

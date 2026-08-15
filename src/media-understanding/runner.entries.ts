@@ -19,6 +19,7 @@ import {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { detectMime } from "../media/mime.js";
 import { resolveOpenAiNonModelEnvApiKey } from "../openai/auth-split.js";
 import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache } from "./attachments.js";
@@ -474,9 +475,14 @@ async function runManagedOpenAiAudioEntry(params: {
     maxBytes,
     timeoutMs,
   });
-  if (!media.mime?.toLowerCase().startsWith("audio/")) {
+  const declaredMime = media.mime?.toLowerCase();
+  const effectiveMime =
+    !declaredMime || declaredMime === "application/octet-stream"
+      ? await detectMime({ buffer: media.buffer, filePath: media.fileName })
+      : declaredMime;
+  if (!effectiveMime?.startsWith("audio/")) {
     throw new Error(
-      `Audio transcription requires audio media; received ${media.mime ?? "an unknown media type"}`,
+      `Audio transcription requires audio media; received ${effectiveMime ?? "an unknown media type"}`,
     );
   }
   assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
@@ -492,7 +498,7 @@ async function runManagedOpenAiAudioEntry(params: {
     input: {
       fileBase64: media.buffer.toString("base64"),
       fileName: media.fileName,
-      mimeType: media.mime,
+      mimeType: effectiveMime,
       model,
       language:
         params.entry.language ??
