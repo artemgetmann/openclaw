@@ -177,6 +177,26 @@ describe("transcribeAudioFile", () => {
     );
   });
 
+  it("detects direct audio bytes when the server omits its MIME type", async () => {
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from(
+        "524946462400000057415645666d74201000000001000100401f0000803e0000020010006461746100000000",
+        "hex",
+      ),
+      fileName: "episode",
+    });
+    runAudioTranscription.mockResolvedValue(transcriptionResult("detected transcript"));
+
+    await expect(
+      transcribeAudioUrl({
+        url: "https://cdn.example.test/episode",
+        cfg: {} as OpenClawConfig,
+      }),
+    ).resolves.toEqual({ text: "detected transcript" });
+
+    expect(runAudioTranscription).toHaveBeenCalled();
+  });
+
   it("chunks a downloaded podcast when it exceeds the managed provider byte limit", async () => {
     fetchRemoteMedia.mockResolvedValue({
       buffer: Buffer.alloc(11),

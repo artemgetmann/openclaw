@@ -1,6 +1,6 @@
 ---
 name: summarize
-description: Summarize or extract text/transcripts from URLs, podcasts, and local files (great fallback for “transcribe this YouTube/video”).
+description: Transcribe podcasts through Jarvis managed OpenAI, and summarize or extract other URLs and files when the optional summarize CLI is installed.
 homepage: https://summarize.sh
 metadata:
   {
@@ -39,7 +39,19 @@ Use this skill immediately when the user asks any of:
 - “summarize this URL/article”
 - “transcribe this YouTube/video” (best-effort transcript extraction; no `yt-dlp` needed)
 
-## Quick start
+## Optional external CLI
+
+Before using any `summarize` command, verify that the optional CLI exists:
+
+```bash
+command -v summarize
+```
+
+If it is absent, do not run the examples below. Use the product's available web
+or document tools instead, or tell the user that this optional extraction path
+needs installation. The managed podcast path does not need this CLI.
+
+When it is installed:
 
 ```bash
 summarize "https://example.com"

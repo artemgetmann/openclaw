@@ -12,6 +12,7 @@ import {
   mergeInboundPathRoots,
 } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
+import { detectMime } from "../media/mime.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.js";
 import { resolvePodcastAudioUrl } from "./podcast-url.js";
@@ -434,7 +435,9 @@ export async function transcribeAudioUrl(params: {
     });
     const fetchedMime = media.contentType?.toLowerCase();
     const detectedMime =
-      !fetchedMime || fetchedMime === "application/octet-stream" ? mediaType : fetchedMime;
+      !fetchedMime || fetchedMime === "application/octet-stream"
+        ? (mediaType ?? (await detectMime({ buffer: media.buffer, filePath: media.fileName })))
+        : fetchedMime;
     if (!detectedMime?.toLowerCase().startsWith("audio/")) {
       throw new Error(
         `Audio transcription requires audio media; received ${detectedMime ?? "an unknown media type"}`,
