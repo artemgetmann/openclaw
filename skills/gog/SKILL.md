@@ -217,9 +217,59 @@ Common commands
 - Sheets update: `gog sheets update <sheetId> "Tab!A1:B2" --values-json '[["A","B"],["1","2"]]' --input USER_ENTERED`
 - Sheets append: `gog sheets append <sheetId> "Tab!A:C" --values-json '[["x","y","z"]]' --insert INSERT_ROWS`
 - Sheets clear: `gog sheets clear <sheetId> "Tab!A2:Z"`
+- Sheets native range copy: `gog sheets copy-paste <sheetId> "Source!A1" "Destination!A1" --type NORMAL --json --no-input`
 - Sheets metadata: `gog sheets metadata <sheetId> --json`
 - Docs export: `gog docs export <docId> --format txt --out /tmp/doc.txt`
 - Docs cat: `gog docs cat <docId>`
+
+### Sheets images and rich cell content
+
+Classify the source before choosing a write path. Ordinary values and
+`=IMAGE(...)` formulas are cell content that `gog sheets get` can inspect (use
+`--render FORMULA` for formulas). A true image-in-cell is a distinct image value
+and may appear empty through the Sheets values API. An over-grid image is a
+separate object anchored above cells; a cell-range copy is not proof that it
+was copied.
+
+For a same-spreadsheet copy, prefer the server-side Sheets operation over UI
+clipboard automation:
+
+`gog sheets copy-paste <sheetId> "Source!A1" "Destination!A1" --type NORMAL --json --no-input`
+
+This bypasses the browser and system clipboard. Google documents `PASTE_NORMAL`
+as copying values, formulas, formats, and merges, but does not explicitly
+guarantee true image-in-cell preservation. Treat this as a staged, verified
+operation rather than assuming that a successful API response proves the
+image arrived.
+
+- When the final destination already contains data or an image, never clear it
+  first. Copy to an explicitly disposable staging cell or an already-authorized
+  duplicate spreadsheet, verify there, and only then replace the destination.
+- Verify the exact destination before reporting success. For `=IMAGE(...)`,
+  re-read it with `gog sheets get ... --render FORMULA`. For a true
+  image-in-cell, use either an existing authorized Apps Script function that
+  checks `value.valueType == SpreadsheetApp.ValueType.IMAGE`, or a fresh visual
+  view of the exact destination cell in Sheets. An empty values-API result is
+  neither success nor failure for this image type.
+- Do not create or deploy an Apps Script project merely to avoid a manual
+  handoff. Existing Apps Script automation can use `Range.getValue()` /
+  `Range.setValue()` for `CellImage` and must verify the destination's
+  `ValueType.IMAGE` before returning success.
+- Do not use managed-browser or Computer Use clipboard shortcuts for a true
+  image-in-cell after the native path is unavailable or unverified. Browser
+  control is suitable for destination-state inspection, not reliable image
+  transfer.
+- Over-grid images need an object-aware Apps Script path (`OverGridImage`) or a
+  manual handoff. Drive export to XLSX can preserve a workbook for offline work
+  or backup, but it does not prove that the live destination cell changed.
+- If native copy cannot be staged and independently verified, stop with the
+  exact limitation and ask for a manual image transfer. Jarvis must not claim
+  success from navigation, a copy command exit code, or an unchanged old image.
+
+Use Jarvis Computer Use only when the task genuinely requires visible Mac UI,
+the screen is unlocked, and the user has authorized that surface. It remains a
+fallback after native Sheets and purpose-built Apps Script paths, not a way to
+retry the same clipboard operation.
 
 Calendar Colors
 
