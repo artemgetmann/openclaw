@@ -335,6 +335,28 @@ require_preflight_tools() {
   [[ -x "${PROVE_RUNTIME_SCRIPT}" ]] || die "runtime-proof helper is missing or not executable: ${PROVE_RUNTIME_SCRIPT}"
 }
 
+require_github_receipt_preflight() {
+  # The connector evidence adapter presently verifies a candidate PR only. It
+  # does not provide the merged-PR, required-check, and reviewer receipts this
+  # protected hotfix workflow consumes, so do not silently downgrade those
+  # gates when host `gh` authentication has expired. Probe before locks or
+  # packaging and give the operator the exact recovery action instead.
+  local preflight_output=""
+  local -a preflight_env=(/usr/bin/env -i
+    PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+    HOME="${HOME}"
+    OPENCLAW_GITHUB_GH_BIN="${GH_BIN}")
+  [[ -n "${GH_TOKEN:-}" ]] && preflight_env+=(GH_TOKEN="${GH_TOKEN}")
+  [[ -n "${GITHUB_TOKEN:-}" ]] && preflight_env+=(GITHUB_TOKEN="${GITHUB_TOKEN}")
+
+  if ! preflight_output="$("${preflight_env[@]}" /bin/bash "${ROOT_DIR}/scripts/github-auth-preflight.sh" \
+      --context host --transport host-gh 2>&1)"; then
+    printf '%s\n' "${preflight_output}" >&2
+    die "protected-hotfix GitHub receipts require authenticated host gh API; connector candidate evidence lacks merged-PR/required-check/reviewer parity; reauthenticate gh before prepare, apply, or packaging"
+  fi
+  log "${preflight_output}"
+}
+
 run_pr_required() {
   if [[ "${SHIP_TEST_MODE}" == "1" ]]; then
     "${PR_REQUIRED_SCRIPT}" "$@"
@@ -1685,6 +1707,7 @@ main() {
   load_release_helpers
   require_preflight_tools
   assert_clean_sacred_main
+  require_github_receipt_preflight
 
   local json=""
   local pr_state=""

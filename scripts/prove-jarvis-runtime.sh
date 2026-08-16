@@ -17,7 +17,10 @@ JARVIS_APP_MANIFEST="${OPENCLAW_JARVIS_APP_MANIFEST:-${JARVIS_APP_PATH}/Contents
 JARVIS_INSTALLED_MANIFEST="${OPENCLAW_JARVIS_INSTALLED_MANIFEST:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json}"
 JARVIS_PROTECTION_MARKER="${OPENCLAW_JARVIS_PROTECTION_MARKER:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json}"
 LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-launchctl}"
-LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
+# Keep the explicit override for isolated fixtures and unusual installations.
+# macOS places lsof in /usr/sbin, which sanitized wrapper PATH values commonly
+# omit, so resolve that known system location before treating the tool as absent.
+LSOF_BIN="${OPENCLAW_LSOF_BIN:-}"
 JQ_BIN="${OPENCLAW_JQ_BIN:-jq}"
 ID_BIN="${OPENCLAW_ID_BIN:-id}"
 EXPECTED_COMMIT=""
@@ -46,6 +49,21 @@ app-managed bundled runtime by default. Pass
 hotfix. It does not deploy, restart, bootout, install, touch
 /Applications/Jarvis.app, or mutate ai.openclaw.gateway.
 EOF
+}
+
+resolve_lsof_bin() {
+  if [[ -n "${LSOF_BIN}" ]]; then
+    command -v "${LSOF_BIN}" >/dev/null 2>&1 || die "missing lsof command: ${LSOF_BIN}"
+    return
+  fi
+
+  if command -v lsof >/dev/null 2>&1; then
+    LSOF_BIN="$(command -v lsof)"
+  elif [[ -x /usr/sbin/lsof ]]; then
+    LSOF_BIN="/usr/sbin/lsof"
+  else
+    die "missing lsof command; set OPENCLAW_LSOF_BIN to an executable lsof path"
+  fi
 }
 
 log() {
@@ -92,7 +110,7 @@ parse_args() {
 
 require_readonly_tools() {
   command -v "${LAUNCHCTL_BIN}" >/dev/null 2>&1 || die "missing launchctl command"
-  command -v "${LSOF_BIN}" >/dev/null 2>&1 || die "missing lsof command"
+  resolve_lsof_bin
   command -v "${JQ_BIN}" >/dev/null 2>&1 || die "missing jq command"
   command -v "${ID_BIN}" >/dev/null 2>&1 || die "missing id command"
   [[ -x "${JARVIS_NODE}" ]] || die "Jarvis node runtime is missing or not executable: ${JARVIS_NODE}"
@@ -550,4 +568,6 @@ main() {
   print_proof "${jarvis_pid}"
 }
 
-main "$@"
+if [[ "${OPENCLAW_PROVE_JARVIS_RUNTIME_LIB_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi
