@@ -60,4 +60,23 @@ describe("Google Workspace auth recovery skill contract", () => {
     expect(setup).toContain("-25299");
     expect(setup).toContain("degraded auth health");
   });
+
+  it("keeps OAuth scope inventory separate from provider API readiness", () => {
+    const gog = readBundledSkill("gog");
+    const setup = readBundledSkill("consumer-setup");
+
+    // A saved Sheets scope can coexist with a disabled Sheets API. The agent
+    // must prove the exact provider surface before any task mutation.
+    for (const skill of [gog, setup]) {
+      expect(skill).toContain("OAuth");
+      expect(skill).toMatch(/does not prove|not proof/);
+      expect(skill).toContain("gog sheets metadata <sheetId> --json --no-input");
+      expect(skill).toContain("SERVICE_DISABLED");
+      expect(skill).toContain("Cloud project");
+      expect(skill).toMatch(/do not (?:retry the mutation|reconnect the account)/i);
+    }
+
+    expect(gog).toContain("A successful Drive-backed spreadsheet copy proves");
+    expect(setup).toMatch(/enable that API in the project\s+that owns the OAuth client/);
+  });
 });

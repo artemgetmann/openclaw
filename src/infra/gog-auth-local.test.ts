@@ -7,6 +7,7 @@ import {
   AUTH_KEYRING_OPEN_TIMEOUT,
   authOperationStatusPids,
   authWorkerTerminalExitCode,
+  authorizedAccountMessage,
   classifyGoogleAuthFailure,
   DEFAULT_CONSUMER_GOOGLE_SERVICES,
   gogSubprocessEnv,
@@ -35,6 +36,18 @@ describe("gog auth local helper", () => {
 
   it("defaults Google setup to the broad workspace surface bundle", () => {
     expect(DEFAULT_CONSUMER_GOOGLE_SERVICES).toBe("gmail,calendar,drive,contacts,docs,sheets");
+  });
+
+  it("does not present stored OAuth scopes as Google API readiness", () => {
+    const message = authorizedAccountMessage(
+      "demo@example.com",
+      "gmail,calendar,drive,contacts,docs,sheets",
+    );
+
+    expect(message).toContain("authorization is stored for demo@example.com");
+    expect(message).toContain("does not verify that each Google API is enabled");
+    expect(message).toContain("read-only check");
+    expect(message).toContain("before any write");
   });
 
   it("starts outside the repository without the development-only tsx loader", async () => {
