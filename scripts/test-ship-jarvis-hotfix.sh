@@ -97,6 +97,33 @@ load_release_helpers
 
 [[ "${SHIP_TEST_MODE}" == "1" ]] || fail "self-contained fixture did not enable test mode"
 
+GH_API_PREFLIGHT_FAIL_FIXTURE="${TMP_ROOT}/gh-api-preflight-fail"
+GH_API_PREFLIGHT_READY_FIXTURE="${TMP_ROOT}/gh-api-preflight-ready"
+cat >"${GH_API_PREFLIGHT_FAIL_FIXTURE}" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+cat >"${GH_API_PREFLIGHT_READY_FIXTURE}" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "api" && "${2:-}" == "user" && "${3:-}" == "--jq" && "${4:-}" == ".login" ]]; then
+  printf '%s\n' fixture-user
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "${GH_API_PREFLIGHT_FAIL_FIXTURE}" "${GH_API_PREFLIGHT_READY_FIXTURE}"
+GH_BIN="${GH_API_PREFLIGHT_FAIL_FIXTURE}"
+if (require_github_receipt_preflight) >"${TMP_ROOT}/github-preflight.out" 2>&1; then
+  fail "expired host gh API unexpectedly passed protected-hotfix preflight"
+fi
+grep -Fq "connector candidate evidence lacks merged-PR/required-check/reviewer parity" \
+  "${TMP_ROOT}/github-preflight.out" || fail "GitHub preflight omitted connector parity boundary"
+GH_BIN="${GH_API_PREFLIGHT_READY_FIXTURE}"
+require_github_receipt_preflight >"${TMP_ROOT}/github-preflight-ready.out"
+grep -Fq "transport=host-gh account=fixture-user" "${TMP_ROOT}/github-preflight-ready.out" || \
+  fail "authenticated host gh API preflight did not report its transport"
+pass "protected-hotfix GitHub receipt preflight fails before packaging when host gh expires"
+
 # Production re-enters through macOS /bin/bash 3.2. Under `set -u`, that shell
 # rejects an unguarded expansion of an empty array even though newer Bash does
 # not. Exercise the no-protected-receipt path in the exact production shell.
