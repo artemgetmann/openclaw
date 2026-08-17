@@ -51,6 +51,13 @@ export async function transcribeOpenAiCompatibleAudio(
   if (!headers.has("authorization")) {
     headers.set("authorization", `Bearer ${params.apiKey}`);
   }
+  // The SSRF-pinned fetch path can receive Brotli-compressed provider bytes
+  // without a Content-Encoding header, leaving Response.json() to parse the
+  // compressed body as JSON. Ask OpenAI for identity encoding so the guarded
+  // response remains directly parseable.
+  if (!headers.has("accept-encoding")) {
+    headers.set("accept-encoding", "identity");
+  }
 
   const { response: res, release } = await postTranscriptionRequest({
     url,
