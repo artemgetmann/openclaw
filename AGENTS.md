@@ -21,6 +21,10 @@
 
 ## Always-on rules
 
+- Before starting any Jarvis work, read `docs/jarvis/MAINTENANCE.md`. Proceed
+  only with an allowed work class, enforce its active-item and monthly limits,
+  and record an accepted item with its countable receipts. If it does not fit
+  the policy, stop for Artem.
 - In chat replies, use repo-root-relative file references only.
 - Read `SECURITY.md` before any security triage, advisory work, or severity decision.
 - Read `docs/consumer/project-status.md` before high-level product, launch, pricing, reliability, scaling, or architecture decisions. If that card is stale, its numbers are not decision-grade until refreshed.
