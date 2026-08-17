@@ -29,6 +29,8 @@ Jarvis docs should create action, not emotional debt.
 
 - `docs/jarvis/VISION.md` - product north star, taste, non-goals, and strategy
   guardrails.
+- `docs/jarvis/MAINTENANCE.md` - active work-authority gate, maintenance limits,
+  startup reactivation criteria, and receipt-based dashboard contract.
 - `docs/consumer/project-status.md` - tiny beta decision card: stage, user
   counts, freshness, and launch implications.
 - `docs/research/jarvis-consumer-launch-plan.md` - current launch mission
