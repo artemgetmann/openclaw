@@ -40,11 +40,35 @@ For every agent-driven read, invoke `scripts/xurl-read-safe.sh` from this skill 
 
 - Default to no more than 10 returned resources per task. The guard adds `-n 10` when a collection command omits a count.
 - Before requesting more than 10, tell the user the exact requested maximum and maximum estimated cost, then get fresh confirmation in the current conversation. Only after confirmation, pass the same count with `--approved-max`.
-- The estimator uses conservative standard X pay-per-use rates verified on 2026-08-13. Recheck official pricing before an approved larger read if those rates may have changed.
+- The estimator uses conservative standard X pay-per-use rates verified on 2026-08-18. Recheck official pricing before an approved larger read if those rates may have changed.
 - Never infer approval from an earlier task, a general request for analysis, or an existing credit balance.
 - Never split a task into repeated 10-result calls to evade the task limit.
 - The guard refuses more than 100 results, raw API reads, streaming, mutating commands, and verbose output. This prevents automatic pagination and accidental credential disclosure.
 - Keep auto-recharge off. Credit purchases and billing changes require separate explicit approval.
+
+### Command-level enforcement
+
+Skill instructions are not the enforcement boundary. Agent hosts must install the PATH-level shim so accidental direct reads are intercepted before they reach X:
+
+```bash
+scripts/install-xurl-agent-shim.sh
+scripts/install-xurl-agent-shim.sh --status
+```
+
+The shim routes supported read shortcuts through `xurl-read-safe.sh`, rejects raw GET/HEAD requests, rejects verbose mode, and fails closed on unknown commands. Local help/auth commands and separately approval-gated writes continue to the underlying CLI. Installation is reversible with `scripts/install-xurl-agent-shim.sh --uninstall`.
+
+Do not bypass the shim by locating or invoking another `xurl` binary. Do not split a task into multiple allowed calls.
+
+### Browser fallback
+
+Use the guarded API first because it is faster and returns structured data. If X returns a spend-cap or insufficient-credit error, continue the same public read-only task through an available authenticated browser:
+
+1. Use the runtime's supported browser-control skill and existing signed-in session.
+2. Keep the browser search within the original public-data scope; do not inspect DMs, private account data, cookies, storage, credentials, or unrelated history.
+3. Do not use the browser to evade the 10-result task limit. For a larger task, retain the same exact-count approval boundary even though browser reads do not consume X API credit.
+4. If browser authentication, CAPTCHA, 2FA, or access blocks the task, stop and report the blocker. Never change billing, purchase credits, or raise a spend cap as fallback behavior.
+
+The fallback is conditional. Ordinary public X tasks remain `guarded API up to 10 -> authenticated browser on spend/credit failure -> report blocker if both paths fail`.
 
 Examples:
 
@@ -55,6 +79,9 @@ scripts/xurl-read-safe.sh -- search "golang" -n 10
 # First tell the user: "25 posts can cost up to $0.125. Do you approve this read?"
 # Run only after the user confirms that exact maximum in the current conversation.
 scripts/xurl-read-safe.sh --approved-max 25 -- search "golang" -n 25
+
+# With the PATH shim installed, the equivalent enforced command is:
+xurl --approved-max 25 search "golang" -n 25
 ```
 
 ---
@@ -172,7 +199,7 @@ Tokens are persisted to `~/.xurl` in YAML format. Each app has its own isolated 
 | Remove app                | `xurl auth apps remove NAME`                          |
 | Set default (interactive) | `xurl auth default`                                   |
 | Set default (command)     | `xurl auth default APP_NAME [USERNAME]`               |
-| Use app per-request       | `xurl --app NAME /2/users/me`                         |
+| Use app per-request       | Manual only; raw agent reads are blocked              |
 | Auth status               | `xurl auth status`                                    |
 
 > **Post IDs vs URLs:** Anywhere `POST_ID` appears above you can also paste a full post URL (e.g. `https://x.com/user/status/1234567890`) — xurl extracts the ID automatically.
