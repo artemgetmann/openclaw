@@ -4,7 +4,7 @@ set -euo pipefail
 
 DEFAULT_MAX=10
 HARD_MAX=100
-# Standard X pay-per-use rates verified on 2026-08-13. These deliberately use
+# Standard X pay-per-use rates verified on 2026-08-18. These deliberately use
 # the higher public-read rate rather than discounted owned-read pricing so the
 # displayed amount remains a conservative maximum for mixed read tasks.
 POST_COST_MILLS=5
@@ -92,7 +92,7 @@ for ((index = 0; index < ${#args[@]}; index += 1)); do
       -v|--verbose|-s|--stream)
         die "$arg is not allowed for guarded reads"
         ;;
-      read|search|whoami|user|timeline|mentions|bookmarks|likes|following|followers|dms)
+      read|search|whoami|user|posts|timeline|mentions|bookmarks|likes|following|followers|dms)
         command_name="$arg"
         continue
         ;;
@@ -115,6 +115,11 @@ for ((index = 0; index < ${#args[@]}; index += 1)); do
       requested_count="${args[$((index + 1))]}"
       count_flag_seen=1
       index=$((index + 1))
+      ;;
+    -n[0-9]*)
+      ((count_flag_seen == 0)) || die "result count may be specified only once"
+      requested_count="${arg#-n}"
+      count_flag_seen=1
       ;;
     --max-results=*)
       ((count_flag_seen == 0)) || die "result count may be specified only once"
@@ -139,7 +144,7 @@ case "$command_name" in
     mills_per_resource=$POST_COST_MILLS
     fixed_count=1
     ;;
-  search|timeline|mentions|bookmarks|likes)
+  search|posts|timeline|mentions|bookmarks|likes)
     resource_label="Post"
     mills_per_resource=$POST_COST_MILLS
     fixed_count=0
@@ -190,4 +195,8 @@ if ((dry_run == 1)); then
   exit 0
 fi
 
-exec xurl "${args[@]}"
+# The PATH-level agent shim sets XURL_REAL_BIN before delegating here. Using
+# that resolved executable avoids recursing back into the shim while keeping
+# direct guard invocations backward compatible on machines without the shim.
+real_xurl="${XURL_REAL_BIN:-xurl}"
+exec "$real_xurl" "${args[@]}"

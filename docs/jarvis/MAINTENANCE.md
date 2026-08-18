@@ -64,9 +64,10 @@ Use a committed dashboard entry for each accepted item. It records countable
 receipts, not estimated founder hours. Do not derive a fake time budget from
 this table.
 
-| Date       | Task                  | Class             | Affected active user      | PR               | App release       | Founder decisions or approvals | Manual rescues | Result        | Displaced work |
-| ---------- | --------------------- | ----------------- | ------------------------- | ---------------- | ----------------- | ------------------------------ | -------------- | ------------- | -------------- |
-| YYYY-MM-DD | Short observable task | One allowed class | Anonymous count or `none` | `#123` or `none` | Version or `none` | Count and short receipt        | Count          | Closed result | Task or `none` |
+| Date       | Task                        | Class                         | Affected active user      | PR               | App release       | Founder decisions or approvals | Manual rescues | Result              | Displaced work |
+| ---------- | --------------------------- | ----------------------------- | ------------------------- | ---------------- | ----------------- | ------------------------------ | -------------- | ------------------- | -------------- |
+| 2026-08-18 | Enforce bounded X API reads | serious current-user incident | 1                         | #1468            | none              | 1: approved spend-control fix  | 1              | Source guard merged | none           |
+| YYYY-MM-DD | Short observable task       | One allowed class             | Anonymous count or `none` | `#123` or `none` | Version or `none` | Count and short receipt        | Count          | Closed result       | Task or `none` |
 
 Rules for the fields:
 
