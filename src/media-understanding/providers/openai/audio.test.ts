@@ -51,6 +51,7 @@ describe("transcribeOpenAiCompatibleAudio", () => {
 
     const headers = new Headers(seenInit?.headers);
     expect(headers.get("authorization")).toBe("Bearer test-key");
+    expect(headers.get("accept-encoding")).toBe("identity");
     expect(headers.get("x-custom")).toBe("1");
 
     const form = seenInit?.body as FormData;
