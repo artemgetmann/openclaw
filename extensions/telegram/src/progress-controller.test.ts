@@ -2,6 +2,11 @@ import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramProgressController } from "./progress-controller.js";
 import {
+  __testing as runStopTesting,
+  claimTelegramRunStop,
+  registerTelegramRunStop,
+} from "./run-stop-control.js";
+import {
   __testing as workLogTesting,
   getTelegramWorkLog,
   renderTelegramWorkLog,
@@ -30,6 +35,7 @@ function createProgressControllerHarness() {
 describe("createTelegramProgressController", () => {
   beforeEach(() => {
     workLogTesting.resetTelegramWorkLogsForTests();
+    runStopTesting.resetTelegramRunStopsForTests();
   });
 
   it("serializes pending first send, flushes pending progress edit, then deletes the same message", async () => {
@@ -74,6 +80,153 @@ describe("createTelegramProgressController", () => {
         "Opening example.com\n\nReading IANA example domains",
       ),
     );
+  });
+
+  it("hosts an active Stop control on a temporary Working bubble and removes it safely", async () => {
+    const onDispose = vi.fn();
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),
+      editMessageText: vi.fn().mockResolvedValue(true),
+      editMessageReplyMarkup: vi.fn().mockResolvedValue(true),
+      deleteMessage: vi.fn().mockResolvedValue(true),
+    };
+    const controller = createTelegramProgressController({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      minInitialChars: 1,
+      activeReplyMarkup: {
+        inline_keyboard: [[{ text: "⏹ Stop", callback_data: "ors:1", style: "danger" }]],
+      },
+      onDispose,
+      renderText: (text) => ({ text }),
+    });
+
+    controller.start("Working…");
+    await vi.waitFor(() =>
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Working…", {
+        reply_markup: {
+          inline_keyboard: [[{ text: "⏹ Stop", callback_data: "ors:1", style: "danger" }]],
+        },
+      }),
+    );
+    await expect(controller.retainAsWorkLog()).resolves.toEqual({ retained: false });
+    await controller.clear();
+
+    expect(api.editMessageReplyMarkup).toHaveBeenCalledWith(123, 77, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
+    expect(onDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the active Stop claim when progress cleanup flush fails", async () => {
+    const onDispose = vi.fn();
+    const adoptedStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockRejectedValue(new Error("flush failed")),
+      messageId: vi.fn().mockReturnValue(88),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      materialize: vi.fn().mockResolvedValue(88),
+      forceNewMessage: vi.fn(),
+    };
+    const controller = createTelegramProgressController({
+      api: { editMessageReplyMarkup: vi.fn() } as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      stream: adoptedStream,
+      activeReplyMarkup: {
+        inline_keyboard: [[{ text: "⏹ Stop", callback_data: "ors:1", style: "danger" }]],
+      },
+      onDispose,
+      renderText: (text) => ({ text }),
+    });
+
+    await expect(controller.clear()).rejects.toThrow("flush failed");
+
+    expect(adoptedStream.clear).not.toHaveBeenCalled();
+    expect(onDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("retires run A before stalled cleanup can overlap same-route run B", () => {
+    const route = {
+      accountId: "default",
+      chatId: 123,
+      requesterId: 9,
+      threadId: 77,
+    };
+    const runA = registerTelegramRunStop(route);
+    const runAToken = runA.buttons[0]?.[0]?.callback_data ?? "";
+    const neverFlushes = new Promise<void>(() => {});
+    const controller = createTelegramProgressController({
+      api: {} as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      stream: {
+        update: vi.fn(),
+        flush: vi.fn().mockReturnValue(neverFlushes),
+        messageId: vi.fn().mockReturnValue(88),
+        clear: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        materialize: vi.fn().mockResolvedValue(88),
+        forceNewMessage: vi.fn(),
+      },
+      activeReplyMarkup: {
+        inline_keyboard: runA.buttons.map((row) => row.map((button) => ({ ...button }))),
+      },
+      onDispose: runA.release,
+      renderText: (text) => ({ text }),
+    });
+
+    // Do not await: this models dispatch cleanup timing out while Telegram's
+    // flush remains stuck. The terminal transition itself must revoke run A.
+    void controller.clear();
+    const runB = registerTelegramRunStop(route);
+    const runBToken = runB.buttons[0]?.[0]?.callback_data ?? "";
+
+    expect(
+      claimTelegramRunStop({
+        data: runAToken,
+        ...route,
+      }),
+    ).toEqual({ status: "stale" });
+    expect(
+      claimTelegramRunStop({
+        data: runBToken,
+        ...route,
+      })?.status,
+    ).toBe("claimed");
+  });
+
+  it("releases the active Stop claim when Work log conversion flush fails", async () => {
+    const onDispose = vi.fn();
+    const adoptedStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockRejectedValue(new Error("flush failed")),
+      messageId: vi.fn().mockReturnValue(88),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      materialize: vi.fn().mockResolvedValue(88),
+      forceNewMessage: vi.fn(),
+    };
+    const controller = createTelegramProgressController({
+      api: { editMessageText: vi.fn() } as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      stream: adoptedStream,
+      activeReplyMarkup: {
+        inline_keyboard: [[{ text: "⏹ Stop", callback_data: "ors:1", style: "danger" }]],
+      },
+      onDispose,
+      renderText: (text) => ({ text }),
+    });
+    controller.update("Checking workspace state.");
+
+    await expect(controller.retainAsWorkLog()).rejects.toThrow("flush failed");
+
+    expect(adoptedStream.materialize).not.toHaveBeenCalled();
+    expect(onDispose).toHaveBeenCalledTimes(1);
   });
 
   it("can adopt an existing visible stream as the progress bubble", async () => {

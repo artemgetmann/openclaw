@@ -1,3 +1,4 @@
+import type { InlineKeyboardMarkup } from "@grammyjs/types";
 import type { Bot } from "grammy";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramDeleteAuditMetadata } from "./delete-guard.js";
@@ -22,6 +23,7 @@ const PROGRESS_ENTRY_SEPARATOR = "\n\n";
 const PROGRESS_RENDER_HEADROOM_CHARS = 64;
 
 export type TelegramProgressController = {
+  start: (text: string) => void;
   update: (text: string) => void;
   preview: (text: string) => void;
   updatePlan: (text: string) => void;
@@ -49,6 +51,8 @@ export function createTelegramProgressController(params: {
   replyToMessageId?: number;
   throttleMs?: number;
   minInitialChars?: number;
+  activeReplyMarkup?: InlineKeyboardMarkup;
+  onDispose?: () => void;
   deleteAudit?: Partial<
     Pick<
       TelegramDeleteAuditMetadata,
@@ -79,6 +83,7 @@ export function createTelegramProgressController(params: {
       replyToMessageId: params.replyToMessageId,
       ...(params.throttleMs != null ? { throttleMs: params.throttleMs } : {}),
       minInitialChars: params.minInitialChars,
+      replyMarkup: params.activeReplyMarkup,
       deleteAudit: {
         callsite: params.deleteAudit?.callsite ?? "telegram-progress-controller-clear",
         reason: params.deleteAudit?.reason ?? "progress_cleanup",
@@ -101,6 +106,32 @@ export function createTelegramProgressController(params: {
   const progressEntries: string[] = [];
   const progressEntryKeys = new Set<string>();
   let planEntryIndex: number | undefined;
+  let disposed = false;
+
+  const dispose = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    params.onDispose?.();
+  };
+
+  const removeActiveReplyMarkup = async (messageId: number | undefined) => {
+    if (!params.activeReplyMarkup || typeof messageId !== "number") {
+      return;
+    }
+    try {
+      await params.api.editMessageReplyMarkup(params.chatId, messageId, {
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch (err) {
+      params.warn?.(
+        `telegram active run controls cleanup failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  };
 
   const normalizeProgressEntryKey = (entry: string) => entry.replace(/\s+/g, " ").trim();
 
@@ -218,6 +249,17 @@ export function createTelegramProgressController(params: {
   };
 
   return {
+    start: (text: string) => {
+      if (cleared || hasProgress) {
+        return;
+      }
+      const placeholder = text.trim();
+      if (!placeholder) {
+        return;
+      }
+      lastRenderedProgressText = placeholder;
+      stream.update(placeholder);
+    },
     update: (text: string) => {
       if (cleared) {
         return;
@@ -277,16 +319,30 @@ export function createTelegramProgressController(params: {
         return;
       }
       cleared = true;
-      if (options?.flushBeforeDelete !== false) {
-        // Normal progress cleanup flushes pending progress edits before
-        // deletion so "step 1 -> step 2 -> cleanup" cannot collapse into a
-        // stale visible bubble under Telegram preview throttling.
-        await stream.flush();
+      // Authorization ends when the controller becomes terminal, not when
+      // best-effort Telegram cleanup eventually finishes. A stalled flush or
+      // delete may outlive the dispatcher's cleanup timeout and overlap the
+      // next run on this route; revoke the old Stop token before any such I/O.
+      dispose();
+      try {
+        if (options?.flushBeforeDelete !== false) {
+          // Normal progress cleanup flushes pending progress edits before
+          // deletion so "step 1 -> step 2 -> cleanup" cannot collapse into a
+          // stale visible bubble under Telegram preview throttling.
+          await stream.flush();
+        }
+        // Remove the control before deleting the transient bubble. If Telegram
+        // rejects the delete, the stale button still cannot stop a later run.
+        await removeActiveReplyMarkup(stream.messageId());
+        // Final-answer cleanup can explicitly skip in-flight preview edits. At
+        // that point the next durable message is the final answer, so deleting
+        // the visible progress bubble beats faithfully rendering stale progress.
+        await stream.clear({ waitForInFlight: options?.waitForInFlight });
+      } finally {
+        // Keep disposal idempotent for callers that provide an onDispose hook
+        // with its own cleanup bookkeeping.
+        dispose();
       }
-      // Final-answer cleanup can explicitly skip in-flight preview edits. At
-      // that point the next durable message is the final answer, so deleting
-      // the visible progress bubble beats faithfully rendering stale progress.
-      await stream.clear({ waitForInFlight: options?.waitForInFlight });
     },
     materialize: async () => {
       if (cleared || !hasProgress) {
@@ -305,7 +361,9 @@ export function createTelegramProgressController(params: {
         stream.forceNewMessage();
         return undefined;
       }
+      await removeActiveReplyMarkup(messageId);
       cleared = true;
+      dispose();
       return messageId;
     },
     retainAsWorkLog: async (options?: { toolNames?: readonly string[] }) => {
@@ -325,25 +383,31 @@ export function createTelegramProgressController(params: {
       }
       const collapsed = renderTelegramWorkLog(workLog, false);
       cleared = true;
-      // Retention converts the mutable progress bubble in place before final
-      // delivery starts. That keeps Telegram ordering stable: Work log first,
-      // then a separate final answer message.
-      stream.update(collapsed.text);
-      await stream.flush();
-      const messageId = await stream.materialize?.();
-      if (typeof messageId !== "number") {
-        return { retained: false };
-      }
       try {
-        await params.api.editMessageText(params.chatId, messageId, collapsed.text, {
-          reply_markup: buildTelegramWorkLogReplyMarkup(collapsed),
-        });
-      } catch (err) {
-        params.warn?.(
-          `telegram work log buttons failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        // Retention converts the mutable progress bubble in place before final
+        // delivery starts. That keeps Telegram ordering stable: Work log first,
+        // then a separate final answer message.
+        stream.update(collapsed.text);
+        await stream.flush();
+        const messageId = await stream.materialize?.();
+        if (typeof messageId !== "number") {
+          return { retained: false };
+        }
+        try {
+          await params.api.editMessageText(params.chatId, messageId, collapsed.text, {
+            reply_markup: buildTelegramWorkLogReplyMarkup(collapsed),
+          });
+        } catch (err) {
+          params.warn?.(
+            `telegram work log buttons failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        return { retained: true, messageId, workLogId: workLog.id };
+      } finally {
+        // Work-log conversion is terminal for the active control even when
+        // Telegram rejects a flush or cannot return a durable message id.
+        dispose();
       }
-      return { retained: true, messageId, workLogId: workLog.id };
     },
     messageId: () => stream.messageId(),
     lastText: () => lastRenderedProgressText,

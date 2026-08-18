@@ -120,6 +120,7 @@ import {
   cancelTelegramAutoSteer,
   parseTelegramQueueCallback,
 } from "./queue-buttons.js";
+import { claimTelegramRunStop } from "./run-stop-control.js";
 import { buildInlineKeyboard } from "./send.js";
 import { getSentMessageMetadata, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 import {
@@ -1653,6 +1654,71 @@ export const registerTelegramHandlers = ({
         senderId,
         messageThreadId: messageThreadId ?? undefined,
       });
+      const runStopClaim = claimTelegramRunStop({
+        data,
+        accountId,
+        chatId,
+        requesterId: senderId,
+        threadId: messageThreadId ?? resolvedThreadId ?? dmThreadId,
+      });
+      if (runStopClaim) {
+        if (runStopClaim.status === "mismatch") {
+          return;
+        }
+        if (runStopClaim.status === "stale") {
+          // Nothing remains to cancel, so stale and duplicate controls only
+          // need best-effort visual cleanup.
+          await clearCallbackButtons();
+          return;
+        }
+        const syntheticStopMessage = buildSyntheticTextMessage({
+          base: callbackMessage,
+          from: callback.from,
+          text: "/stop",
+          // The progress bubble may be much older than the tap. Stamp the
+          // synthetic command at callback time so the existing abort cutoff
+          // also suppresses follow-ups that raced between bubble creation and
+          // this Stop claim.
+          date: Math.floor(Date.now() / 1000),
+        });
+        let stopSucceeded = false;
+        try {
+          // Cancellation is the product contract. Run it before touching
+          // Telegram markup so a transient edit failure cannot consume the
+          // one-shot claim while leaving the model run alive.
+          await processMessage(
+            buildSyntheticContext(ctx, syntheticStopMessage),
+            [],
+            storeAllowFrom,
+            {
+              forceWasMentioned: true,
+              messageIdOverride: callback.id,
+            },
+          );
+          stopSucceeded = true;
+        } catch (err) {
+          // Keep the same control claimable if the abort pipeline itself fails.
+          // The explanatory reply also gives the user a plain /stop fallback
+          // if Telegram later removes or stops rendering the old keyboard.
+          runStopClaim.restore();
+          logVerbose(`telegram: active-run Stop processing failed: ${String(err)}`);
+          await replyToCallbackChat(
+            "I couldn't stop that run. Tap Stop again or send /stop to retry.",
+          ).catch((replyErr) => {
+            logVerbose(`telegram: active-run Stop failure reply failed: ${String(replyErr)}`);
+          });
+          return;
+        } finally {
+          // A failed abort restores the token and keeps the button as a retry
+          // path. Only a successful cancellation retires the keyboard.
+          if (stopSucceeded) {
+            await clearCallbackButtons().catch((err) => {
+              logVerbose(`telegram: active-run Stop button cleanup failed: ${String(err)}`);
+            });
+          }
+        }
+        return;
+      }
       const queueCallback = parseTelegramQueueCallback(data);
       if (queueCallback) {
         // A cached receipt gives us an extra exact-message check in the hot
