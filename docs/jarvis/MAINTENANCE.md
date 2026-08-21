@@ -64,11 +64,12 @@ Use a committed dashboard entry for each accepted item. It records countable
 receipts, not estimated founder hours. Do not derive a fake time budget from
 this table.
 
-| Date       | Task                        | Class                         | Affected active user      | PR               | App release       | Founder decisions or approvals | Manual rescues | Result                | Displaced work |
-| ---------- | --------------------------- | ----------------------------- | ------------------------- | ---------------- | ----------------- | ------------------------------ | -------------- | --------------------- | -------------- |
-| 2026-08-18 | Enforce bounded X API reads | serious current-user incident | 1                         | #1468            | none              | 1: approved spend-control fix  | 1              | Source guard merged   | none           |
-| 2026-08-18 | Restore voice transcription | serious current-user incident | 1                         | #1469            | none              | 1: approved transcription fix  | 1              | Source fix CI pending | none           |
-| YYYY-MM-DD | Short observable task       | One allowed class             | Anonymous count or `none` | `#123` or `none` | Version or `none` | Count and short receipt        | Count          | Closed result         | Task or `none` |
+| Date       | Task                            | Class                         | Affected active user      | PR               | App release       | Founder decisions or approvals | Manual rescues | Result                                               | Displaced work |
+| ---------- | ------------------------------- | ----------------------------- | ------------------------- | ---------------- | ----------------- | ------------------------------ | -------------- | ---------------------------------------------------- | -------------- |
+| 2026-08-18 | Enforce bounded X API reads     | serious current-user incident | 1                         | #1468            | none              | 1: approved spend-control fix  | 1              | Source guard merged                                  | none           |
+| 2026-08-18 | Restore voice transcription     | serious current-user incident | 1                         | #1469            | none              | 1: approved transcription fix  | 1              | Source fix CI pending                                | none           |
+| 2026-08-21 | Disambiguate PDF artifact skill | approved portable component   | none                      | none             | none              | 1: approved skill migration    | 0              | Draft PR #1470 parked; merge deferred by monthly cap | none           |
+| YYYY-MM-DD | Short observable task           | One allowed class             | Anonymous count or `none` | `#123` or `none` | Version or `none` | Count and short receipt        | Count          | Closed result                                        | Task or `none` |
 
 Rules for the fields:
 
