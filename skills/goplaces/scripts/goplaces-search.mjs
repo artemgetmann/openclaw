@@ -6,40 +6,113 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function resolveRuntimeRoot() {
+function hasRuntimeCode(runtimeRoot) {
+  return (
+    fs.existsSync(path.join(runtimeRoot, "dist", "index.js")) ||
+    fs.existsSync(path.join(runtimeRoot, "src", "index.ts"))
+  );
+}
+
+function resolveEffectiveHomeDir() {
+  const environmentHome =
+    process.env.HOME?.trim() || process.env.USERPROFILE?.trim() || os.homedir();
+  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+  if (!explicitHome) {
+    return path.resolve(environmentHome);
+  }
+  if (explicitHome === "~" || explicitHome.startsWith("~/")) {
+    return path.resolve(environmentHome, explicitHome === "~" ? "" : explicitHome.slice(2));
+  }
+  return path.resolve(explicitHome);
+}
+
+function resolvePathForComparison(input) {
+  const effectiveHomeDir = resolveEffectiveHomeDir();
+  if (input === "~") {
+    return effectiveHomeDir;
+  }
+  if (input.startsWith("~/")) {
+    return path.resolve(effectiveHomeDir, input.slice(2));
+  }
+  return path.resolve(input);
+}
+
+function resolveDefaultStateDir(homeDir) {
+  const currentStateDir = path.join(homeDir, ".openclaw");
+  if (process.env.OPENCLAW_TEST_FAST === "1" || fs.existsSync(currentStateDir)) {
+    return currentStateDir;
+  }
+  for (const legacyName of [".clawdbot", ".moldbot", ".moltbot"]) {
+    const legacyStateDir = path.join(homeDir, legacyName);
+    if (fs.existsSync(legacyStateDir)) {
+      return legacyStateDir;
+    }
+  }
+  return currentStateDir;
+}
+
+function resolveRuntimeContext() {
   const checkoutRoot = path.resolve(__dirname, "../../..");
-  const stateRuntimeRoot = process.env.OPENCLAW_STATE_DIR
-    ? path.join(process.env.OPENCLAW_STATE_DIR, "lib", "openclaw-bundled")
+  // Empty environment entries are common when launchers forward optional
+  // settings. Treat them as absent so they cannot hide a valid legacy state.
+  const explicitStateValue =
+    process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim();
+  const explicitStateDir = explicitStateValue
+    ? resolvePathForComparison(explicitStateValue)
     : undefined;
-  const packagedJarvisRuntimeRoot = path.join(
+  const explicitStateRuntimeRoot = explicitStateDir
+    ? path.join(explicitStateDir, "lib", "openclaw-bundled")
+    : undefined;
+  const packagedJarvisStateDir = path.join(
     os.homedir(),
     "Library",
     "Application Support",
     "Jarvis",
     ".jarvis",
-    "lib",
-    "openclaw-bundled",
   );
+  const packagedJarvisRuntimeRoot = path.join(packagedJarvisStateDir, "lib", "openclaw-bundled");
+  // OPENCLAW_HOME is an explicit isolation boundary even when no state override
+  // is present. Reproduce core state precedence before importing the runtime.
+  const inferredStateDir = process.env.OPENCLAW_HOME?.trim()
+    ? resolveDefaultStateDir(resolveEffectiveHomeDir())
+    : packagedJarvisStateDir;
 
-  // A bundled skill may run from the repo, the product-skills mirror, or the
-  // shared personal mirror. Select the first layout that actually has runtime
-  // code instead of assuming the skill path is nested inside the checkout.
-  for (const candidate of [
-    process.env.OPENCLAW_GOPLACES_RUNTIME_ROOT,
-    checkoutRoot,
-    stateRuntimeRoot,
-    packagedJarvisRuntimeRoot,
-  ]) {
-    if (
-      candidate &&
-      (fs.existsSync(path.join(candidate, "dist", "index.js")) ||
-        fs.existsSync(path.join(candidate, "src", "index.ts")))
-    ) {
-      return candidate;
+  // The shell wrapper pins a runtime after proving it is runnable. Preserve
+  // that choice, and attach state provenance when the path is a known package.
+  const pinnedRuntimeRoot = process.env.OPENCLAW_GOPLACES_RUNTIME_ROOT;
+  if (pinnedRuntimeRoot && hasRuntimeCode(pinnedRuntimeRoot)) {
+    if (explicitStateDir) {
+      return { runtimeRoot: pinnedRuntimeRoot, stateDir: explicitStateDir };
     }
+    if (path.resolve(pinnedRuntimeRoot) === path.resolve(packagedJarvisRuntimeRoot)) {
+      return { runtimeRoot: pinnedRuntimeRoot, stateDir: inferredStateDir };
+    }
+    return { runtimeRoot: pinnedRuntimeRoot };
   }
 
-  return checkoutRoot;
+  // A real checkout owns its local runtime and keeps normal BYOK config
+  // behavior. Mirrored skill paths do not contain either entry and fall through.
+  if (hasRuntimeCode(checkoutRoot)) {
+    return { runtimeRoot: checkoutRoot };
+  }
+
+  if (explicitStateRuntimeRoot) {
+    if (hasRuntimeCode(explicitStateRuntimeRoot)) {
+      return { runtimeRoot: explicitStateRuntimeRoot, stateDir: explicitStateDir };
+    }
+    if (hasRuntimeCode(packagedJarvisRuntimeRoot)) {
+      return { runtimeRoot: packagedJarvisRuntimeRoot, stateDir: explicitStateDir };
+    }
+    throw new Error(
+      `could not locate a packaged OpenClaw runtime for explicit state: ${explicitStateDir}`,
+    );
+  }
+
+  if (hasRuntimeCode(packagedJarvisRuntimeRoot)) {
+    return { runtimeRoot: packagedJarvisRuntimeRoot, stateDir: inferredStateDir };
+  }
+
+  return { runtimeRoot: checkoutRoot };
 }
 
 function usage() {
@@ -97,7 +170,12 @@ function parseArgs(argv) {
 }
 
 async function importOpenClawRuntime() {
-  const runtimeRoot = resolveRuntimeRoot();
+  const { runtimeRoot, stateDir } = resolveRuntimeContext();
+  // State aliases are normalized before runtime import. Explicit config-path
+  // overrides remain untouched because they are supported caller intent.
+  if (stateDir) {
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+  }
   const distEntry = path.join(runtimeRoot, "dist", "index.js");
   const sourceEntry = path.join(runtimeRoot, "src", "index.ts");
   const entry = fs.existsSync(distEntry) ? distEntry : sourceEntry;
