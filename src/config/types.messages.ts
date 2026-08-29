@@ -156,7 +156,7 @@ export type CommandsConfig = {
   debug?: boolean;
   /** Allow restart commands/tools (default: true). */
   restart?: boolean;
-  /** Require a separate confirmation turn before gateway-tool restarts (default: true). */
+  /** @deprecated Ignored compatibility key. Gateway-tool restarts always require confirmation. */
   restartConfirmation?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;

@@ -710,7 +710,6 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
-      restartConfirmationRequired: params.config?.commands?.restartConfirmation !== false,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 

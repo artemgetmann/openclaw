@@ -52,13 +52,6 @@ confirmation that explicitly names the public release or Sparkle update. A
 current request that unmistakably names that same public-release action already
 satisfies this confirmation; generic completion language does not.
 
-The product default keeps the separate live-chat restart confirmation. An owner
-who treats restarts as routine execution may set
-`commands.restartConfirmation: false`. For that configured owner, an authorized
-installed-runtime delivery includes its documented gateway restart without a
-second approval turn. This preference does not select an installed-runtime target
-or authorize packaging, signing, notarization, installation, or publication.
-
 State the classification and delivery target in the plan, PR, and closeout.
 Use the enforceable receipt in
 `docs/agent-guides/jarvis-delivery-boundary.md`; CI rejects missing or inflated

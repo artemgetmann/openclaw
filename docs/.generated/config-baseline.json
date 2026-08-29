@@ -38494,8 +38494,7 @@
         "native": "auto",
         "nativeSkills": "auto",
         "ownerDisplay": "raw",
-        "restart": true,
-        "restartConfirmation": true
+        "restart": true
       },
       "deprecated": false,
       "sensitive": false,
@@ -38714,15 +38713,14 @@
       "path": "commands.restartConfirmation",
       "kind": "core",
       "type": "boolean",
-      "required": true,
-      "defaultValue": true,
-      "deprecated": false,
+      "required": false,
+      "deprecated": true,
       "sensitive": false,
       "tags": [
         "advanced"
       ],
-      "label": "Require Restart Confirmation",
-      "help": "Require a separate confirmation turn before a live-chat gateway restart (default: true). Set false only when the owner treats restarts as routine task execution.",
+      "label": "Legacy Restart Confirmation (Ignored)",
+      "help": "Deprecated compatibility key. Its value is ignored; live-chat gateway restarts require a separate confirmation turn.",
       "hasChildren": false
     },
     {

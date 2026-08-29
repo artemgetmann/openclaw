@@ -104,7 +104,6 @@ export function buildSystemPrompt(params: {
     bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
-    restartConfirmationRequired: params.config?.commands?.restartConfirmation !== false,
   });
 }
 

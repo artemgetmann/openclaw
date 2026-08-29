@@ -31,6 +31,14 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("commands.restartConfirmation compatibility", () => {
+  it("accepts the retired key so existing configs still start", () => {
+    expect(OpenClawSchema.safeParse({ commands: { restartConfirmation: false } }).success).toBe(
+      true,
+    );
+  });
+});
+
 describe("plugins.slots.contextEngine", () => {
   it("accepts a contextEngine slot id", () => {
     const result = OpenClawSchema.safeParse({
