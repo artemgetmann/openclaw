@@ -94,7 +94,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, arm restart confirmation for the current chat, inspect or change gateway config, update gateway source, or check/inspect/install a signed Sparkle app update. Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation. Only after that action succeeds, ask the confirmation question returned by the tool, end the turn, and wait for the user's reply. app.update.check asks Sparkle to refresh in the background without installing. app.update.status is read-only. app.update.install requires the exact version/build returned by status and a later-turn confirmation. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Always pass a human-readable completion message via the note parameter so the system can deliver it after restart.",
+      "Restart, arm restart confirmation for the current chat, inspect or change gateway config, update gateway source, or check/inspect/install a signed Sparkle app update. A plain action=restart is a routine service-lifecycle step and does not require a separate confirmation turn when it is explicitly requested or necessary to complete the current authorized task. It never broadens the task's authority. Before asking the user to confirm any other restart-capable action in live chat, first call restart.request_confirmation. Only after that action succeeds, ask the confirmation question returned by the tool, end the turn, and wait for the user's reply. app.update.check asks Sparkle to refresh in the background without installing. app.update.status is read-only. app.update.install requires the exact version/build returned by status and a later-turn confirmation. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Always pass a human-readable completion message via the note parameter so the system can deliver it after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -160,7 +160,9 @@ export function createGatewayTool(opts?: {
         if (!isRestartEnabled(opts?.config)) {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
-        await requirePendingRestartConfirmation();
+        // Restarting the service is a routine execution detail inside the caller's
+        // existing task authority. The confirmation gate remains on mutations that
+        // also change config, source, or the installed application.
         const sessionKey = resolveCurrentSessionKey();
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)

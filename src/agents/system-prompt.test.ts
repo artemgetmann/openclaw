@@ -1147,17 +1147,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
 
-  it("requires arming session-scoped restart confirmation before asking the user", () => {
+  it("treats plain restart as routine before gating other restart-capable actions", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["gateway"],
     });
+    const directInstruction =
+      "Do not ask for a separate restart confirmation when the user explicitly requests it";
     const armInstruction =
       "when this session does not already have a pending restart confirmation, you MUST first call the gateway tool with action `restart.request_confirmation`";
     const askInstruction =
       'Only after that tool call succeeds, ask exactly: "This will interrupt other tasks that you have running in other chats. Restart now?"';
 
-    expect(prompt.indexOf(armInstruction)).toBeGreaterThanOrEqual(0);
+    expect(prompt.indexOf(directInstruction)).toBeGreaterThanOrEqual(0);
+    expect(prompt.indexOf(armInstruction)).toBeGreaterThan(prompt.indexOf(directInstruction));
     expect(prompt.indexOf(askInstruction)).toBeGreaterThan(prompt.indexOf(armInstruction));
     expect(prompt).toContain(
       "Never ask the restart confirmation question before the gateway tool successfully records the pending confirmation.",
@@ -1167,6 +1170,7 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain("Only proceed on a later user turn");
     expect(prompt).toContain("`/restart` remains the escape hatch");
+    expect(prompt).toContain("Restart authority never broadens the task");
   });
 });
 

@@ -64,13 +64,14 @@ Use a committed dashboard entry for each accepted item. It records countable
 receipts, not estimated founder hours. Do not derive a fake time budget from
 this table.
 
-| Date       | Task                               | Class                         | Affected active user      | PR               | App release       | Founder decisions or approvals | Manual rescues | Result                | Displaced work   |
-| ---------- | ---------------------------------- | ----------------------------- | ------------------------- | ---------------- | ----------------- | ------------------------------ | -------------- | --------------------- | ---------------- |
-| 2026-08-18 | Enforce bounded X API reads        | serious current-user incident | 1                         | #1468            | none              | 1: approved spend-control fix  | 1              | Source guard merged   | none             |
-| 2026-08-18 | Restore voice transcription        | serious current-user incident | 1                         | #1469            | none              | 1: approved transcription fix  | 1              | Source fix CI pending | none             |
-| 2026-08-27 | Pair GoPlaces runtime state        | serious current-user incident | 1                         | none             | none              | 1: approved root-cause fix     | 1              | Source fix verified   | Next normal item |
-| 2026-08-29 | Preserve agent message line breaks | serious current-user incident | 1                         | none             | none              | 1: approved cross-channel fix  | 1              | Source fix verified   | Next normal item |
-| YYYY-MM-DD | Short observable task              | One allowed class             | Anonymous count or `none` | `#123` or `none` | Version or `none` | Count and short receipt        | Count          | Closed result         | Task or `none`   |
+| Date       | Task                               | Class                         | Affected active user      | PR               | App release       | Founder decisions or approvals | Manual rescues | Result                 | Displaced work   |
+| ---------- | ---------------------------------- | ----------------------------- | ------------------------- | ---------------- | ----------------- | ------------------------------ | -------------- | ---------------------- | ---------------- |
+| 2026-08-18 | Enforce bounded X API reads        | serious current-user incident | 1                         | #1468            | none              | 1: approved spend-control fix  | 1              | Source guard merged    | none             |
+| 2026-08-18 | Restore voice transcription        | serious current-user incident | 1                         | #1469            | none              | 1: approved transcription fix  | 1              | Source fix CI pending  | none             |
+| 2026-08-27 | Pair GoPlaces runtime state        | serious current-user incident | 1                         | none             | none              | 1: approved root-cause fix     | 1              | Source fix verified    | Next normal item |
+| 2026-08-29 | Preserve agent message line breaks | serious current-user incident | 1                         | none             | none              | 1: approved cross-channel fix  | 1              | Source fix verified    | Next normal item |
+| 2026-08-29 | Remove redundant restart approval  | serious current-user incident | 1                         | none             | none              | 1: approved policy fix         | 1              | Source fix in progress | Next normal item |
+| YYYY-MM-DD | Short observable task              | One allowed class             | Anonymous count or `none` | `#123` or `none` | Version or `none` | Count and short receipt        | Count          | Closed result          | Task or `none`   |
 
 Rules for the fields:
 

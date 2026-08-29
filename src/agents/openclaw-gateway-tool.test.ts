@@ -156,14 +156,18 @@ describe("gateway tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
-  it("describes arming restart confirmation before asking the user", () => {
+  it("describes plain restart as routine before the confirmation fallback", () => {
     const description = requireGatewayTool().description;
+    const directInstruction = "A plain action=restart is a routine service-lifecycle step";
     const armInstruction =
-      "Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation.";
+      "Before asking the user to confirm any other restart-capable action in live chat, first call restart.request_confirmation.";
     const askInstruction =
       "Only after that action succeeds, ask the confirmation question returned by the tool";
 
-    expect(description.indexOf(armInstruction)).toBeGreaterThanOrEqual(0);
+    expect(description.indexOf(directInstruction)).toBeGreaterThanOrEqual(0);
+    expect(description.indexOf(armInstruction)).toBeGreaterThan(
+      description.indexOf(directInstruction),
+    );
     expect(description.indexOf(askInstruction)).toBeGreaterThan(
       description.indexOf(armInstruction),
     );
@@ -223,6 +227,33 @@ describe("gateway tool", () => {
       vi.useRealTimers();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("restarts a live chat session without a second confirmation", async () => {
+    const { storePath, sessionKey } = await createSessionStoreFixture();
+    const stateDir = path.dirname(storePath);
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    const result = await withEnvAsync(
+      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
+      () =>
+        tool.execute("restart-current-turn", {
+          action: "restart",
+          delayMs: 0,
+        }),
+    );
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      signal: "SIGUSR1",
+      delayMs: 0,
+    });
+    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).not.toHaveProperty(
+      "pendingRestartConfirmation",
+    );
   });
 
   it("passes config.apply through gateway call", async () => {

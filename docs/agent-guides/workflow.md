@@ -45,6 +45,13 @@ It does not silently authorize:
 - destructive cleanup or irreversible data changes;
 - live messages, live acceptance, or other user-visible external effects.
 
+Once the task already has installed-runtime delivery authority, the canonical
+delivery command's documented gateway restart is part of that same authority.
+Do not stop for a redundant restart confirmation. A current-turn explicit
+restart request also authorizes that exact restart. Neither rule broadens a
+source-only task into deployment or authorizes packaging, installation, public
+release, or another mutation class.
+
 Generic `ship` or `ship end-to-end` language carries the source lifecycle
 through normal merge. It does not authorize a public Jarvis app release or
 Sparkle update. Before packaging, signing, notarization, or publication for that

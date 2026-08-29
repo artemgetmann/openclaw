@@ -52,6 +52,12 @@ confirmation that explicitly names the public release or Sparkle update. A
 current request that unmistakably names that same public-release action already
 satisfies this confirmation; generic completion language does not.
 
+When the installed-runtime target is already authorized, its canonical delivery
+includes the documented gateway restart. Do not split that restart into a second
+approval turn. A current-turn explicit restart request is also sufficient restart
+authority. These rules do not select an installed-runtime target on their own and
+do not authorize packaging, signing, notarization, installation, or publication.
+
 State the classification and delivery target in the plan, PR, and closeout.
 Use the enforceable receipt in
 `docs/agent-guides/jarvis-delivery-boundary.md`; CI rejects missing or inflated
