@@ -156,6 +156,8 @@ export type CommandsConfig = {
   debug?: boolean;
   /** Allow restart commands/tools (default: true). */
   restart?: boolean;
+  /** @deprecated Ignored compatibility key. Gateway-tool restarts always require confirmation. */
+  restartConfirmation?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;
   /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */

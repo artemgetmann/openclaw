@@ -1111,6 +1111,8 @@ export const FIELD_HELP: Record<string, string> = {
   "commands.config": "Allow /config chat command to read/write config on disk (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart": "Allow /restart and gateway restart tool actions (default: true).",
+  "commands.restartConfirmation":
+    "Deprecated compatibility key. Its value is ignored; live-chat gateway restarts require a separate confirmation turn.",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",

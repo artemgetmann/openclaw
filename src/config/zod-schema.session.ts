@@ -204,6 +204,9 @@ export const CommandsSchema = z
     config: z.boolean().optional(),
     debug: z.boolean().optional(),
     restart: z.boolean().optional().default(true),
+    // Retain the retired key only so configs written while #1473 was live still parse.
+    // Runtime behavior intentionally ignores its value and always requires confirmation.
+    restartConfirmation: z.boolean().optional().meta({ deprecated: true }),
     useAccessGroups: z.boolean().optional(),
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     ownerDisplay: z.enum(["raw", "hash"]).optional().default("raw"),

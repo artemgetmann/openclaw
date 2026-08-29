@@ -38710,6 +38710,20 @@
       "hasChildren": false
     },
     {
+      "path": "commands.restartConfirmation",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": true,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Legacy Restart Confirmation (Ignored)",
+      "help": "Deprecated compatibility key. Its value is ignored; live-chat gateway restarts require a separate confirmation turn.",
+      "hasChildren": false
+    },
+    {
       "path": "commands.text",
       "kind": "core",
       "type": "boolean",
