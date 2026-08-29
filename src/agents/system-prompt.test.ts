@@ -1151,9 +1151,10 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["gateway"],
+      restartConfirmationRequired: false,
     });
     const directInstruction =
-      "Do not ask for a separate restart confirmation when the user explicitly requests it";
+      "This owner configured gateway action `restart` as a routine service-lifecycle step";
     const armInstruction =
       "when this session does not already have a pending restart confirmation, you MUST first call the gateway tool with action `restart.request_confirmation`";
     const askInstruction =
@@ -1172,6 +1173,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`/restart` remains the escape hatch");
     expect(prompt).toContain("Restart authority never broadens the task");
   });
+
+  it("keeps two-turn restart confirmation enabled by default", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["gateway"],
+    });
+
+    expect(prompt).toContain(
+      "For restart-capable gateway actions in live chat (`restart`, `config.apply`, `config.patch`, `update.run`, `app.update.install`)",
+    );
+    expect(prompt).not.toContain("This owner configured gateway action `restart` as a routine");
+  });
 });
 
 describe("buildPendingRestartConfirmationPromptHint", () => {
@@ -1184,6 +1197,15 @@ describe("buildPendingRestartConfirmationPromptHint", () => {
     );
     expect(hint).toContain("current user turn clearly confirms");
     expect(hint).toContain("Do not treat your own prior message");
+  });
+
+  it("exempts plain restart from a pending protected-mutation confirmation when configured", () => {
+    const hint = buildPendingRestartConfirmationPromptHint({
+      restartConfirmationRequired: false,
+    });
+
+    expect(hint).toContain("Plain gateway `restart` is exempt");
+    expect(hint).toContain("do not run the protected mutation");
   });
 });
 

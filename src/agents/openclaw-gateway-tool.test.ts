@@ -158,8 +158,11 @@ describe("gateway tool", () => {
   });
 
   it("describes plain restart as routine before the confirmation fallback", () => {
-    const description = requireGatewayTool().description;
-    const directInstruction = "A plain action=restart is a routine service-lifecycle step";
+    const description = requireGatewayTool(undefined, {
+      commands: { restart: true, restartConfirmation: false },
+    }).description;
+    const directInstruction =
+      "This owner configured plain action=restart as a routine service-lifecycle step";
     const armInstruction =
       "Before asking the user to confirm any other restart-capable action in live chat, first call restart.request_confirmation.";
     const askInstruction =
@@ -244,7 +247,7 @@ describe("gateway tool", () => {
     });
     const stateDir = path.dirname(storePath);
     const tool = requireGatewayTool(sessionKey, {
-      commands: { restart: true },
+      commands: { restart: true, restartConfirmation: false },
       session: { store: storePath },
     });
 
@@ -272,6 +275,21 @@ describe("gateway tool", () => {
       kill.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("keeps direct restart behind confirmation by default", async () => {
+    const { storePath, sessionKey } = await createSessionStoreFixture();
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    await expect(
+      tool.execute("restart-default-gate", {
+        action: "restart",
+        delayMs: 0,
+      }),
+    ).rejects.toThrow("Restart confirmation required");
   });
 
   it("passes config.apply through gateway call", async () => {

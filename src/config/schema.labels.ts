@@ -523,6 +523,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.config": "Allow /config",
   "commands.debug": "Allow /debug",
   "commands.restart": "Allow Restart",
+  "commands.restartConfirmation": "Require Restart Confirmation",
   "commands.useAccessGroups": "Use Access Groups",
   "commands.ownerAllowFrom": "Command Owners",
   "commands.ownerDisplay": "Owner ID Display",

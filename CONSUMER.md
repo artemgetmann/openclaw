@@ -52,11 +52,12 @@ confirmation that explicitly names the public release or Sparkle update. A
 current request that unmistakably names that same public-release action already
 satisfies this confirmation; generic completion language does not.
 
-When the installed-runtime target is already authorized, its canonical delivery
-includes the documented gateway restart. Do not split that restart into a second
-approval turn. A current-turn explicit restart request is also sufficient restart
-authority. These rules do not select an installed-runtime target on their own and
-do not authorize packaging, signing, notarization, installation, or publication.
+The product default keeps the separate live-chat restart confirmation. An owner
+who treats restarts as routine execution may set
+`commands.restartConfirmation: false`. For that configured owner, an authorized
+installed-runtime delivery includes its documented gateway restart without a
+second approval turn. This preference does not select an installed-runtime target
+or authorize packaging, signing, notarization, installation, or publication.
 
 State the classification and delivery target in the plan, PR, and closeout.
 Use the enforceable receipt in
