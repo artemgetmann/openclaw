@@ -132,6 +132,7 @@ export async function resolveCommandsSystemPromptBundle(
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,
+    restartConfirmationRequired: params.cfg?.commands?.restartConfirmation !== false,
   });
 
   return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };

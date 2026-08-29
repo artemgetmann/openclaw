@@ -5,12 +5,14 @@ import { describe, expect, it } from "vitest";
 import { saveSessionStore, type SessionEntry } from "../sessions.js";
 import {
   clearPendingRestartConfirmation,
+  clearPendingRestartConfirmationForSession,
   consumePendingRestartConfirmationForSession,
   createPendingRestartConfirmation,
   expirePendingRestartConfirmation,
   getPendingRestartConfirmationStatus,
   readPendingRestartConfirmation,
   recordPendingRestartConfirmationForSession,
+  restorePendingRestartConfirmationForSession,
   writePendingRestartConfirmation,
 } from "./restart-confirmation.js";
 
@@ -117,6 +119,50 @@ describe("restart confirmation store lifecycle", () => {
 
     expect(result.status).toBe("ready");
     expect(result.entry?.pendingRestartConfirmation).toBeUndefined();
+  });
+
+  it("clears a pending confirmation after a direct restart", async () => {
+    const { storePath, sessionKey } = await createStore();
+    const pending = createPendingRestartConfirmation({ now: 5_000 });
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt,
+        pendingRestartConfirmation: pending,
+      },
+    });
+
+    const cleared = await clearPendingRestartConfirmationForSession({ storePath, sessionKey });
+    const after = await consumePendingRestartConfirmationForSession({
+      storePath,
+      sessionKey,
+      now: pending.requestedAt + 1,
+    });
+
+    expect(cleared.entry?.pendingRestartConfirmation).toBeUndefined();
+    expect(cleared.cleared).toEqual(pending);
+    expect(after.status).toBe("missing-confirmation");
+  });
+
+  it("restores the exact confirmation when restart scheduling fails", async () => {
+    const { storePath, sessionKey } = await createStore();
+    const pending = createPendingRestartConfirmation({ now: 5_000 });
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt,
+        pendingRestartConfirmation: pending,
+      },
+    });
+
+    const cleared = await clearPendingRestartConfirmationForSession({ storePath, sessionKey });
+    const restored = await restorePendingRestartConfirmationForSession({
+      storePath,
+      sessionKey,
+      pending: cleared.cleared!,
+    });
+
+    expect(restored?.pendingRestartConfirmation).toEqual(pending);
   });
 
   it("expires and clears stale confirmations", async () => {

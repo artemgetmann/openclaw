@@ -56,9 +56,13 @@ source lifecycle through focused proof, PR, and normal merge; it does not
 authorize package, sign, notarize, install, deploy, restart, live traffic, or
 public release work.
 `Fix this on my Jarvis`, `ship this to my main Jarvis`, or equivalent language
-that explicitly names the installed target authorizes the canonical deployment
-plus one targeted acceptance and exact cleanup. `Investigate`, `review`, or
-`make a PR` does not authorize deployment, restart, live traffic, or cleanup.
+that explicitly names the installed target authorizes the canonical deployment,
+one targeted acceptance, and exact cleanup. The product default still asks for
+restart confirmation. When the owner explicitly configures
+`commands.restartConfirmation: false`, the same installed-runtime authority also
+includes its documented gateway restart without a second approval turn.
+`Investigate`, `review`, or `make a PR` does not authorize deployment, restart,
+live traffic, or cleanup.
 If main acceptance is required but not authorized, finish safe source work and
 stop at `blocked-at-boundary` with the missing actions named; do not silently
 downgrade the target to source.

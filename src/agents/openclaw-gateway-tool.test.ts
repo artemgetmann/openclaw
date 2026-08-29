@@ -9,6 +9,7 @@ import {
   saveSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
+import { __testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 
@@ -16,6 +17,26 @@ const appUpdateMockState = vi.hoisted(() => ({
   gatewayRestartRequired: true,
   supportsCheck: true,
 }));
+const restartMockState = vi.hoisted(() => ({ schedulingFails: false }));
+
+vi.mock("../infra/restart.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/restart.js")>();
+  return {
+    ...actual,
+    requestGatewayToolRestart: vi.fn(async (options) =>
+      restartMockState.schedulingFails
+        ? {
+            ok: false,
+            method: "launchd-handoff" as const,
+            restartMode: "external-supervised" as const,
+            delayMs: options?.delayMs ?? 0,
+            detail: "test scheduling failure",
+            verified: false as const,
+          }
+        : actual.requestGatewayToolRestart(options),
+    ),
+  };
+});
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(
@@ -156,14 +177,21 @@ describe("gateway tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
-  it("describes arming restart confirmation before asking the user", () => {
-    const description = requireGatewayTool().description;
+  it("describes plain restart as routine before the confirmation fallback", () => {
+    const description = requireGatewayTool(undefined, {
+      commands: { restart: true, restartConfirmation: false },
+    }).description;
+    const directInstruction =
+      "This owner configured plain action=restart as a routine service-lifecycle step";
     const armInstruction =
-      "Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation.";
+      "Before asking the user to confirm any other restart-capable action in live chat, first call restart.request_confirmation.";
     const askInstruction =
       "Only after that action succeeds, ask the confirmation question returned by the tool";
 
-    expect(description.indexOf(armInstruction)).toBeGreaterThanOrEqual(0);
+    expect(description.indexOf(directInstruction)).toBeGreaterThanOrEqual(0);
+    expect(description.indexOf(armInstruction)).toBeGreaterThan(
+      description.indexOf(directInstruction),
+    );
     expect(description.indexOf(askInstruction)).toBeGreaterThan(
       description.indexOf(armInstruction),
     );
@@ -223,6 +251,95 @@ describe("gateway tool", () => {
       vi.useRealTimers();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("restarts a live chat session without a second confirmation", async () => {
+    restartTesting.resetSigusr1State();
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const pending = createPendingRestartConfirmation({ now: Date.now() });
+    const { storePath, sessionKey } = await createSessionStoreFixture({
+      entry: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt,
+        pendingRestartConfirmation: pending,
+      },
+    });
+    const stateDir = path.dirname(storePath);
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true, restartConfirmation: false },
+      session: { store: storePath },
+    });
+
+    try {
+      const result = await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
+        () =>
+          tool.execute("restart-current-turn", {
+            action: "restart",
+            delayMs: 0,
+          }),
+      );
+
+      expect(result.details).toMatchObject({
+        ok: true,
+        signal: "SIGUSR1",
+        delayMs: 0,
+      });
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).not.toHaveProperty(
+        "pendingRestartConfirmation",
+      );
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      restartTesting.resetSigusr1State();
+      kill.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves pending protected-action consent when routine restart scheduling fails", async () => {
+    const pending = createPendingRestartConfirmation({ now: Date.now() - 1_000 });
+    const { storePath, sessionKey } = await createSessionStoreFixture({
+      entry: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt,
+        pendingRestartConfirmation: pending,
+      },
+    });
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true, restartConfirmation: false },
+      session: { store: storePath },
+    });
+    restartMockState.schedulingFails = true;
+
+    try {
+      const result = await tool.execute("restart-scheduling-fails", {
+        action: "restart",
+        delayMs: 0,
+      });
+
+      expect(result.details).toMatchObject({ ok: false, detail: "test scheduling failure" });
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toHaveProperty(
+        "pendingRestartConfirmation",
+      );
+    } finally {
+      restartMockState.schedulingFails = false;
+    }
+  });
+
+  it("keeps direct restart behind confirmation by default", async () => {
+    const { storePath, sessionKey } = await createSessionStoreFixture();
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    await expect(
+      tool.execute("restart-default-gate", {
+        action: "restart",
+        delayMs: 0,
+      }),
+    ).rejects.toThrow("Restart confirmation required");
   });
 
   it("passes config.apply through gateway call", async () => {

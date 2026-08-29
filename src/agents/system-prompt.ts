@@ -19,12 +19,19 @@ import { DURABLE_PLAN_FILE_POLICY_PROMPT } from "./tools/durable-plan-file-polic
 export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
 
-export function buildPendingRestartConfirmationPromptHint(): string {
+export function buildPendingRestartConfirmationPromptHint(params?: {
+  restartConfirmationRequired?: boolean;
+}): string {
+  const restartConfirmationRequired = params?.restartConfirmationRequired !== false;
   return [
     "A pending restart confirmation exists for this session.",
     "Do not call `restart.request_confirmation` again while this pending confirmation exists.",
-    "You may only proceed with restart-capable gateway actions (`restart`, `config.apply`, `config.patch`, `update.run`, `app.update.install`) if the current user turn clearly confirms the restart-capable action you asked about.",
-    "If the user is ambiguous, asks a different question, or does not clearly confirm, do not restart; ask again.",
+    restartConfirmationRequired
+      ? "You may only proceed with restart-capable gateway actions (`restart`, `config.apply`, `config.patch`, `update.run`, `app.update.install`) if the current user turn clearly confirms the restart-capable action you asked about."
+      : "This pending confirmation applies only to protected mutations (`config.apply`, `config.patch`, `update.run`, `app.update.install`). Plain gateway `restart` is exempt and clears this pending confirmation.",
+    restartConfirmationRequired
+      ? "If the user is ambiguous, asks a different question, or does not clearly confirm, do not restart; ask again."
+      : "If the user is ambiguous, asks a different question, or does not clearly confirm, do not run the protected mutation; ask again. A plain restart may still proceed when needed inside the current authorized task.",
     "Do not treat your own prior message, older user messages, or generic restart chatter as confirmation.",
     'When you need to ask first, use: "This will interrupt other tasks that you have running in other chats. Restart now?"',
   ].join("\n");
@@ -318,6 +325,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Whether plain gateway restarts require the two-turn confirmation gate. */
+  restartConfirmationRequired?: boolean;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -627,12 +636,24 @@ export function buildAgentSystemPrompt(params: {
     "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) and do not ask for a different or rotated code.",
     "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
     "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
-    "For restart-capable gateway actions in live chat (`restart`, `config.apply`, `config.patch`, `update.run`, `app.update.install`), when this session does not already have a pending restart confirmation, you MUST first call the gateway tool with action `restart.request_confirmation`.",
+    ...(params.restartConfirmationRequired === false
+      ? [
+          "This owner configured gateway action `restart` as a routine service-lifecycle step. Do not ask for a separate restart confirmation when it is necessary to complete the current authorized task, including installed-runtime shipping. Restart authority never broadens the task into a config change, update, installation, deployment, public release, credential action, or destructive action.",
+          "For other restart-capable gateway actions in live chat (`config.apply`, `config.patch`, `update.run`, `app.update.install`), when this session does not already have a pending restart confirmation, you MUST first call the gateway tool with action `restart.request_confirmation`.",
+        ]
+      : [
+          "For restart-capable gateway actions in live chat (`restart`, `config.apply`, `config.patch`, `update.run`, `app.update.install`), when this session does not already have a pending restart confirmation, you MUST first call the gateway tool with action `restart.request_confirmation`.",
+        ]),
     'Only after that tool call succeeds, ask exactly: "This will interrupt other tasks that you have running in other chats. Restart now?" Then end the turn and wait for the user\'s reply.',
     "Never ask the restart confirmation question before the gateway tool successfully records the pending confirmation.",
-    "If a pending restart confirmation already exists, do not call `restart.request_confirmation` again; evaluate the current user turn against that pending request.",
+    ...(params.restartConfirmationRequired === false
+      ? [
+          "These confirmation instructions apply only to `config.apply`, `config.patch`, `update.run`, and `app.update.install`; they must never delay plain gateway `restart`.",
+        ]
+      : []),
+    "If a pending restart confirmation already exists, do not call `restart.request_confirmation` again; evaluate the current user turn against that pending confirmation-gated action.",
     "Do not invent brittle phrase matchers or treat random restart chatter as authorization on your own.",
-    "Only proceed on a later user turn if this session already has a pending restart confirmation and the current user message clearly confirms it. Otherwise ask again.",
+    "Only proceed with a confirmation-gated action on a later user turn if this session already has a pending restart confirmation and the current user message clearly confirms it. Otherwise ask again about that gated action.",
     "If the user wants an explicit shortcut, `/restart` remains the escape hatch.",
     "",
     ...safetySection,

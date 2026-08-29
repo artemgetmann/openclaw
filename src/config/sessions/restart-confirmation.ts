@@ -192,3 +192,69 @@ export async function consumePendingRestartConfirmationForSession(params: {
     { activeSessionKey: normalizeStoreSessionKey(params.sessionKey) },
   );
 }
+
+export async function clearPendingRestartConfirmationForSession(params: {
+  storePath: string;
+  sessionKey: string;
+}): Promise<{
+  entry: SessionEntry | null;
+  cleared?: SessionPendingRestartConfirmation;
+}> {
+  return await updateSessionStore(
+    params.storePath,
+    (store) => {
+      const resolved = resolveSessionStoreEntry({
+        store,
+        sessionKey: params.sessionKey,
+      });
+      const existing = resolved.existing;
+      if (!existing) {
+        return { entry: null };
+      }
+      // Completing a plain restart must invalidate any older confirmation so it
+      // cannot accidentally authorize a later config, update, or install action.
+      const next = clearPendingRestartConfirmation(existing);
+      const cleared = normalizePendingRestartConfirmation(existing.pendingRestartConfirmation);
+      if (next !== existing) {
+        store[resolved.normalizedKey] = next;
+        for (const legacyKey of resolved.legacyKeys) {
+          delete store[legacyKey];
+        }
+      }
+      return { entry: next, cleared };
+    },
+    { activeSessionKey: normalizeStoreSessionKey(params.sessionKey) },
+  );
+}
+
+export async function restorePendingRestartConfirmationForSession(params: {
+  storePath: string;
+  sessionKey: string;
+  pending: SessionPendingRestartConfirmation;
+}): Promise<SessionEntry | null> {
+  return await updateSessionStore(
+    params.storePath,
+    (store) => {
+      const resolved = resolveSessionStoreEntry({
+        store,
+        sessionKey: params.sessionKey,
+      });
+      const existing = resolved.existing;
+      if (!existing) {
+        return null;
+      }
+      // Never overwrite a newer confirmation that another turn may have armed
+      // while restart scheduling was in flight.
+      if (normalizePendingRestartConfirmation(existing.pendingRestartConfirmation)) {
+        return existing;
+      }
+      const next = writePendingRestartConfirmation(existing, params.pending);
+      store[resolved.normalizedKey] = next;
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
+      return next;
+    },
+    { activeSessionKey: normalizeStoreSessionKey(params.sessionKey) },
+  );
+}
