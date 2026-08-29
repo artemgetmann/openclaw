@@ -119,6 +119,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "whatsapp-user",
+    description: "WhatsApp-as-me owner-safe messaging",
+    hasSubcommands: true,
+  },
+  {
     name: "whatsapp-monitor",
     description: "WhatsApp-as-me durable monitor polling tools",
     hasSubcommands: true,

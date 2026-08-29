@@ -27,6 +27,7 @@ function looksLikeSkillsDir(dir: string): boolean {
 }
 
 export type BundledSkillsResolveOptions = {
+  allowEnvOverride?: boolean;
   argv1?: string;
   moduleUrl?: string;
   cwd?: string;
@@ -36,7 +37,8 @@ export type BundledSkillsResolveOptions = {
 export function resolveBundledSkillsDir(
   opts: BundledSkillsResolveOptions = {},
 ): string | undefined {
-  const override = process.env.OPENCLAW_BUNDLED_SKILLS_DIR?.trim();
+  const override =
+    opts.allowEnvOverride === false ? undefined : process.env.OPENCLAW_BUNDLED_SKILLS_DIR?.trim();
   if (override) {
     return override;
   }

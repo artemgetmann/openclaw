@@ -7,14 +7,18 @@ import { fileURLToPath } from "node:url";
 
 type SendCommand = "text" | "file";
 
+type OutboundTextStream = AsyncIterable<Buffer | string> & { isTTY?: boolean };
+
 type Flags = {
   command: SendCommand;
   json: boolean;
   storeDir: string;
   to: string;
   message?: string;
+  messageFile?: string;
   file?: string;
   caption?: string;
+  captionFile?: string;
   timeoutMs: number;
   lockWaitMs: number;
   settleMs: number;
@@ -97,10 +101,15 @@ type Deps = {
   verifySend: typeof verifyAcceptedSendInLocalHistory;
 };
 
+// wacli currently accepts the final text as one argv value. Keep well below
+// macOS ARG_MAX and Linux's per-argument limit so accepted input cannot fail
+// with E2BIG after the sync owner has been paused.
+const outboundTextMaxBytes = 64 * 1024;
+
 function usage() {
   console.error(`Usage:
-  wacli-send-safe.sh text --to <recipient> --message <text> [--store <dir>] [--json] [--timeout-ms <ms>] [--lock-wait-ms <ms>] [--settle-ms <ms>] [--grace-ms <ms>]
-  wacli-send-safe.sh file --to <recipient> --file <path> [--caption <text>] [--store <dir>] [--json] [--timeout-ms <ms>] [--lock-wait-ms <ms>] [--settle-ms <ms>] [--grace-ms <ms>]
+  wacli-send-safe.sh text --to <recipient> (--message <text> | --message-file <path|->) [--store <dir>] [--json] [--timeout-ms <ms>] [--lock-wait-ms <ms>] [--settle-ms <ms>] [--grace-ms <ms>]
+  wacli-send-safe.sh file --to <recipient> --file <path> [--caption <text> | --caption-file <path|->] [--store <dir>] [--json] [--timeout-ms <ms>] [--lock-wait-ms <ms>] [--settle-ms <ms>] [--grace-ms <ms>]
 
 Notes:
   - If the recorded OpenClaw wacli sync owner is running, this helper pauses it, sends, then restores it.
@@ -173,6 +182,15 @@ function parseArgs(argv: string[]): Flags {
         index += 1;
         break;
       }
+      case "--message-file": {
+        const next = rest[index + 1];
+        if (!next) {
+          throw new Error("--message-file requires a value");
+        }
+        flags.messageFile = next;
+        index += 1;
+        break;
+      }
       case "--file": {
         const next = rest[index + 1];
         if (!next) {
@@ -188,6 +206,15 @@ function parseArgs(argv: string[]): Flags {
           throw new Error("--caption requires a value");
         }
         flags.caption = next;
+        index += 1;
+        break;
+      }
+      case "--caption-file": {
+        const next = rest[index + 1];
+        if (!next) {
+          throw new Error("--caption-file requires a value");
+        }
+        flags.captionFile = next;
         index += 1;
         break;
       }
@@ -235,14 +262,117 @@ function parseArgs(argv: string[]): Flags {
   if (!flags.to) {
     throw new Error("--to is required");
   }
-  if (flags.command === "text" && !flags.message) {
-    throw new Error("--message is required for text sends");
+  if (flags.message !== undefined && flags.messageFile !== undefined) {
+    throw new Error("Use only one of --message or --message-file");
+  }
+  if (flags.caption !== undefined && flags.captionFile !== undefined) {
+    throw new Error("Use only one of --caption or --caption-file");
+  }
+  if (flags.command === "text" && !flags.message && !flags.messageFile) {
+    throw new Error("--message or --message-file is required for text sends");
   }
   if (flags.command === "file" && !flags.file) {
     throw new Error("--file is required for file sends");
   }
+  if (
+    flags.command === "text" &&
+    (flags.caption !== undefined || flags.captionFile !== undefined)
+  ) {
+    throw new Error("--caption and --caption-file require a file send");
+  }
+  if (
+    flags.command === "file" &&
+    (flags.message !== undefined || flags.messageFile !== undefined)
+  ) {
+    throw new Error("--message and --message-file require a text send");
+  }
 
   return flags;
+}
+
+function assertSafeInlineText(value: string, inlineFlag: string, fileFlag: string): void {
+  // JSON stringification can escape newlines, quotes, control characters, and
+  // existing backslashes. Any inline backslash is therefore ambiguous. The
+  // file/stdin path is lossless for legitimate code and Windows paths.
+  if (/[\r\n\t\\]/.test(value)) {
+    throw new Error(
+      `${inlineFlag} accepts simple one-line text only; use ${fileFlag} for generated, multiline, or escape-sensitive text`,
+    );
+  }
+  if (value.includes("\0")) {
+    throw new Error(`${inlineFlag} cannot contain NUL bytes`);
+  }
+}
+
+async function readOutboundTextStream(
+  chunks: AsyncIterable<Buffer | string>,
+  source: string,
+): Promise<string> {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let text = "";
+  for await (const chunk of chunks) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+    bytes += buffer.byteLength;
+    if (bytes > outboundTextMaxBytes) {
+      throw new Error(`${source} exceeded the 64 KiB local limit`);
+    }
+    try {
+      text += decoder.decode(buffer, { stream: true });
+    } catch {
+      throw new Error(`${source} is not valid UTF-8`);
+    }
+  }
+  try {
+    text += decoder.decode();
+  } catch {
+    throw new Error(`${source} is not valid UTF-8`);
+  }
+  if (!text.trim()) {
+    throw new Error(`${source} is empty`);
+  }
+  if (text.includes("\0")) {
+    throw new Error(`${source} cannot contain NUL bytes`);
+  }
+  return text;
+}
+
+async function readOutboundTextFile(
+  source: string,
+  flag: string,
+  stdin: OutboundTextStream = process.stdin,
+): Promise<string> {
+  if (source === "-") {
+    if (stdin.isTTY) {
+      throw new Error(`${flag} - requires piped or tool-provided stdin`);
+    }
+    return readOutboundTextStream(stdin, `${flag} stdin`);
+  }
+  return readOutboundTextStream(fs.createReadStream(source), flag);
+}
+
+async function resolveOutboundText(
+  flags: Flags,
+  stdin: OutboundTextStream = process.stdin,
+): Promise<Flags> {
+  const resolved = { ...flags };
+  if (resolved.message !== undefined && resolved.messageFile !== undefined) {
+    throw new Error("Use only one of --message or --message-file");
+  }
+  if (resolved.caption !== undefined && resolved.captionFile !== undefined) {
+    throw new Error("Use only one of --caption or --caption-file");
+  }
+  if (resolved.message !== undefined) {
+    assertSafeInlineText(resolved.message, "--message", "--message-file");
+  } else if (resolved.messageFile !== undefined) {
+    resolved.message = await readOutboundTextFile(resolved.messageFile, "--message-file", stdin);
+  }
+  if (resolved.caption !== undefined) {
+    assertSafeInlineText(resolved.caption, "--caption", "--caption-file");
+  } else if (resolved.captionFile !== undefined) {
+    resolved.caption = await readOutboundTextFile(resolved.captionFile, "--caption-file", stdin);
+  }
+  return resolved;
 }
 
 function helperScriptPath() {
@@ -781,10 +911,13 @@ function resolveDeps(deps: Partial<Deps> | undefined): Deps {
 }
 
 async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Promise<SendReport> {
+  // Resolve and reject unsafe text before taking the store lock or touching the
+  // long-lived sync owner. Invalid input must have no WhatsApp-side effects.
+  const resolvedFlags = await resolveOutboundText(flags);
   const deps = resolveDeps(depsOverrides);
-  const lock = await acquireStoreSendLock(flags.storeDir, flags.lockWaitMs, deps);
+  const lock = await acquireStoreSendLock(resolvedFlags.storeDir, resolvedFlags.lockWaitMs, deps);
   try {
-    return await runOwnerSafeSendLocked(flags, deps);
+    return await runOwnerSafeSendLocked(resolvedFlags, deps);
   } finally {
     lock.release();
   }
@@ -1082,6 +1215,8 @@ export {
   containsLockError,
   parseArgs,
   parseSendReceipt,
+  readOutboundTextStream,
+  resolveOutboundText,
   runOwnerSafeSend,
   verifyAcceptedSendInLocalHistory,
 };

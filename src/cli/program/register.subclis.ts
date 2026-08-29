@@ -285,6 +285,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "whatsapp-user",
+    description: "WhatsApp-as-me owner-safe messaging",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../whatsapp-user-cli.js");
+      mod.registerWhatsAppUserCli(program);
+    },
+  },
+  {
     name: "whatsapp-monitor",
     description: "WhatsApp-as-me durable monitor polling tools",
     hasSubcommands: true,

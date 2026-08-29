@@ -1,6 +1,6 @@
 ---
 name: telegram-user
-description: Use for Telegram-as-me requests on this Mac: reading, sending, replying, or waiting as the user's real Telegram account. Do not use it for the normal Telegram bot channel, BotFather setup, or generic bot onboarding.
+description: "Use for Telegram-as-me requests on this Mac: reading, sending, replying, or waiting as the user's real Telegram account. Do not use it for the normal Telegram bot channel, BotFather setup, or generic bot onboarding."
 metadata:
   {
     "openclaw":
@@ -74,6 +74,8 @@ Automation Rule
   `skills/telegram-user/scripts/telegram-user-cli.sh <subcommand> ...`
 - Run one command per call. Do not add shell chains, pipes, or redirection
   around the wrapper unless the user explicitly asks for raw shell plumbing.
+- For every agent-authored send, use the runtime input contract below. Never
+  place generated or user-provided message text inside the command string.
 - When the agent shell/exec tool has its own deadline, set it to at least 360
   seconds for a one-shot installed `telegram-user` command. A cold or stale
   environment can spend up to 32 seconds probing interpreters and dependency
@@ -248,6 +250,17 @@ Login Flow
 
 Default Commands
 
+Runtime input contract
+
+- OpenClaw/Jarvis `exec`: use `--message-file -` or `--caption-file -` and put
+  the exact UTF-8 text in the tool's `stdin` field. The tool writes and closes
+  stdin atomically.
+- Codex `exec_command`: it has no atomic stdin field or explicit EOF operation.
+  Create a private temporary UTF-8 file with the file-editing tool, not shell
+  interpolation. Pass its absolute path through `--message-file` or
+  `--caption-file`, then remove that exact temporary file after the command
+  finishes. Never reuse the file for another recipient.
+
 - Doctor / setup-state interpreter:
   `openclaw telegram-user doctor --json`
 - Status:
@@ -279,15 +292,15 @@ Default Commands
 - Transcribe the downloaded audio file:
   `openclaw media transcribe --file /tmp/openclaw-media/telegram-jarvis_tester_1_bot-52830.oga --json`
 - Send a message:
-  `openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello" --json`
+  call `openclaw telegram-user send --chat @jarvis_tester_1_bot --message-file <runtime-input> --json`
 - Send multiline, generated, JSON, code, path, or escape-sensitive text:
-  `printf '%s' "$message" | openclaw telegram-user send --chat @jarvis_tester_1_bot --message-file - --json`
+  call `openclaw telegram-user send --chat @jarvis_tester_1_bot --message-file <runtime-input> --json`
 - Reply to a specific message:
-  `openclaw telegram-user send --chat @jarvis_tester_1_bot --reply-to 12345 --message "on it" --json`
+  call `openclaw telegram-user send --chat @jarvis_tester_1_bot --reply-to 12345 --message-file <runtime-input> --json`
 - Create a forum topic:
   `openclaw telegram-user topic-create --chat -1003783709877 --title "strategy follow-up" --json`
 - Send into a forum topic:
-  `openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message "seed prompt" --json`
+  call `openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message-file <runtime-input> --json`
 - Delete a temporary forum topic:
   `openclaw telegram-user topic-delete --chat -1003783709877 --topic-anchor 12345 --json`
 - Select an exact callback button:
@@ -302,10 +315,10 @@ Default Commands
 Behavior Notes
 
 - This surface reads and writes as the user's real Telegram account.
-- Use `--message` only for simple inline text. Use `--message-file <path>` or
-  `--message-file -` for generated or multiline text. Never concatenate
-  `JSON.stringify(message)` into a shell command: JSON escaping turns real
-  newlines into visible `\\n` characters before Telegram receives the value.
+- Agents always use `--message-file` or `--caption-file` through the runtime
+  input contract above. Inline `--message` and `--caption` are
+  human/operator conveniences for simple one-line text only. The CLI rejects
+  multiline text and ambiguous backslashes on those inline flags.
 - `telegram-user login` persists pending login state so the caller does not
   manage `phone_code_hash` by hand.
 - Use `inbox` for discovery and unread triage across chats.

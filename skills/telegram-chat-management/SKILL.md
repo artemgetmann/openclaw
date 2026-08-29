@@ -73,8 +73,14 @@ openclaw telegram-user topic-create --chat -1003783709877 --title "launch follow
 4. Send the handoff into the topic as the user:
 
 ```bash
-openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message "Jarvis, continue this workstream from docs/plans/launch-follow-up.md. Reply in this topic with the next 3 actions. Do not post publicly or DM anyone without approval." --json
+openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message-file <runtime-input> --json
 ```
+
+For OpenClaw/Jarvis `exec`, replace `<runtime-input>` with `-` and put the exact
+handoff in the tool's `stdin` field. In Codex, create a private temporary UTF-8
+file with the file-editing tool and replace `<runtime-input>` with its absolute
+path, then remove that exact file after the command. Never embed the handoff in
+the command string.
 
 Give a one-shot installed command at least 360 seconds at the outer shell/exec
 layer. This covers cold dependency bootstrap plus the backend deadline. If it

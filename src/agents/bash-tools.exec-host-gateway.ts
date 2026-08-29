@@ -39,6 +39,7 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 export type ProcessGatewayAllowlistParams = {
   command: string;
+  stdin?: string;
   workdir: string;
   env: Record<string, string>;
   pty: boolean;
@@ -265,6 +266,7 @@ export async function processGatewayAllowlist(
       try {
         run = await runExecProcess({
           command: params.command,
+          stdin: params.stdin,
           execCommand: enforcedCommand,
           workdir: params.workdir,
           env: params.env,

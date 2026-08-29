@@ -429,6 +429,9 @@ describe("exec approvals safe bins", () => {
     expect(
       evaluate(["wacli", "chats", "mark-unread", "--chat", "628123@s.whatsapp.net", "--json"]),
     ).toBe(true);
+    expect(evaluate(["wacli", "send", "text", "--to", "+15550001111", "--message", "hello"])).toBe(
+      false,
+    );
     expect(
       evaluate([
         "openclaw",
@@ -455,6 +458,18 @@ describe("exec approvals safe bins", () => {
         "--expected-url",
         "https://t.me/+ExactInviteHash",
         "--json",
+      ]),
+    ).toBe(false);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "send",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--caption=-",
+        "--media",
+        "/tmp/proof.ogg",
       ]),
     ).toBe(false);
     expect(evaluate(["openclaw", "telegram-user", "status", "--json"])).toBe(true);
@@ -549,7 +564,67 @@ describe("exec approvals safe bins", () => {
         "--reply-to",
         "123",
       ]),
+    ).toBe(false);
+    expect(
+      evaluate([
+        "openclaw",
+        "whatsapp-user",
+        "send-text",
+        "--to",
+        "+15550001111",
+        "--message-file",
+        "-",
+        "--json",
+      ]),
     ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "whatsapp-user",
+        "send-text",
+        "--to",
+        "+15550001111",
+        "--message",
+        "hello",
+      ]),
+    ).toBe(false);
+    expect(
+      evaluate([
+        "openclaw",
+        "whatsapp-user",
+        "send-file",
+        "--to",
+        "+15550001111",
+        "--file",
+        "/tmp/proof.pdf",
+        "--caption-file",
+        "-",
+      ]),
+    ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "send",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--message-file",
+        "-",
+        "--reply-to",
+        "123",
+      ]),
+    ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "send",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--message-file",
+        "/tmp/message.txt",
+      ]),
+    ).toBe(false);
     expect(evaluate(["bash", "-lc", "gog auth add test@example.com"])).toBe(false);
   });
 

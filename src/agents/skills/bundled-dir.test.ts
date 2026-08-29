@@ -24,6 +24,30 @@ describe("resolveBundledSkillsDir", () => {
     expect(resolveBundledSkillsDir()).toBe(overrideDir);
   });
 
+  it("can ignore the environment override for product-owned helper resolution", async () => {
+    const overrideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-override-"));
+    process.env.OPENCLAW_BUNDLED_SKILLS_DIR = overrideDir;
+
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-product-owned-"));
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    await writeSkill({
+      dir: path.join(root, "skills", "wacli"),
+      name: "wacli",
+      description: "wacli",
+    });
+    const moduleUrl = pathToFileURL(path.join(root, "dist", "whatsapp-user-cli.js")).href;
+
+    expect(
+      resolveBundledSkillsDir({
+        allowEnvOverride: false,
+        argv1: path.join(root, "dist", "index.js"),
+        cwd: root,
+        execPath: path.join(root, "bin", "node"),
+        moduleUrl,
+      }),
+    ).toBe(path.join(root, "skills"));
+  });
+
   it("resolves bundled skills under a flattened dist layout", async () => {
     delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
 

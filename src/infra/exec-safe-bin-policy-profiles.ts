@@ -290,9 +290,9 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     },
   },
   wacli: {
-    // wacli powers search/sync/send flows directly from chat. Trust the real
-    // command families and only single out path/file handoff flags that would
-    // otherwise turn Normal mode into an implicit filesystem escape hatch.
+    // Keep direct wacli access read-oriented. Agent sends go through the bundled
+    // owner-safe wrapper so generated text never has to cross an inline shell
+    // argument and send reconciliation stays in one place.
     maxPositional: 16,
     commandFamilies: [
       ["auth"],
@@ -304,7 +304,6 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["doctor"],
       ["history", "backfill"],
       ["messages", "search"],
-      ["send", "text"],
       ["sync"],
     ],
     allowUnknownOptions: true,
@@ -312,14 +311,12 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     allowedValueFlags: [
       "--after",
       "--before",
-      "--caption",
       "--chat",
       "--count",
       "--db",
       "--file",
       "--idle-exit",
       "--limit",
-      "--message",
       "--query",
       "--requests",
       "--session",
@@ -358,6 +355,8 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["telegram-user", "wait"],
       ["telegram-user", "monitor-listen"],
       ["telegram-user", "monitor-poll"],
+      ["whatsapp-user", "send-file"],
+      ["whatsapp-user", "send-text"],
       ["whatsapp-monitor", "poll"],
       ["media", "transcribe"],
     ],
@@ -378,7 +377,6 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--account-id",
       "--before-id",
       "--chat",
-      "--caption",
       "--code",
       "--contains",
       "--cron-store",
@@ -389,7 +387,6 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--hook-url",
       "--limit",
       "--media",
-      "--message",
       "--monitor-store",
       "--max-runs",
       "--phone",
@@ -411,6 +408,43 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--monitor-store": "pathOrSafeLiteral",
     },
     commandFamilyOptions: [
+      {
+        family: ["telegram-user", "send"],
+        guardedValueFlags: {
+          "--caption": "forbid",
+          "--caption-file": "stdinOnly",
+          "--message": "forbid",
+          "--message-file": "stdinOnly",
+        },
+      },
+      {
+        family: ["whatsapp-user", "send-file"],
+        allowedValueFlags: [
+          "--file",
+          "--grace-ms",
+          "--lock-wait-ms",
+          "--settle-ms",
+          "--store",
+          "--to",
+        ],
+        guardedValueFlags: {
+          "--caption": "forbid",
+          "--caption-file": "stdinOnly",
+          "--file": "pathOrSafeLiteral",
+          "--message": "forbid",
+          "--store": "pathOrSafeLiteral",
+        },
+      },
+      {
+        family: ["whatsapp-user", "send-text"],
+        allowedValueFlags: ["--grace-ms", "--lock-wait-ms", "--settle-ms", "--store", "--to"],
+        guardedValueFlags: {
+          "--caption": "forbid",
+          "--message": "forbid",
+          "--message-file": "stdinOnly",
+          "--store": "pathOrSafeLiteral",
+        },
+      },
       {
         family: ["telegram-user", "download"],
         allowedValueFlags: ["--message-id", "--output"],

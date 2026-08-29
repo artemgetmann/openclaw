@@ -554,26 +554,41 @@ describe("telegram-user commands", () => {
     );
   });
 
-  it("reproduces JSON-stringified multiline text as literal inline shell input", async () => {
-    const serializedForShell = JSON.stringify("Heading\n\n- item").slice(1, -1);
-    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
-      backend_meta: backendMeta,
-      message: { message_id: 126, text: serializedForShell },
-    });
+  it("rejects malformed UTF-8 instead of rewriting the message", async () => {
+    async function* chunks() {
+      yield Buffer.from([0x66, 0x80, 0x6f]);
+    }
 
-    await telegramUserSendCommand(
-      { chat: "@jarvis_tester_1_bot", message: serializedForShell },
-      runtime,
-    );
-
-    expect(serializedForShell).toBe(String.raw`Heading\n\n- item`);
-    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
-      expect.objectContaining({ message: serializedForShell }),
-    );
+    await expect(readTelegramMessageStream(chunks(), "test")).rejects.toThrow(/valid UTF-8/i);
   });
 
-  it("preserves ordinary inline JSON, code, and paths that contain no newline escape", async () => {
-    const message = String.raw`{"path":"C:\\Users\\name","regex":"\\d+"}`;
+  it("rejects JSON-stringified multiline text before the backend", async () => {
+    const serializedForShell = JSON.stringify("Heading\n\n- item").slice(1, -1);
+
+    await expect(
+      telegramUserSendCommand(
+        { chat: "@jarvis_tester_1_bot", message: serializedForShell },
+        runtime,
+      ),
+    ).rejects.toThrow(/use --message-file/i);
+
+    expect(serializedForShell).toBe(String.raw`Heading\n\n- item`);
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
+  });
+
+  it("rejects actual multiline inline text before the backend", async () => {
+    await expect(
+      telegramUserSendCommand(
+        { chat: "@jarvis_tester_1_bot", message: "Heading\n\n- item" },
+        runtime,
+      ),
+    ).rejects.toThrow(/use --message-file/i);
+
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
+  });
+
+  it("preserves simple inline text that does not require escaping", async () => {
+    const message = '{"status":"ok"}';
     backendMocks.runTelegramUserSend.mockResolvedValueOnce({
       backend_meta: backendMeta,
       message: { message_id: 127, text: message },
@@ -584,6 +599,21 @@ describe("telegram-user commands", () => {
     expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
       expect.objectContaining({ message }),
     );
+  });
+
+  it("rejects every ambiguous inline backslash before the backend", async () => {
+    const serializedQuote = JSON.stringify('He said "yes"').slice(1, -1);
+    await expect(
+      telegramUserSendCommand({ chat: "@jarvis_tester_1_bot", message: serializedQuote }, runtime),
+    ).rejects.toThrow(/use --message-file/i);
+
+    await expect(
+      telegramUserSendCommand(
+        { chat: "@jarvis_tester_1_bot", message: String.raw`C:\Users\name` },
+        runtime,
+      ),
+    ).rejects.toThrow(/use --message-file/i);
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
   });
 
   it("rejects combining inline and file-backed message input", async () => {
@@ -638,6 +668,45 @@ describe("telegram-user commands", () => {
       replyTo: 120,
     });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("message_id=125"));
+  });
+
+  it("reads a multiline media caption from a file without rewriting it", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-caption-"));
+    const captionFile = path.join(root, "caption.txt");
+    const caption = "Heading\n\nLiteral \\n stays literal";
+    await fs.writeFile(captionFile, caption, "utf8");
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: { message_id: 128, text: caption },
+    });
+
+    try {
+      await telegramUserSendCommand(
+        { captionFile, chat: "@jarvis_tester_1_bot", media: "/tmp/proof.pdf" },
+        runtime,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
+      expect.objectContaining({ caption, message: undefined }),
+    );
+  });
+
+  it("rejects escape-sensitive inline media captions before the backend", async () => {
+    await expect(
+      telegramUserSendCommand(
+        {
+          caption: String.raw`Heading\n\n- item`,
+          chat: "@jarvis_tester_1_bot",
+          media: "/tmp/proof.pdf",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/use --caption-file/i);
+
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
   });
 
   it("uses topic anchor as the reply target for forum-topic sends", async () => {

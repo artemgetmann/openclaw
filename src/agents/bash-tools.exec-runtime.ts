@@ -93,11 +93,18 @@ export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
+export const EXEC_STDIN_MAX_BYTES = 4 * 1024 * 1024;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
+  stdin: Type.Optional(
+    Type.String({
+      description:
+        "Exact UTF-8 text to write to the command's stdin before closing it. Keep message bodies here instead of shell arguments.",
+    }),
+  ),
   workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
@@ -355,6 +362,7 @@ export function emitExecSystemEvent(
 
 export async function runExecProcess(opts: {
   command: string;
+  stdin?: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
   // Used to sanitize safeBins execution while preserving the original user input.
   execCommand?: string;
@@ -558,6 +566,7 @@ export async function runExecProcess(opts: {
             ...spawnBase,
             mode: "child",
             argv: spawnSpec.argv,
+            input: opts.stdin,
             stdinMode: spawnSpec.stdinMode,
           });
   } catch (err) {
@@ -576,6 +585,7 @@ export async function runExecProcess(opts: {
           scopeKey: opts.scopeKey,
           mode: "child",
           argv: spawnSpec.childFallbackArgv,
+          input: opts.stdin,
           cwd: opts.workdir,
           env: spawnSpec.env,
           stdinMode: "pipe-open",
