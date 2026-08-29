@@ -1,10 +1,6 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import {
-  applySystemPromptOverrideToSession,
-  buildEmbeddedSystemPrompt,
-  createSystemPromptOverride,
-} from "./system-prompt.js";
+import { applySystemPromptOverrideToSession, createSystemPromptOverride } from "./system-prompt.js";
 
 function createMockSession() {
   const setSystemPrompt = vi.fn();
@@ -51,32 +47,5 @@ describe("applySystemPromptOverrideToSession", () => {
       _rebuildSystemPrompt?: (toolNames: string[]) => string;
     };
     expect(mutable._rebuildSystemPrompt?.(["tool1"])).toBe("rebuild test");
-  });
-});
-
-describe("buildEmbeddedSystemPrompt", () => {
-  it("carries the routine-restart setting into the live agent prompt", () => {
-    const prompt = buildEmbeddedSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
-      restartConfirmationRequired: false,
-      runtimeInfo: {
-        host: "test-host",
-        os: "test-os",
-        arch: "arm64",
-        node: "v24",
-        model: "test/model",
-      },
-      tools: [],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-    });
-
-    expect(prompt).toContain(
-      "This owner configured gateway action `restart` as a routine service-lifecycle step",
-    );
-    expect(prompt).not.toContain(
-      "For restart-capable gateway actions in live chat (`restart`, `config.apply`, `config.patch`, `update.run`, `app.update.install`)",
-    );
   });
 });

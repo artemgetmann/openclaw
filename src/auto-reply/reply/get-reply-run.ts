@@ -352,11 +352,7 @@ export async function runPreparedReply(
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    pendingRestartConfirmation
-      ? buildPendingRestartConfirmationPromptHint({
-          restartConfirmationRequired: cfg.commands?.restartConfirmation !== false,
-        })
-      : undefined,
+    pendingRestartConfirmation ? buildPendingRestartConfirmationPromptHint() : undefined,
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).

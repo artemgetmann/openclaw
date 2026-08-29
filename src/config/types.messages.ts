@@ -156,8 +156,6 @@ export type CommandsConfig = {
   debug?: boolean;
   /** Allow restart commands/tools (default: true). */
   restart?: boolean;
-  /** Require a separate confirmation turn before gateway-tool restarts (default: true). */
-  restartConfirmation?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;
   /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
