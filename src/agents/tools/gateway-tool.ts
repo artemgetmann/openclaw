@@ -4,6 +4,7 @@ import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
 import {
+  clearPendingRestartConfirmationForSession,
   consumePendingRestartConfirmationForSession,
   extractDeliveryInfo,
   recordPendingRestartConfirmationForSession,
@@ -163,6 +164,12 @@ export function createGatewayTool(opts?: {
         // Restarting the service is a routine execution detail inside the caller's
         // existing task authority. The confirmation gate remains on mutations that
         // also change config, source, or the installed application.
+        if (liveChatSessionKey) {
+          await clearPendingRestartConfirmationForSession({
+            storePath,
+            sessionKey: liveChatSessionKey,
+          });
+        }
         const sessionKey = resolveCurrentSessionKey();
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)

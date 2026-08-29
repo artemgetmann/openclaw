@@ -9,6 +9,7 @@ import {
   saveSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
+import { __testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 
@@ -230,30 +231,47 @@ describe("gateway tool", () => {
   });
 
   it("restarts a live chat session without a second confirmation", async () => {
-    const { storePath, sessionKey } = await createSessionStoreFixture();
+    restartTesting.resetSigusr1State();
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const pending = createPendingRestartConfirmation({ now: Date.now() });
+    const { storePath, sessionKey } = await createSessionStoreFixture({
+      entry: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt,
+        pendingRestartConfirmation: pending,
+      },
+    });
     const stateDir = path.dirname(storePath);
     const tool = requireGatewayTool(sessionKey, {
       commands: { restart: true },
       session: { store: storePath },
     });
 
-    const result = await withEnvAsync(
-      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
-      () =>
-        tool.execute("restart-current-turn", {
-          action: "restart",
-          delayMs: 0,
-        }),
-    );
+    try {
+      const result = await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
+        () =>
+          tool.execute("restart-current-turn", {
+            action: "restart",
+            delayMs: 0,
+          }),
+      );
 
-    expect(result.details).toMatchObject({
-      ok: true,
-      signal: "SIGUSR1",
-      delayMs: 0,
-    });
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).not.toHaveProperty(
-      "pendingRestartConfirmation",
-    );
+      expect(result.details).toMatchObject({
+        ok: true,
+        signal: "SIGUSR1",
+        delayMs: 0,
+      });
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).not.toHaveProperty(
+        "pendingRestartConfirmation",
+      );
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      restartTesting.resetSigusr1State();
+      kill.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("passes config.apply through gateway call", async () => {

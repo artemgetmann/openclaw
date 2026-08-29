@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { saveSessionStore, type SessionEntry } from "../sessions.js";
 import {
   clearPendingRestartConfirmation,
+  clearPendingRestartConfirmationForSession,
   consumePendingRestartConfirmationForSession,
   createPendingRestartConfirmation,
   expirePendingRestartConfirmation,
@@ -117,6 +118,28 @@ describe("restart confirmation store lifecycle", () => {
 
     expect(result.status).toBe("ready");
     expect(result.entry?.pendingRestartConfirmation).toBeUndefined();
+  });
+
+  it("clears a pending confirmation after a direct restart", async () => {
+    const { storePath, sessionKey } = await createStore();
+    const pending = createPendingRestartConfirmation({ now: 5_000 });
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt,
+        pendingRestartConfirmation: pending,
+      },
+    });
+
+    const entry = await clearPendingRestartConfirmationForSession({ storePath, sessionKey });
+    const after = await consumePendingRestartConfirmationForSession({
+      storePath,
+      sessionKey,
+      now: pending.requestedAt + 1,
+    });
+
+    expect(entry?.pendingRestartConfirmation).toBeUndefined();
+    expect(after.status).toBe("missing-confirmation");
   });
 
   it("expires and clears stale confirmations", async () => {
