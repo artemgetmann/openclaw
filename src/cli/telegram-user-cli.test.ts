@@ -11,6 +11,7 @@ const telegramUserMarkUnreadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserReadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserDownloadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserSendCommand = vi.fn().mockResolvedValue(undefined);
+const validateTelegramSendInputShape = vi.fn();
 const telegramUserTopicCreateCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserTopicDeleteCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserTopicResolveCommand = vi.fn().mockResolvedValue(undefined);
@@ -31,6 +32,7 @@ vi.mock("../commands/telegram-user.js", () => ({
   telegramUserReadCommand,
   telegramUserDownloadCommand,
   telegramUserSendCommand,
+  validateTelegramSendInputShape,
   telegramUserTopicCreateCommand,
   telegramUserTopicDeleteCommand,
   telegramUserTopicResolveCommand,
@@ -78,6 +80,7 @@ describe("telegram-user cli", () => {
     expect(help).toContain("openclaw telegram-user doctor --json");
     expect(help).toContain("openclaw telegram-user send --chat @jarvis_tester_1_bot");
     expect(help).toContain("--message-file -");
+    expect(help).toContain("--caption-file");
     expect(help).toContain("openclaw telegram-user send --chat -1003783709877 --topic-anchor");
     expect(help).toContain("openclaw telegram-user topic-delete --chat -1003783709877");
     expect(help).toContain("openclaw telegram-user topic-resolve --chat -1003783709877");
@@ -128,6 +131,33 @@ describe("telegram-user cli", () => {
         json: true,
         messageFile: "/tmp/message.txt",
       }),
+      expect.anything(),
+    );
+    expect(validateTelegramSendInputShape).toHaveBeenCalledWith(
+      expect.objectContaining({ messageFile: "/tmp/message.txt" }),
+    );
+  });
+
+  it("forwards file-backed media captions without shell reinterpretation", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "send",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--media",
+        "/tmp/proof.pdf",
+        "--caption-file",
+        "/tmp/caption.txt",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserSendCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ captionFile: "/tmp/caption.txt", media: "/tmp/proof.pdf" }),
       expect.anything(),
     );
   });

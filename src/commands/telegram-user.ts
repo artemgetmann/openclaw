@@ -1,7 +1,6 @@
 import { createReadStream } from "node:fs";
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
-import { StringDecoder } from "node:string_decoder";
 import type { ListenerHealthSnapshot } from "../monitor/listener-health.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -180,27 +179,106 @@ async function readLoginSecretFromStdin(kind: string | undefined): Promise<{
 async function resolveTelegramSendMessage(
   opts: Record<string, unknown>,
 ): Promise<string | undefined> {
-  const inlineMessage = readExactStringOpt(opts, "message");
-  const messageFile = readStringOpt(opts, "messageFile");
-  if (inlineMessage !== undefined && messageFile !== undefined) {
-    throw new Error("Telegram user send accepts only one of --message or --message-file.");
-  }
-  if (messageFile !== undefined) {
-    const message =
-      messageFile === "-"
-        ? await readTelegramMessageFromStdin()
-        : await readTelegramMessageStream(createReadStream(messageFile), "--message-file");
-    if (!message.trim()) {
-      throw new Error("Telegram user send received an empty --message-file.");
-    }
-    return message;
-  }
-  return inlineMessage;
+  return resolveTelegramSendText(opts, {
+    fileKey: "messageFile",
+    fileFlag: "--message-file",
+    inlineKey: "message",
+    inlineFlag: "--message",
+  });
 }
 
-async function readTelegramMessageFromStdin(): Promise<string> {
+async function resolveTelegramSendCaption(
+  opts: Record<string, unknown>,
+): Promise<string | undefined> {
+  return resolveTelegramSendText(opts, {
+    fileKey: "captionFile",
+    fileFlag: "--caption-file",
+    inlineKey: "caption",
+    inlineFlag: "--caption",
+  });
+}
+
+async function resolveTelegramSendText(
+  opts: Record<string, unknown>,
+  names: {
+    fileKey: string;
+    fileFlag: string;
+    inlineKey: string;
+    inlineFlag: string;
+  },
+): Promise<string | undefined> {
+  const inlineText = readExactStringOpt(opts, names.inlineKey);
+  const textFile = readStringOpt(opts, names.fileKey);
+  if (inlineText !== undefined && textFile !== undefined) {
+    throw new Error(
+      `Telegram user send accepts only one of ${names.inlineFlag} or ${names.fileFlag}.`,
+    );
+  }
+  if (textFile !== undefined) {
+    const text =
+      textFile === "-"
+        ? await readTelegramMessageFromStdin(names.fileFlag)
+        : await readTelegramMessageStream(createReadStream(textFile), names.fileFlag);
+    if (!text.trim()) {
+      throw new Error(`Telegram user send received an empty ${names.fileFlag}.`);
+    }
+    if (text.includes("\0")) {
+      throw new Error(`Telegram user send ${names.fileFlag} cannot contain NUL bytes.`);
+    }
+    return text;
+  }
+  if (inlineText !== undefined) {
+    assertSafeTelegramInlineText(inlineText, names.inlineFlag, names.fileFlag);
+  }
+  return inlineText;
+}
+
+function assertSafeTelegramInlineText(value: string, inlineFlag: string, fileFlag: string): void {
+  // JSON stringification escapes more than newlines: quotes, controls, and
+  // existing backslashes can all be altered before argv reaches this parser.
+  // Reject every ambiguous inline backslash and direct callers to the exact
+  // file/stdin boundary instead of trying to guess the intended decoding.
+  if (/[\r\n\t\\]/.test(value)) {
+    throw new Error(
+      `Telegram user send ${inlineFlag} accepts simple one-line text only; use ${fileFlag} for generated, multiline, or escape-sensitive text.`,
+    );
+  }
+  if (value.includes("\0")) {
+    throw new Error(`Telegram user send ${inlineFlag} cannot contain NUL bytes.`);
+  }
+}
+
+export function validateTelegramSendInputShape(opts: Record<string, unknown>): void {
+  const message = readExactStringOpt(opts, "message");
+  const messageFile = readStringOpt(opts, "messageFile");
+  const caption = readExactStringOpt(opts, "caption");
+  const captionFile = readStringOpt(opts, "captionFile");
+  const media = readStringOpt(opts, "media");
+  if (message !== undefined && messageFile !== undefined) {
+    throw new Error("Telegram user send accepts only one of --message or --message-file.");
+  }
+  if (caption !== undefined && captionFile !== undefined) {
+    throw new Error("Telegram user send accepts only one of --caption or --caption-file.");
+  }
+  if (messageFile === "-" && captionFile === "-") {
+    throw new Error(
+      "Telegram user send cannot read both --message-file and --caption-file from stdin.",
+    );
+  }
+  if (message !== undefined) {
+    assertSafeTelegramInlineText(message, "--message", "--message-file");
+  }
+  if (caption !== undefined) {
+    assertSafeTelegramInlineText(caption, "--caption", "--caption-file");
+  }
+  if ((caption !== undefined || captionFile !== undefined) && !media) {
+    throw new Error("Telegram user send --caption or --caption-file requires --media.");
+  }
+}
+
+async function readTelegramMessageFromStdin(flag: string): Promise<string> {
   if (process.stdin.isTTY) {
-    throw new Error("Telegram user send --message-file - requires a pipe, not a terminal.");
+    throw new Error(`Telegram user send ${flag} - requires piped or tool-provided stdin.`);
   }
   return readTelegramMessageStream(process.stdin, "stdin");
 }
@@ -209,7 +287,7 @@ export async function readTelegramMessageStream(
   chunks: AsyncIterable<Buffer | string>,
   source: string,
 ): Promise<string> {
-  const decoder = new StringDecoder("utf8");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let bytes = 0;
   let message = "";
   for await (const chunk of chunks) {
@@ -218,11 +296,17 @@ export async function readTelegramMessageStream(
     if (bytes > telegramSendMessageMaxBytes) {
       throw new Error(`Telegram user send ${source} input exceeded the 4 MiB local limit.`);
     }
-    // StringDecoder carries an incomplete UTF-8 sequence into the next chunk,
-    // preventing replacement characters when streams split a code point.
-    message += decoder.write(buffer);
+    try {
+      message += decoder.decode(buffer, { stream: true });
+    } catch {
+      throw new Error(`Telegram user send ${source} input is not valid UTF-8.`);
+    }
   }
-  return message + decoder.end();
+  try {
+    return message + decoder.decode();
+  } catch {
+    throw new Error(`Telegram user send ${source} input is not valid UTF-8.`);
+  }
 }
 
 function assertNever(value: never, context: string): never {
@@ -1066,10 +1150,11 @@ export async function telegramUserOwnerClaimCommand(
 }
 
 export async function telegramUserSendCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
+  validateTelegramSendInputShape(opts);
   const chat = readStringOpt(opts, "chat");
   const message = await resolveTelegramSendMessage(opts);
   const media = readStringOpt(opts, "media");
-  const caption = readStringOpt(opts, "caption");
+  const caption = await resolveTelegramSendCaption(opts);
   if (!chat || (!message && !media)) {
     throw new Error("Telegram user send requires --chat and either --message or --media.");
   }

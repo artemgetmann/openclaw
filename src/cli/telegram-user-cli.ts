@@ -59,6 +59,10 @@ export function registerTelegramUserCli(program: Command) {
             "Send generated or multiline text without shell escape rewriting.",
           ],
           [
+            "printf '%s' \"$caption\" | openclaw telegram-user send --chat @jarvis_tester_1_bot --media /tmp/proof.pdf --caption-file -",
+            "Send a generated media caption without shell escape rewriting.",
+          ],
+          [
             'openclaw telegram-user send --chat -1003783709877 --topic-anchor 15250 --message "hello topic" --json',
             "Send into a forum topic by using the topic anchor returned by topic-create.",
           ],
@@ -242,15 +246,26 @@ export function registerTelegramUserCli(program: Command) {
       ),
   )
     .option("--media <path-or-url>", "Upload this media file or URL")
-    .option("--caption <text>", "Caption for --media; overrides --message when both are present")
+    .option(
+      "--caption <text>",
+      "Single-line caption for --media; overrides --message when both are present",
+    )
+    .option(
+      "--caption-file <path>",
+      "Read the exact media caption from a UTF-8 file; use - for stdin",
+    )
     .option("--voice", "Send uploaded audio as a Telegram voice note", false)
     .option("--audio-as-voice", "Alias for --voice", false)
     .option("--reply-to <id>", "Reply to this message id")
     .option("--topic-anchor <id>", "Forum topic anchor returned by topic-create")
     .option("--topic-id <id>", "Alias for --topic-anchor")
     .action(async (opts) => {
+      const { telegramUserSendCommand, validateTelegramSendInputShape } =
+        await import("../commands/telegram-user.js");
+      // Reject unsafe inline text before runtime discovery touches the shared
+      // Telegram session owner or its machine lock.
+      validateTelegramSendInputShape(opts);
       await runTelegramUserCommand(async () => {
-        const { telegramUserSendCommand } = await import("../commands/telegram-user.js");
         await telegramUserSendCommand(opts, defaultRuntime);
       });
     });

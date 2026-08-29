@@ -20,6 +20,7 @@ import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
+  EXEC_STDIN_MAX_BYTES,
   applyPathPrepend,
   applyShellPath,
   normalizeExecAsk,
@@ -307,11 +308,12 @@ export function createExecTool(
     name: "exec",
     label: "exec",
     description:
-      "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+      "Execute shell commands with background continuation. Put exact multiline or escape-sensitive input in stdin instead of the command string. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
     parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
       const params = args as {
         command: string;
+        stdin?: string;
         workdir?: string;
         env?: Record<string, string>;
         yieldMs?: number;
@@ -328,6 +330,15 @@ export function createExecTool(
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
+      }
+      if (
+        params.stdin !== undefined &&
+        Buffer.byteLength(params.stdin, "utf8") > EXEC_STDIN_MAX_BYTES
+      ) {
+        throw new Error("Exec stdin exceeded the 4 MiB local limit.");
+      }
+      if (params.stdin !== undefined && params.pty === true) {
+        throw new Error("Exec stdin cannot be combined with pty=true.");
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
@@ -514,6 +525,9 @@ export function createExecTool(
       }
 
       if (host === "node") {
+        if (params.stdin !== undefined) {
+          throw new Error("Exec stdin is not supported for host=node.");
+        }
         return executeNodeHostCommand({
           command: params.command,
           workdir,
@@ -541,6 +555,7 @@ export function createExecTool(
       if (host === "gateway" && !bypassApprovals) {
         const gatewayResult = await processGatewayAllowlist({
           command: params.command,
+          stdin: params.stdin,
           workdir,
           env,
           pty: params.pty === true && !sandbox,
@@ -591,6 +606,7 @@ export function createExecTool(
 
       const run = await runExecProcess({
         command: params.command,
+        stdin: params.stdin,
         execCommand: execCommandOverride,
         workdir,
         env,

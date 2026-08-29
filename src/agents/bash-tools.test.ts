@@ -577,6 +577,36 @@ describe("exec tool backgrounding", () => {
   });
 });
 
+describe("exec tool stdin", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it("writes exact multiline text without placing it in the shell command", async () => {
+    const stdin = 'Heading\n\n- $HOME `whoami` "quoted" \\n literal';
+    const result = await executeExecCommand(
+      execTool,
+      'node -e "process.stdin.pipe(process.stdout)"',
+      { stdin },
+    );
+
+    expect(readTextContent(result.content)).toBe(stdin);
+  });
+
+  it("rejects oversized or PTY-bound stdin before spawning", async () => {
+    await expect(
+      executeExecCommand(execTool, 'node -e "process.stdin.resume()"', {
+        stdin: "x".repeat(4 * 1024 * 1024 + 1),
+      }),
+    ).rejects.toThrow(/4 MiB/i);
+
+    await expect(
+      executeExecCommand(execTool, 'node -e "process.stdin.resume()"', {
+        pty: true,
+        stdin: "hello",
+      }),
+    ).rejects.toThrow(/cannot be combined with pty/i);
+  });
+});
+
 describe("exec gateway restart guard", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 

@@ -188,7 +188,7 @@ describe("exec safe bin policy product-owned cli defaults", () => {
         ["send", "text", "--to", "+14155551212", "--message", "hello there"],
         wacliProfile,
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       validateSafeBinArgv(
         ["chats", "mark-read", "--chat", "628123@s.whatsapp.net", "--json"],
@@ -210,8 +210,83 @@ describe("exec safe bin policy product-owned cli defaults", () => {
     ).toBe(false);
   });
 
-  it("allows Telegram-as-me direct commands only through telegram-user families", () => {
+  it("allows agent message sends only through stdin-backed product families", () => {
     const openclawProfile = SAFE_BIN_PROFILES.openclaw;
+    expect(
+      validateSafeBinArgv(
+        ["whatsapp-user", "send-text", "--to", "+15550001111", "--message-file", "-", "--json"],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["whatsapp-user", "send-text", "--to", "+15550001111", "--message", "hello"],
+        openclawProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        ["whatsapp-user", "send-text", "--to", "+15550001111", "--message=-"],
+        openclawProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        [
+          "whatsapp-user",
+          "send-text",
+          "--to",
+          "+15550001111",
+          "--message-file",
+          "/tmp/message.txt",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        [
+          "whatsapp-user",
+          "send-file",
+          "--to",
+          "+15550001111",
+          "--file",
+          "/tmp/proof.pdf",
+          "--caption-file",
+          "-",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "send",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--caption",
+          "-",
+          "--media",
+          "/tmp/proof.ogg",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "send",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--caption=-",
+          "--media",
+          "/tmp/proof.ogg",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(false);
     expect(validateSafeBinArgv(["telegram-user", "status", "--json"], openclawProfile)).toBe(true);
     expect(validateSafeBinArgv(["telegram-user", "doctor", "--json"], openclawProfile)).toBe(true);
     expect(
@@ -292,7 +367,7 @@ describe("exec safe bin policy product-owned cli defaults", () => {
         ],
         openclawProfile,
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       validateSafeBinArgv(
         [
@@ -307,7 +382,7 @@ describe("exec safe bin policy product-owned cli defaults", () => {
         ],
         openclawProfile,
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       validateSafeBinArgv(
         [
@@ -322,7 +397,7 @@ describe("exec safe bin policy product-owned cli defaults", () => {
         ],
         openclawProfile,
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       validateSafeBinArgv(
         [
@@ -337,6 +412,50 @@ describe("exec safe bin policy product-owned cli defaults", () => {
           "--voice",
           "--reply-to",
           "123",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "send",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--message-file",
+          "-",
+          "--reply-to",
+          "123",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "send",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--message-file",
+          "/tmp/message.txt",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "send",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--media",
+          "/tmp/proof.ogg",
+          "--caption-file",
+          "-",
+          "--voice",
         ],
         openclawProfile,
       ),

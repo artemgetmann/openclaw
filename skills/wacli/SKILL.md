@@ -160,11 +160,17 @@ Read-state commands
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - Treat send/sync actions as higher-risk than read/list actions. Prove read access
   first before sending to third parties.
-- For send actions, use `skills/wacli/scripts/wacli-send-safe.sh` as the default path whenever the main `~/.wacli` store might already have a live sync owner.
+- For send actions, use `openclaw whatsapp-user send-text` or
+  `openclaw whatsapp-user send-file` as the default agent path.
+  It delegates to the bundled owner-safe helper without asking the agent to
+  execute a writable workspace script directly.
   This is especially important for monitor-driven replies, Telegram-approved follow-up sends, and any wake flow that decides to answer on WhatsApp after first reading from the shared store.
   The helper serializes sends per store, pauses/restores the recorded sync owner
   when needed, and reconciles failed raw-send exits against exact local history.
-- Do NOT kill the live sync owner manually, do NOT restart it by hand, and do NOT improvise raw `wacli send ...` if `skills/wacli/scripts/wacli-send-safe.sh` covers the same send.
+- For every agent-authored text or caption, use the runtime input contract
+  below. Never place generated or user-provided text inside the shell command,
+  and never add `--message-escapes`.
+- Do NOT kill the live sync owner manually, do NOT restart it by hand, and do NOT improvise raw `wacli send ...` if `openclaw whatsapp-user send-text` or `send-file` covers the same send.
   Manual stop/send/restart loops are a fallback-of-last-resort debug path, not the authored agent workflow.
 
 Setup Routing
@@ -259,9 +265,19 @@ History backfill
 
 Send
 
-- Text: `skills/wacli/scripts/wacli-send-safe.sh text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
-- Group: `skills/wacli/scripts/wacli-send-safe.sh text --to "1234567890-123456789@g.us" --message "Running 5 min late."`
-- File: `skills/wacli/scripts/wacli-send-safe.sh file --to "+14155551212" --file /path/agenda.pdf --caption "Agenda"`
+Runtime input contract
+
+- OpenClaw/Jarvis `exec`: use `--message-file -` or `--caption-file -` and put
+  the exact UTF-8 text in the tool's `stdin` field. The tool writes and closes
+  stdin atomically.
+- Codex `exec_command`: create a private temporary UTF-8 file with the
+  file-editing tool, not shell interpolation. Pass its absolute path through
+  `--message-file` or `--caption-file`, then remove that exact temporary file
+  after the command finishes. Never reuse it for another recipient.
+
+- Text: `openclaw whatsapp-user send-text --to "+14155551212" --message-file <runtime-input>`
+- Group: `openclaw whatsapp-user send-text --to "1234567890-123456789@g.us" --message-file <runtime-input>`
+- File: `openclaw whatsapp-user send-file --to "+14155551212" --file /path/agenda.pdf --caption-file <runtime-input>`
 - A successful safe-send means WhatsApp accepted the outbound attempt or the
   exact outbound row was later found in local history after a failed raw-send
   exit. Only call it locally verified when the helper reports
@@ -278,12 +294,13 @@ Send
   approval.
 - Raw send fallback for self-chat/test only:
   `wacli send text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
+  This raw inline form is for deliberate human/operator use only, not agent-authored sends.
 
 Monitor-driven reply send pattern
 
 - When a scoped WhatsApp monitor decides that a reply should actually be sent, keep the detection and send paths separate:
   - detection: `skills/wacli/scripts/wacli-recent-reply.sh ... --json`
-  - send: `skills/wacli/scripts/wacli-send-safe.sh text --to <phone-or-jid> --message "<approved reply>"`
+  - send: `openclaw whatsapp-user send-text --to <phone-or-jid> --message-file <runtime-input>`
 - Do not turn the wake run into a store-lock debugging exercise.
   The correct authored behavior is: inspect helper output, decide, then call the safe send helper once with pinned args.
 - After a manual send, if continued handling would clearly help, offer a scoped
