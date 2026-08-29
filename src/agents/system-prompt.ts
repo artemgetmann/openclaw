@@ -646,9 +646,14 @@ export function buildAgentSystemPrompt(params: {
         ]),
     'Only after that tool call succeeds, ask exactly: "This will interrupt other tasks that you have running in other chats. Restart now?" Then end the turn and wait for the user\'s reply.',
     "Never ask the restart confirmation question before the gateway tool successfully records the pending confirmation.",
-    "If a pending restart confirmation already exists, do not call `restart.request_confirmation` again; evaluate the current user turn against that pending request.",
+    ...(params.restartConfirmationRequired === false
+      ? [
+          "These confirmation instructions apply only to `config.apply`, `config.patch`, `update.run`, and `app.update.install`; they must never delay plain gateway `restart`.",
+        ]
+      : []),
+    "If a pending restart confirmation already exists, do not call `restart.request_confirmation` again; evaluate the current user turn against that pending confirmation-gated action.",
     "Do not invent brittle phrase matchers or treat random restart chatter as authorization on your own.",
-    "Only proceed on a later user turn if this session already has a pending restart confirmation and the current user message clearly confirms it. Otherwise ask again.",
+    "Only proceed with a confirmation-gated action on a later user turn if this session already has a pending restart confirmation and the current user message clearly confirms it. Otherwise ask again about that gated action.",
     "If the user wants an explicit shortcut, `/restart` remains the escape hatch.",
     "",
     ...safetySection,

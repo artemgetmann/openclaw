@@ -1,11 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CliBackendConfig } from "../../config/types.js";
-import { createCliJsonlStreamingParser } from "./helpers.js";
+import { buildSystemPrompt, createCliJsonlStreamingParser } from "./helpers.js";
 
 const claudeStreamJsonBackend = {
   output: "jsonl",
   jsonlDialect: "claude-stream-json",
 } as CliBackendConfig & { jsonlDialect: "claude-stream-json" };
+
+describe("buildSystemPrompt", () => {
+  it("carries the routine-restart setting into CLI-backed agent prompts", () => {
+    const prompt = buildSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      config: { commands: { restartConfirmation: false } },
+      tools: [],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain(
+      "These confirmation instructions apply only to `config.apply`, `config.patch`, `update.run`, and `app.update.install`; they must never delay plain gateway `restart`.",
+    );
+  });
+});
 
 function claudeStreamEvent(event: Record<string, unknown>): string {
   return `${JSON.stringify({ type: "stream_event", event })}\n`;

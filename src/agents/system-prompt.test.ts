@@ -1169,7 +1169,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "If a pending restart confirmation already exists, do not call `restart.request_confirmation` again",
     );
-    expect(prompt).toContain("Only proceed on a later user turn");
+    expect(prompt).toContain("Only proceed with a confirmation-gated action on a later user turn");
+    expect(prompt).toContain("they must never delay plain gateway `restart`");
     expect(prompt).toContain("`/restart` remains the escape hatch");
     expect(prompt).toContain("Restart authority never broadens the task");
   });
