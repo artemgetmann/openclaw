@@ -10,6 +10,7 @@ import {
   recordPendingRestartConfirmationForSession,
   RESTART_CONFIRMATION_RECOMMENDED_PROMPT,
   resolveAgentIdFromSessionKey,
+  restorePendingRestartConfirmationForSession,
 } from "../../config/sessions.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
@@ -169,6 +170,15 @@ export function createGatewayTool(opts?: {
         if (restartConfirmationRequired) {
           await requirePendingRestartConfirmation();
         }
+        const clearedPending =
+          !restartConfirmationRequired && liveChatSessionKey
+            ? (
+                await clearPendingRestartConfirmationForSession({
+                  storePath,
+                  sessionKey: liveChatSessionKey,
+                })
+              ).cleared
+            : undefined;
         const sessionKey = resolveCurrentSessionKey();
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
@@ -207,17 +217,27 @@ export function createGatewayTool(opts?: {
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
-        const scheduled = await requestGatewayToolRestart({
-          delayMs,
-          reason,
-        });
-        if (!restartConfirmationRequired && scheduled.ok && liveChatSessionKey) {
-          // A successful routine restart supersedes any older protected-action
-          // approval. Preserve that approval when scheduling fails so the owner
-          // is not forced through the confirmation flow again for no reason.
-          await clearPendingRestartConfirmationForSession({
+        let scheduled;
+        try {
+          scheduled = await requestGatewayToolRestart({
+            delayMs,
+            reason,
+          });
+        } catch (error) {
+          if (clearedPending && liveChatSessionKey) {
+            await restorePendingRestartConfirmationForSession({
+              storePath,
+              sessionKey: liveChatSessionKey,
+              pending: clearedPending,
+            });
+          }
+          throw error;
+        }
+        if (!scheduled.ok && clearedPending && liveChatSessionKey) {
+          await restorePendingRestartConfirmationForSession({
             storePath,
             sessionKey: liveChatSessionKey,
+            pending: clearedPending,
           });
         }
         return jsonResult(scheduled);
