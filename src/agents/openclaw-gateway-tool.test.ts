@@ -17,6 +17,26 @@ const appUpdateMockState = vi.hoisted(() => ({
   gatewayRestartRequired: true,
   supportsCheck: true,
 }));
+const restartMockState = vi.hoisted(() => ({ schedulingFails: false }));
+
+vi.mock("../infra/restart.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/restart.js")>();
+  return {
+    ...actual,
+    requestGatewayToolRestart: vi.fn(async (options) =>
+      restartMockState.schedulingFails
+        ? {
+            ok: false,
+            method: "launchd-handoff" as const,
+            restartMode: "external-supervised" as const,
+            delayMs: options?.delayMs ?? 0,
+            detail: "test scheduling failure",
+            verified: false as const,
+          }
+        : actual.requestGatewayToolRestart(options),
+    ),
+  };
+});
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(
@@ -274,6 +294,36 @@ describe("gateway tool", () => {
       restartTesting.resetSigusr1State();
       kill.mockRestore();
       vi.useRealTimers();
+    }
+  });
+
+  it("preserves pending protected-action consent when routine restart scheduling fails", async () => {
+    const pending = createPendingRestartConfirmation({ now: Date.now() - 1_000 });
+    const { storePath, sessionKey } = await createSessionStoreFixture({
+      entry: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt,
+        pendingRestartConfirmation: pending,
+      },
+    });
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true, restartConfirmation: false },
+      session: { store: storePath },
+    });
+    restartMockState.schedulingFails = true;
+
+    try {
+      const result = await tool.execute("restart-scheduling-fails", {
+        action: "restart",
+        delayMs: 0,
+      });
+
+      expect(result.details).toMatchObject({ ok: false, detail: "test scheduling failure" });
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toHaveProperty(
+        "pendingRestartConfirmation",
+      );
+    } finally {
+      restartMockState.schedulingFails = false;
     }
   });
 

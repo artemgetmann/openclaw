@@ -168,11 +168,6 @@ export function createGatewayTool(opts?: {
         // also change config, source, or the installed application.
         if (restartConfirmationRequired) {
           await requirePendingRestartConfirmation();
-        } else if (liveChatSessionKey) {
-          await clearPendingRestartConfirmationForSession({
-            storePath,
-            sessionKey: liveChatSessionKey,
-          });
         }
         const sessionKey = resolveCurrentSessionKey();
         const delayMs =
@@ -216,6 +211,15 @@ export function createGatewayTool(opts?: {
           delayMs,
           reason,
         });
+        if (!restartConfirmationRequired && scheduled.ok && liveChatSessionKey) {
+          // A successful routine restart supersedes any older protected-action
+          // approval. Preserve that approval when scheduling fails so the owner
+          // is not forced through the confirmation flow again for no reason.
+          await clearPendingRestartConfirmationForSession({
+            storePath,
+            sessionKey: liveChatSessionKey,
+          });
+        }
         return jsonResult(scheduled);
       }
 
