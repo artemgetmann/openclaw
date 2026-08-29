@@ -590,6 +590,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.cliBackends.*.liveSession",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.cliBackends.*.maxPromptArgChars",
       "kind": "core",
       "type": "integer",
@@ -861,6 +871,16 @@
     },
     {
       "path": "agents.defaults.cliBackends.*.systemPromptArg",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.cliBackends.*.systemPromptFileArg",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -1636,6 +1656,46 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.heartbeat.managedRoute",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.heartbeat.managedRoute.accountId",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.heartbeat.managedRoute.target",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.heartbeat.managedRoute.to",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.heartbeat.model",
       "kind": "core",
       "type": "string",
@@ -1703,6 +1763,20 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.heartbeat.weekendMode",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "automation"
+      ],
+      "label": "Heartbeat Weekend Mode",
+      "help": "Controls ambient Saturday/Sunday behavior: \"urgent-only\" (default), \"normal\", or \"off\". Explicit event-driven wakes can still run immediately.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.humanDelay",
       "kind": "core",
       "type": "object",
@@ -1752,6 +1826,58 @@
       ],
       "label": "Human Delay Mode",
       "help": "Delay style for block replies (\"off\", \"natural\", \"custom\").",
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.imageGenerationModel",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.imageGenerationModel.fallbacks",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "media",
+        "reliability"
+      ],
+      "label": "Image Generation Fallbacks",
+      "help": "Ordered fallback image-generation models (provider/model).",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.imageGenerationModel.fallbacks.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.imageGenerationModel.primary",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "media"
+      ],
+      "label": "Image Generation Model",
+      "help": "Optional image-generation model (provider/model) used by the native image_generate tool.",
       "hasChildren": false
     },
     {
@@ -2933,6 +3059,86 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.replyRunWatchdog",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.replyRunWatchdog.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.replyRunWatchdog.intervalMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.replyRunWatchdog.text",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.replyTimeoutContinuation",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.replyTimeoutContinuation.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.replyTimeoutContinuation.maxAttempts",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.replyTimeoutContinuation.statusText",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.repoRoot",
       "kind": "core",
       "type": "string",
@@ -4100,6 +4306,20 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.groupChat.visibleReplies",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "automatic",
+        "message_tool"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.heartbeat",
       "kind": "core",
       "type": "object",
@@ -4226,6 +4446,46 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.heartbeat.managedRoute",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.heartbeat.managedRoute.accountId",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.heartbeat.managedRoute.target",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.heartbeat.managedRoute.to",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.heartbeat.model",
       "kind": "core",
       "type": "string",
@@ -4290,6 +4550,19 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.heartbeat.weekendMode",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "automation"
+      ],
+      "label": "Heartbeat Weekend Mode",
       "hasChildren": false
     },
     {
@@ -6647,6 +6920,26 @@
       "hasChildren": true
     },
     {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.allowedFlags",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.allowedFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.tools.exec.safeBinProfiles.*.allowedValueFlags",
       "kind": "core",
       "type": "array",
@@ -6667,6 +6960,152 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.allowUnknownOptions",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilies",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilies.*",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilies.*.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions.*.allowedFlags",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions.*.allowedFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions.*.allowedValueFlags",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions.*.allowedValueFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions.*.family",
+      "kind": "core",
+      "type": "array",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions.*.family.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions.*.guardedValueFlags",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.commandFamilyOptions.*.guardedValueFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "forbid",
+        "pathOrSafeLiteral",
+        "safeLiteral",
+        "stdinOnly"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.tools.exec.safeBinProfiles.*.deniedFlags",
       "kind": "core",
       "type": "array",
@@ -6681,6 +7120,32 @@
       "kind": "core",
       "type": "string",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.guardedValueFlags",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.guardedValueFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "forbid",
+        "pathOrSafeLiteral",
+        "safeLiteral",
+        "stdinOnly"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -8011,6 +8476,20 @@
       "hasChildren": false
     },
     {
+      "path": "browser.profiles.*.cloneFromUserProfile",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Clone Browser Profile From User",
+      "help": "Seeds this profile by cloning the user's local Chrome state before launch. Use for separate signed-in browser windows that should reuse cookies without taking over the live Chrome process.",
+      "hasChildren": false
+    },
+    {
       "path": "browser.profiles.*.color",
       "kind": "core",
       "type": "string",
@@ -8035,7 +8514,63 @@
         "storage"
       ],
       "label": "Browser Profile Driver",
-      "help": "Per-profile browser driver mode. Use \"openclaw\" (or legacy \"clawd\") for CDP-based profiles, or use \"existing-session\" for host-local Chrome MCP attachment.",
+      "help": "Per-profile browser driver mode. Use \"openclaw\" (or legacy \"clawd\") for CDP-based profiles, or use \"existing-session\" for host-local Chrome DevTools MCP attachment.",
+      "hasChildren": false
+    },
+    {
+      "path": "browser.profiles.*.profileDirectory",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Browser Profile Directory",
+      "help": "Optional Chromium profile directory name for existing-session lanes (for example \"Default\" or \"Profile 4\"). Use this as operator intent metadata when a lane is meant to target one exact signed-in browser profile.",
+      "hasChildren": false
+    },
+    {
+      "path": "browser.profiles.*.sourceChromeDir",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Browser Profile Source Chrome Dir",
+      "help": "Optional source Chrome user-data root used when cloneFromUserProfile is enabled. Leave unset to auto-detect the standard Chrome data directory for the current OS.",
+      "hasChildren": false
+    },
+    {
+      "path": "browser.profiles.*.sourceProfileName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Browser Profile Source Profile Name",
+      "help": "Optional source Chrome profile directory name used when cloneFromUserProfile is enabled. Leave unset to auto-detect the most recently used Chrome profile from Local State.",
+      "hasChildren": false
+    },
+    {
+      "path": "browser.profiles.*.userDataDir",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Browser Profile User Data Dir",
+      "help": "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for host-local Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory.",
       "hasChildren": false
     },
     {
@@ -8564,7 +9099,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -9105,7 +9641,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -10896,7 +11433,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -11203,6 +11741,16 @@
     },
     {
       "path": "channels.discord.accounts.*.threadBindings.spawnAcpSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.threadBindings.spawnSessions",
       "kind": "channel",
       "type": "boolean",
       "required": false,
@@ -13739,7 +14287,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -14134,7 +14683,23 @@
         "storage"
       ],
       "label": "Discord Thread-Bound ACP Spawn",
-      "help": "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+      "help": "Deprecated. Use channels.discord.threadBindings.spawnSessions instead.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.threadBindings.spawnSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network",
+        "storage"
+      ],
+      "label": "Discord Thread-Bound Session Spawn",
+      "help": "Allow session spawns with thread=true to auto-create and bind Discord threads.",
       "hasChildren": false
     },
     {
@@ -14150,7 +14715,7 @@
         "storage"
       ],
       "label": "Discord Thread-Bound Subagent Spawn",
-      "help": "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+      "help": "Deprecated. Use channels.discord.threadBindings.spawnSessions instead.",
       "hasChildren": false
     },
     {
@@ -18917,7 +19482,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -19592,7 +20158,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -20228,7 +20795,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -20965,7 +21533,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -22305,7 +22874,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -23048,7 +23618,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -23557,7 +24128,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -24042,7 +24614,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -24957,7 +25530,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -25555,7 +26129,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -25894,7 +26469,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -26692,7 +27268,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -27446,7 +28023,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -28539,7 +29117,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -29943,7 +30522,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -31968,7 +32548,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -32141,6 +32722,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.richMessages",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.streaming",
       "kind": "channel",
       "type": [
@@ -32226,6 +32817,16 @@
     },
     {
       "path": "channels.telegram.accounts.*.threadBindings.spawnAcpSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.threadBindings.spawnSessions",
       "kind": "channel",
       "type": "boolean",
       "required": false,
@@ -33935,7 +34536,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -34138,6 +34740,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.richMessages",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.streaming",
       "kind": "channel",
       "type": [
@@ -34258,7 +34870,23 @@
         "storage"
       ],
       "label": "Telegram Thread-Bound ACP Spawn",
-      "help": "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
+      "help": "Deprecated. Use channels.telegram.threadBindings.spawnSessions instead.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.threadBindings.spawnSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network",
+        "storage"
+      ],
+      "label": "Telegram Thread-Bound Session Spawn",
+      "help": "Allow session spawns with thread=true to auto-bind Telegram current conversations when supported.",
       "hasChildren": false
     },
     {
@@ -34274,7 +34902,7 @@
         "storage"
       ],
       "label": "Telegram Thread-Bound Subagent Spawn",
-      "help": "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
+      "help": "Deprecated. Use channels.telegram.threadBindings.spawnSessions instead.",
       "hasChildren": false
     },
     {
@@ -35161,6 +35789,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "block",
         "bullets",
         "code",
         "off"
@@ -35828,7 +36457,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -36525,7 +37155,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -36781,7 +37412,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -37059,7 +37691,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -37459,7 +38092,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -37761,7 +38395,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -37859,7 +38494,8 @@
         "native": "auto",
         "nativeSkills": "auto",
         "ownerDisplay": "raw",
-        "restart": true
+        "restart": true,
+        "restartConfirmation": true
       },
       "deprecated": false,
       "sensitive": false,
@@ -38072,6 +38708,21 @@
       ],
       "label": "Allow Restart",
       "help": "Allow /restart and gateway restart tool actions (default: true).",
+      "hasChildren": false
+    },
+    {
+      "path": "commands.restartConfirmation",
+      "kind": "core",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Require Restart Confirmation",
+      "help": "Require a separate confirmation turn before a live-chat gateway restart (default: true). Set false only when the owner treats restarts as routine task execution.",
       "hasChildren": false
     },
     {
@@ -40903,6 +41554,16 @@
       "hasChildren": false
     },
     {
+      "path": "hooks.gmail.monitorEvents",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "hooks.gmail.pushToken",
       "kind": "core",
       "type": "string",
@@ -41845,6 +42506,251 @@
       "hasChildren": false
     },
     {
+      "path": "jarvis",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Jarvis Commercial Backend",
+      "hasChildren": true
+    },
+    {
+      "path": "jarvis.backend",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Jarvis Backend",
+      "hasChildren": true
+    },
+    {
+      "path": "jarvis.backend.accessToken",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "security"
+      ],
+      "label": "Jarvis Backend Access Token",
+      "hasChildren": true
+    },
+    {
+      "path": "jarvis.backend.accessToken.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.accessToken.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.accessToken.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.account",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "jarvis.backend.account.accountId",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.account.email",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.account.license",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.accountAccessToken",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "security"
+      ],
+      "label": "Jarvis Account Access Token",
+      "hasChildren": true
+    },
+    {
+      "path": "jarvis.backend.accountAccessToken.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.accountAccessToken.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.accountAccessToken.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.accountEmail",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Jarvis Account Email",
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Jarvis Backend URL",
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.deviceId",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Jarvis Device ID",
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.backend.timeoutMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Jarvis Backend Timeout (ms)",
+      "hasChildren": false
+    },
+    {
+      "path": "jarvis.managedServices",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Jarvis Managed Services",
+      "hasChildren": true
+    },
+    {
+      "path": "jarvis.managedServices.mode",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "license-only",
+        "managed"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Jarvis Managed Services Mode",
+      "hasChildren": false
+    },
+    {
       "path": "logging",
       "kind": "core",
       "type": "object",
@@ -42662,6 +43568,20 @@
       "kind": "core",
       "type": "string",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.groupChat.visibleReplies",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "automatic",
+        "message_tool"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -43778,6 +44698,20 @@
       "hasChildren": false
     },
     {
+      "path": "messages.visibleReplies",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "automatic",
+        "message_tool"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "meta",
       "kind": "core",
       "type": "object",
@@ -44758,6 +45692,30 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.acpx.config.agentCommands",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "ACP Agent Commands",
+      "help": "Optional per-agent ACP adapter commands. OpenClaw plugin configuration takes precedence over machine-global ACPX configuration.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.acpx.config.agentCommands.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.acpx.config.command",
       "kind": "plugin",
       "type": "string",
@@ -44796,7 +45754,7 @@
         "advanced"
       ],
       "label": "Expected acpx Version",
-      "help": "Exact version to enforce (for example 0.1.16) or \"any\" to skip strict version matching.",
+      "help": "Exact version to enforce (for example the packaged acpx dependency version) or \"any\" to skip strict version matching.",
       "hasChildren": false
     },
     {
@@ -45397,6 +46355,174 @@
     },
     {
       "path": "plugins.entries.cloudflare-ai-gateway.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.codex",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Codex",
+      "help": "Native Codex App Server thread-control compatibility pilot. (plugin: codex)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.codex.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Codex Config",
+      "help": "Plugin-defined config payload for codex.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.codex.config.args",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "defaultValue": [
+        "app-server",
+        "--listen",
+        "stdio://"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.codex.config.args.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.codex.config.command",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "defaultValue": "codex",
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.codex.config.defaultWorkspaceDir",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.codex.config.protectedWorkspaceDirs",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "defaultValue": [],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.codex.config.protectedWorkspaceDirs.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.codex.config.requestTimeoutMs",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "defaultValue": 30000,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.codex.config.turnTimeoutMs",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "defaultValue": 1200000,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.codex.config.worktreesRoot",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.codex.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable Codex",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.codex.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.codex.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -47388,7 +48514,7 @@
         "storage"
       ],
       "label": "OpenAI API Key",
-      "help": "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+      "help": "API key for OpenAI embeddings (or use ${OPENAI_NON_MODEL_API_KEY})",
       "hasChildren": false
     },
     {
@@ -52801,7 +53927,7 @@
         "storage"
       ],
       "label": "Session Reset Policy",
-      "help": "Defines the default reset policy object used when no type-specific or channel-specific override applies. Set this first, then layer resetByType or resetByChannel only where behavior must differ.",
+      "help": "Defines the default reset policy object used when no type-specific or channel-specific override applies. Manual mode keeps chats persistent until an explicit reset, while daily and idle remain available for shorter-lived workflows.",
       "hasChildren": true
     },
     {
@@ -52843,7 +53969,7 @@
         "storage"
       ],
       "label": "Session Reset Mode",
-      "help": "Selects reset strategy: \"daily\" resets at a configured hour and \"idle\" resets after inactivity windows. Keep one clear mode per policy to avoid surprising context turnover patterns.",
+      "help": "Selects reset strategy: \"manual\" keeps chats until /new or /reset, \"daily\" resets at a configured hour, and \"idle\" resets after inactivity windows. Keep one clear mode per policy to avoid surprising context turnover patterns.",
       "hasChildren": false
     },
     {
@@ -53342,6 +54468,20 @@
       ],
       "label": "Thread Binding Max Age (hours)",
       "help": "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
+      "hasChildren": false
+    },
+    {
+      "path": "session.threadBindings.spawnSessions",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Thread-Bound Session Spawn",
+      "help": "Default switch for channel integrations that create thread-bound work sessions from sessions_spawn or native ACP spawn flows.",
       "hasChildren": false
     },
     {
@@ -54525,6 +55665,26 @@
       "hasChildren": true
     },
     {
+      "path": "tools.exec.safeBinProfiles.*.allowedFlags",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.allowedFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.exec.safeBinProfiles.*.allowedValueFlags",
       "kind": "core",
       "type": "array",
@@ -54545,6 +55705,152 @@
       "hasChildren": false
     },
     {
+      "path": "tools.exec.safeBinProfiles.*.allowUnknownOptions",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilies",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilies.*",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilies.*.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions.*.allowedFlags",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions.*.allowedFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions.*.allowedValueFlags",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions.*.allowedValueFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions.*.family",
+      "kind": "core",
+      "type": "array",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions.*.family.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions.*.guardedValueFlags",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.commandFamilyOptions.*.guardedValueFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "forbid",
+        "pathOrSafeLiteral",
+        "safeLiteral",
+        "stdinOnly"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.exec.safeBinProfiles.*.deniedFlags",
       "kind": "core",
       "type": "array",
@@ -54559,6 +55865,32 @@
       "kind": "core",
       "type": "string",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.guardedValueFlags",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.guardedValueFlags.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "forbid",
+        "pathOrSafeLiteral",
+        "safeLiteral",
+        "stdinOnly"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
