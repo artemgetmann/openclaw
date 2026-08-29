@@ -1790,6 +1790,7 @@ export async function runEmbeddedAttempt(
       contextFiles,
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
+      restartConfirmationRequired: params.config?.commands?.restartConfirmation !== false,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
