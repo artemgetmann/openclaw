@@ -138,6 +138,21 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(CONSUMER_DEFAULT_BUNDLED_SKILLS).not.toContain("workspace-only");
   });
 
+  it("does not enable Apple Notes for fresh or previously generated consumer configs", () => {
+    const fresh = apply({});
+    expect(fresh.skills?.allowBundled).not.toContain("apple-notes");
+    expect(fresh.skills?.entries?.["apple-notes"]?.enabled).toBe(false);
+
+    const previousGeneratedAllowlist = [...CONSUMER_DEFAULT_BUNDLED_SKILLS, "apple-notes"];
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: previousGeneratedAllowlist },
+    });
+
+    expect(repaired.config.skills?.allowBundled).not.toContain("apple-notes");
+    expect(repaired.config.skills?.entries?.["apple-notes"]?.enabled).toBe(false);
+    expect(repaired.changes).toContain("skills.allowBundled -= apple-notes");
+  });
+
   it("repairs legacy generated consumer allowlists with newly bundled defaults", () => {
     const legacyGeneratedAllowlist = [
       "consumer-setup",
@@ -157,9 +172,12 @@ describe("applyNonInteractiveSkillsConfig", () => {
       skills: { allowBundled: legacyGeneratedAllowlist },
     });
 
-    expect(repaired.changes).toEqual([
-      expect.stringContaining("skills.allowBundled += checkpoint,goal-mode"),
-    ]);
+    expect(repaired.changes).toEqual(
+      expect.arrayContaining([
+        "skills.allowBundled -= apple-notes",
+        expect.stringContaining("skills.allowBundled += checkpoint,goal-mode"),
+      ]),
+    );
     expect(repaired.config.skills?.allowBundled?.indexOf("jarvis-computer-use")).toBe(
       (repaired.config.skills?.allowBundled?.indexOf("peekaboo") ?? 0) - 1,
     );
@@ -210,7 +228,83 @@ describe("applyNonInteractiveSkillsConfig", () => {
     });
 
     expect(repaired.config.skills?.allowBundled).toEqual(customAllowlist);
+    expect(repaired.changes).toEqual(["skills.entries.apple-notes.enabled = false"]);
+  });
+
+  it("disables an inherited Apple Notes entry in a custom allowlist", () => {
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: ["custom-skill", "apple-notes"] },
+    });
+
+    expect(repaired.config.skills?.allowBundled).toEqual(["custom-skill"]);
+    expect(repaired.config.skills?.entries?.["apple-notes"]?.enabled).toBe(false);
+    expect(repaired.changes).toEqual([
+      "skills.allowBundled -= apple-notes",
+      "skills.entries.apple-notes.enabled = false",
+    ]);
+  });
+
+  it("preserves an explicit Apple Notes opt-in", () => {
+    const config: OpenClawConfig = {
+      skills: {
+        allowBundled: ["custom-skill", "apple-notes"],
+        entries: { "apple-notes": { enabled: true } },
+      },
+    };
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist(config);
+
+    expect(repaired.config).toBe(config);
     expect(repaired.changes).toEqual([]);
+  });
+
+  it("repairs generated defaults without removing an explicit Apple Notes opt-in", () => {
+    const previousGeneratedAllowlist = [
+      ...CONSUMER_DEFAULT_BUNDLED_SKILLS.filter((skillName) => skillName !== "session-logs"),
+      "apple-notes",
+    ];
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: {
+        allowBundled: previousGeneratedAllowlist,
+        entries: { "apple-notes": { enabled: true } },
+      },
+    });
+
+    expect(repaired.config.skills?.allowBundled).toContain("apple-notes");
+    expect(repaired.config.skills?.allowBundled).toContain("session-logs");
+    expect(repaired.config.skills?.entries?.["apple-notes"]?.enabled).toBe(true);
+    expect(repaired.changes).toContain("skills.allowBundled += session-logs");
+
+    const secondRepair = repairConsumerDefaultBundledSkillAllowlist(repaired.config);
+    expect(secondRepair.config).toBe(repaired.config);
+    expect(secondRepair.changes).toEqual([]);
+  });
+
+  it("adds an explicitly enabled Apple Notes skill to a generated allowlist", () => {
+    const next = apply({
+      skills: { entries: { "apple-notes": { enabled: true } } },
+    });
+
+    expect(next.skills?.allowBundled).toContain("apple-notes");
+    expect(next.skills?.entries?.["apple-notes"]?.enabled).toBe(true);
+  });
+
+  it("restores an explicitly enabled Apple Notes skill during startup repair", () => {
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: {
+        allowBundled: [...CONSUMER_DEFAULT_BUNDLED_SKILLS],
+        entries: { "apple-notes": { enabled: true } },
+      },
+    });
+
+    expect(repaired.config.skills?.allowBundled).toContain("apple-notes");
+    expect(repaired.config.skills?.entries?.["apple-notes"]?.enabled).toBe(true);
+    expect(repaired.changes).toContain("skills.allowBundled += apple-notes");
+
+    const secondRepair = repairConsumerDefaultBundledSkillAllowlist(repaired.config);
+    expect(secondRepair.config).toBe(repaired.config);
+    expect(secondRepair.changes).toEqual([]);
   });
 
   it("renames legacy Jarvis GUI Control allowlist entries without widening custom allowlists", () => {
@@ -220,6 +314,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
 
     expect(repaired.changes).toEqual([
       "skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use",
+      "skills.entries.apple-notes.enabled = false",
     ]);
     expect(repaired.config.skills?.allowBundled).toEqual(["jarvis-computer-use"]);
   });
@@ -307,12 +402,12 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(repaired.config).toBe(config);
   });
 
-  it("does not repair custom bundled skill allowlists", () => {
+  it("preserves custom bundled skill allowlists while disabling Apple Notes", () => {
     const repaired = repairConsumerDefaultBundledSkillAllowlist({
       skills: { allowBundled: ["custom-skill", "checkpoint"] },
     });
 
-    expect(repaired.changes).toEqual([]);
+    expect(repaired.changes).toEqual(["skills.entries.apple-notes.enabled = false"]);
     expect(repaired.config.skills?.allowBundled).toEqual(["custom-skill", "checkpoint"]);
   });
 

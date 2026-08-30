@@ -195,6 +195,7 @@ describe("runGatewayStartupConfigPreflight", () => {
         managedServices: { mode: "managed" as const },
         backend: { baseUrl: "https://jarvis.example.invalid" },
       },
+      skills: { entries: { "apple-notes": { enabled: false } } },
       auth: {
         profiles: {
           "openai-codex:default": { provider: "openai-codex", mode: "oauth" as const },
@@ -287,6 +288,7 @@ describe("runGatewayStartupConfigPreflight", () => {
       "openclaw.json",
     );
     const staleConfig: OpenClawConfig = {
+      skills: { entries: { "apple-notes": { enabled: false } } },
       agents: {
         defaults: { workspace: legacyWorkspace },
         list: [
@@ -296,6 +298,7 @@ describe("runGatewayStartupConfigPreflight", () => {
       },
     };
     const migratedConfig: OpenClawConfig = {
+      skills: { entries: { "apple-notes": { enabled: false } } },
       agents: {
         defaults: { workspace: canonicalWorkspace },
         list: [
@@ -362,6 +365,7 @@ describe("runGatewayStartupConfigPreflight", () => {
           config: {
             skills: {
               allowBundled: repairedAllowBundled,
+              entries: { "apple-notes": { enabled: false } },
             },
           },
         }),
@@ -379,6 +383,7 @@ describe("runGatewayStartupConfigPreflight", () => {
 
     const writtenConfig = writeConfig.mock.calls[0]?.[0];
     expect(writtenConfig?.skills?.allowBundled).toEqual(repairedAllowBundled);
+    expect(writtenConfig?.skills?.entries?.["apple-notes"]?.enabled).toBe(false);
     expect(repairedAllowBundled.indexOf("jarvis-computer-use")).toBe(
       repairedAllowBundled.indexOf("peekaboo") - 1,
     );
@@ -402,7 +407,10 @@ describe("runGatewayStartupConfigPreflight", () => {
       "openclaw.json",
     );
     const config: OpenClawConfig = {
-      skills: { allowBundled: ["wacli", "discord"] },
+      skills: {
+        allowBundled: ["wacli", "discord"],
+        entries: { "apple-notes": { enabled: false } },
+      },
     };
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
@@ -447,7 +455,10 @@ describe("runGatewayStartupConfigPreflight", () => {
     };
     const repairedConfig: OpenClawConfig = {
       skills: {
-        entries: { "jarvis-computer-use": { enabled: false } },
+        entries: {
+          "apple-notes": { enabled: false },
+          "jarvis-computer-use": { enabled: false },
+        },
       },
     };
     const readSnapshot = vi
@@ -734,7 +745,10 @@ describe("runGatewayStartupConfigPreflight", () => {
       "openclaw.json",
     );
     const narrowedConfig: OpenClawConfig = {
-      skills: { allowBundled: ["peekaboo"] },
+      skills: {
+        allowBundled: ["peekaboo"],
+        entries: { "apple-notes": { enabled: false } },
+      },
     };
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()

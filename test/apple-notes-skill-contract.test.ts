@@ -6,6 +6,10 @@ function readAppleNotesSkill(): string {
   return readFileSync(path.join(process.cwd(), "skills", "apple-notes", "SKILL.md"), "utf8");
 }
 
+function readConsumerSetupSkill(): string {
+  return readFileSync(path.join(process.cwd(), "skills", "consumer-setup", "SKILL.md"), "utf8");
+}
+
 describe("Apple Notes skill contract", () => {
   it("creates notes through memo's folder-scoped editor flow", () => {
     const skill = readAppleNotesSkill();
@@ -15,5 +19,16 @@ describe("Apple Notes skill contract", () => {
     expect(skill).toContain('memo notes -f "Folder Name" -a');
     expect(skill).toContain("Enter the title and body in the editor");
     expect(skill).not.toContain('memo notes -a "Note Title"');
+  });
+
+  it("keeps setup discoverable only for explicit Apple Notes opt-ins", () => {
+    const consumerSetup = readConsumerSetupSkill();
+
+    expect(consumerSetup).toContain("an explicitly enabled Apple Notes integration");
+    expect(consumerSetup).toContain("### Apple Notes (explicit opt-in only)");
+    expect(consumerSetup).toContain("`skills.entries.apple-notes.enabled` is explicitly `true`");
+    expect(consumerSetup).toContain(
+      "Do not create, edit, move, or delete a note merely to test setup.",
+    );
   });
 });
