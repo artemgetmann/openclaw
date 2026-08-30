@@ -10,7 +10,6 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "message-drafting",
   "personal-tone-of-voice",
   "skill-runtime",
-  "apple-notes",
   "apple-reminders",
   "documents",
   "pdf",
@@ -53,10 +52,11 @@ export const LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES: Readonly<Record<string, stri
   "jarvis-gui-control": "jarvis-computer-use",
 };
 
-// These were briefly shipped as consumer defaults even though they are
-// personal Codex/Jarvis workflow tools. Keep their names only long enough to
-// recognize and repair generated allowlists from that release.
+// These were shipped as consumer defaults but are no longer safe or appropriate
+// to enable automatically. Keep their names here so generated configs are
+// repaired on update without removing an operator's genuinely custom opt-in.
 const RETIRED_CONSUMER_DEFAULT_BUNDLED_SKILLS = new Set([
+  "apple-notes",
   "plain-language",
   "builder-priority-triage",
 ]);
@@ -78,6 +78,12 @@ export function buildConsumerBundledSkillAllowlist(config: OpenClawConfig): stri
     allowed.add(skillName);
   }
 
+  // A deliberate entry-level opt-in must remain usable after onboarding creates
+  // a populated bundled allowlist. Default configs never enter this branch.
+  if (config.skills?.entries?.["apple-notes"]?.enabled === true && !allowed.has("apple-notes")) {
+    allowlist.push("apple-notes");
+  }
+
   return allowlist;
 }
 
@@ -97,48 +103,100 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   const workingConfig = entryMigration.config;
   const normalizedAllowlist = normalizeLegacyBundledSkillNames(currentAllowlist, workingConfig);
   const renameChanged = !sameStringArray(currentAllowlist, normalizedAllowlist);
+  const appleNotesExplicitlyEnabled =
+    workingConfig.skills?.entries?.["apple-notes"]?.enabled === true;
+  // Startup repair is the durable opt-in path. An earlier default-disable may
+  // already have removed Apple Notes from the populated bundled allowlist, so
+  // changing only the documented entry flag must restore the exact skill.
+  const appleNotesAddedForOptIn =
+    appleNotesExplicitlyEnabled && !normalizedAllowlist.includes("apple-notes");
+  const optInAwareAllowlist = appleNotesAddedForOptIn
+    ? [...normalizedAllowlist, "apple-notes"]
+    : normalizedAllowlist;
+  const appleNotesDisabled =
+    !appleNotesExplicitlyEnabled &&
+    workingConfig.skills?.entries?.["apple-notes"]?.enabled !== false;
+  const safeWorkingConfig = appleNotesDisabled
+    ? {
+        ...workingConfig,
+        skills: {
+          ...workingConfig.skills,
+          entries: {
+            ...workingConfig.skills?.entries,
+            "apple-notes": {
+              ...workingConfig.skills?.entries?.["apple-notes"],
+              enabled: false,
+            },
+          },
+        },
+      }
+    : workingConfig;
   const defaultSkills = new Set<string>(CONSUMER_DEFAULT_BUNDLED_SKILLS);
-  const allowlistWithoutRetiredDefaults = normalizedAllowlist.filter(
+  const allowlistWithoutRetiredDefaults = optInAwareAllowlist.filter(
+    (skillName) =>
+      !RETIRED_CONSUMER_DEFAULT_BUNDLED_SKILLS.has(skillName) ||
+      (skillName === "apple-notes" && appleNotesExplicitlyEnabled),
+  );
+  // Explicit opt-in keeps Apple Notes usable, but it must not make an otherwise
+  // generated list look custom and miss later default-list repairs.
+  const allowlistForGeneratedDetection = optInAwareAllowlist.filter(
     (skillName) => !RETIRED_CONSUMER_DEFAULT_BUNDLED_SKILLS.has(skillName),
   );
-  const hasEnoughDefaultSkillsToLookGenerated = allowlistWithoutRetiredDefaults.length >= 3;
+  const hasEnoughDefaultSkillsToLookGenerated = allowlistForGeneratedDetection.length >= 3;
   const looksLikeGeneratedConsumerDefault =
     hasEnoughDefaultSkillsToLookGenerated &&
-    allowlistWithoutRetiredDefaults.every((skillName) => defaultSkills.has(skillName));
+    allowlistForGeneratedDetection.every((skillName) => defaultSkills.has(skillName));
 
   if (!looksLikeGeneratedConsumerDefault) {
-    if (!renameChanged && entryMigration.changes.length === 0) {
+    const appleNotesRemoved =
+      !appleNotesExplicitlyEnabled && optInAwareAllowlist.includes("apple-notes");
+    const safeCustomAllowlist = appleNotesRemoved
+      ? optInAwareAllowlist.filter((skillName) => skillName !== "apple-notes")
+      : optInAwareAllowlist;
+    if (
+      !renameChanged &&
+      !appleNotesAddedForOptIn &&
+      !appleNotesRemoved &&
+      !appleNotesDisabled &&
+      entryMigration.changes.length === 0
+    ) {
       return { config, changes: [] };
     }
     return {
-      config: renameChanged
-        ? {
-            ...workingConfig,
-            skills: {
-              ...workingConfig.skills,
-              allowBundled: normalizedAllowlist,
-            },
-          }
-        : workingConfig,
+      config:
+        renameChanged || appleNotesAddedForOptIn || appleNotesRemoved
+          ? {
+              ...safeWorkingConfig,
+              skills: {
+                ...safeWorkingConfig.skills,
+                allowBundled: safeCustomAllowlist,
+              },
+            }
+          : safeWorkingConfig,
       changes: [
         ...entryMigration.changes,
         ...(renameChanged
           ? ["skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use"]
           : []),
+        ...(appleNotesAddedForOptIn ? ["skills.allowBundled += apple-notes"] : []),
+        ...(appleNotesRemoved ? ["skills.allowBundled -= apple-notes"] : []),
+        ...(appleNotesDisabled ? ["skills.entries.apple-notes.enabled = false"] : []),
       ],
     };
   }
 
   // Only generated lists are product-owned. A custom list may intentionally
   // reference an externally installed skill with the same name, so preserve it.
-  const retiredDefaultsRemoved = normalizedAllowlist.filter((skillName) =>
-    RETIRED_CONSUMER_DEFAULT_BUNDLED_SKILLS.has(skillName),
+  const retiredDefaultsRemoved = optInAwareAllowlist.filter(
+    (skillName) =>
+      RETIRED_CONSUMER_DEFAULT_BUNDLED_SKILLS.has(skillName) &&
+      !(skillName === "apple-notes" && appleNotesExplicitlyEnabled),
   );
   const nextAllowlist = [...allowlistWithoutRetiredDefaults];
   const current = new Set(nextAllowlist);
   const added: string[] = [];
   for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
-    const explicitlyDisabled = isBundledSkillExplicitlyDisabled(workingConfig, skillName);
+    const explicitlyDisabled = isBundledSkillExplicitlyDisabled(safeWorkingConfig, skillName);
     if (explicitlyDisabled || current.has(skillName)) {
       continue;
     }
@@ -151,6 +209,8 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
     added.length === 0 &&
     retiredDefaultsRemoved.length === 0 &&
     !renameChanged &&
+    !appleNotesAddedForOptIn &&
+    !appleNotesDisabled &&
     entryMigration.changes.length === 0
   ) {
     return { config, changes: [] };
@@ -160,18 +220,24 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   if (renameChanged) {
     changes.push("skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use");
   }
+  if (appleNotesAddedForOptIn) {
+    changes.push("skills.allowBundled += apple-notes");
+  }
   if (retiredDefaultsRemoved.length > 0) {
     changes.push(`skills.allowBundled -= ${retiredDefaultsRemoved.join(",")}`);
   }
   if (added.length > 0) {
     changes.push(`skills.allowBundled += ${added.join(",")}`);
   }
+  if (appleNotesDisabled) {
+    changes.push("skills.entries.apple-notes.enabled = false");
+  }
 
   return {
     config: {
-      ...workingConfig,
+      ...safeWorkingConfig,
       skills: {
-        ...workingConfig.skills,
+        ...safeWorkingConfig.skills,
         allowBundled: nextAllowlist,
       },
     },

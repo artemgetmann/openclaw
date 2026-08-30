@@ -1,6 +1,6 @@
 ---
 name: consumer-setup
-description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp as Me, Email, Google Workspace, Apple Notes, Apple Reminders, Telegram as Me, Google Maps Search, or creative audio. Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
+description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp as Me, Email, Google Workspace, Apple Reminders, Telegram as Me, Google Maps Search, creative audio, or an explicitly enabled Apple Notes integration. Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
@@ -284,16 +284,18 @@ details, translate only those details into friendly wording:
   refresh token is immortal: Google can still revoke it for password changes,
   user/admin revocation, long inactivity, token limits, or security policy.
 
-### Apple Notes
+### Apple Notes (explicit opt-in only)
 
+- Apple Notes is disabled by default. Use this setup route only when
+  `skills.entries.apple-notes.enabled` is explicitly `true`; do not suggest
+  enabling it as part of ordinary consumer setup.
 - Missing states usually look like: `memo` not installed or macOS Automation
   permission not granted for Notes.
-- Tell the user Apple Notes is not ready on this Mac yet.
-- Offer to help install the dependency and grant permission.
-- Once ready, keep deterministic create/delete on
-  `skills/apple-notes/scripts/apple-notes-local.sh`; do not fall back to
-  interactive `memo` flows for consumer automation unless the user explicitly
-  wants that path.
+- Tell the user the explicitly enabled Apple Notes integration is not ready on
+  this Mac yet, then offer to install the dependency or guide the exact macOS
+  permission step.
+- Once ready, verify access with a read-only list or search before any mutation.
+  Do not create, edit, move, or delete a note merely to test setup.
 
 ### Apple Reminders
 
