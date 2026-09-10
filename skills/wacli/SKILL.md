@@ -105,11 +105,21 @@ Automation Rule
 
 Voice notes and audio
 
-- When a WhatsApp message contains a voice note or audio attachment, download
-  it with
-  `wacli media download --chat <jid> --id <message-id> --output <directory> --json`,
-  then hand the downloaded file to the generic transcription route:
-  `openclaw media transcribe --file /path/to/downloaded-audio.oga --json`
+- Download an authorized voice note or audio attachment with
+  `wacli --read-only media download --chat <jid> --id <message-id> --output /absolute/path/audio.oga --json`.
+  Read-only mode writes the requested output file without recording it in the
+  shared store or taking the live sync owner's write lock. Plain `media download`
+  takes that lock; waiting longer while sync holds it does not fix this conflict.
+- Require a successful download result, then use its returned `path` and
+  `mime_type` with the generic transcription route:
+  `openclaw media transcribe --file <returned-path> --mime <returned-mime-type> --json`.
+  Preserve the MIME type even when the output filename has no extension; an
+  extensionless audio file can otherwise produce no transcript.
+- If an earlier plain download failed with `store is locked`, retry the same
+  authorized message once with `--read-only` before reporting a blocker. Never
+  stop/restart sync, copy authentication state, or bypass the lock for a download.
+  If the installed CLI rejects read-only media downloads, report that exact
+  capability gap; do not silently fall back to the lock-taking command.
 
 Time-aware WhatsApp context
 
