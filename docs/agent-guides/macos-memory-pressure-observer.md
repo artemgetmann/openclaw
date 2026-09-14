@@ -16,10 +16,10 @@ are at-most-once attempts: an ambiguous wrapper failure is recorded but never
 replayed automatically. Routine weekly healthy reports are intentionally
 suppressed.
 
-Set `OPENCLAW_MEMORY_OBSERVER_THREAD_ID` during installation to keep all memory
-notifications in one dedicated Telegram FYI topic. The topic identifier is
-stored as an explicit LaunchAgent argument; it is never hard-coded in the
-portable source.
+Set `OPENCLAW_MEMORY_OBSERVER_THREAD_ID` during installation; installation
+fails closed without it so memory notifications cannot fall back to a general
+chat. The topic identifier is stored as an explicit LaunchAgent argument and
+reused by `run-now`; it is never hard-coded in the portable source.
 
 The observer never kills processes, restarts Codex, restarts Jarvis, or reboots
 the Mac. Its recovery order is: close finished work, restart Codex when safe,

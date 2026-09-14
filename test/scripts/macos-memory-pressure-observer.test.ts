@@ -17,6 +17,8 @@ async function fixture() {
     root,
     state: path.join(root, "state.json"),
     sample: path.join(root, "sample.json"),
+    notifier: path.join(root, "notify.sh"),
+    notification: path.join(root, "notification.txt"),
   };
 }
 
@@ -24,9 +26,17 @@ async function run(
   paths: Awaited<ReturnType<typeof fixture>>,
   sample: Record<string, number>,
   nowMs = Date.parse("2026-08-02T10:30:00+08:00"),
-  options: { dryRun?: boolean; notifyCommand?: string } = { dryRun: true },
+  options: { dryRun?: boolean; notifyCommand?: string } = {},
 ) {
   await fs.writeFile(paths.sample, JSON.stringify(sample));
+  await fs.rm(paths.notification, { force: true });
+  if (!options.notifyCommand) {
+    await fs.writeFile(
+      paths.notifier,
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "${paths.notification}"\n`,
+      { mode: 0o700 },
+    );
+  }
   const args = [
     observer,
     "--state-path",
@@ -35,14 +45,15 @@ async function run(
     paths.sample,
     "--now-ms",
     String(nowMs),
+    "--notify-command",
+    options.notifyCommand ?? paths.notifier,
   ];
-  if (options.notifyCommand) {
-    args.push("--notify-command", options.notifyCommand);
-  }
-  if (options.dryRun !== false) {
+  if (options.dryRun) {
     args.push("--dry-run");
   }
-  return execFileAsync(process.execPath, args);
+  const result = await execFileAsync(process.execPath, args);
+  const notification = await fs.readFile(paths.notification, "utf8").catch(() => "");
+  return { ...result, stdout: `${result.stdout}${notification}` };
 }
 
 const healthy = {
@@ -128,6 +139,19 @@ describe("macOS memory pressure observer", () => {
     const paths = await fixture();
     const result = await run(paths, healthy);
     expect(result.stdout).not.toContain("MEMORY_OBSERVER_NOTIFICATION");
+  });
+
+  it("does not let a dry run advance or consume live notification state", async () => {
+    const paths = await fixture();
+    for (let index = 0; index < 5; index += 1) {
+      await run(paths, warn);
+    }
+    const before = await fs.readFile(paths.state, "utf8");
+    const preview = await run(paths, warn, Date.now(), { dryRun: true });
+    expect(preview.stdout).toContain("Mac memory pressure has stayed high");
+    expect(await fs.readFile(paths.state, "utf8")).toBe(before);
+    const delivered = await run(paths, warn);
+    expect(delivered.stdout).toContain("Mac memory pressure has stayed high");
   });
 
   it("fails closed when durable state is corrupt", async () => {
@@ -254,6 +278,7 @@ describe("macOS memory pressure observer installer", () => {
         OPENCLAW_MEMORY_OBSERVER_PLIST_PATH: path.join(paths.root, "observer.plist"),
         OPENCLAW_MEMORY_OBSERVER_STATE_PATH: path.join(paths.root, "state.json"),
         OPENCLAW_MEMORY_OBSERVER_INSTALL_DIR: path.join(paths.root, "installed"),
+        OPENCLAW_MEMORY_OBSERVER_THREAD_ID: "31792",
       },
     });
     expect(result.stdout).toContain("<key>StartInterval</key><integer>300</integer>");
@@ -286,5 +311,41 @@ describe("macOS memory pressure observer installer", () => {
       },
     });
     expect(result.stdout).toContain("<string>--thread-id</string><string>31792</string>");
+  });
+
+  it("reuses the installed FYI topic for manual run-now executions", async () => {
+    const paths = await fixture();
+    const fakeBin = path.join(paths.root, "bin");
+    const fakeUname = path.join(fakeBin, "uname");
+    const fakeNode = path.join(fakeBin, "node");
+    const fakePlistBuddy = path.join(fakeBin, "PlistBuddy");
+    const nodeArgs = path.join(paths.root, "node-args.txt");
+    const plist = path.join(paths.root, "observer.plist");
+    await fs.mkdir(fakeBin);
+    await fs.writeFile(fakeUname, "#!/bin/sh\nprintf 'Darwin\\n'\n", { mode: 0o700 });
+    await fs.writeFile(
+      fakeNode,
+      `#!/bin/sh\nif [ "$1" = "-p" ]; then printf '22.22.1\\n'; exit 0; fi\nprintf '%s\\n' "$@" > "${nodeArgs}"\n`,
+      { mode: 0o700 },
+    );
+    await fs.writeFile(
+      fakePlistBuddy,
+      "#!/bin/sh\nprintf 'Array {\\n  /usr/bin/node\\n  observer.mjs\\n  --thread-id\\n  31792\\n}\\n'\n",
+      { mode: 0o700 },
+    );
+    await fs.writeFile(plist, "fixture");
+    await execFileAsync("/bin/bash", [installer, "run-now", "--dry-run"], {
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        OPENCLAW_MAIN_REPO: path.resolve("."),
+        OPENCLAW_NODE_BIN: fakeNode,
+        OPENCLAW_MEMORY_OBSERVER_PLIST_BUDDY_BIN: fakePlistBuddy,
+        OPENCLAW_MEMORY_OBSERVER_PLIST_PATH: plist,
+        OPENCLAW_MEMORY_OBSERVER_INSTALL_DIR: path.join(paths.root, "installed"),
+        OPENCLAW_MEMORY_OBSERVER_STATE_PATH: path.join(paths.root, "state.json"),
+      },
+    });
+    expect(await fs.readFile(nodeArgs, "utf8")).toContain("--thread-id\n31792\n");
   });
 });

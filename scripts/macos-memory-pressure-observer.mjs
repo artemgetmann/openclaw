@@ -288,6 +288,19 @@ async function main() {
     message = recoveryMessage(sample);
   }
 
+  // A dry run is a pure preview. In particular, it must not advance the live
+  // confirmation counters or consume the alert that the next scheduled run
+  // is responsible for delivering.
+  if (args.dryRun) {
+    if (message) {
+      await notify(args, message);
+    }
+    console.log(
+      `MEMORY_OBSERVER_SAMPLE observed=${observed} state=${result.state.severity} pending=${result.state.pendingCount} free_percent=${sample.freePercent} swap_used_mib=${sample.swapUsedMiB} pageouts=${sample.pageouts} swapouts=${sample.swapouts} paging_reset=${pagingReset ? 1 : 0} notification=${message ? "dry-run" : "none"}`,
+    );
+    return;
+  }
+
   // FYI delivery is deliberately at-most-once. Persist the attempt before the
   // external call so a successful Telegram send followed by a non-zero wrapper
   // exit cannot replay the same message every five minutes.

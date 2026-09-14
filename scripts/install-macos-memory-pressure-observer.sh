@@ -7,6 +7,7 @@ MAIN_REPO="${OPENCLAW_MAIN_REPO:-/Users/user/Programming_Projects/openclaw}"
 LABEL="ai.jarvis.memory-pressure-observer"
 INTERVAL_SECS="${OPENCLAW_MEMORY_OBSERVER_INTERVAL_SECS:-300}"
 LAUNCHCTL_BIN="${OPENCLAW_MEMORY_OBSERVER_LAUNCHCTL_BIN:-/bin/launchctl}"
+PLIST_BUDDY_BIN="${OPENCLAW_MEMORY_OBSERVER_PLIST_BUDDY_BIN:-/usr/libexec/PlistBuddy}"
 PLIST_PATH="${OPENCLAW_MEMORY_OBSERVER_PLIST_PATH:-${HOME}/Library/LaunchAgents/${LABEL}.plist}"
 STATE_PATH="${OPENCLAW_MEMORY_OBSERVER_STATE_PATH:-${HOME}/Library/Application Support/Jarvis/.jarvis/ops/memory-pressure-observer/state.json}"
 INSTALL_DIR="${OPENCLAW_MEMORY_OBSERVER_INSTALL_DIR:-${HOME}/Library/Application Support/Jarvis/.jarvis/ops/memory-pressure-observer}"
@@ -39,7 +40,16 @@ if [[ -n "$THREAD_ID" && ! "$THREAD_ID" =~ ^[0-9]+$ ]]; then
   echo "OPENCLAW_MEMORY_OBSERVER_THREAD_ID must be a positive integer" >&2
   exit 1
 fi
-[[ "$(uname -s)" == "Darwin" ]] || { echo "This observer supports macOS only." >&2; exit 1; }
+if [[ "$COMMAND" == "install" && -z "$THREAD_ID" ]]; then
+  echo "OPENCLAW_MEMORY_OBSERVER_THREAD_ID is required for install" >&2
+  exit 1
+fi
+# Rendering an install plan is platform-neutral and is exercised by Linux CI.
+# Every command that reads or mutates the actual service remains macOS-only.
+if [[ "$(uname -s)" != "Darwin" && ! ( "$COMMAND" == "install" && "$DRY_RUN" == "1" ) ]]; then
+  echo "This observer supports macOS only." >&2
+  exit 1
+fi
 
 SCHEDULE_ROOT="$MAIN_REPO"
 [[ -d "$SCHEDULE_ROOT/.git" ]] || SCHEDULE_ROOT="$REPO_ROOT"
@@ -89,6 +99,12 @@ EOF
   <key>StandardErrorPath</key><string>$(xml_escape "$LOG_ERR")</string>
 </dict></plist>
 EOF
+}
+
+read_installed_thread_id() {
+  [[ -f "$PLIST_PATH" ]] || return 0
+  "$PLIST_BUDDY_BIN" -c 'Print :ProgramArguments' "$PLIST_PATH" 2>/dev/null |
+    awk '/--thread-id/ { getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }'
 }
 
 install_job() {
@@ -151,7 +167,17 @@ case "$COMMAND" in
     ;;
   run-now)
     resolve_node
+    # Manual executions inherit the destination persisted in the installed
+    # LaunchAgent, so they cannot silently fall back to Codex Pings.
+    if [[ -z "$THREAD_ID" ]]; then
+      THREAD_ID="$(read_installed_thread_id)"
+    fi
+    [[ -n "$THREAD_ID" ]] || {
+      echo "Installed observer has no Telegram topic; reinstall with OPENCLAW_MEMORY_OBSERVER_THREAD_ID" >&2
+      exit 1
+    }
     run_args=("$OBSERVER" --state-path "$STATE_PATH")
+    if [[ -n "$THREAD_ID" ]]; then run_args+=(--thread-id "$THREAD_ID"); fi
     if (( DRY_RUN )); then run_args+=(--dry-run); fi
     exec "$NODE_BIN" "${run_args[@]}"
     ;;
