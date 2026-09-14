@@ -12,6 +12,7 @@ STATE_PATH="${OPENCLAW_MEMORY_OBSERVER_STATE_PATH:-${HOME}/Library/Application S
 INSTALL_DIR="${OPENCLAW_MEMORY_OBSERVER_INSTALL_DIR:-${HOME}/Library/Application Support/Jarvis/.jarvis/ops/memory-pressure-observer}"
 LOG_OUT="${OPENCLAW_MEMORY_OBSERVER_LOG_OUT:-/tmp/jarvis-memory-pressure-observer.out.log}"
 LOG_ERR="${OPENCLAW_MEMORY_OBSERVER_LOG_ERR:-/tmp/jarvis-memory-pressure-observer.err.log}"
+THREAD_ID="${OPENCLAW_MEMORY_OBSERVER_THREAD_ID:-}"
 DRY_RUN=0
 
 usage() {
@@ -34,6 +35,10 @@ done
   echo "--interval-secs must be an integer of at least 60" >&2
   exit 1
 }
+if [[ -n "$THREAD_ID" && ! "$THREAD_ID" =~ ^[0-9]+$ ]]; then
+  echo "OPENCLAW_MEMORY_OBSERVER_THREAD_ID must be a positive integer" >&2
+  exit 1
+fi
 [[ "$(uname -s)" == "Darwin" ]] || { echo "This observer supports macOS only." >&2; exit 1; }
 
 SCHEDULE_ROOT="$MAIN_REPO"
@@ -68,6 +73,13 @@ render_plist() {
     <string>$(xml_escape "$NODE_BIN")</string>
     <string>$(xml_escape "$OBSERVER")</string>
     <string>--state-path</string><string>$(xml_escape "$STATE_PATH")</string>
+EOF
+  # Keep the personal Telegram destination explicit in the installed job. The
+  # portable source has no baked-in chat or topic identifier.
+  if [[ -n "$THREAD_ID" ]]; then
+    printf '    <string>--thread-id</string><string>%s</string>\n' "$(xml_escape "$THREAD_ID")"
+  fi
+  cat <<EOF
   </array>
   <key>WorkingDirectory</key><string>$(xml_escape "$INSTALL_DIR")</string>
   <key>RunAtLoad</key><true/>
@@ -82,7 +94,7 @@ EOF
 install_job() {
   resolve_node
   if (( DRY_RUN )); then
-    echo "dry_run=1 label=${LABEL} plist=${PLIST_PATH} interval_secs=${INTERVAL_SECS}"
+    echo "dry_run=1 label=${LABEL} plist=${PLIST_PATH} interval_secs=${INTERVAL_SECS} thread_id=${THREAD_ID:-wrapper-default}"
     render_plist
     return
   fi
@@ -122,7 +134,7 @@ install_job() {
     exit 1
   fi
   rm -f "$backup" "$observer_backup"
-  echo "installed=1 label=${LABEL} interval_secs=${INTERVAL_SECS} plist=${PLIST_PATH}"
+  echo "installed=1 label=${LABEL} interval_secs=${INTERVAL_SECS} thread_id=${THREAD_ID:-wrapper-default} plist=${PLIST_PATH}"
 }
 
 case "$COMMAND" in

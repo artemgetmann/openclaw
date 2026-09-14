@@ -15,14 +15,18 @@ const DEFAULT_NOTIFY = path.join(
   os.homedir(),
   "Library/Application Support/OpenClaw/.openclaw/workspace/bin/jarvis-telegram-notify.sh",
 );
-const CONFIRMATION_SAMPLES = 2;
-const RECOVERY_SAMPLES = 2;
+// Five-minute sampling remains fast enough for admission control diagnostics,
+// while user-visible notifications require a genuinely sustained condition.
+const WARNING_CONFIRMATION_SAMPLES = 6;
+const CRITICAL_CONFIRMATION_SAMPLES = 2;
+const RECOVERY_CONFIRMATION_SAMPLES = 12;
 
 function parseArgs(argv) {
   const args = {
     statePath: process.env.OPENCLAW_MEMORY_OBSERVER_STATE_PATH || DEFAULT_STATE_PATH,
     notifyCommand: process.env.OPENCLAW_MEMORY_OBSERVER_NOTIFY_COMMAND || DEFAULT_NOTIFY,
     samplePath: undefined,
+    threadId: process.env.OPENCLAW_MEMORY_OBSERVER_THREAD_ID || undefined,
     nowMs: Date.now(),
     dryRun: false,
   };
@@ -44,11 +48,13 @@ function parseArgs(argv) {
       args.samplePath = next();
     } else if (arg === "--now-ms") {
       args.nowMs = Number(next());
+    } else if (arg === "--thread-id") {
+      args.threadId = next();
     } else if (arg === "--dry-run") {
       args.dryRun = true;
     } else if (arg === "--help" || arg === "-h") {
       console.log(
-        "Usage: macos-memory-pressure-observer.mjs [--state-path PATH] [--sample-json PATH] [--notify-command PATH] [--dry-run]",
+        "Usage: macos-memory-pressure-observer.mjs [--state-path PATH] [--sample-json PATH] [--notify-command PATH] [--thread-id ID] [--dry-run]",
       );
       process.exit(0);
     } else {
@@ -57,6 +63,9 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(args.nowMs)) {
     throw new Error("--now-ms must be numeric");
+  }
+  if (args.threadId && !/^\d+$/.test(args.threadId)) {
+    throw new Error("--thread-id must be a positive integer");
   }
   return args;
 }
@@ -105,7 +114,10 @@ function classify(sample) {
   if (sample.pressureLevel >= 4) {
     return "critical";
   }
-  if (sample.pressureLevel >= 2 || sample.freePercent < 25) {
+  // A transient kernel warning with ample headroom is useful to the internal
+  // heavy-work guard but was far too noisy as a human notification. The FYI
+  // observer warns only when measured headroom is actually below the floor.
+  if (sample.freePercent < 25) {
     return "warn";
   }
   return "healthy";
@@ -113,15 +125,15 @@ function classify(sample) {
 
 function defaultState() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     severity: "healthy",
     pendingSeverity: "healthy",
     pendingCount: 0,
     recoveryCount: 0,
     episodeId: 0,
     notifiedLevels: [],
-    recoveryNotificationPending: false,
-    lastWeeklyKey: null,
+    lastRecoveryAttemptedEpisodeId: null,
+    lastNotificationAttempt: null,
     lastSample: null,
   };
 }
@@ -129,10 +141,23 @@ function defaultState() {
 async function loadState(statePath) {
   try {
     const state = JSON.parse(await fs.readFile(statePath, "utf8"));
-    if (state.schemaVersion !== 1) {
+    if (state.schemaVersion !== 1 && state.schemaVersion !== 2) {
       throw new Error("unsupported schema");
     }
-    return { ...defaultState(), ...state };
+    if (state.schemaVersion === 1) {
+      // Version 1 could retain recoveryNotificationPending after an ambiguous
+      // send and replay stale recovery notices. Start clean while preserving
+      // only long-lived diagnostic history.
+      return {
+        ...defaultState(),
+        episodeId: Number.isInteger(state.episodeId) ? state.episodeId : 0,
+        lastSample: state.lastSample ?? null,
+      };
+    }
+    const defaults = defaultState();
+    return Object.fromEntries(
+      Object.keys(defaults).map((key) => [key, state[key] ?? defaults[key]]),
+    );
   } catch (error) {
     if (error?.code === "ENOENT") {
       return defaultState();
@@ -148,24 +173,6 @@ async function saveState(statePath, state) {
   await fs.writeFile(staged, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   await fs.chmod(staged, 0o600);
   await fs.rename(staged, statePath);
-}
-
-function localWeeklyKey(nowMs) {
-  const now = new Date(nowMs);
-  // launchd runs every five minutes. Sunday at/after 10:30 gets one report per
-  // local calendar week, even if the exact 10:30 tick was delayed or missed.
-  if (
-    now.getDay() !== 0 ||
-    now.getHours() < 10 ||
-    (now.getHours() === 10 && now.getMinutes() < 30)
-  ) {
-    return null;
-  }
-  return [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-  ].join("-");
 }
 
 function formatMiB(value) {
@@ -184,26 +191,19 @@ function recoveryMessage(sample) {
   return `Mac memory recovered. Memory available: ${sample.freePercent}%. Swap allocated: ${formatMiB(sample.swapUsedMiB)} MB, which may be historical. No restart is needed now.`;
 }
 
-function weeklyMessage(state, sample) {
-  if (state.severity === "healthy") {
-    return `Weekly Mac memory check: healthy. Memory available: ${sample.freePercent}%. Swap allocated: ${formatMiB(sample.swapUsedMiB)} MB (historical telemetry). No restart needed.`;
-  }
-  return `Weekly Mac memory check: ${state.severity}. Memory available: ${sample.freePercent}%. Restart Codex first when safe; restart the Mac only if pressure remains unhealthy afterward.`;
-}
-
 async function notify(args, message) {
   if (args.dryRun) {
     console.log(`MEMORY_OBSERVER_NOTIFICATION dry_run=1 message=${JSON.stringify(message)}`);
     return;
   }
-  await execFileAsync(
-    args.notifyCommand,
-    ["--session-id", "Mac memory health", "--message", message],
-    {
-      timeout: 60_000,
-      encoding: "utf8",
-    },
-  );
+  const notifyArgs = ["--session-id", "Mac memory health", "--message", message];
+  if (args.threadId) {
+    notifyArgs.push("--thread-id", args.threadId);
+  }
+  await execFileAsync(args.notifyCommand, notifyArgs, {
+    timeout: 60_000,
+    encoding: "utf8",
+  });
 }
 
 function updateState(state, observed) {
@@ -213,12 +213,13 @@ function updateState(state, observed) {
     state.pendingCount = 0;
     if (state.severity !== "healthy") {
       state.recoveryCount += 1;
-      if (state.recoveryCount >= RECOVERY_SAMPLES) {
+      if (state.recoveryCount >= RECOVERY_CONFIRMATION_SAMPLES) {
         state.severity = "healthy";
         state.recoveryCount = 0;
         state.notifiedLevels = [];
-        state.recoveryNotificationPending = true;
-        notificationKind = "recovery";
+        if (state.lastRecoveryAttemptedEpisodeId !== state.episodeId) {
+          notificationKind = "recovery";
+        }
       }
     } else {
       state.recoveryCount = 0;
@@ -241,7 +242,9 @@ function updateState(state, observed) {
     state.pendingSeverity = observed;
     state.pendingCount = 1;
   }
-  if (state.pendingCount < CONFIRMATION_SAMPLES) {
+  const requiredSamples =
+    observed === "critical" ? CRITICAL_CONFIRMATION_SAMPLES : WARNING_CONFIRMATION_SAMPLES;
+  if (state.pendingCount < requiredSamples) {
     return { state, notificationKind };
   }
 
@@ -252,8 +255,6 @@ function updateState(state, observed) {
     state.episodeId += 1;
     state.notifiedLevels = [];
   }
-  // A failed delivery leaves the level absent from notifiedLevels. Retry the
-  // same bounded episode notification on the next scheduled sample.
   if (
     (wasHealthy || escalated || state.severity === observed) &&
     !state.notifiedLevels.includes(observed)
@@ -283,28 +284,35 @@ async function main() {
   if (result.notificationKind === "warn" || result.notificationKind === "critical") {
     message = alertMessage(result.notificationKind, sample);
     deliveredLevel = result.notificationKind;
-  } else if (result.notificationKind === "recovery" || result.state.recoveryNotificationPending) {
+  } else if (result.notificationKind === "recovery") {
     message = recoveryMessage(sample);
   }
 
-  const weeklyKey = localWeeklyKey(args.nowMs);
-  if (!message && observed === "healthy" && weeklyKey && weeklyKey !== result.state.lastWeeklyKey) {
-    message = weeklyMessage(result.state, sample);
-  }
-
-  // Persist observations before a send, but record delivery dedupe only after
-  // the notification command succeeds. A failed send is safely retried.
-  await saveState(args.statePath, result.state);
+  // FYI delivery is deliberately at-most-once. Persist the attempt before the
+  // external call so a successful Telegram send followed by a non-zero wrapper
+  // exit cannot replay the same message every five minutes.
   if (message) {
-    await notify(args, message);
     if (deliveredLevel) {
       result.state.notifiedLevels.push(deliveredLevel);
     }
-    if (result.state.recoveryNotificationPending) {
-      result.state.recoveryNotificationPending = false;
+    if (result.notificationKind === "recovery") {
+      result.state.lastRecoveryAttemptedEpisodeId = result.state.episodeId;
     }
-    if (weeklyKey) {
-      result.state.lastWeeklyKey = weeklyKey;
+    result.state.lastNotificationAttempt = {
+      kind: result.notificationKind,
+      attemptedAtMs: args.nowMs,
+      status: "pending",
+    };
+  }
+  await saveState(args.statePath, result.state);
+  if (message) {
+    try {
+      await notify(args, message);
+      result.state.lastNotificationAttempt.status = "delivered";
+    } catch (error) {
+      result.state.lastNotificationAttempt.status = "failed";
+      await saveState(args.statePath, result.state);
+      throw error;
     }
     await saveState(args.statePath, result.state);
   }
