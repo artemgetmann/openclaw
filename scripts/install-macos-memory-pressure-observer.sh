@@ -8,6 +8,7 @@ LABEL="ai.jarvis.memory-pressure-observer"
 INTERVAL_SECS="${OPENCLAW_MEMORY_OBSERVER_INTERVAL_SECS:-300}"
 LAUNCHCTL_BIN="${OPENCLAW_MEMORY_OBSERVER_LAUNCHCTL_BIN:-/bin/launchctl}"
 PLIST_BUDDY_BIN="${OPENCLAW_MEMORY_OBSERVER_PLIST_BUDDY_BIN:-/usr/libexec/PlistBuddy}"
+PLUTIL_BIN="${OPENCLAW_MEMORY_OBSERVER_PLUTIL_BIN:-/usr/bin/plutil}"
 PLIST_PATH="${OPENCLAW_MEMORY_OBSERVER_PLIST_PATH:-${HOME}/Library/LaunchAgents/${LABEL}.plist}"
 STATE_PATH="${OPENCLAW_MEMORY_OBSERVER_STATE_PATH:-${HOME}/Library/Application Support/Jarvis/.jarvis/ops/memory-pressure-observer/state.json}"
 INSTALL_DIR="${OPENCLAW_MEMORY_OBSERVER_INSTALL_DIR:-${HOME}/Library/Application Support/Jarvis/.jarvis/ops/memory-pressure-observer}"
@@ -32,8 +33,8 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
-[[ "$INTERVAL_SECS" =~ ^[0-9]+$ ]] && (( INTERVAL_SECS >= 60 )) || {
-  echo "--interval-secs must be an integer of at least 60" >&2
+[[ "$INTERVAL_SECS" == "300" ]] || {
+  echo "--interval-secs is fixed at 300 to preserve confirmation durations" >&2
   exit 1
 }
 if [[ -n "$THREAD_ID" && ! "$THREAD_ID" =~ ^[0-9]+$ ]]; then
@@ -122,7 +123,7 @@ install_job() {
   observer_staged="$(mktemp "${INSTALL_DIR}/observer.staged.XXXXXX")"
   render_plist >"$staged"
   chmod 600 "$staged"
-  /usr/bin/plutil -lint "$staged" >/dev/null
+  "$PLUTIL_BIN" -lint "$staged" >/dev/null
   cp "$OBSERVER_SOURCE" "$observer_staged"
   chmod 700 "$observer_staged"
   "$NODE_BIN" --input-type=module --check <"$observer_staged"
@@ -136,10 +137,12 @@ install_job() {
   fi
   if "$LAUNCHCTL_BIN" print "gui/${UID}/${LABEL}" >/dev/null 2>&1; then prior_loaded=1; fi
   "$LAUNCHCTL_BIN" bootout "gui/${UID}/${LABEL}" >/dev/null 2>&1 || true
-  mv "$observer_staged" "$OBSERVER"
-  mv "$staged" "$PLIST_PATH"
-  "$LAUNCHCTL_BIN" enable "gui/${UID}/${LABEL}" >/dev/null
-  if ! "$LAUNCHCTL_BIN" bootstrap "gui/${UID}" "$PLIST_PATH"; then
+  # Once the old job is stopped, every replacement step belongs to one guarded
+  # transaction. Any failure restores both files and reloads the prior job.
+  if ! mv "$observer_staged" "$OBSERVER" ||
+    ! mv "$staged" "$PLIST_PATH" ||
+    ! "$LAUNCHCTL_BIN" enable "gui/${UID}/${LABEL}" >/dev/null ||
+    ! "$LAUNCHCTL_BIN" bootstrap "gui/${UID}" "$PLIST_PATH"; then
     "$LAUNCHCTL_BIN" bootout "gui/${UID}/${LABEL}" >/dev/null 2>&1 || true
     if [[ -n "$backup" ]]; then mv "$backup" "$PLIST_PATH"; else rm -f "$PLIST_PATH"; fi
     if [[ -n "$observer_backup" ]]; then mv "$observer_backup" "$OBSERVER"; else rm -f "$OBSERVER"; fi

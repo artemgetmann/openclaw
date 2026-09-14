@@ -287,6 +287,14 @@ describe("macOS memory pressure observer", () => {
 });
 
 describe("macOS memory pressure observer installer", () => {
+  it("rejects schedules that would change the documented confirmation durations", async () => {
+    await expect(
+      execFileAsync("/bin/bash", [installer, "install", "--dry-run", "--interval-secs", "60"], {
+        env: { ...process.env, OPENCLAW_MEMORY_OBSERVER_THREAD_ID: "31792" },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+  });
+
   it("renders a scheduled one-shot job anchored to stable owner-only app support", async () => {
     const paths = await fixture();
     const repoRoot = path.resolve(".");
@@ -373,5 +381,55 @@ describe("macOS memory pressure observer installer", () => {
       },
     });
     expect(await fs.readFile(nodeArgs, "utf8")).toContain("--thread-id\n31792\n");
+  });
+
+  it("restores and reloads the prior observer when enable fails", async () => {
+    const paths = await fixture();
+    const fakeBin = path.join(paths.root, "bin");
+    const fakeUname = path.join(fakeBin, "uname");
+    const fakeNode = path.join(fakeBin, "node");
+    const fakeLaunchctl = path.join(fakeBin, "launchctl");
+    const fakePlutil = path.join(fakeBin, "plutil");
+    const launchctlLog = path.join(paths.root, "launchctl.txt");
+    const plist = path.join(paths.root, "observer.plist");
+    const installDir = path.join(paths.root, "installed");
+    const installedObserver = path.join(installDir, "macos-memory-pressure-observer.mjs");
+    await fs.mkdir(fakeBin);
+    await fs.mkdir(installDir);
+    await fs.writeFile(fakeUname, "#!/bin/sh\nprintf 'Darwin\\n'\n", { mode: 0o700 });
+    await fs.writeFile(
+      fakeNode,
+      '#!/bin/sh\nif [ "$1" = "-p" ]; then printf \'22.22.1\\n\'; fi\nexit 0\n',
+      { mode: 0o700 },
+    );
+    await fs.writeFile(
+      fakeLaunchctl,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${launchctlLog}"\ncase "$1" in print) exit 0 ;; enable) exit 9 ;; *) exit 0 ;; esac\n`,
+      { mode: 0o700 },
+    );
+    await fs.writeFile(fakePlutil, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    await fs.writeFile(plist, "prior plist\n");
+    await fs.writeFile(installedObserver, "prior observer\n");
+    await expect(
+      execFileAsync("/bin/bash", [installer, "install"], {
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH}`,
+          OPENCLAW_MAIN_REPO: path.resolve("."),
+          OPENCLAW_NODE_BIN: fakeNode,
+          OPENCLAW_MEMORY_OBSERVER_LAUNCHCTL_BIN: fakeLaunchctl,
+          OPENCLAW_MEMORY_OBSERVER_PLUTIL_BIN: fakePlutil,
+          OPENCLAW_MEMORY_OBSERVER_PLIST_PATH: plist,
+          OPENCLAW_MEMORY_OBSERVER_INSTALL_DIR: installDir,
+          OPENCLAW_MEMORY_OBSERVER_STATE_PATH: path.join(paths.root, "state.json"),
+          OPENCLAW_MEMORY_OBSERVER_THREAD_ID: "31792",
+        },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(await fs.readFile(plist, "utf8")).toBe("prior plist\n");
+    expect(await fs.readFile(installedObserver, "utf8")).toBe("prior observer\n");
+    expect(await fs.readFile(launchctlLog, "utf8")).toContain(
+      `bootstrap gui/${process.getuid?.()}`,
+    );
   });
 });
