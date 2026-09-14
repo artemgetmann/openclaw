@@ -19,15 +19,20 @@ async function fixture() {
     sample: path.join(root, "sample.json"),
     notifier: path.join(root, "notify.sh"),
     notification: path.join(root, "notification.txt"),
+    nowMs: Date.parse("2026-08-02T10:30:00+08:00"),
   };
 }
 
 async function run(
   paths: Awaited<ReturnType<typeof fixture>>,
   sample: Record<string, number>,
-  nowMs = Date.parse("2026-08-02T10:30:00+08:00"),
+  nowMs?: number,
   options: { dryRun?: boolean; notifyCommand?: string } = {},
 ) {
+  const sampleTime = nowMs ?? paths.nowMs;
+  if (nowMs === undefined) {
+    paths.nowMs += 5 * 60_000;
+  }
   await fs.writeFile(paths.sample, JSON.stringify(sample));
   await fs.rm(paths.notification, { force: true });
   if (!options.notifyCommand) {
@@ -44,7 +49,7 @@ async function run(
     "--sample-json",
     paths.sample,
     "--now-ms",
-    String(nowMs),
+    String(sampleTime),
     "--notify-command",
     options.notifyCommand ?? paths.notifier,
   ];
@@ -74,7 +79,7 @@ afterEach(async () => {
 describe("macOS memory pressure observer", () => {
   it("requires thirty minutes of low headroom and sends one alert per episode", async () => {
     const paths = await fixture();
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 6; index += 1) {
       const pending = await run(paths, warn);
       expect(pending.stdout).not.toContain("MEMORY_OBSERVER_NOTIFICATION");
     }
@@ -96,9 +101,10 @@ describe("macOS memory pressure observer", () => {
   it("escalates critical once and recovers after one stable hour", async () => {
     const paths = await fixture();
     await run(paths, critical);
+    await run(paths, critical);
     const escalated = await run(paths, critical);
     expect(escalated.stdout).toContain("memory pressure is critical");
-    for (let index = 0; index < 11; index += 1) {
+    for (let index = 0; index < 12; index += 1) {
       const recovering = await run(paths, healthy);
       expect(recovering.stdout).not.toContain("Mac memory recovered");
     }
@@ -108,6 +114,7 @@ describe("macOS memory pressure observer", () => {
 
   it("does not downgrade or re-notify a critical episode on warn samples", async () => {
     const paths = await fixture();
+    await run(paths, critical);
     await run(paths, critical);
     await run(paths, critical);
     const lowerPressure = await run(paths, warn);
@@ -143,11 +150,11 @@ describe("macOS memory pressure observer", () => {
 
   it("does not let a dry run advance or consume live notification state", async () => {
     const paths = await fixture();
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 6; index += 1) {
       await run(paths, warn);
     }
     const before = await fs.readFile(paths.state, "utf8");
-    const preview = await run(paths, warn, Date.now(), { dryRun: true });
+    const preview = await run(paths, warn, paths.nowMs, { dryRun: true });
     expect(preview.stdout).toContain("Mac memory pressure has stayed high");
     expect(await fs.readFile(paths.state, "utf8")).toBe(before);
     const delivered = await run(paths, warn);
@@ -171,20 +178,59 @@ describe("macOS memory pressure observer", () => {
     ).rejects.toMatchObject({ code: 1 });
   });
 
+  it("resets a pending sequence after a gap instead of claiming continuous pressure", async () => {
+    const paths = await fixture();
+    await run(paths, warn);
+    await run(paths, warn);
+    const afterSleep = await run(paths, warn, paths.nowMs + 60 * 60_000);
+    expect(afterSleep.stdout).toContain("pending=1");
+    expect(afterSleep.stdout).toContain("notification=none");
+  });
+
+  it("serializes overlapping confirmation runs so only one notification is attempted", async () => {
+    const paths = await fixture();
+    for (let index = 0; index < 6; index += 1) {
+      await run(paths, warn);
+    }
+    const notifier = path.join(paths.root, "slow-notify.sh");
+    const sends = path.join(paths.root, "sends.txt");
+    await fs.writeFile(notifier, `#!/bin/sh\nsleep 1\nprintf 'sent\\n' >> "${sends}"\n`, {
+      mode: 0o700,
+    });
+    await fs.writeFile(paths.sample, JSON.stringify(warn));
+    const args = [
+      observer,
+      "--state-path",
+      paths.state,
+      "--sample-json",
+      paths.sample,
+      "--now-ms",
+      String(paths.nowMs),
+      "--notify-command",
+      notifier,
+    ];
+    const [first, second] = await Promise.all([
+      execFileAsync(process.execPath, args),
+      execFileAsync(process.execPath, args),
+    ]);
+    expect(`${first.stdout}${second.stdout}`).toContain("reason=already_running");
+    expect((await fs.readFile(sends, "utf8")).trim().split("\n")).toHaveLength(1);
+  });
+
   it("does not replay an FYI alert after an ambiguous notification failure", async () => {
     const paths = await fixture();
     const notifier = path.join(paths.root, "notify.sh");
     await fs.writeFile(notifier, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-    for (let index = 0; index < 5; index += 1) {
-      await run(paths, warn, Date.now(), { dryRun: false, notifyCommand: notifier });
+    for (let index = 0; index < 6; index += 1) {
+      await run(paths, warn, undefined, { dryRun: false, notifyCommand: notifier });
     }
     await expect(
-      run(paths, warn, Date.now(), { dryRun: false, notifyCommand: notifier }),
+      run(paths, warn, undefined, { dryRun: false, notifyCommand: notifier }),
     ).rejects.toMatchObject({
       code: 1,
     });
     await fs.writeFile(notifier, "#!/bin/sh\nprintf 'sent\\n'\n", { mode: 0o700 });
-    const deduplicated = await run(paths, warn, Date.now(), {
+    const deduplicated = await run(paths, warn, undefined, {
       dryRun: false,
       notifyCommand: notifier,
     });
@@ -199,17 +245,17 @@ describe("macOS memory pressure observer", () => {
       '#!/bin/sh\ncase "$*" in *recovered*) exit 1 ;; *) exit 0 ;; esac\n',
       { mode: 0o700 },
     );
-    for (let index = 0; index < 6; index += 1) {
-      await run(paths, warn, Date.now(), { dryRun: false, notifyCommand: notifier });
+    for (let index = 0; index < 7; index += 1) {
+      await run(paths, warn, undefined, { dryRun: false, notifyCommand: notifier });
     }
-    for (let index = 0; index < 11; index += 1) {
-      await run(paths, healthy, Date.now(), { dryRun: false, notifyCommand: notifier });
+    for (let index = 0; index < 12; index += 1) {
+      await run(paths, healthy, undefined, { dryRun: false, notifyCommand: notifier });
     }
     await expect(
-      run(paths, healthy, Date.now(), { dryRun: false, notifyCommand: notifier }),
+      run(paths, healthy, undefined, { dryRun: false, notifyCommand: notifier }),
     ).rejects.toMatchObject({ code: 1 });
     await fs.writeFile(notifier, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-    const deduplicated = await run(paths, healthy, Date.now(), {
+    const deduplicated = await run(paths, healthy, undefined, {
       dryRun: false,
       notifyCommand: notifier,
     });
@@ -251,7 +297,7 @@ describe("macOS memory pressure observer", () => {
         lastSample: warn,
       }),
     );
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 7; index += 1) {
       const result = await run(paths, warn);
       expect(result.stdout).toContain("state=warn");
       expect(result.stdout).not.toContain("Mac memory pressure has stayed high");
@@ -268,7 +314,7 @@ describe("macOS memory pressure observer", () => {
     await fs.writeFile(notifier, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`, {
       mode: 0o700,
     });
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 7; index += 1) {
       await fs.writeFile(paths.sample, JSON.stringify(warn));
       await execFileAsync(process.execPath, [
         observer,
@@ -280,6 +326,8 @@ describe("macOS memory pressure observer", () => {
         notifier,
         "--thread-id",
         "31792",
+        "--now-ms",
+        String(paths.nowMs + index * 5 * 60_000),
       ]);
     }
     expect(await fs.readFile(argsFile, "utf8")).toContain("--thread-id\n31792\n");
@@ -287,6 +335,14 @@ describe("macOS memory pressure observer", () => {
 });
 
 describe("macOS memory pressure observer installer", () => {
+  it("rejects a zero Telegram topic id", async () => {
+    await expect(
+      execFileAsync("/bin/bash", [installer, "install", "--dry-run"], {
+        env: { ...process.env, OPENCLAW_MEMORY_OBSERVER_THREAD_ID: "0" },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+  });
+
   it("rejects schedules that would change the documented confirmation durations", async () => {
     await expect(
       execFileAsync("/bin/bash", [installer, "install", "--dry-run", "--interval-secs", "60"], {
@@ -431,5 +487,38 @@ describe("macOS memory pressure observer installer", () => {
     expect(await fs.readFile(launchctlLog, "utf8")).toContain(
       `bootstrap gui/${process.getuid?.()}`,
     );
+  });
+
+  it("preserves installed files when uninstall cannot stop the loaded observer", async () => {
+    const paths = await fixture();
+    const fakeBin = path.join(paths.root, "bin");
+    const fakeUname = path.join(fakeBin, "uname");
+    const fakeLaunchctl = path.join(fakeBin, "launchctl");
+    const plist = path.join(paths.root, "observer.plist");
+    const installDir = path.join(paths.root, "installed");
+    const installedObserver = path.join(installDir, "macos-memory-pressure-observer.mjs");
+    await fs.mkdir(fakeBin);
+    await fs.mkdir(installDir);
+    await fs.writeFile(fakeUname, "#!/bin/sh\nprintf 'Darwin\\n'\n", { mode: 0o700 });
+    await fs.writeFile(
+      fakeLaunchctl,
+      '#!/bin/sh\ncase "$1" in print) exit 0 ;; bootout) exit 9 ;; *) exit 0 ;; esac\n',
+      { mode: 0o700 },
+    );
+    await fs.writeFile(plist, "installed plist\n");
+    await fs.writeFile(installedObserver, "installed observer\n");
+    await expect(
+      execFileAsync("/bin/bash", [installer, "uninstall"], {
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH}`,
+          OPENCLAW_MEMORY_OBSERVER_LAUNCHCTL_BIN: fakeLaunchctl,
+          OPENCLAW_MEMORY_OBSERVER_PLIST_PATH: plist,
+          OPENCLAW_MEMORY_OBSERVER_INSTALL_DIR: installDir,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(await fs.readFile(plist, "utf8")).toBe("installed plist\n");
+    expect(await fs.readFile(installedObserver, "utf8")).toBe("installed observer\n");
   });
 });

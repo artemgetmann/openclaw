@@ -17,9 +17,12 @@ const DEFAULT_NOTIFY = path.join(
 );
 // Five-minute sampling remains fast enough for admission control diagnostics,
 // while user-visible notifications require a genuinely sustained condition.
-const WARNING_CONFIRMATION_SAMPLES = 6;
-const CRITICAL_CONFIRMATION_SAMPLES = 2;
-const RECOVERY_CONFIRMATION_SAMPLES = 12;
+const SAMPLE_INTERVAL_MS = 5 * 60_000;
+const MAX_CONTINUOUS_GAP_MS = SAMPLE_INTERVAL_MS * 2;
+const WARNING_CONFIRMATION_MS = 30 * 60_000;
+const CRITICAL_CONFIRMATION_MS = 10 * 60_000;
+const RECOVERY_CONFIRMATION_MS = 60 * 60_000;
+const STALE_LOCK_MS = 5 * 60_000;
 
 function parseArgs(argv) {
   const args = {
@@ -64,7 +67,7 @@ function parseArgs(argv) {
   if (!Number.isFinite(args.nowMs)) {
     throw new Error("--now-ms must be numeric");
   }
-  if (args.threadId && !/^\d+$/.test(args.threadId)) {
+  if (args.threadId && (!/^\d+$/.test(args.threadId) || Number(args.threadId) <= 0)) {
     throw new Error("--thread-id must be a positive integer");
   }
   return args;
@@ -129,7 +132,9 @@ function defaultState() {
     severity: "healthy",
     pendingSeverity: "healthy",
     pendingCount: 0,
+    pendingSinceMs: null,
     recoveryCount: 0,
+    recoverySinceMs: null,
     episodeId: 0,
     notifiedLevels: [],
     lastRecoveryAttemptedEpisodeId: null,
@@ -163,11 +168,15 @@ async function loadState(statePath) {
         pendingSeverity,
         pendingCount:
           Number.isInteger(state.pendingCount) && state.pendingCount >= 0 ? state.pendingCount : 0,
+        pendingSinceMs: Number.isFinite(state.lastSample?.sampledAtMs)
+          ? state.lastSample.sampledAtMs
+          : null,
         recoveryCount:
           Number.isInteger(state.recoveryCount) && state.recoveryCount >= 0
             ? state.recoveryCount
             : 0,
         episodeId,
+        recoverySinceMs: null,
         notifiedLevels: Array.isArray(state.notifiedLevels)
           ? [
               ...new Set(
@@ -230,16 +239,34 @@ async function notify(args, message) {
   });
 }
 
-function updateState(state, observed) {
+function isContinuous(state, observed, nowMs) {
+  const prior = state.lastSample;
+  return Boolean(
+    prior &&
+    prior.observed === observed &&
+    Number.isFinite(prior.sampledAtMs) &&
+    nowMs >= prior.sampledAtMs &&
+    nowMs - prior.sampledAtMs <= MAX_CONTINUOUS_GAP_MS,
+  );
+}
+
+function updateState(state, observed, nowMs) {
   let notificationKind = null;
   if (observed === "healthy") {
     state.pendingSeverity = "healthy";
     state.pendingCount = 0;
+    state.pendingSinceMs = null;
     if (state.severity !== "healthy") {
-      state.recoveryCount += 1;
-      if (state.recoveryCount >= RECOVERY_CONFIRMATION_SAMPLES) {
+      if (isContinuous(state, observed, nowMs) && Number.isFinite(state.recoverySinceMs)) {
+        state.recoveryCount += 1;
+      } else {
+        state.recoveryCount = 1;
+        state.recoverySinceMs = nowMs;
+      }
+      if (nowMs - state.recoverySinceMs >= RECOVERY_CONFIRMATION_MS) {
         state.severity = "healthy";
         state.recoveryCount = 0;
+        state.recoverySinceMs = null;
         state.notifiedLevels = [];
         if (state.lastRecoveryAttemptedEpisodeId !== state.episodeId) {
           notificationKind = "recovery";
@@ -247,11 +274,13 @@ function updateState(state, observed) {
       }
     } else {
       state.recoveryCount = 0;
+      state.recoverySinceMs = null;
     }
     return { state, notificationKind };
   }
 
   state.recoveryCount = 0;
+  state.recoverySinceMs = null;
   // Once an episode reaches critical, a merely-warn sample is not recovery and
   // must not emit a lower-severity follow-up. Only confirmed healthy samples
   // close the critical episode.
@@ -260,15 +289,20 @@ function updateState(state, observed) {
     state.pendingCount = 0;
     return { state, notificationKind };
   }
-  if (state.pendingSeverity === observed) {
+  if (
+    state.pendingSeverity === observed &&
+    isContinuous(state, observed, nowMs) &&
+    Number.isFinite(state.pendingSinceMs)
+  ) {
     state.pendingCount += 1;
   } else {
     state.pendingSeverity = observed;
     state.pendingCount = 1;
+    state.pendingSinceMs = nowMs;
   }
-  const requiredSamples =
-    observed === "critical" ? CRITICAL_CONFIRMATION_SAMPLES : WARNING_CONFIRMATION_SAMPLES;
-  if (state.pendingCount < requiredSamples) {
+  const requiredDurationMs =
+    observed === "critical" ? CRITICAL_CONFIRMATION_MS : WARNING_CONFIRMATION_MS;
+  if (nowMs - state.pendingSinceMs < requiredDurationMs) {
     return { state, notificationKind };
   }
 
@@ -288,8 +322,7 @@ function updateState(state, observed) {
   return { state, notificationKind };
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+async function runOnce(args) {
   const state = await loadState(args.statePath);
   const sample = args.samplePath
     ? JSON.parse(await fs.readFile(args.samplePath, "utf8"))
@@ -300,7 +333,7 @@ async function main() {
     previousCounters &&
     (sample.pageouts < previousCounters.pageouts || sample.swapouts < previousCounters.swapouts),
   );
-  const result = updateState(state, observed);
+  const result = updateState(state, observed, args.nowMs);
   result.state.lastSample = { ...sample, observed, sampledAtMs: args.nowMs, pagingReset };
 
   let message = null;
@@ -356,6 +389,54 @@ async function main() {
   console.log(
     `MEMORY_OBSERVER_SAMPLE observed=${observed} state=${result.state.severity} pending=${result.state.pendingCount} free_percent=${sample.freePercent} swap_used_mib=${sample.swapUsedMiB} pageouts=${sample.pageouts} swapouts=${sample.swapouts} paging_reset=${pagingReset ? 1 : 0} notification=${message ? "sent" : "none"}`,
   );
+}
+
+async function acquireStateLock(statePath) {
+  const lockPath = `${statePath}.lock`;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await fs.open(lockPath, "wx", 0o600);
+      await handle.writeFile(`${process.pid}\n`);
+      return async () => {
+        await handle.close();
+        await fs.unlink(lockPath).catch((error) => {
+          if (error?.code !== "ENOENT") {
+            throw error;
+          }
+        });
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      const lock = await fs.stat(lockPath).catch(() => null);
+      if (attempt === 0 && lock && Date.now() - lock.mtimeMs > STALE_LOCK_MS) {
+        await fs.unlink(lockPath).catch(() => {});
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.dryRun) {
+    await runOnce(args);
+    return;
+  }
+  await fs.mkdir(path.dirname(args.statePath), { recursive: true, mode: 0o700 });
+  const release = await acquireStateLock(args.statePath);
+  if (!release) {
+    console.log("MEMORY_OBSERVER_SKIPPED reason=already_running");
+    return;
+  }
+  try {
+    await runOnce(args);
+  } finally {
+    await release();
+  }
 }
 
 main().catch((error) => {

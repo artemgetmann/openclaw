@@ -37,7 +37,7 @@ done
   echo "--interval-secs is fixed at 300 to preserve confirmation durations" >&2
   exit 1
 }
-if [[ -n "$THREAD_ID" && ! "$THREAD_ID" =~ ^[0-9]+$ ]]; then
+if [[ -n "$THREAD_ID" && ( ! "$THREAD_ID" =~ ^[0-9]+$ || "$THREAD_ID" == "0" ) ]]; then
   echo "OPENCLAW_MEMORY_OBSERVER_THREAD_ID must be a positive integer" >&2
   exit 1
 fi
@@ -160,7 +160,13 @@ case "$COMMAND" in
   install) install_job ;;
   uninstall)
     if (( DRY_RUN )); then echo "dry_run=1 uninstall_label=${LABEL} plist=${PLIST_PATH}"; exit 0; fi
-    "$LAUNCHCTL_BIN" bootout "gui/${UID}/${LABEL}" >/dev/null 2>&1 || true
+    if "$LAUNCHCTL_BIN" print "gui/${UID}/${LABEL}" >/dev/null 2>&1; then
+      "$LAUNCHCTL_BIN" bootout "gui/${UID}/${LABEL}" >/dev/null 2>&1 || true
+      if "$LAUNCHCTL_BIN" print "gui/${UID}/${LABEL}" >/dev/null 2>&1; then
+        echo "Uninstall failed; observer is still loaded and files were preserved." >&2
+        exit 1
+      fi
+    fi
     rm -f "$PLIST_PATH" "$OBSERVER"
     echo "uninstalled=1 label=${LABEL}"
     ;;

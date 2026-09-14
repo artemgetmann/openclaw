@@ -5,13 +5,14 @@ It is not a product default and does not change the heavy-work guard.
 
 The observer samples macOS every five minutes. The internal heavy-work guard
 continues to react to platform memory pressure independently. User-visible FYI
-warnings require measured memory headroom below the fixed 25% floor for six
-consecutive samples; a transient kernel warning with ample headroom stays
+warnings require measured memory headroom below the fixed 25% floor for 30
+continuous minutes; a transient kernel warning with ample headroom stays
 silent. Swap, pageout, and swapout counters are diagnostic history only; a
 large absolute value is never a reboot trigger.
 
-Critical pressure still confirms after two consecutive samples. Twelve healthy
-samples close an episode and produce at most one recovery note. Notifications
+Critical pressure confirms after 10 continuous minutes. Sixty continuous
+healthy minutes close an episode and produce at most one recovery note. Gaps
+longer than two sampling intervals reset an unfinished confirmation. Notifications
 are at-most-once attempts: an ambiguous wrapper failure is recorded but never
 replayed automatically. Routine weekly healthy reports are intentionally
 suppressed.
