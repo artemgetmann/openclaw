@@ -235,6 +235,32 @@ describe("macOS memory pressure observer", () => {
     expect(state).not.toHaveProperty("recoveryNotificationPending");
   });
 
+  it("preserves legacy active-episode dedupe while dropping stale recovery state", async () => {
+    const paths = await fixture();
+    await fs.writeFile(
+      paths.state,
+      JSON.stringify({
+        schemaVersion: 1,
+        severity: "warn",
+        pendingSeverity: "warn",
+        pendingCount: 8,
+        recoveryCount: 0,
+        episodeId: 7,
+        notifiedLevels: ["warn"],
+        recoveryNotificationPending: false,
+        lastSample: warn,
+      }),
+    );
+    for (let index = 0; index < 6; index += 1) {
+      const result = await run(paths, warn);
+      expect(result.stdout).toContain("state=warn");
+      expect(result.stdout).not.toContain("Mac memory pressure has stayed high");
+    }
+    const state = JSON.parse(await fs.readFile(paths.state, "utf8"));
+    expect(state.episodeId).toBe(7);
+    expect(state.notifiedLevels).toEqual(["warn"]);
+  });
+
   it("passes the configured FYI topic to the notification wrapper", async () => {
     const paths = await fixture();
     const notifier = path.join(paths.root, "notify.sh");

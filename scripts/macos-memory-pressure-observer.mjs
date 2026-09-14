@@ -146,11 +146,35 @@ async function loadState(statePath) {
     }
     if (state.schemaVersion === 1) {
       // Version 1 could retain recoveryNotificationPending after an ambiguous
-      // send and replay stale recovery notices. Start clean while preserving
-      // only long-lived diagnostic history.
+      // send and replay stale recovery notices. Drop that flag, but preserve a
+      // sanitized active episode and its delivered levels so deployment cannot
+      // create a duplicate alert for pressure that is already in progress.
+      const severity = ["healthy", "warn", "critical"].includes(state.severity)
+        ? state.severity
+        : "healthy";
+      const pendingSeverity = ["healthy", "warn", "critical"].includes(state.pendingSeverity)
+        ? state.pendingSeverity
+        : severity;
+      const episodeId =
+        Number.isInteger(state.episodeId) && state.episodeId >= 0 ? state.episodeId : 0;
       return {
         ...defaultState(),
-        episodeId: Number.isInteger(state.episodeId) ? state.episodeId : 0,
+        severity,
+        pendingSeverity,
+        pendingCount:
+          Number.isInteger(state.pendingCount) && state.pendingCount >= 0 ? state.pendingCount : 0,
+        recoveryCount:
+          Number.isInteger(state.recoveryCount) && state.recoveryCount >= 0
+            ? state.recoveryCount
+            : 0,
+        episodeId,
+        notifiedLevels: Array.isArray(state.notifiedLevels)
+          ? [
+              ...new Set(
+                state.notifiedLevels.filter((level) => level === "warn" || level === "critical"),
+              ),
+            ]
+          : [],
         lastSample: state.lastSample ?? null,
       };
     }
