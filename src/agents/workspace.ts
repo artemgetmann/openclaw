@@ -599,6 +599,17 @@ async function refreshLegacyBundledWorkspaceSkills(workspaceDir: string): Promis
       continue;
     }
 
+    // A marker records the last installed bundle, not permission to overwrite
+    // later owner edits. This also protects personal skill roots reached through
+    // workspace/skills symlinks; an unreadable tree must not authorize deletion.
+    if (managedMarker && workspaceTreeHash !== managedMarker.bundledTreeHash) {
+      workspaceLogger.info("Preserved locally edited managed workspace skill.", {
+        skill: entry.name,
+        skillDir,
+      });
+      continue;
+    }
+
     await fs.rm(skillDir, { recursive: true, force: true });
     await fs.cp(bundledSkillDir, skillDir, { recursive: true, force: true });
     await writeManagedWorkspaceSkillMarker(skillDir, bundledTreeHash);

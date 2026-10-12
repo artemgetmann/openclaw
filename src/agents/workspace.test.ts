@@ -398,6 +398,65 @@ describe("ensureAgentWorkspace", () => {
     expect(marker.bundledTreeHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it.each(["SKILL.md", path.join("scripts", "run.sh")])(
+    "preserves local %s edits and marker through a shared skills symlink",
+    async (editedFile) => {
+      // Reproduce the personal root exposed by workspace/skills without touching
+      // real owner files. Exercise normal workspace setup, not private helpers.
+      const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+      const sharedSkillsDir = path.join(workspaceDir, ".personal-skills");
+      await fs.mkdir(sharedSkillsDir);
+      await fs.symlink(sharedSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+      const { workspaceSkillDir, bundledSkillDir } = await seedManagedWorkspaceSkillCopy({
+        workspaceDir,
+        bundledSkillsDir,
+        skillName: "message-drafting",
+      });
+      const originalMarker = await fs.readFile(
+        path.join(workspaceSkillDir, ".openclaw-skill.json"),
+        "utf-8",
+      );
+      await fs.appendFile(path.join(workspaceSkillDir, editedFile), "\n# Owner customization\n");
+      const customized = await fs.readFile(path.join(workspaceSkillDir, editedFile), "utf-8");
+      // A concurrent upstream update must not convert owner edits into a clean
+      // managed install or replace either the customized content or provenance.
+      await fs.appendFile(path.join(bundledSkillDir, "SKILL.md"), "\nNew bundled rule\n");
+      await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir }, async () => {
+        await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+      });
+      expect(await fs.readFile(path.join(workspaceSkillDir, editedFile), "utf-8")).toBe(customized);
+      expect(await fs.readFile(path.join(workspaceSkillDir, ".openclaw-skill.json"), "utf-8")).toBe(
+        originalMarker,
+      );
+      expect(await fs.readlink(path.join(workspaceDir, "skills"))).toBe(sharedSkillsDir);
+    },
+  );
+
+  it("updates an unchanged managed skill when its bundled tree changes", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    const { workspaceSkillDir, bundledSkillDir } = await seedManagedWorkspaceSkillCopy({
+      workspaceDir,
+      bundledSkillsDir,
+      skillName: "message-drafting",
+    });
+    const originalMarker = await readWorkspaceSkillMarker(workspaceSkillDir);
+    await fs.appendFile(path.join(bundledSkillDir, "SKILL.md"), "\nNew bundled rule\n");
+    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir }, async () => {
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+    });
+    expect(await fs.readFile(path.join(workspaceSkillDir, "SKILL.md"), "utf-8")).toBe(
+      await fs.readFile(path.join(bundledSkillDir, "SKILL.md"), "utf-8"),
+    );
+    const marker = await readWorkspaceSkillMarker(workspaceSkillDir);
+    expect(marker.bundledTreeHash).not.toBe(originalMarker.bundledTreeHash);
+    expect(marker.source).toBe("openclaw-bundled");
+    expect(await fs.readFile(path.join(workspaceSkillDir, "scripts", "run.sh"), "utf-8")).toBe(
+      "#!/bin/sh\n",
+    );
+  });
+
   it("repairs half-updated workspace skills when declared helper scripts are missing", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
     const bundledSkillsDir = path.join(workspaceDir, ".bundled");
