@@ -1355,6 +1355,7 @@ export async function runTelegramUserDownload(
 
 export async function runTelegramUserInbox(
   params: {
+    scanLimit?: number | null;
     contains?: string | null;
     dmOnly?: boolean | null;
     limit?: number | null;
@@ -1362,6 +1363,7 @@ export async function runTelegramUserInbox(
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserInboxResult> {
   const args = ["inbox"];
+  pushOptionalNumberArg(args, "--scan-limit", params.scanLimit);
   pushOptionalNumberArg(args, "--limit", params.limit);
   pushOptionalStringArg(args, "--contains", params.contains);
   if (params.unreadOnly) {

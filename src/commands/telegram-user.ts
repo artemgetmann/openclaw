@@ -913,6 +913,12 @@ function logInboxText(
   runtime.log(
     `Telegram user inbox completed. dialogs=${result.dialogs.length} unread_only=${filters.unreadOnly} dm_only=${filters.dmOnly} ${formatBackendMeta(result.backend_meta)}`,
   );
+  // Opt-in coverage must remain visible outside JSON mode, including no-match scans.
+  if (result.stop_reason !== undefined) {
+    runtime.log(
+      `Coverage: scanned=${result.scanned_count} returned=${result.returned_count} exhausted=${result.exhausted} stop_reason=${result.stop_reason} observed_start=${result.observed_start} observed_end=${result.observed_end}`,
+    );
+  }
   if (result.dialogs.length === 0) {
     runtime.log("No Telegram user dialogs matched the requested filters.");
     return;
@@ -1376,13 +1382,29 @@ export async function telegramUserDownloadCommand(
 }
 
 export async function telegramUserInboxCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
+  const scanLimit = readNumberOpt(opts, "scanLimit");
+  const limit = readNumberOpt(opts, "limit") ?? 20;
+  // An invalid explicit budget must not silently fall back to legacy coverage.
+  if (
+    opts.scanLimit !== undefined &&
+    (!Number.isInteger(scanLimit) ||
+      scanLimit! < 1 ||
+      scanLimit! > 5000 ||
+      !Number.isInteger(limit) ||
+      (opts.limit !== undefined && readNumberOpt(opts, "limit") === undefined) ||
+      limit < 1 ||
+      limit > 5000)
+  ) {
+    throw new Error("Telegram inbox scan and result limits must be integers between 1 and 5000.");
+  }
   const unreadOnly = readBooleanOpt(opts, "unread");
   const dmOnly = readBooleanOpt(opts, "dmOnly");
   const result = await runTelegramUserInbox({
     ...resolveBackendOptions(opts),
     contains: readStringOpt(opts, "contains"),
     dmOnly,
-    limit: readNumberOpt(opts, "limit") ?? 20,
+    limit,
+    scanLimit,
     unreadOnly,
   });
   if (readBooleanOpt(opts, "json")) {

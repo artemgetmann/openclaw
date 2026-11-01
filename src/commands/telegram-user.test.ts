@@ -1300,7 +1300,14 @@ describe("telegram-user commands", () => {
     });
 
     await telegramUserInboxCommand(
-      { contains: "attention", dmOnly: true, json: true, limit: "5", unread: true },
+      {
+        contains: "attention",
+        dmOnly: true,
+        json: true,
+        limit: "5",
+        scanLimit: "5000",
+        unread: true,
+      },
       runtime,
     );
 
@@ -1309,6 +1316,7 @@ describe("telegram-user commands", () => {
       dmOnly: true,
       envFile: undefined,
       limit: 5,
+      scanLimit: 5000,
       session: undefined,
       unreadOnly: true,
     });
@@ -1316,6 +1324,16 @@ describe("telegram-user commands", () => {
       expect.stringContaining('"display_name": "Jarvis Tester 1"'),
     );
   });
+
+  it.each(["nonsense", "NaN", "Infinity", "1.5", "0", "5001"])(
+    "rejects invalid scan budget %s before backend access",
+    async (scanLimit) => {
+      await expect(telegramUserInboxCommand({ scanLimit }, runtime)).rejects.toThrow(
+        "integers between",
+      );
+      expect(backendMocks.runTelegramUserInbox).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders inbox text output with triage summary", async () => {
     backendMocks.runTelegramUserInbox.mockResolvedValueOnce({
