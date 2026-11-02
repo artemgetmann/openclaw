@@ -15,6 +15,11 @@ This fork is not an upstream-tracking branch. Treat upstream as a source of cand
 
 ## Rules
 
+Apply the destination gate in `AGENTS.md` and the Jarvis maintenance gate before
+using this intake procedure. The branch defaults and heuristics below apply only
+to accepted, explicitly authorized legacy fork work; they do not authorize new
+work or override standalone ownership.
+
 - Never do blind upstream merges or rebases onto fork branches.
 - Intake one bounded upstream change at a time.
 - Default to `main`.
@@ -66,7 +71,8 @@ This fork is not an upstream-tracking branch. Treat upstream as a source of cand
 
 ## Decision heuristics
 
-- If the upstream change fixes a bug the fork already has, port it now
+- If an accepted legacy maintenance item needs an upstream bug fix, consider the
+  smallest bounded port within that item's authority
 - If it hardens a trusted surface, port it unless the fork has already replaced that code path
 - If it overlaps a recent fork-specific change, treat it as a manual-port candidate, not a reflex cherry-pick
 - If the change starts a refactor chain, skip the chain and port the smallest safe fix instead

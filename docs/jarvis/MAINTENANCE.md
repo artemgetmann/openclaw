@@ -9,6 +9,12 @@ reactivation criteria below are met.
 
 ## Start gate
 
+Apply the destination gate in `AGENTS.md` first. The classes and limits below
+constrain authorized work in this fork; available monthly capacity does not
+itself authorize a change or select its destination. Approved portable component
+or evidence work defaults to the owning standalone project. Preparing source in
+this fork requires explicit user authorization for that legacy-source step.
+
 Before starting Jarvis work, classify it as exactly one of these allowed work
 classes:
 
