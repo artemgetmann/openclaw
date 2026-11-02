@@ -11,8 +11,9 @@ user explicitly asks.
 - Jarvis is a personal AI operator running on the user's own Mac.
 - Telegram is the current primary interface.
 - The product bar is subtraction first: remove complexity before adding knobs.
-- Current product work should move fast, prove behavior, and avoid speculative
-  platform work unless asked.
+- Apply the destination gate in `AGENTS.md` before implementation. This fork is
+  retained for bounded legacy maintenance; standalone capabilities belong in their
+  owning project unless the user explicitly authorizes legacy source work.
 
 ## Work Scope Contract
 
@@ -62,7 +63,8 @@ applicable package, upgrade, release, and end-user receipts.
 
 ## Branch Targets
 
-- Jarvis product work targets this repo's `main`.
+- Authorized legacy Jarvis work targets this repo's `main` after the destination
+  and maintenance gates. Standalone work follows its owning project's workflow.
 - `consumer` and `codex/consumer-openclaw-project` are legacy fallback branches.
 - Do not target either legacy branch unless the user explicitly asks for an
   emergency backport.

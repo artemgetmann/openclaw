@@ -4,18 +4,38 @@
 >
 > This file is intentionally lean. If a section starts turning into a playbook, move it into a focused doc and leave a pointer here.
 
+## Destination before implementation
+
+This fork is retained for bounded legacy maintenance. Before selecting source files,
+creating an implementation worktree, or opening a PR, determine the owning project
+and intended destination. Default new capabilities and portable migration work to
+the standalone project that owns the capability. For Telegram user CLI work, that
+repository is `artemgetmann/telegram-user-cli`; follow its own
+instructions and current owner. Do not infer implementation destination from the
+current checkout or the installed CLI's runtime path.
+
+Changes in this fork require an allowed class in `docs/jarvis/MAINTENANCE.md`,
+verified active-item/monthly capacity, and explicit user authorization for legacy
+source work. Authorization already given in the current task satisfies this
+requirement; do not request it again. An expressly authorized emergency legacy
+fix remains possible under
+that policy. Explicit later user direction can override the default destination;
+do not silently broaden its scope or delivery authority. If ownership or legacy
+source authority remains unclear, propose the destination and resolve it before
+implementation. Read-only investigation and proposals may proceed.
+
 ## Default repo stance
 
 - Treat this checkout as the consumer-product fork unless the user says otherwise.
 - Do not assume upstream `openclaw/openclaw` workflow by default.
-- Main/consumer consolidation has landed. New consumer-product work targets this repo's `main`.
+- After the destination gate accepts legacy fork work, target this repo's `main`.
 - Do not recreate or target a `consumer` branch for new work.
 - Do not target `codex/consumer-openclaw-project` for new work unless the user explicitly declares an emergency backport.
 - If the user says "consumer branch", ask whether they mean the legacy fallback before doing work there.
 - Never merge `upstream/main` into fork branches. Upstream intake is selective only.
 - PR targets:
-  - Consumer-product work: this repo's `main`
-  - General fork work: this repo's `main`
+  - Authorized legacy fork work: this repo's `main`
+  - Standalone work: the owning standalone repository and its workflow
   - Upstream work: `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream PR or review flow
 - `consumer` and `codex/consumer-openclaw-project` are legacy/emergency fallback branches. Do not target new PRs there unless the user explicitly asks.
 
