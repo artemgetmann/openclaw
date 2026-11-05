@@ -207,6 +207,8 @@ export type TelegramUserDownloadResult = {
 };
 
 export type TelegramUserInboxDialog = {
+  peer_type?: "user" | "channel" | "chat";
+  peer_id?: string;
   archived: boolean;
   chat_id: number | null;
   chat_title: string | null;
@@ -226,6 +228,14 @@ export type TelegramUserInboxDialog = {
 };
 
 export type TelegramUserInboxResult = {
+  scanned_count?: number;
+  returned_count?: number;
+  result_limit?: number;
+  scan_limit?: number;
+  exhausted?: boolean;
+  stop_reason?: "exhausted" | "scan_limit" | "result_limit" | "output_limit";
+  observed_start?: string;
+  observed_end?: string;
   backend_meta?: TelegramUserBackendMeta;
   dialogs: TelegramUserInboxDialog[];
 };

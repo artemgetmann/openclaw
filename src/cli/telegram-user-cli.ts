@@ -382,6 +382,10 @@ export function registerTelegramUserCli(program: Command) {
     .option("--unread", "Only include dialogs with unread counts, mentions, or reactions", false)
     .option("--dm-only", "Only include direct-message dialogs", false)
     .option("--limit <n>", "List up to this many dialogs", "20")
+    .option(
+      "--scan-limit <n>",
+      "Opt in to bounded enumeration (1..5000 inspected dialogs, including lookahead)",
+    )
     .option("--contains <text>", "Only include dialogs whose title, username, or last text matches")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {

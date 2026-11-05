@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -928,6 +928,7 @@ def build_parser() -> argparse.ArgumentParser:
 
   inbox = subparsers.add_parser("inbox", help = "List dialogs with unread metadata")
   inbox.add_argument("--limit", type = int, default = 20, help = "Maximum number of dialogs")
+  inbox.add_argument("--scan-limit", type = int, help = "Opt-in scan budget 1..5000, including lookahead")
   inbox.add_argument("--unread", action = "store_true", help = "Only include unread dialogs")
   inbox.add_argument("--dm-only", action = "store_true", help = "Only include direct messages")
   inbox.add_argument("--contains", default = "", help = "Only include matching title, username, or last text")
@@ -1884,8 +1885,13 @@ async def run_button_click(args: argparse.Namespace) -> int:
 
 
 async def run_inbox(args: argparse.Namespace) -> int:
+  scan_limit = getattr(args, "scan_limit", None)
+  # Validate before connecting. Legacy callers keep their historical clamp.
+  if scan_limit is not None and not (1 <= scan_limit <= 5000 and 1 <= args.limit <= 5000):
+    raise ValueError("inbox --scan-limit and opt-in --limit must be between 1 and 5000")
+  observed_start = datetime.now(timezone.utc).isoformat()
   session_path = resolve_session_path(args.session)
-  limit = max(1, min(int(args.limit or 20), 200))
+  limit = int(args.limit) if scan_limit is not None else max(1, min(int(args.limit or 20), 200))
   contains = str(args.contains or "")
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
@@ -1897,19 +1903,55 @@ async def run_inbox(args: argparse.Namespace) -> int:
         dm_only = bool(args.dm_only),
         unread_only = bool(args.unread),
       )
+      if scan_limit is not None:
+        scan_cap = scan_limit
+      scanned = 0
+      output_bytes = 0
+      stop_reason = "exhausted"
       # Keep the scan bounded, but do not assume the first few hundred dialogs are
       # representative once filters are applied client-side.
+      # Result lookahead consumes the same scan budget. At its exact boundary
+      # exhaustion remains unproven; never infer it from an artificial limit.
       async for dialog in client.iter_dialogs(limit = scan_cap, ignore_pinned = False):
+        scanned += 1
+        if scan_limit is not None and len(dialogs) >= limit:
+          stop_reason = "result_limit"
+          break
         if not dialog_matches_inbox_filters(
           dialog,
           contains = contains,
           dm_only = bool(args.dm_only),
           unread_only = bool(args.unread),
         ):
+          if scan_limit is not None and scanned >= scan_cap:
+            stop_reason = "scan_limit"
+            break
           continue
         dialogs.append(build_dialog_payload(dialog))
-        if len(dialogs) >= limit:
+        if scan_limit is not None:
+          # Bare Telegram IDs overlap across peer namespaces.
+          peer_type = "user" if dialog.is_user else "channel" if dialog.is_channel else "chat"
+          dialogs[-1]["peer_type"] = peer_type
+          dialogs[-1]["peer_id"] = f"{peer_type}:{dialogs[-1]['chat_id']}"
+          # Match emit's ASCII JSON encoding and reserve ample envelope space
+          # below the existing 4 MiB backend transport cap. Never truncate text
+          # silently or advertise complete coverage after dropping a row.
+          row_bytes = len(json.dumps(dialogs[-1], ensure_ascii=True)) + 2
+          if output_bytes + row_bytes > 4 * 1024 * 1024 - 4096:
+            dialogs.pop()
+            stop_reason = "output_limit"
+            break
+          output_bytes += row_bytes
+        if scan_limit is not None and scanned >= scan_cap:
+          stop_reason = "scan_limit"
           break
+        if scan_limit is None and len(dialogs) >= limit:
+          break
+      if scan_limit is not None:
+        return emit({"dialogs": dialogs, "scanned_count": scanned,
+          "returned_count": len(dialogs), "result_limit": limit, "scan_limit": scan_limit,
+          "exhausted": stop_reason == "exhausted", "stop_reason": stop_reason,
+          "observed_start": observed_start, "observed_end": datetime.now(timezone.utc).isoformat()})
       return emit({"dialogs": dialogs})
     finally:
       await client.disconnect()

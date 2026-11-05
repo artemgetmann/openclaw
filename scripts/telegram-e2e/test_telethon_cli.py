@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import io
+import json
 from datetime import datetime, timedelta, timezone
 import os
 import stat
@@ -2834,6 +2835,128 @@ class TelethonCliSyncTests(unittest.TestCase):
       telethon_cli.compute_inbox_scan_cap(limit = 200, dm_only = True, unread_only = True),
       5_000,
     )
+
+
+class BoundedInboxTests(unittest.IsolatedAsyncioTestCase):
+  async def enumerate(self, count, *, scan=5000, limit=5000, unread=False, zero_unread=False, mixed=False, text=None):
+    # No account/session data: this fake intentionally has no send or ack API.
+    client = FakeInboxClient([
+      build_fake_dialog(chat_id=i + 1, is_user=True, unread_count=1 if i == count - 1 else 0, message_text=text)
+      for i in range(count)
+    ])
+    if zero_unread:
+      for dialog in client.dialogs:
+        dialog.unread_count = 0
+    if mixed:
+      for index, dialog in enumerate(client.dialogs):
+        dialog.entity.id = index // 3 + 1
+        dialog.is_user = index % 3 == 0
+        dialog.is_channel = index % 3 == 1
+        dialog.is_group = not dialog.is_user
+        dialog.pinned = index == 0
+        dialog.archived = index % 2 == 0
+      # Simulate the library yielding successive pages without adding a product
+      # cursor. Telethon's actual paging implementation is unchanged/unmocked
+      # integration proof remains outside this synthetic test.
+      async def paged_dialogs(*, limit, ignore_pinned):
+        yielded = 0
+        for offset in range(0, len(client.dialogs), 100):
+          await asyncio.sleep(0)
+          for dialog in client.dialogs[offset:offset + 100]:
+            if yielded >= limit:
+              return
+            yielded += 1
+            yield dialog
+      client.iter_dialogs = paged_dialogs
+    result = {}
+    with tempfile.TemporaryDirectory() as directory:
+      session = Path(directory) / "fake.session"
+      session.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value=(client, None)),
+        patch.object(telethon_cli, "emit", side_effect=lambda value: result.update(value) or 0),
+      ):
+        await telethon_cli.run_inbox(argparse.Namespace(
+          session=str(session), lock=str(Path(directory) / "fake.lock"), scan_limit=scan, limit=limit, unread=unread,
+          dm_only=False, contains="",
+        ))
+    self.assertTrue(client.disconnected)
+    self.assertLessEqual(result["scanned_count"], scan)
+    self.assertLessEqual(result["returned_count"], limit)
+    return result
+
+  async def test_large_and_late_unread_enumeration(self):
+    result = await self.enumerate(3201)
+    self.assertEqual(result["returned_count"], 3201)
+    self.assertTrue(result["exhausted"])
+    self.assertEqual(result["dialogs"][0]["peer_id"], "user:1")
+    result = await self.enumerate(3201, unread=True)
+    self.assertEqual(result["scanned_count"], 3201)
+    self.assertEqual(result["returned_count"], 1)
+    self.assertTrue(result["exhausted"])
+
+  async def test_termination_boundaries(self):
+    for count, scan, limit, reason, scanned in [
+      (0, 10, 10, "exhausted", 0),
+      (9, 10, 10, "exhausted", 9),
+      (10, 10, 10, "scan_limit", 10),
+      (11, 10, 10, "scan_limit", 10),
+      (9, 10, 3, "result_limit", 4),
+      (3, 10, 3, "exhausted", 3),
+    ]:
+      with self.subTest(count=count, scan=scan, limit=limit):
+        result = await self.enumerate(count, scan=scan, limit=limit)
+        self.assertEqual(result["stop_reason"], reason)
+        self.assertEqual(result["scanned_count"], scanned)
+        self.assertEqual(result["exhausted"], reason == "exhausted")
+
+  async def test_mixed_identity_pins_retry_and_zero_matches(self):
+    first = await self.enumerate(303, mixed=True)
+    second = await self.enumerate(303, mixed=True)
+    self.assertEqual(first["dialogs"], second["dialogs"])
+    self.assertEqual([row["peer_id"] for row in first["dialogs"][:3]], ["user:1", "channel:1", "chat:1"])
+    self.assertTrue(first["dialogs"][0]["pinned"])
+    self.assertTrue(first["dialogs"][0]["archived"])
+    for count, exhausted in [(9, True), (10, False)]:
+      result = await self.enumerate(count, scan=10, unread=True, zero_unread=True)
+      self.assertEqual(result["returned_count"], 0)
+      self.assertEqual(result["exhausted"], exhausted)
+
+  async def test_invalid_budget_rejected_before_connect(self):
+    for scan in [0, 5001]:
+      with patch.object(telethon_cli, "connect_client") as connect:
+        with self.assertRaises(ValueError):
+          await telethon_cli.run_inbox(argparse.Namespace(scan_limit=scan, limit=20))
+        connect.assert_not_called()
+
+  async def test_serialized_output_fits_existing_transport(self):
+    result = await self.enumerate(5000, text="界" * 200)
+    self.assertEqual(result["stop_reason"], "output_limit")
+    self.assertFalse(result["exhausted"])
+    self.assertLess(result["returned_count"], 5000)
+    self.assertLess(len(json.dumps(result, ensure_ascii=True).encode("utf-8")) + 1, 4 * 1024 * 1024)
+
+  async def test_transport_failure_never_emits_complete_result(self):
+    # Cancellation and provider failures propagate to the existing error path;
+    # no successful coverage envelope may escape after partial iteration.
+    for failure in [TimeoutError("synthetic"), RuntimeError("synthetic"), asyncio.CancelledError()]:
+      client = FakeInboxClient([])
+      async def failing_dialogs(**kwargs):
+        yield build_fake_dialog(chat_id=1, is_user=True)
+        raise failure
+      client.iter_dialogs = failing_dialogs
+      with tempfile.TemporaryDirectory() as directory:
+        with (
+          patch.object(telethon_cli, "connect_client", return_value=(client, None)),
+          patch.object(telethon_cli, "emit") as emit,
+        ):
+          with self.assertRaises(type(failure)):
+            await telethon_cli.run_inbox(argparse.Namespace(
+              session=str(Path(directory) / "fake.session"), lock=str(Path(directory) / "fake.lock"),
+              scan_limit=10, limit=10, unread=False, dm_only=False, contains="",
+            ))
+          emit.assert_not_called()
+          self.assertTrue(client.disconnected)
 
 
 if __name__ == "__main__":

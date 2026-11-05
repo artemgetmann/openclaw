@@ -432,6 +432,8 @@ describe("telegram-user cli", () => {
         "inbox",
         "--contains",
         "urgent",
+        "--scan-limit",
+        "5000",
         "--unread",
         "--dm-only",
         "--limit",
@@ -448,6 +450,7 @@ describe("telegram-user cli", () => {
     expect(telegramUserInboxCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         contains: "urgent",
+        scanLimit: "5000",
         dmOnly: true,
         envFile: "/tmp/tg.env",
         json: true,
